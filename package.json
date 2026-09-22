@@ -1,0 +1,27 @@
+{
+  "name": "flighthopper",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.2"
+  },
+  "dependencies": {
+    "cesium": "^1.145.0",
+    "egm96-universal": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-static-copy": "^4.1.1"
+  },
+  "scripts": {
+    "dev": "vite",
+    "server": "node --env-file-if-exists=.env.local server/main.ts",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"shared/**/*.test.ts\" \"server/**/*.test.ts\" \"client/**/*.test.ts\" \"tools/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test",
+    "record:cells": "node --env-file-if-exists=.env.local tools/record-cells.ts"
+  }
+}

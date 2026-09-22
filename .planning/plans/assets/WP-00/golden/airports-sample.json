@@ -1,0 +1,264 @@
+[
+ {
+  "ident": "KSFO",
+  "name": "San Francisco International Airport",
+  "lat": 37.619806,
+  "lon": -122.374821,
+  "elevFt": 13,
+  "nM": -32.3,
+  "runways": [
+   {
+    "lengthFt": 11870,
+    "widthFt": 200,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "10L",
+      "lat": 37.628742,
+      "lon": -122.39341,
+      "thrLat": 37.62874200000001,
+      "thrLon": -122.39341000000002,
+      "displacedFt": 0,
+      "elevFt": 5,
+      "hdgTrueDeg": 118,
+      "thrHaeM": -30.79
+     },
+     {
+      "ident": "28R",
+      "lat": 37.613538,
+      "lon": -122.35716,
+      "thrLat": 37.61392406152527,
+      "thrLon": -122.35807660762543,
+      "displacedFt": 300,
+      "elevFt": 13,
+      "hdgTrueDeg": 298,
+      "thrHaeM": -28.3
+     }
+    ]
+   },
+   {
+    "lengthFt": 11381,
+    "widthFt": 200,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "10R",
+      "lat": 37.626298,
+      "lon": -122.393124,
+      "thrLat": 37.626298000000006,
+      "thrLon": -122.393124,
+      "displacedFt": 0,
+      "elevFt": 6,
+      "hdgTrueDeg": 118,
+      "thrHaeM": -30.49
+     },
+     {
+      "ident": "28L",
+      "lat": 37.61172,
+      "lon": -122.358367,
+      "thrLat": 37.612106061525516,
+      "thrLon": -122.35928358521744,
+      "displacedFt": 300,
+      "elevFt": 13,
+      "hdgTrueDeg": 298,
+      "thrHaeM": -28.3
+     }
+    ]
+   },
+   {
+    "lengthFt": 7650,
+    "widthFt": 200,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "1L",
+      "lat": 37.607898,
+      "lon": -122.38295,
+      "thrLat": 37.60945907337661,
+      "thrLon": -122.38190221973213,
+      "displacedFt": 645,
+      "elevFt": 10,
+      "hdgTrueDeg": 28,
+      "thrHaeM": -29.26
+     },
+     {
+      "ident": "19R",
+      "lat": 37.626476,
+      "lon": -122.37063,
+      "thrLat": 37.626476,
+      "thrLon": -122.37063,
+      "displacedFt": 0,
+      "elevFt": 9,
+      "hdgTrueDeg": 208,
+      "thrHaeM": -29.53
+     }
+    ]
+   },
+   {
+    "lengthFt": 8660,
+    "widthFt": 200,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "1R",
+      "lat": 37.606333,
+      "lon": -122.381061,
+      "thrLat": 37.60768835105868,
+      "thrLon": -122.38015132095961,
+      "displacedFt": 560,
+      "elevFt": 12,
+      "hdgTrueDeg": 28,
+      "thrHaeM": -28.65
+     },
+     {
+      "ident": "19L",
+      "lat": 37.627346,
+      "lon": -122.367124,
+      "thrLat": 37.627346,
+      "thrLon": -122.36712399999999,
+      "displacedFt": 0,
+      "elevFt": 10,
+      "hdgTrueDeg": 208,
+      "thrHaeM": -29.22
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "ident": "LLBG",
+  "name": "Ben Gurion International Airport",
+  "lat": 32.011398,
+  "lon": 34.8867,
+  "elevFt": 135,
+  "nM": 19.7,
+  "runways": [
+   {
+    "lengthFt": 9094,
+    "widthFt": 197,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "03",
+      "lat": 31.9962158203125,
+      "lon": 34.88608169555664,
+      "thrLat": 31.99621582031251,
+      "thrLon": 34.88608169555664,
+      "displacedFt": 0,
+      "elevFt": 129,
+      "hdgTrueDeg": 29,
+      "thrHaeM": 59.02
+     },
+     {
+      "ident": "21",
+      "lat": 32.018123626708984,
+      "lon": 34.90022659301758,
+      "thrLat": 32.01812362670899,
+      "thrLon": 34.90022659301758,
+      "displacedFt": 0,
+      "elevFt": 134,
+      "hdgTrueDeg": 209,
+      "thrHaeM": 60.62
+     }
+    ]
+   },
+   {
+    "lengthFt": 13327,
+    "widthFt": 148,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "08",
+      "lat": 32.01300048828125,
+      "lon": 34.86040115356445,
+      "thrLat": 32.01300048828124,
+      "thrLon": 34.86040115356445,
+      "displacedFt": 0,
+      "elevFt": 97,
+      "hdgTrueDeg": 80,
+      "thrHaeM": 49.14
+     },
+     {
+      "ident": "26",
+      "lat": 32.01890182495117,
+      "lon": 34.89860153198242,
+      "thrLat": 32.017964441366175,
+      "thrLon": 34.892332625764766,
+      "displacedFt": 1969,
+      "elevFt": 124,
+      "hdgTrueDeg": 260,
+      "thrHaeM": 57.53
+     }
+    ]
+   },
+   {
+    "lengthFt": 10209,
+    "widthFt": 148,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "12",
+      "lat": 32.01470184326172,
+      "lon": 34.86579895019531,
+      "thrLat": 32.014701843261726,
+      "thrLon": 34.86579895019531,
+      "displacedFt": 0,
+      "elevFt": 112,
+      "hdgTrueDeg": 121.4,
+      "thrHaeM": 53.74
+     },
+     {
+      "ident": "30",
+      "lat": 31.999900817871094,
+      "lon": 34.89419937133789,
+      "thrLat": 32.000252142495185,
+      "thrLon": 34.89352067554944,
+      "displacedFt": 246,
+      "elevFt": 130,
+      "hdgTrueDeg": 301.4,
+      "thrHaeM": 59.37
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "ident": "LOWI",
+  "name": "Innsbruck Airport",
+  "lat": 47.260201,
+  "lon": 11.344,
+  "elevFt": 1907,
+  "nM": 48.4,
+  "runways": [
+   {
+    "lengthFt": 6562,
+    "widthFt": 148,
+    "surface": "ASP",
+    "ends": [
+     {
+      "ident": "08",
+      "lat": 47.2588005065918,
+      "lon": 11.330900192260742,
+      "thrLat": 47.258945864390505,
+      "thrLon": 11.332252515916366,
+      "displacedFt": 339,
+      "elevFt": 1907,
+      "hdgTrueDeg": 81,
+      "thrHaeM": 629.72
+     },
+     {
+      "ident": "26",
+      "lat": 47.261600494384766,
+      "lon": 11.357000350952148,
+      "thrLat": 47.26160049438477,
+      "thrLon": 11.357000350952148,
+      "displacedFt": 0,
+      "elevFt": 1894,
+      "hdgTrueDeg": 261,
+      "thrHaeM": 625.72
+     }
+    ]
+   }
+  ]
+ }
+]
