@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Camera, Cartesian3, Cartographic, Ellipsoid, GeographicProjection, MapMode2D, Matrix4, SceneMode } from 'cesium'
 import type { Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
-import { chaseOffsetEnu, ChaseCamera } from './chaseCamera.ts'
+import { chaseOffsetEnu, ChaseCamera, OrbitControl } from './chaseCamera.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
 const DEG = 180 / Math.PI
@@ -172,4 +172,57 @@ test('release hands the camera back (identity transform) and the next chase star
   assert.ok(Matrix4.equals(camera.transform, Matrix4.IDENTITY))
   cc.update(st({ headingDeg: 200 }), 0.016)
   near(lookHeadingDeg(camera), 200, 1e-6)
+})
+
+test('OrbitControl: drag right swings the view clockwise, drag down raises the camera; both clamp', () => {
+  const o = new OrbitControl(-12, 150)
+  o.drag(300, 0) // 0.3°/px
+  near(o.headingOffsetDeg, 90, 1e-9)
+  o.drag(-600, 0)
+  near(o.headingOffsetDeg, 270, 1e-9)
+  o.drag(0, 100) // 0.25°/px, down = look more steeply down
+  near(o.pitchDeg, -37, 1e-9)
+  o.drag(0, 10_000)
+  near(o.pitchDeg, -89, 1e-9)
+  o.drag(0, -10_000)
+  near(o.pitchDeg, 10, 1e-9)
+})
+
+test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 3 km; reset restores the start', () => {
+  const o = new OrbitControl(-12, 150)
+  o.wheel(100)
+  assert.ok(o.rangeM < 150 && o.rangeM > 120, `${o.rangeM}`)
+  o.wheel(-200)
+  assert.ok(o.rangeM > 150, `${o.rangeM}`)
+  o.wheel(1e6)
+  near(o.rangeM, 25, 1e-9)
+  o.wheel(-1e6)
+  near(o.rangeM, 3000, 1e-9)
+  o.drag(123, 45)
+  o.reset()
+  assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [0, -12, 150])
+})
+
+test('ChaseCamera follows the orbit: 90° offset looks east from the west side; zoom sets the distance', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.drag(300, 0)
+  cc.orbit.wheel(-200)
+  cc.update(st({ headingDeg: 0 }), 1 / 60)
+  near(lookHeadingDeg(camera), 90, 0.5)
+  near(Cartesian3.magnitude(camera.position), cc.orbit.rangeM, 0.01)
+})
+
+test('release: next chase starts behind the aircraft again but keeps zoom and pitch', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.drag(300, 40)
+  cc.orbit.wheel(150)
+  const [pitch, range] = [cc.orbit.pitchDeg, cc.orbit.rangeM]
+  cc.update(st(), 1 / 60)
+  cc.release()
+  assert.equal(cc.orbit.headingOffsetDeg, 0)
+  assert.deepEqual([cc.orbit.pitchDeg, cc.orbit.rangeM], [pitch, range])
+  cc.update(st({ headingDeg: 0 }), 1 / 60)
+  near(lookHeadingDeg(camera), 0, 0.5)
 })
