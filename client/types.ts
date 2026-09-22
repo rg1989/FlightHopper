@@ -1,0 +1,49 @@
+import type { Quality } from '../shared/types.ts'
+import type { AltSource } from './track/types.ts'
+
+/** What the scene draws for one aircraft at render time. Produced by Track.stateAt(). */
+export interface RenderState {
+  hex: string
+  lat: number
+  lon: number
+  hM: number                                    // WGS84 ellipsoidal metres
+  headingDeg: number                            // true, nose direction
+  pitchDeg: number                              // nose-up positive
+  rollDeg: number                               // right-wing-down positive
+  gsKt: number | null
+  trackDeg: number | null
+  altBaroFt: number | null
+  vsFpm: number | null
+  mode: 'interp' | 'extrap' | 'stale'           // stale = extrapolated past 8 s → frozen
+  altSource: AltSource
+  onGround: boolean
+  ageS: number                                  // tRender − newest sample tMs, seconds
+  quality: Quality
+  callsign: string | null
+  typeCode: string | null
+}
+
+export interface ClientConfig {
+  terrain: 'ion' | 'reearth' | 'ellipsoid'
+  imagery: 'ion' | 'eox' | 'none'
+  ionToken: string | null
+  apiBase: string
+}
+
+/** public/models/manifest.json entry. Calibration makes the model's nose point along RenderState.headingDeg. */
+export interface ModelManifestEntry {
+  id: string
+  uri: string                                   // relative to public/, e.g. "models/airliner.glb"
+  license: string
+  author: string
+  source: string                                // where it was downloaded from
+  forwardAxisFix: { headingDeg: number; pitchDeg: number; rollDeg: number }
+  gearHeightM: number                           // model origin → wheel bottom, metres (after scale)
+  lengthM: number                               // real-world length the scale targets
+  scale: number
+}
+
+export interface ModelManifest {
+  default: string                               // id of the model used when no type match
+  models: ModelManifestEntry[]
+}
