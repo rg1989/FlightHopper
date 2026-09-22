@@ -1,10 +1,11 @@
 // client/track/vertical.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { AltitudeLadder } from './vertical.ts'
+import { AltitudeLadder, VerticalFilter } from './vertical.ts'
 import type { Sample } from '../../shared/types.ts'
 
 const FT = 0.3048
+const KT = 1852 / 3600
 const N = -32.3 // KSFO-area geoid undulation, metres
 
 function sample(p: Partial<Sample>): Sample {
@@ -137,4 +138,148 @@ test('ladder: an implausible v0 geom jump does not leak into the output', () => 
     hs.push(r.hM)
   }
   for (let i = 1; i < hs.length; i++) assert.ok(Math.abs(hs[i] - hs[i - 1]) <= 0.5 + 1e-9, `step at ${i}: ${hs[i] - hs[i - 1]}`)
+})
+
+// ---------- VerticalFilter ----------
+
+test('filter: null before the first sample, and before the first sample time', () => {
+  const f = new VerticalFilter()
+  assert.equal(f.at(0), null)
+  f.add(10, 100, null)
+  assert.equal(f.at(9.99), null)
+  assert.deepEqual(f.at(10), { hM: 100, vsMs: 0 })
+})
+
+test('filter: extrapolates with the rate after the last state', () => {
+  const f = new VerticalFilter()
+  f.add(0, 100, 2)
+  const s = f.at(5)!
+  near(s.hM, 110, 1e-9)
+  near(s.vsMs, 2, 1e-9)
+})
+
+test('filter: cubic Hermite between filtered states (smoothstep midpoint)', () => {
+  const f = new VerticalFilter({ alpha: 1, beta: 0 }) // α = 1: states sit on the measurements
+  f.add(0, 0, 0)
+  f.add(1, 1, 0)
+  const s = f.at(0.5)!
+  near(s.hM, 0.5, 1e-9)
+  near(s.vsMs, 1.5, 1e-9)
+  near(f.at(1)!.hM, 1, 1e-9)
+})
+
+test('filter: a sample at or before the last time is ignored', () => {
+  const f = new VerticalFilter()
+  f.add(0, 100, 0)
+  f.add(0, 500, 0)
+  f.add(-1, 500, 0)
+  assert.deepEqual(f.at(0), { hM: 100, vsMs: 0 })
+})
+
+// A 3° glide at 140 kt: VS ≈ −3.77 m/s. alt quantised to 25 ft, rate to 64 fpm, irregular sample times,
+// 0.3 s transport latency, rendered causally 3 s behind at 60 Hz (what Track + RenderClock do).
+const VS = -140 * KT * Math.tan((3 * Math.PI) / 180)
+const truth = (t: number): number => 1000 + VS * t
+const quantFt = (m: number, stepFt: number): number => Math.round(m / FT / stepFt) * stepFt * FT
+
+function rng(seed: number): () => number {
+  let x = seed >>> 0
+  return () => (x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 2 ** 32
+}
+
+const RATE_Q = (Math.round(((VS / FT) * 60) / 64) * 64 * FT) / 60 // reported rate, 64 fpm steps
+
+const p95 = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b)
+  return s[Math.min(s.length - 1, Math.floor(0.95 * s.length))]
+}
+
+function runDescent(f: VerticalFilter, rateMs: number | null): { posP95: number; vsP95: number; maxStep: number } {
+  const next = rng(42)
+  const times: number[] = []
+  for (let t = 0; t < 200; t += 0.5 + next()) times.push(t)
+  const posErr: number[] = []
+  const vsErr: number[] = []
+  let k = 0
+  let prevH: number | null = null
+  let maxStep = 0
+  for (let frame = 0; frame < 195 * 60; frame++) {
+    const T = frame / 60
+    while (k < times.length && times[k] + 0.3 <= T) {
+      f.add(times[k], quantFt(truth(times[k]), 25), rateMs)
+      k++
+    }
+    const tr = T - 3
+    const s = f.at(tr)
+    if (s === null) continue
+    if (prevH !== null) maxStep = Math.max(maxStep, Math.abs(s.hM - prevH))
+    prevH = s.hM
+    if (tr >= 20) {
+      posErr.push(Math.abs(s.hM - truth(tr)))
+      vsErr.push(Math.abs(s.vsMs - VS))
+    }
+  }
+  return { posP95: p95(posErr), vsP95: p95(vsErr), maxStep }
+}
+
+test('filter: 3° descent at 140 kt, 25 ft quantised, with reported rate → smooth and accurate', () => {
+  // naive linear interpolation of the raw samples scores height p95 ≈ 3.0 m and VS p95 ≈ 6.3 m/s here
+  const r = runDescent(new VerticalFilter(), RATE_Q)
+  assert.ok(r.posP95 <= 2.5, `height error p95 ${r.posP95.toFixed(2)} m (25 ft steps are 7.6 m)`)
+  assert.ok(r.vsP95 <= 2, `VS error p95 ${r.vsP95.toFixed(2)} m/s`)
+  assert.ok(r.maxStep <= 1, `max per-frame step ${r.maxStep.toFixed(3)} m`)
+})
+
+test('filter: same descent without any reported rate still meets the G2 vertical bar', () => {
+  const r = runDescent(new VerticalFilter(), null)
+  assert.ok(r.posP95 <= 2.5, `height error p95 ${r.posP95.toFixed(2)} m`)
+  assert.ok(r.vsP95 <= 2, `VS error p95 ${r.vsP95.toFixed(2)} m/s`)
+  assert.ok(r.maxStep <= 1, `max per-frame step ${r.maxStep.toFixed(3)} m`)
+})
+
+test('filter: a reported rate 10 % steeper than the height track (baro rate vs geometric height) does not drag the height away', () => {
+  const r = runDescent(new VerticalFilter(), VS * 1.1)
+  assert.ok(r.posP95 <= 3, `height error p95 ${r.posP95.toFixed(2)} m`)
+  assert.ok(r.vsP95 <= 2, `VS error p95 ${r.vsP95.toFixed(2)} m/s`)
+})
+
+test('ladder → filter: a geom → baro-qnh switch mid-descent renders without a VS spike or a frame step > 1 m', () => {
+  const lad = new AltitudeLadder()
+  const f = new VerticalFilter()
+  const qnh = 1020
+  const corrM = (qnh - 1013.25) * 27 * FT
+  const next = rng(7)
+  const times: number[] = []
+  for (let t = 0; t < 120; t += 0.5 + next()) times.push(t)
+  let k = 0
+  let prevH: number | null = null
+  let maxStep = 0
+  const vsErr: number[] = []
+  for (let frame = 0; frame < 115 * 60; frame++) {
+    const T = frame / 60
+    while (k < times.length && times[k] + 0.3 <= T) {
+      const t = times[k]
+      const geomM = truth(t) + 40 // geom 40 m above the baro-qnh reading of the same air
+      const baroFt = (truth(t) - N - corrM) / FT
+      const s = sample({
+        tMs: t * 1000,
+        altBaroFt: Math.round(baroFt / 25) * 25,
+        navQnhHpa: qnh,
+        altGeomFt: t < 60 ? Math.round(geomM / FT / 25) * 25 : null,
+        geomRateFpm: Math.round(((VS / FT) * 60) / 64) * 64,
+      })
+      const h = lad.height(s)!
+      f.add(t, h.hM, (s.geomRateFpm! * FT) / 60)
+      k++
+    }
+    const st = f.at(T - 3)
+    if (st === null) continue
+    if (prevH !== null) maxStep = Math.max(maxStep, Math.abs(st.hM - prevH))
+    prevH = st.hM
+    if (T - 3 >= 20) vsErr.push(Math.abs(st.vsMs - VS))
+  }
+  // without the ladder's continuity offset the raw 40 m rung jump shows up as VS p95 ≈ 3.1 m/s, max ≈ 12 m/s
+  assert.ok(maxStep <= 1, `max per-frame step ${maxStep.toFixed(3)} m`)
+  assert.ok(p95(vsErr) <= 2, `VS error p95 ${p95(vsErr).toFixed(2)} m/s`)
+  assert.ok(Math.max(...vsErr) <= 4, `VS error max ${Math.max(...vsErr).toFixed(2)} m/s`)
 })
