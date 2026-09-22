@@ -39,6 +39,32 @@ export function targetAttitude(i: AttitudeInput): Att {
   return { headingDeg, pitchDeg, rollDeg: clamp(roll, -35, 35) }
 }
 
+/** First-order lag on each axis, exact for any dt: x += (target − x)·(1 − e^(−dt/τ)). Heading takes the short way. */
+export class AttitudeSmoother {
+  private readonly tauS: number
+  private cur: Att | null = null
+
+  /** tauS default 1 s: damps the ~1 Hz jitter of per-sample turn rates without a visible lag in roll-in. */
+  constructor(tauS = 1) {
+    this.tauS = tauS
+  }
+
+  step(target: Att, dtS: number): Att {
+    const c = this.cur
+    if (c === null) {
+      this.cur = { headingDeg: wrap360(target.headingDeg), pitchDeg: target.pitchDeg, rollDeg: target.rollDeg }
+    } else if (dtS > 0) {
+      const k = 1 - Math.exp(-dtS / this.tauS)
+      this.cur = {
+        headingDeg: wrap360(c.headingDeg + k * wrap180(target.headingDeg - c.headingDeg)),
+        pitchDeg: c.pitchDeg + k * (target.pitchDeg - c.pitchDeg),
+        rollDeg: c.rollDeg + k * (target.rollDeg - c.rollDeg),
+      }
+    }
+    return { ...this.cur! }
+  }
+}
+
 /** Signed track change rate in °/s, + = right turn, wrap-safe across north. 0 when dtS ≤ 0. */
 export function turnRateDegS(prevTrackDeg: number, trackDeg: number, dtS: number): number {
   return dtS > 0 ? wrap180(trackDeg - prevTrackDeg) / dtS : 0

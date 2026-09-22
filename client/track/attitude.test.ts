@@ -1,7 +1,7 @@
 // client/track/attitude.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { targetAttitude, turnRateDegS } from './attitude.ts'
+import { AttitudeSmoother, targetAttitude, turnRateDegS } from './attitude.ts'
 import type { Att, Phase } from './types.ts'
 
 const KT = 1852 / 3600
@@ -103,4 +103,54 @@ test('turnRateDegS: wrap-safe across north both ways', () => {
 test('turnRateDegS: dt ≤ 0 → 0', () => {
   assert.equal(turnRateDegS(10, 20, 0), 0)
   assert.equal(turnRateDegS(10, 20, -1), 0)
+})
+
+// ---------- AttitudeSmoother ----------
+
+test('smoother: the first step returns the target', () => {
+  const s = new AttitudeSmoother(2)
+  assert.deepEqual(s.step({ headingDeg: 45, pitchDeg: 3, rollDeg: -5 }, 0.016), { headingDeg: 45, pitchDeg: 3, rollDeg: -5 })
+})
+
+test('smoother: converges with time constant tau, independent of step size', () => {
+  const target: Att = { headingDeg: 0, pitchDeg: 10, rollDeg: 20 }
+  const fine = new AttitudeSmoother(2)
+  fine.step({ headingDeg: 0, pitchDeg: 0, rollDeg: 0 }, 0)
+  let a: Att = { headingDeg: 0, pitchDeg: 0, rollDeg: 0 }
+  for (let i = 0; i < 120; i++) a = fine.step(target, 2 / 120) // 60 Hz for tau seconds
+  const k = 1 - Math.exp(-1)
+  near(a.pitchDeg, 10 * k, 1e-9)
+  near(a.rollDeg, 20 * k, 1e-9)
+  const coarse = new AttitudeSmoother(2)
+  coarse.step({ headingDeg: 0, pitchDeg: 0, rollDeg: 0 }, 0)
+  near(coarse.step(target, 2).pitchDeg, 10 * k, 1e-9)
+  for (let i = 0; i < 1200; i++) a = fine.step(target, 1 / 60) // 20 s more: residual e^−11
+  near(a.pitchDeg, 10, 1e-3)
+  near(a.rollDeg, 20, 1e-3)
+})
+
+test('smoother: default tau is 1 s', () => {
+  const s = new AttitudeSmoother()
+  s.step({ headingDeg: 0, pitchDeg: 0, rollDeg: 0 }, 0)
+  near(s.step({ headingDeg: 0, pitchDeg: 10, rollDeg: 0 }, 1).pitchDeg, 10 * (1 - Math.exp(-1)), 1e-9)
+})
+
+test('smoother: heading 359 → 1 goes the short way through north', () => {
+  const s = new AttitudeSmoother(1)
+  s.step({ headingDeg: 359, pitchDeg: 0, rollDeg: 0 }, 0)
+  for (let i = 0; i < 300; i++) {
+    const h = s.step({ headingDeg: 1, pitchDeg: 0, rollDeg: 0 }, 1 / 60).headingDeg
+    assert.ok(h >= 0 && h < 360, `normalised: ${h}`)
+    assert.ok(h >= 359 || h <= 1, `stayed on the 2° arc through north: ${h}`)
+  }
+  const t = new AttitudeSmoother(1)
+  t.step({ headingDeg: 359, pitchDeg: 0, rollDeg: 0 }, 0)
+  near(t.step({ headingDeg: 1, pitchDeg: 0, rollDeg: 0 }, 1).headingDeg, (359 + 2 * (1 - Math.exp(-1))) % 360, 1e-9) // ≈ 0.26
+})
+
+test('smoother: dt ≤ 0 holds the current attitude; returned objects are copies', () => {
+  const s = new AttitudeSmoother(1)
+  const first = s.step({ headingDeg: 10, pitchDeg: 1, rollDeg: 2 }, 0)
+  first.pitchDeg = 99
+  assert.deepEqual(s.step({ headingDeg: 50, pitchDeg: 5, rollDeg: 9 }, 0), { headingDeg: 10, pitchDeg: 1, rollDeg: 2 })
 })
