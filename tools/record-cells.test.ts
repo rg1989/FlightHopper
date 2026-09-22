@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nextInterval } from './record-cells.ts'
+import { nextBase, nextInterval } from './record-cells.ts'
 
 test('401/403 stop for good', () => {
   assert.equal(nextInterval(2000, 2000, 403, null), 'stop')
@@ -22,4 +22,11 @@ test('success recovers toward base, never below 1 s', () => {
   assert.equal(nextInterval(10_000, 2000, 200, null), 9000)
   assert.equal(nextInterval(2000, 2000, 200, null), 2000)
   assert.equal(nextInterval(1000, 500, 200, null), 1000)
+})
+
+test('a 429 doubles the base for the rest of the run; nothing else changes it', () => {
+  assert.equal(nextBase(2000, 429), 4000)
+  assert.equal(nextBase(4000, 200), 4000)
+  assert.equal(nextBase(4000, 503), 4000)
+  assert.equal(nextBase(200_000, 429), 300_000)
 })

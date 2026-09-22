@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node ≥ 24.2 (native TypeScript), `node:test`, TypeScript 7 (type-check only), Vite 8 + `vite-plugin-static-copy` 4, CesiumJS 1.145, `egm96-universal` 1.1.
 
-**Wave:** 0 (sequential; everything else waits for this). **Estimated:** 2–3 h. **Validated:** every file below was run in a scratch copy on 2026-09-22: 40/40 tests pass, `tsc --noEmit` clean, `vite build` produces `dist/cesiumStatic/{Workers,Assets,ThirdParty,Widgets}`, and the dev server renders a globe.
+**Wave:** 0 (sequential; everything else waits for this). **Estimated:** 2–3 h. **Validated:** every file below was run in a scratch copy on 2026-09-22: 41/41 tests pass, `tsc --noEmit` clean, `vite build` produces `dist/cesiumStatic/{Workers,Assets,ThirdParty,Widgets}`, and the dev server renders a globe.
 
 ## Global Constraints
 
@@ -1217,7 +1217,7 @@ git commit -m "feat(server): recording line format and causal recording→sample
 
 **Interfaces:**
 - Consumes: `RecordLine` (Task 8)
-- Produces: `nextInterval(currentMs, baseMs, status, retryAfterS): number | "stop"`; CLI `npm run record:cells` writing `data/recordings/YYYY-MM-DD.jsonl`
+- Produces: `nextInterval(currentMs, baseMs, status, retryAfterS): number | "stop"`; `nextBase(baseMs, status): number`; CLI `npm run record:cells` writing `data/recordings/YYYY-MM-DD.jsonl`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1225,7 +1225,7 @@ git commit -m "feat(server): recording line format and causal recording→sample
 // tools/record-cells.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nextInterval } from './record-cells.ts'
+import { nextBase, nextInterval } from './record-cells.ts'
 
 test('401/403 stop for good', () => {
   assert.equal(nextInterval(2000, 2000, 403, null), 'stop')
@@ -1248,6 +1248,13 @@ test('success recovers toward base, never below 1 s', () => {
   assert.equal(nextInterval(2000, 2000, 200, null), 2000)
   assert.equal(nextInterval(1000, 500, 200, null), 1000)
 })
+
+test('a 429 doubles the base for the rest of the run; nothing else changes it', () => {
+  assert.equal(nextBase(2000, 429), 4000)
+  assert.equal(nextBase(4000, 200), 4000)
+  assert.equal(nextBase(4000, 503), 4000)
+  assert.equal(nextBase(200_000, 429), 300_000)
+})
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1263,7 +1270,7 @@ Expected: FAIL — Cannot find module ./record-cells.ts
 // and appends every raw response to data/recordings/YYYY-MM-DD.jsonl in the RecordLine format.
 // ponytail: standalone on purpose so recording starts on day 1; tools/record-arrivals.ts replaces it after M1b.
 //
-//   CONTACT=you@example.com node tools/record-cells.ts [--interval-ms 2000] [--radius-nm 40] [--heroes KSFO,LLBG,LOWI]
+//   CONTACT=you@example.com node tools/record-cells.ts [--interval-ms 3000] [--radius-nm 40] [--heroes KSFO,LLBG,LOWI]
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -1287,10 +1294,15 @@ export function nextInterval(currentMs: number, baseMs: number, status: number, 
   return Math.max(baseMs, Math.max(MIN_INTERVAL_MS, Math.round(currentMs * 0.9)))
 }
 
+/** A 429 permanently halves the rate for this run: never climb back to a rate that was refused. */
+export function nextBase(baseMs: number, status: number): number {
+  return status === 429 ? Math.min(MAX_INTERVAL_MS, baseMs * 2) : baseMs
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
-      'interval-ms': { type: 'string', default: '2000' },
+      'interval-ms': { type: 'string', default: '3000' },
       'radius-nm': { type: 'string', default: '40' },
       heroes: { type: 'string', default: 'KSFO,LLBG,LOWI' },
       out: { type: 'string', default: 'data/recordings' },
@@ -1298,7 +1310,7 @@ async function main(): Promise<void> {
   })
   const contact = process.env.CONTACT
   if (!contact) throw new Error('Set CONTACT (e.g. in .env.local); it goes into the User-Agent.')
-  const baseMs = Math.max(MIN_INTERVAL_MS, Number(values['interval-ms']))
+  let baseMs = Math.max(MIN_INTERVAL_MS, Number(values['interval-ms']))
   const radius = Number(values['radius-nm'])
   const heroes = values.heroes.split(',').map((id) => ({ id, ...HEROES[id] }))
   if (heroes.some((h) => h.lat === undefined)) throw new Error(`unknown hero in ${values.heroes}`)
@@ -1328,6 +1340,7 @@ async function main(): Promise<void> {
     }
     const line: RecordLine = { v: 1, source: 'adsblol', url, status, tSendMs, tRecvMs: Date.now(), bytes, body: status === 200 ? body : '' }
     appendFileSync(join(values.out, `${new Date(tSendMs).toISOString().slice(0, 10)}.jsonl`), JSON.stringify(line) + '\n')
+    baseMs = nextBase(baseMs, status)
     const next = nextInterval(interval, baseMs, status, retryAfterS)
     if (next === 'stop') {
       console.error(`HTTP ${status} from ${url}: blocked. Stopping; do not retry automatically.`)
@@ -1356,7 +1369,7 @@ nohup npm run record:cells > data/recordings/record-cells.log 2>&1 &
 sleep 20 && tail -c 300 data/recordings/$(date -u +%F).jsonl
 ```
 
-Expected: at least one line with `"status":200`. It polls KSFO, LLBG and LOWI (40 nm) round-robin every 2 s = 0.5 req/s. While it runs, any live `adsblol` server run must use `MAX_RPS=0.5` so the total stays ≤ 1 req/s. Stop it with `pkill -f record-cells` when WP-E4's `record-arrivals` takes over.
+Expected: at least one line with `"status":200`. It polls KSFO, LLBG and LOWI (40 nm) round-robin every 3 s ≈ 0.33 req/s. A 429 doubles the interval for the rest of the run and it never climbs back (adsb.lol returned a 429 at 0.5 req/s on 2026-09-22). While it runs, any live `adsblol` server run must use `MAX_RPS=0.5` so the total stays ≤ 1 req/s. Stop it with `pkill -f record-cells` when WP-E4's `record-arrivals` takes over.
 
 - [ ] **Step 6: Commit**
 
@@ -1457,7 +1470,7 @@ git commit -m "feat(client): Vite + Cesium build with static assets and /api pro
 - [ ] **Step 1: Full check**
 
 Run: `npm run check`
-Expected: `tsc` silent; `ℹ tests 40`, `ℹ pass 40`, `ℹ fail 0`.
+Expected: `tsc` silent; `ℹ tests 41`, `ℹ pass 41`, `ℹ fail 0`.
 
 - [ ] **Step 2: Tag**
 

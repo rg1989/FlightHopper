@@ -2,7 +2,7 @@
 // and appends every raw response to data/recordings/YYYY-MM-DD.jsonl in the RecordLine format.
 // ponytail: standalone on purpose so recording starts on day 1; tools/record-arrivals.ts replaces it after M1b.
 //
-//   CONTACT=you@example.com node tools/record-cells.ts [--interval-ms 2000] [--radius-nm 40] [--heroes KSFO,LLBG,LOWI]
+//   CONTACT=you@example.com node tools/record-cells.ts [--interval-ms 3000] [--radius-nm 40] [--heroes KSFO,LLBG,LOWI]
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -26,10 +26,15 @@ export function nextInterval(currentMs: number, baseMs: number, status: number, 
   return Math.max(baseMs, Math.max(MIN_INTERVAL_MS, Math.round(currentMs * 0.9)))
 }
 
+/** A 429 permanently halves the rate for this run: never climb back to a rate that was refused. */
+export function nextBase(baseMs: number, status: number): number {
+  return status === 429 ? Math.min(MAX_INTERVAL_MS, baseMs * 2) : baseMs
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
-      'interval-ms': { type: 'string', default: '2000' },
+      'interval-ms': { type: 'string', default: '3000' },
       'radius-nm': { type: 'string', default: '40' },
       heroes: { type: 'string', default: 'KSFO,LLBG,LOWI' },
       out: { type: 'string', default: 'data/recordings' },
@@ -37,7 +42,7 @@ async function main(): Promise<void> {
   })
   const contact = process.env.CONTACT
   if (!contact) throw new Error('Set CONTACT (e.g. in .env.local); it goes into the User-Agent.')
-  const baseMs = Math.max(MIN_INTERVAL_MS, Number(values['interval-ms']))
+  let baseMs = Math.max(MIN_INTERVAL_MS, Number(values['interval-ms']))
   const radius = Number(values['radius-nm'])
   const heroes = values.heroes.split(',').map((id) => ({ id, ...HEROES[id] }))
   if (heroes.some((h) => h.lat === undefined)) throw new Error(`unknown hero in ${values.heroes}`)
@@ -67,6 +72,7 @@ async function main(): Promise<void> {
     }
     const line: RecordLine = { v: 1, source: 'adsblol', url, status, tSendMs, tRecvMs: Date.now(), bytes, body: status === 200 ? body : '' }
     appendFileSync(join(values.out, `${new Date(tSendMs).toISOString().slice(0, 10)}.jsonl`), JSON.stringify(line) + '\n')
+    baseMs = nextBase(baseMs, status)
     const next = nextInterval(interval, baseMs, status, retryAfterS)
     if (next === 'stop') {
       console.error(`HTTP ${status} from ${url}: blocked. Stopping; do not retry automatically.`)
