@@ -1,0 +1,16 @@
+{
+  "default": "cesium-air",
+  "models": [
+    {
+      "id": "cesium-air",
+      "uri": "models/Cesium_Air.glb",
+      "license": "Apache-2.0: CesiumJS repository LICENSE.md (Copyright 2011-2026 CesiumJS Contributors); the model is not listed among that file's third-party example-application data",
+      "author": "CesiumJS Contributors (Cesium GS, Inc.)",
+      "source": "https://github.com/CesiumGS/cesium/blob/a6f0337f9fe56557c66cb7f6db0f0be422ed593e/Apps/SampleData/models/CesiumAir/Cesium_Air.glb",
+      "forwardAxisFix": { "headingDeg": -90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 4.03,
+      "lengthM": 37.57,
+      "scale": 1.7555
+    }
+  ]
+}
