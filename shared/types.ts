@@ -27,6 +27,31 @@ export interface ReadsbAircraft {
   seen?: number
   mlat?: string[]
   tisb?: string[]
+  // Detail-panel fields (read only for the selected aircraft and the table; all optional, as upstream omits unknowns)
+  squawk?: string
+  category?: string
+  emergency?: string
+  ias?: number
+  tas?: number
+  mach?: number
+  track_rate?: number
+  mag_heading?: number
+  nav_altitude_mcp?: number
+  nav_altitude_fms?: number
+  nav_heading?: number
+  nav_modes?: string[]
+  wd?: number
+  ws?: number
+  oat?: number
+  tat?: number
+  rssi?: number
+  messages?: number
+  nac_v?: number
+  nic_baro?: number
+  sil?: number
+  sda?: number
+  gva?: number
+  rc?: number
 }
 
 /** Source-agnostic envelope. nowMs is the UPSTREAM clock in ms. */

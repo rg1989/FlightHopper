@@ -1,4 +1,5 @@
-import type { Sample, SourceKind } from './types.ts'
+import type { AircraftInfo } from './info.ts'
+import type { ReadsbAircraft, Sample, SourceKind } from './types.ts'
 
 export type Degraded = null | 'rate-limited' | 'blocked' | 'upstream-down'
 
@@ -13,12 +14,15 @@ export interface ViewResponse {
   serverNowMs: number
   samples: Sample[]
   status: StatusBrief
+  info?: AircraftInfo[]          // for returned hexes whose info changed after `since` (all of them when since=0)
 }
 
 export interface ChaseResponse {
   serverNowMs: number
   samples: Sample[]
   status: StatusBrief
+  raw?: ReadsbAircraft | null    // newest full upstream object for the detail panel
+  info?: AircraftInfo | null
 }
 
 export interface BudgetState {

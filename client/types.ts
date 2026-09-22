@@ -1,3 +1,4 @@
+import type { AircraftInfo } from '../shared/info.ts'
 import type { Quality } from '../shared/types.ts'
 import type { AltSource } from './track/types.ts'
 
@@ -46,4 +47,23 @@ export interface ModelManifestEntry {
 export interface ModelManifest {
   default: string                               // id of the model used when no type match
   models: ModelManifestEntry[]
+}
+
+/**
+ * One aircraft in the browse view: newest sample, dead-reckoned to the render time (no Hermite, no filters), for
+ * thousands of aircraft per frame. Objects are reused between frames by Fleet; never keep a reference across frames.
+ */
+export interface FleetEntry {
+  hex: string
+  lat: number
+  lon: number
+  hM: number                                    // HAE metres for 3-D placement (geom, else baro + N; ground: N)
+  altFt: number | null                          // baro ft (geom when no baro) for colour and table; null = unknown
+  onGround: boolean
+  trackDeg: number | null
+  gsKt: number | null
+  vsFpm: number | null
+  ageS: number                                  // render time − newest sample tMs, seconds
+  quality: Quality
+  info: AircraftInfo | null
 }
