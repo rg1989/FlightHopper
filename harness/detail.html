@@ -1,0 +1,32 @@
+<!-- harness/detail.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness: detail panel</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+      #stage { position: relative; width: 100%; height: 100%; }
+      /* Stand-ins for the base layers the panel sits on: the browse street map and the chase satellite imagery. */
+      body[data-bg='map'] #stage { background:
+        linear-gradient(90deg, transparent 0 48%, #fff 48% 49%, transparent 49%) 0 0 / 180px 180px,
+        linear-gradient(0deg, transparent 0 60%, #fcd6a4 60% 62%, transparent 62%) 0 0 / 240px 240px,
+        radial-gradient(circle at 70% 30%, #aad3df 0 120px, transparent 121px), #f2efe9; }
+      body[data-bg='satellite'] #stage { background: repeating-linear-gradient(35deg, #3f5f2a 0 40px, #6b7d4a 40px 90px, #a88b5b 90px 120px, #2f4a24 120px 170px); }
+      body[data-bg='snow'] #stage { background: linear-gradient(160deg, #fff 0%, #e9eef3 40%, #cfd8e0 70%, #fff 100%); }
+      #controls { position: absolute; top: 8px; right: 8px; z-index: 20; display: flex; flex-wrap: wrap; justify-content: flex-end;
+        gap: 4px; max-width: min(520px, calc(100% - 330px)); font: 12px system-ui, sans-serif; }
+      #controls button { font: inherit; padding: 3px 8px; }
+      #controls button[aria-pressed='true'] { outline: 2px solid #1e88e5; }
+      #stats { position: absolute; right: 8px; bottom: 8px; z-index: 20; max-width: 46ch; padding: 6px 8px; border-radius: 4px;
+        background: rgba(255, 255, 255, 0.9); color: #111; font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body data-bg="map">
+    <div id="stage"></div>
+    <div id="controls"></div>
+    <div id="stats"></div>
+    <script type="module" src="./detail.ts"></script>
+  </body>
+</html>
