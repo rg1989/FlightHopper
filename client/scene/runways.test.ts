@@ -2,9 +2,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { Cartographic, EntityCollection, JulianDate, PolygonGeometry, Primitive, type GeometryInstance, type Viewer } from 'cesium'
 import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg, distanceNm } from '../../shared/geo.ts'
-import { runwayCorners } from './runways.ts'
+import { addRunways, RUNWAY_LIFT_M, runwayCorners } from './runways.ts'
 
 const airports: Airport[] = JSON.parse(readFileSync(new URL('../../data/fixtures/golden/airports-sample.json', import.meta.url), 'utf8'))
 const ksfo = airports.find((a) => a.ident === 'KSFO')!
@@ -57,4 +58,65 @@ test('every golden runway: rectangle as wide as published, as long as its ends a
       assert.deepEqual([a.h, b.h, c.h, d.h], [x.thrHaeM, x.thrHaeM, y.thrHaeM, y.thrHaeM], name)
     }
   }
+})
+
+// addRunways against a stand-in viewer: the scene's primitive list and an entity collection are all it touches.
+// (Labels only need a DOM once Cesium renders them, so this runs in Node.)
+function fakeViewer(): { viewer: Viewer; added: unknown[]; removed: unknown[]; entities: EntityCollection } {
+  const added: unknown[] = []
+  const removed: unknown[] = []
+  const entities = new EntityCollection()
+  const primitives = { add: (p: unknown) => (added.push(p), p), remove: (p: unknown) => (removed.push(p), true) }
+  const viewer = { scene: { primitives }, entities, isDestroyed: () => false } as unknown as Viewer
+  return { viewer, added, removed, entities }
+}
+
+const deg = (rad: number): number => (rad * 180) / Math.PI
+const now = JulianDate.now()
+
+test('addRunways: one batched polygon primitive for all runways, one marker per threshold', () => {
+  const { viewer, added, entities } = fakeViewer()
+  addRunways(viewer, airports)
+  const runways = airports.flatMap((a) => a.runways)
+  assert.equal(added.length, 1)
+  const prim = added[0] as Primitive
+  assert.ok(prim instanceof Primitive)
+  assert.equal((prim.geometryInstances as unknown[]).length, runways.length)
+  assert.equal(entities.values.length, runways.length * 2)
+  const ksfoLabels = entities.values.slice(0, 8).map((e) => e.label!.text!.getValue(now))
+  assert.deepEqual(ksfoLabels, ['10L', '28R', '10R', '28L', '1L', '19R', '1R', '19L'])
+})
+
+test('addRunways: the polygon sits on the corners, lifted RUNWAY_LIFT_M; the marker sits on the threshold', () => {
+  const { viewer, added, entities } = fakeViewer()
+  addRunways(viewer, [{ ...ksfo, runways: [rwy] }])
+  const instance = ((added[0] as Primitive).geometryInstances as GeometryInstance[])[0]
+  const geom = PolygonGeometry.createGeometry(instance.geometry as unknown as PolygonGeometry)!
+  const v = geom.attributes.position!.values as unknown as number[]
+  assert.equal(v.length, 4 * 3)
+  const corners = runwayCorners(rwy)
+  for (let i = 0; i < 4; i++) {
+    const c = Cartographic.fromCartesian({ x: v[3 * i], y: v[3 * i + 1], z: v[3 * i + 2] } as never)
+    near(deg(c.latitude), corners[i].lat, 1e-7, `corner ${i} lat`)
+    near(deg(c.longitude), corners[i].lon, 1e-7, `corner ${i} lon`)
+    near(c.height, corners[i].h + RUNWAY_LIFT_M, 0.01, `corner ${i} h`)
+  }
+  assert.equal(geom.indices!.length, 2 * 3) // two flat triangles: a plane, no subdivision
+  const p = Cartographic.fromCartesian(entities.values[1].position!.getValue(now)!)
+  near(deg(p.latitude), e28R.thrLat, 1e-7)
+  near(deg(p.longitude), e28R.thrLon, 1e-7)
+  near(p.height, e28R.thrHaeM + RUNWAY_LIFT_M, 0.01)
+})
+
+test('addRunways: destroy removes exactly what it added; no airports adds nothing', () => {
+  const { viewer, added, removed, entities } = fakeViewer()
+  entities.add({ id: 'someone-else' })
+  const h = addRunways(viewer, airports)
+  h.destroy()
+  assert.deepEqual(removed, added)
+  assert.deepEqual(entities.values.map((e) => e.id), ['someone-else'])
+  const empty = fakeViewer()
+  addRunways(empty.viewer, []).destroy()
+  assert.equal(empty.added.length, 0)
+  assert.equal(empty.removed.length, 0)
 })
