@@ -1,0 +1,30 @@
+<!-- harness/table.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness: aircraft table</title>
+    <style>
+      /* A light, busy street-map stand-in: the table must read over it, as it will over the browse map. */
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+      body { background:
+        repeating-linear-gradient(28deg, transparent 0 58px, #f6f1e4 58px 64px),
+        repeating-linear-gradient(-62deg, transparent 0 90px, #ffffff 90px 97px),
+        linear-gradient(160deg, #e8e4d8, #d6e6c9 45%, #aad3df 75%, #e8e4d8); }
+      #panel { position: absolute; top: 8px; left: 8px; z-index: 20; width: min(440px, calc(100% - 460px)); min-width: 260px;
+        padding: 6px 8px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff;
+        background: rgba(0, 0, 0, 0.75); border-radius: 4px; }
+      #panel button { font: inherit; margin: 0 4px 4px 0; }
+      #panel button[aria-pressed='true'] { outline: 2px solid #1e88e5; }
+      #stats { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <div id="controls"></div>
+      <div id="stats">loading…</div>
+    </div>
+    <script type="module" src="./table.ts"></script>
+  </body>
+</html>
