@@ -1,7 +1,8 @@
 // client/scene/model.ts
 // WP-V3 model calibration: place the chase model so that its nose points along RenderState.headingDeg.
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
-import { Axis, Cartesian3, Matrix4, Quaternion } from 'cesium'
+import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Quaternion, Transforms } from 'cesium'
+import type { ModelManifestEntry, RenderState } from '../types.ts'
 
 // ---------- glTF geometry in Cesium's model frame ----------
 
@@ -85,4 +86,61 @@ export function measureGlb(glb: Uint8Array): GlbAxes {
     return hi - lo
   }
   return { nose, up, right, lengthM: extent(nose), spanM: extent(right), belowOriginM: -zMin }
+}
+
+// ---------- attitude → Cesium ----------
+//
+// Cesium's conventions, read from the cesium 1.145 source (@cesium/engine Core/Quaternion.js fromHeadingPitchRoll and
+// Core/Transforms.js headingPitchRollToFixedFrame): the matrix is ENU(origin) · Rz(−heading) · Ry(−pitch) · Rx(roll),
+// with ENU x = east, y = north, z = up. In the model frame above (nose +X, left wing +Y, up +Z) that means:
+// - heading 0 points the nose EAST, and positive heading turns it clockwise seen from above: azimuth = 90° + heading.
+//   A model whose nose is +X therefore needs forwardAxisFix.headingDeg = −90.
+// - positive pitch raises +X: nose up, the same sign as RenderState.pitchDeg.
+// - positive roll lifts +Y (the left wing): right wing down, the same sign as RenderState.rollDeg.
+// So hprFor only adds the fix. No sign is flipped.
+
+/** Cesium HeadingPitchRoll (radians) for a RenderState: its attitude plus the model's forwardAxisFix. */
+export function hprFor(state: RenderState, m: ModelManifestEntry, result: HeadingPitchRoll = new HeadingPitchRoll()): HeadingPitchRoll {
+  const fix = m.forwardAxisFix
+  result.heading = CesiumMath.toRadians(state.headingDeg + fix.headingDeg)
+  result.pitch = CesiumMath.toRadians(state.pitchDeg + fix.pitchDeg)
+  result.roll = CesiumMath.toRadians(state.rollDeg + fix.rollDeg)
+  return result
+}
+
+const scratchPos = new Cartesian3()
+const scratchHpr = new HeadingPitchRoll()
+
+/**
+ * World matrix of the chase model: origin at (lat, lon, hM + gearHeightM), attitude from hprFor, uniform m.scale
+ * baked in (so ChaseModel leaves Model.scale at 1).
+ * ponytail: hM is the wheel-bottom height in every phase, not only on the ground, so touchdown has no gear-height
+ * step. Airborne, that bias is smaller than ADS-B's 25 ft altitude step. The offset runs along the ellipsoid normal,
+ * not body-up, so at 10° pitch the wheels sit 0.06 m high. Upgrade: offset along body-up when M4 adds ground contact.
+ */
+export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4): Matrix4 {
+  const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + m.gearHeightM, undefined, scratchPos)
+  const mm = Transforms.headingPitchRollToFixedFrame(pos, hprFor(state, m, scratchHpr), undefined, undefined, result ?? new Matrix4())
+  return Matrix4.multiplyByUniformScale(mm, m.scale, mm)
+}
+
+const scratchOrigin = new Cartesian3()
+const scratchEnu = new Matrix4()
+const scratchDir = new Cartesian3()
+
+/** A model-frame direction as a unit vector in ENU (x east, y north, z up) at the model's origin. */
+function toEnu(modelMatrix: Matrix4, v: Cartesian3, result: Cartesian3): Cartesian3 {
+  const origin = Matrix4.getTranslation(modelMatrix, scratchOrigin)
+  const fixedToEnu = Matrix4.inverseTransformation(Transforms.eastNorthUpToFixedFrame(origin, undefined, scratchEnu), scratchEnu)
+  const world = Matrix4.multiplyByPointAsVector(modelMatrix, v, result)
+  return Cartesian3.normalize(Matrix4.multiplyByPointAsVector(fixedToEnu, world, result), result)
+}
+
+/**
+ * True azimuth of the model's nose in [0, 360), clockwise from north. noseAxis is the nose in Cesium's model frame:
+ * +X by Cesium's convention, or measureGlb(glb).nose to check a particular asset.
+ */
+export function noseAzimuthDeg(modelMatrix: Matrix4, noseAxis: Cartesian3 = Cartesian3.UNIT_X): number {
+  const f = toEnu(modelMatrix, noseAxis, scratchDir)
+  return (CesiumMath.toDegrees(Math.atan2(f.x, f.y)) + 360) % 360
 }
