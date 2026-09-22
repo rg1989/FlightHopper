@@ -4,6 +4,7 @@ import { MinOffset } from '../shared/clock.ts'
 import { isHidden, toSample } from '../shared/sample.ts'
 import type { TokenBucket } from './budget.ts'
 import { cellsForView, type Cell } from './cells.ts'
+import type { InfoStore } from './infoStore.ts'
 import type { Recorder } from './recorder.ts'
 import type { FetchResult, Source } from './sources/types.ts'
 import type { SampleStore } from './store.ts'
@@ -17,6 +18,7 @@ export interface PollerOpts {
   recorder: Recorder | null
   hideFlagged: boolean
   nowMs?: () => number
+  info?: InfoStore // gets every non-hidden aircraft object of every good answer (identity, detail panel, routes)
 }
 
 /**
@@ -38,6 +40,8 @@ const OFFSET_WINDOW_MS = 10 * 60_000
 const HOUR_MS = 3_600_000
 const MIN_SPAN_MS = 60_000 // bytes/hour is extrapolated from at least one minute
 const KEEP_INTERVALS = 100 // p95 over the most recent intervals
+/** The InfoStore forgets an aircraft after this long without an answer: the SampleStore's default horizon. */
+export const INFO_HORIZON_MS = 180_000
 
 /** p95 (nearest rank) of intervals in ms, as seconds; null when there are none. */
 function p95S(xs: readonly number[]): number | null {
@@ -203,7 +207,7 @@ export class Poller {
     }
   }
 
-  /** Budget, recorder, clock offset, store. Returns whether the answer was good (200 and parsed). */
+  /** Budget, recorder, clock offset, stores. Returns whether the answer was good (200 and parsed). */
   #ingest(r: FetchResult): boolean {
     const now = this.#now()
     this.#bucket.onResult(r.status, r.retryAfterS)
@@ -219,11 +223,14 @@ export class Poller {
     if (r.status !== 200 || snap === null) return false
     this.#offset.update(r.tRecvMs, snap.nowMs)
     const offsetMs = this.#offset.get()
+    const info = this.#opts.info
     for (const ac of snap.aircraft) {
       if (this.#opts.hideFlagged && isHidden(ac)) continue
+      info?.update(ac, r.tRecvMs)
       const s = toSample(ac, snap.nowMs, offsetMs, r.tRecvMs)
       if (s) this.#store.add(s)
     }
+    info?.prune(now, INFO_HORIZON_MS) // on good answers only: its route-cache sweep need not run every 100 ms tick
     return true
   }
 
