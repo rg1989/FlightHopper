@@ -24,10 +24,18 @@ export function parseRecordLine(line: string): RecordLine {
 }
 
 export function readRecording(path: string): RecordLine[] {
-  return readFileSync(path, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim() !== '')
-    .map(parseRecordLine)
+  // ponytail: split the Buffer, not one big string — V8 caps a string at ~512 MiB and a day of recording can exceed it.
+  // Ceiling: all parsed lines are held in memory; stream per line if a single file outgrows RAM.
+  const buf = readFileSync(path)
+  const out: RecordLine[] = []
+  for (let start = 0; start < buf.length; ) {
+    let end = buf.indexOf(0x0a, start)
+    if (end === -1) end = buf.length
+    const line = buf.toString('utf8', start, end).trim()
+    if (line !== '') out.push(parseRecordLine(line))
+    start = end + 1
+  }
+  return out
 }
 
 /**

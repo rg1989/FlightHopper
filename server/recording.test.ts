@@ -1,14 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseRecordLine, readRecording, recordingToSamples } from './recording.ts'
 
 const path = fileURLToPath(new URL('../data/fixtures/golden/recording-sample.jsonl', import.meta.url))
 
-test('reads all record lines, including non-200', () => {
+test('reads all record lines, including non-200; tolerates CRLF, blank lines, no final newline', () => {
   const lines = readRecording(path)
   assert.equal(lines.length, 4)
   assert.deepEqual(lines.map((l) => l.status), [200, 200, 429, 200])
+  const raw = readFileSync(path, 'utf8').trim().split('\n')
+  const p = join(mkdtempSync(join(tmpdir(), 'fh-rec-')), 'x.jsonl')
+  writeFileSync(p, `${raw[0]}\r\n\n${raw[2]}`)
+  assert.deepEqual(readRecording(p).map((l) => l.status), [200, 429])
 })
 
 test('re-served poll adds nothing; 429 skipped; second real poll adds only moved aircraft', () => {
@@ -34,3 +41,4 @@ test('stamps in the recording clock: offset = min(tRecv − now) so far', () => 
 test('rejects lines that are not v1 records', () => {
   assert.throws(() => parseRecordLine('{"v":2}'))
 })
+

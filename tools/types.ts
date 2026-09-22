@@ -3,7 +3,7 @@ export interface Frame {
   t: number                                     // seconds (render time, server clock)
   e: number                                     // metres
   n: number
-  u: number
+  u: number                                     // height above the reference (hM − h0), not tangent-plane up
   mode: 'interp' | 'extrap' | 'stale'
   headingDeg: number
   pitchDeg: number

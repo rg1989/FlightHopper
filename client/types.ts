@@ -6,14 +6,14 @@ export interface RenderState {
   hex: string
   lat: number
   lon: number
-  hM: number                                    // WGS84 ellipsoidal metres
+  hM: number                                    // WGS84 ellipsoidal metres of the wheels (the chase model adds gearHeightM)
   headingDeg: number                            // true, nose direction
   pitchDeg: number                              // nose-up positive
   rollDeg: number                               // right-wing-down positive
-  gsKt: number | null
-  trackDeg: number | null
-  altBaroFt: number | null
-  vsFpm: number | null
+  gsKt: number | null                           // copied from the newest sample
+  trackDeg: number | null                       // copied from the newest sample
+  altBaroFt: number | null                      // copied from the newest sample
+  vsFpm: number | null                          // from the vertical filter (derived)
   mode: 'interp' | 'extrap' | 'stale'           // stale = extrapolated past 8 s → frozen
   altSource: AltSource
   onGround: boolean
