@@ -1,7 +1,10 @@
 // client/config.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { EllipsoidTerrainProvider, UrlTemplateImageryProvider } from 'cesium'
 import { readConfig } from './config.ts'
+import { EOX_ATTRIBUTION, makeImagery } from './scene/imagery.ts'
+import { makeTerrain } from './scene/terrain.ts'
 
 test('no env at all → keyless defaults (Re:Earth terrain, EOX imagery, /api)', () => {
   assert.deepEqual(readConfig({}), { terrain: 'reearth', imagery: 'eox', ionToken: null, apiBase: '/api' })
@@ -38,4 +41,21 @@ test('ion without a token throws instead of silently using the Cesium evaluation
 test('apiBase: custom value kept, trailing slashes dropped', () => {
   assert.equal(readConfig({ VITE_API_BASE: 'https://fh.example.net/api/' }).apiBase, 'https://fh.example.net/api')
   assert.equal(readConfig({ VITE_API_BASE: '/api' }).apiBase, '/api')
+})
+
+// Provider wiring for the branches that need no network. ion and reearth are checked in harness/viewer.html.
+test('offline branches: ellipsoid terrain, no imagery', async () => {
+  const cfg = readConfig({ VITE_TERRAIN: 'ellipsoid', VITE_IMAGERY: 'none' })
+  assert.ok((await makeTerrain(cfg)) instanceof EllipsoidTerrainProvider)
+  assert.equal(await makeImagery(cfg), null)
+})
+
+test('EOX imagery: Sentinel-2 cloudless WebMercator template, native zoom cap, attribution on screen', async () => {
+  const p = await makeImagery(readConfig({}))
+  assert.ok(p instanceof UrlTemplateImageryProvider)
+  assert.equal(p.url, 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg')
+  assert.equal(p.maximumLevel, 14)
+  assert.equal(p.credit.showOnScreen, true)
+  assert.match(p.credit.html, /by EOX IT Services GmbH \(Contains modified Copernicus Sentinel data 2025\)/)
+  assert.equal(EOX_ATTRIBUTION, 'EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025)')
 })
