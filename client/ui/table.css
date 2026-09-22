@@ -1,0 +1,195 @@
+/* client/ui/table.css */
+/* Right-hand sidebar over the map: a dark translucent panel with a fixed-row-height virtual list. No backdrop-filter:
+   blurring the globe behind the panel would cost a pass every frame the globe redraws. */
+.fh-table {
+  position: absolute;
+  z-index: 10;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: min(420px, calc(100vw - 16px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.82);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  color: #e6ebf0;
+  font: 12px/1.3 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Collapsed: only the header (toggle + counts) stays, as a small box in the corner. */
+.fh-table.fh-collapsed {
+  bottom: auto;
+  width: auto;
+}
+
+.fh-table.fh-collapsed .fh-table-body {
+  display: none;
+}
+
+.fh-table-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 6px;
+  white-space: nowrap;
+}
+
+.fh-table-toggle {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.fh-table-count {
+  color: #c3ccd5;
+}
+
+.fh-table-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fh-table-search {
+  margin: 0 8px 6px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.fh-table-search:focus {
+  border-color: #4aa3ff;
+}
+
+/* Header and rows share one grid, so the columns line up. */
+.fh-grid {
+  display: grid;
+  grid-template-columns: 20px 62px minmax(0, 1fr) 36px 34px 62px 42px;
+  column-gap: 4px;
+  padding: 0 8px;
+}
+
+.fh-table-cols {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.fh-table-cols button {
+  overflow: hidden;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: #9aa6b2;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fh-table-cols button:hover,
+.fh-table-cols button[data-sort='asc'],
+.fh-table-cols button[data-sort='desc'] {
+  color: #fff;
+}
+
+.fh-table-cols button[data-sort='asc']::after {
+  content: ' ▴';
+}
+
+.fh-table-cols button[data-sort='desc']::after {
+  content: ' ▾';
+}
+
+.fh-table-empty {
+  padding: 10px;
+  color: #9aa6b2;
+}
+
+.fh-table-empty[hidden] {
+  display: none;
+}
+
+/* contain: strict keeps layout, style and paint of the list inside this box: moving rows never relayouts the page. */
+.fh-table-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  contain: strict;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  scrollbar-width: thin;
+}
+
+.fh-table-spacer {
+  position: relative;
+  width: 100%;
+}
+
+/* Height must equal ROW_H in table.ts. Rows are placed with transform: translateY(i × ROW_H). */
+.fh-row {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 22px;
+  line-height: 22px;
+  contain: strict;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-row[hidden] {
+  display: none;
+}
+
+.fh-row.fh-odd {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.fh-row:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fh-row.fh-sel {
+  background: rgba(33, 136, 255, 0.5);
+}
+
+.fh-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fh-num {
+  text-align: right;
+}
+
+.fh-table-cols button.fh-num {
+  text-align: right;
+}
+
+/* Hijack, radio failure, general emergency: not colour alone (bold + box) so it reads for colour-blind users too. */
+.fh-row > span.fh-emerg {
+  align-self: center;
+  border-radius: 3px;
+  background: #d32f2f;
+  color: #fff;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
