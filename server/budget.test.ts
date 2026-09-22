@@ -1,0 +1,207 @@
+// server/budget.test.ts
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { TokenBucket } from './budget.ts'
+
+/** A bucket on a fake clock: tests move time by assigning c.t (ms). */
+function setup(maxRps: number, random?: () => number): { b: TokenBucket; c: { t: number } } {
+  const c = { t: 0 }
+  return { b: new TokenBucket(maxRps, () => c.t, random), c }
+}
+
+const near = (a: number, b: number, msg = ''): void => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b} ${msg}`)
+
+test('burst 2, then one token per 1/rps', () => {
+  const { b, c } = setup(1)
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), false)
+  c.t = 999
+  assert.equal(b.tryTake(), false)
+  c.t = 1000
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), false)
+})
+
+test('steady rate: a caller asking every 10 ms gets maxRps on average, plus at most the burst', () => {
+  for (const maxRps of [1, 0.5, 5]) {
+    const { b, c } = setup(maxRps)
+    let n = 0
+    for (c.t = 0; c.t <= 600_000; c.t += 10) if (b.tryTake()) n++
+    assert.ok(n >= 600 * maxRps && n <= 600 * maxRps + 2, `maxRps ${maxRps}: ${n} takes in 600 s`)
+  }
+})
+
+test('idle time never banks more than the burst', () => {
+  const { b, c } = setup(1)
+  c.t = 3_600_000
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), false)
+  assert.equal(b.state().tokens, 0)
+})
+
+test('429 halves the rate down to a floor of maxRps/8', () => {
+  const { b } = setup(1)
+  const rates: number[] = []
+  for (let i = 0; i < 4; i++) {
+    b.onResult(429, null)
+    rates.push(b.state().rps)
+  }
+  assert.deepEqual(rates, [0.5, 0.25, 0.125, 0.125])
+})
+
+test('429 pauses for Retry-After, then allows one probe and continues at the halved rate', () => {
+  const { b, c } = setup(1)
+  c.t = 10_000
+  b.onResult(429, 30)
+  assert.equal(b.state().pausedUntilMs, 40_000)
+  c.t = 39_999
+  assert.equal(b.tryTake(), false)
+  c.t = 40_000
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.tryTake(), false)
+  c.t = 41_999
+  assert.equal(b.tryTake(), false)
+  c.t = 42_000
+  assert.equal(b.tryTake(), true)
+})
+
+test('429 without Retry-After pauses 5 s', () => {
+  const { b, c } = setup(1)
+  b.onResult(429, null)
+  assert.equal(b.state().pausedUntilMs, 5000)
+  c.t = 4999
+  assert.equal(b.tryTake(), false)
+  c.t = 5000
+  assert.equal(b.tryTake(), true)
+})
+
+test('recovery: ×1.1 per 60 s without a 429, capped at maxRps; a new 429 restarts the clock', () => {
+  const { b, c } = setup(1)
+  b.onResult(429, null)
+  near(b.state().rps, 0.5)
+  c.t = 59_999
+  near(b.state().rps, 0.5)
+  c.t = 60_000
+  near(b.state().rps, 0.55)
+  c.t = 120_000
+  near(b.state().rps, 0.605)
+  b.onResult(429, null)
+  near(b.state().rps, 0.3025)
+  c.t = 179_999
+  near(b.state().rps, 0.3025)
+  c.t = 180_000
+  near(b.state().rps, 0.33275)
+  c.t = 3_600_000
+  assert.equal(b.state().rps, 1)
+})
+
+test('degraded is rate-limited while the last 429 is < 60 s old', () => {
+  const { b, c } = setup(1)
+  assert.equal(b.degraded, null)
+  c.t = 1000
+  b.onResult(429, 1)
+  assert.equal(b.degraded, 'rate-limited')
+  c.t = 60_999
+  assert.equal(b.degraded, 'rate-limited')
+  c.t = 61_000
+  assert.equal(b.degraded, null)
+})
+
+test('401 and 403 block forever', () => {
+  for (const status of [401, 403]) {
+    const { b, c } = setup(1)
+    b.onResult(status, null)
+    assert.equal(b.degraded, 'blocked')
+    assert.equal(b.tryTake(), false)
+    c.t = 86_400_000
+    b.onResult(200, null)
+    assert.equal(b.tryTake(), false)
+    assert.equal(b.state().blocked, true)
+    assert.equal(b.degraded, 'blocked')
+  }
+})
+
+test('5xx and network errors back off 2^k s + jitter, capped at 60 s', () => {
+  const { b, c } = setup(1, () => 0.5)
+  const pauses: number[] = []
+  for (let i = 0; i < 7; i++) {
+    b.onResult(i % 2 === 1 ? 0 : 503, null)
+    pauses.push(b.state().pausedUntilMs - c.t)
+    c.t = b.state().pausedUntilMs
+    assert.equal(b.tryTake(), true, `probe allowed when pause ${i} ends`)
+  }
+  assert.deepEqual(pauses, [2500, 4500, 8500, 16_500, 32_500, 60_000, 60_000])
+})
+
+test('default jitter is within [0, 1) s', () => {
+  for (let i = 0; i < 50; i++) {
+    const { b } = setup(1)
+    b.onResult(502, null)
+    const p = b.state().pausedUntilMs
+    assert.ok(p >= 2000 && p < 3000, `pause ${p}`)
+  }
+})
+
+test('3 consecutive 5xx/0 → upstream-down; any other answer resets the streak and the backoff', () => {
+  const { b, c } = setup(1, () => 0)
+  b.onResult(500, null)
+  b.onResult(0, null)
+  assert.equal(b.degraded, null)
+  b.onResult(504, null)
+  assert.equal(b.degraded, 'upstream-down')
+  c.t = 100_000
+  b.onResult(200, null)
+  assert.equal(b.degraded, null)
+  b.onResult(503, null)
+  assert.equal(b.state().pausedUntilMs, 102_000)
+})
+
+test('blocked outranks rate-limited, which outranks upstream-down', () => {
+  const { b } = setup(1, () => 0)
+  b.onResult(500, null)
+  b.onResult(500, null)
+  b.onResult(500, null)
+  assert.equal(b.degraded, 'upstream-down')
+  b.onResult(429, null)
+  b.onResult(500, null)
+  b.onResult(500, null)
+  b.onResult(500, null)
+  assert.equal(b.degraded, 'rate-limited')
+  b.onResult(403, null)
+  assert.equal(b.degraded, 'blocked')
+})
+
+test('a pause is never shortened by a later, shorter one', () => {
+  const { b } = setup(1, () => 0)
+  b.onResult(429, 30)
+  b.onResult(503, null)
+  assert.equal(b.state().pausedUntilMs, 30_000)
+})
+
+test('counts every outcome', () => {
+  const { b } = setup(1, () => 0)
+  for (const s of [200, 204, 429, 404, 403, 500, 503, 0]) b.onResult(s, null)
+  assert.deepEqual(b.state().counts, { ok: 2, r429: 1, r4xx: 2, r5xx: 2, err: 1 })
+})
+
+test('state() reports rate, ceiling, accrued tokens and pause', () => {
+  const { b, c } = setup(0.5)
+  b.tryTake()
+  c.t = 1000
+  assert.deepEqual(b.state(), {
+    rps: 0.5,
+    maxRps: 0.5,
+    tokens: 1.5,
+    blocked: false,
+    pausedUntilMs: 0,
+    counts: { ok: 0, r429: 0, r4xx: 0, r5xx: 0, err: 0 },
+  })
+})
+
+test('defaults to the wall clock', () => {
+  const b = new TokenBucket(1)
+  assert.equal(b.tryTake(), true)
+  assert.equal(b.degraded, null)
+})
