@@ -3,10 +3,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
 import { Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix4, Transforms } from 'cesium'
+import type { Model, Viewer } from 'cesium'
 import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg } from '../../shared/geo.ts'
 import type { ModelManifest, RenderState } from '../types.ts'
-import { GLTF_TO_CESIUM, hprFor, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
+import { ChaseModel, GLTF_TO_CESIUM, hprFor, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
 
 const root = new URL('../../', import.meta.url)
 const manifest: ModelManifest = JSON.parse(readFileSync(new URL('public/models/manifest.json', root), 'utf8'))
@@ -141,4 +142,40 @@ test('modelMatrixFor: origin at lat/lon and hM + gearHeightM, scale baked in, re
   near(CesiumMath.toDegrees(c.longitude), -122.4, 1e-9)
   near(c.height, -28.3 + m.gearHeightM, 1e-4)
   near(Matrix4.getMaximumScale(mm), m.scale, 1e-9)
+})
+
+// ---------- ChaseModel (Model and Viewer faked: no WebGL in Node) ----------
+
+function fakes(): { viewer: Viewer; added: unknown[]; model: { modelMatrix: Matrix4; show: boolean } } {
+  const added: unknown[] = []
+  const viewer = {
+    scene: { primitives: { add: <T>(p: T): T => (added.push(p), p), remove: (p: unknown): boolean => added.splice(added.indexOf(p), 1).length === 1 } },
+  } as unknown as Viewer
+  return { viewer, added, model: { modelMatrix: new Matrix4(), show: true } }
+}
+
+test('ChaseModel: added hidden; update rewrites modelMatrix in place and shows it; show=false hides; destroy removes', () => {
+  const f = fakes()
+  const cm = new ChaseModel(f.viewer, m, f.model as unknown as Model)
+  assert.deepEqual(f.added, [f.model])
+  assert.equal(f.model.show, false)
+  cm.show = true
+  assert.equal(f.model.show, false, 'not shown before the first update (it would sit at the Earth centre)')
+
+  const same = f.model.modelMatrix
+  const s = state(KSFO.lat, KSFO.lon, 0, 297.9)
+  cm.update(s)
+  assert.equal(f.model.modelMatrix, same)
+  assert.ok(Matrix4.equals(f.model.modelMatrix, modelMatrixFor(s, m)))
+  assert.equal(f.model.show, true)
+
+  cm.show = false
+  cm.update(s)
+  assert.equal(f.model.show, false)
+  assert.equal(cm.show, false)
+  cm.show = true
+  assert.equal(f.model.show, true)
+
+  cm.destroy()
+  assert.deepEqual(f.added, [])
 })

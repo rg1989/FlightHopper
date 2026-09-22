@@ -1,7 +1,8 @@
 // client/scene/model.ts
 // WP-V3 model calibration: place the chase model so that its nose points along RenderState.headingDeg.
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
-import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Quaternion, Transforms } from 'cesium'
+import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Quaternion, Transforms } from 'cesium'
+import type { Viewer } from 'cesium'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
 
 // ---------- glTF geometry in Cesium's model frame ----------
@@ -143,4 +144,56 @@ function toEnu(modelMatrix: Matrix4, v: Cartesian3, result: Cartesian3): Cartesi
 export function noseAzimuthDeg(modelMatrix: Matrix4, noseAxis: Cartesian3 = Cartesian3.UNIT_X): number {
   const f = toEnu(modelMatrix, noseAxis, scratchDir)
   return (CesiumMath.toDegrees(Math.atan2(f.x, f.y)) + 360) % 360
+}
+
+// ---------- the chased model in the scene ----------
+
+/** Manifest uris are relative to public/, so they resolve against Vite's base URL ('/' in Node tests). */
+function modelUrl(m: ModelManifestEntry): string {
+  return `${import.meta.env?.BASE_URL ?? '/'}${m.uri}`
+}
+
+export class ChaseModel {
+  readonly model: Model
+  private readonly viewer: Viewer
+  private readonly m: ModelManifestEntry
+  private visible = true
+  private placed = false
+
+  /** Prefer ChaseModel.load. Adds the model to the scene hidden: it appears on the first update(), not at the Earth's centre. */
+  constructor(viewer: Viewer, m: ModelManifestEntry, model: Model) {
+    this.viewer = viewer
+    this.m = m
+    this.model = model
+    model.show = false
+    viewer.scene.primitives.add(model)
+  }
+
+  static async load(viewer: Viewer, m: ModelManifestEntry): Promise<ChaseModel> {
+    // Model clones its own identity modelMatrix, which update() then rewrites. The scale is in modelMatrixFor, so
+    // Model.scale stays 1. minimumPixelSize keeps a distant model visible.
+    const model = await Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false })
+    return new ChaseModel(viewer, m, model)
+  }
+
+  /** Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. */
+  update(state: RenderState): void {
+    modelMatrixFor(state, this.m, this.model.modelMatrix)
+    this.placed = true
+    this.model.show = this.visible
+  }
+
+  get show(): boolean {
+    return this.visible
+  }
+
+  set show(v: boolean) {
+    this.visible = v
+    this.model.show = v && this.placed
+  }
+
+  /** Removes the model from the scene. PrimitiveCollection destroys what it removes by default. */
+  destroy(): void {
+    this.viewer.scene.primitives.remove(this.model)
+  }
 }
