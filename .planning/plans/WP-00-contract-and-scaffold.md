@@ -10,6 +10,8 @@
 
 **Wave:** 0 (sequential; everything else waits for this). **Estimated:** 2–3 h. **Validated:** every file below was run in a scratch copy on 2026-09-22: 41/41 tests pass, `tsc --noEmit` clean, `vite build` produces `dist/cesiumStatic/{Workers,Assets,ThirdParty,Widgets}`, and the dev server renders a globe.
 
+> **Status:** executed on `main` (tag `wave-0`, 2026-09-22) plus the follow-up commit "streaming readRecording, keyless env defaults". In this plan only, the `// path` first line of each code block is a label, not file content. Wave 1–3 plans keep it as the file's first line.
+
 ## Global Constraints
 
 See `.planning/PLAN.md` § Global Constraints — they apply to every task here. The ones this package establishes:
@@ -122,19 +124,25 @@ data/recordings/
 ```
 
 ```bash
-# Copy to .env.local (gitignored). Server reads plain env; client reads VITE_* via Vite.
+# Copy to .env.local (gitignored). The server reads plain vars; the client reads VITE_* via Vite.
+# Contact for the adsb.lol User-Agent (required for ADSB_SOURCE=adsblol and the recorders)
 CONTACT=you@example.com
-ADSB_SOURCE=replay            # adsblol | readsb | replay
-MAX_RPS=1                     # adsb.lol ceiling; never raise above 1
+# adsblol | readsb | replay
+ADSB_SOURCE=replay
+# adsb.lol budget in req/s. Observed 2026-09-22: 429s at 0.14-0.5 req/s, clean at ~0.08. Keep it low.
+MAX_RPS=0.08
 READSB_URL=http://127.0.0.1:8042
+# lat,lon,radius_nm of your receiver's coverage
 READSB_COVERAGE=32.01,34.88,200
 REPLAY_FILES=data/fixtures/*.jsonl
 REPLAY_SPEED=1
+# empty = do not record
 RECORD_DIR=data/recordings
 PORT=8787
 SHOW_PIA_LADD=0
-VITE_TERRAIN=ion              # ion | reearth | ellipsoid
-VITE_IMAGERY=ion              # ion | eox
+# Terrain/imagery default to keyless sources (reearth + eox) unless a Cesium ion token is set.
+# VITE_TERRAIN=ion
+# VITE_IMAGERY=ion
 VITE_CESIUM_ION_TOKEN=
 VITE_API_BASE=/api
 ```
@@ -359,14 +367,14 @@ export interface RenderState {
   hex: string
   lat: number
   lon: number
-  hM: number                                    // WGS84 ellipsoidal metres
+  hM: number                                    // WGS84 ellipsoidal metres of the wheels (the chase model adds gearHeightM)
   headingDeg: number                            // true, nose direction
   pitchDeg: number                              // nose-up positive
   rollDeg: number                               // right-wing-down positive
-  gsKt: number | null
-  trackDeg: number | null
-  altBaroFt: number | null
-  vsFpm: number | null
+  gsKt: number | null                           // copied from the newest sample
+  trackDeg: number | null                       // copied from the newest sample
+  altBaroFt: number | null                      // copied from the newest sample
+  vsFpm: number | null                          // from the vertical filter (derived)
   mode: 'interp' | 'extrap' | 'stale'           // stale = extrapolated past 8 s → frozen
   altSource: AltSource
   onGround: boolean
@@ -439,7 +447,7 @@ export interface Frame {
   t: number                                     // seconds (render time, server clock)
   e: number                                     // metres
   n: number
-  u: number
+  u: number                                     // height above the reference (hM − h0), not tangent-plane up
   mode: 'interp' | 'extrap' | 'stale'
   headingDeg: number
   pitchDeg: number
@@ -1094,15 +1102,22 @@ git commit -m "feat(shared): distance, bearing and destination helpers"
 // server/recording.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseRecordLine, readRecording, recordingToSamples } from './recording.ts'
 
 const path = fileURLToPath(new URL('../data/fixtures/golden/recording-sample.jsonl', import.meta.url))
 
-test('reads all record lines, including non-200', () => {
+test('reads all record lines, including non-200; tolerates CRLF, blank lines, no final newline', () => {
   const lines = readRecording(path)
   assert.equal(lines.length, 4)
   assert.deepEqual(lines.map((l) => l.status), [200, 200, 429, 200])
+  const raw = readFileSync(path, 'utf8').trim().split('\n')
+  const p = join(mkdtempSync(join(tmpdir(), 'fh-rec-')), 'x.jsonl')
+  writeFileSync(p, `${raw[0]}\r\n\n${raw[2]}`)
+  assert.deepEqual(readRecording(p).map((l) => l.status), [200, 429])
 })
 
 test('re-served poll adds nothing; 429 skipped; second real poll adds only moved aircraft', () => {
@@ -1165,10 +1180,18 @@ export function parseRecordLine(line: string): RecordLine {
 }
 
 export function readRecording(path: string): RecordLine[] {
-  return readFileSync(path, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim() !== '')
-    .map(parseRecordLine)
+  // ponytail: split the Buffer, not one big string — V8 caps a string at ~512 MiB and a day of recording can exceed it.
+  // Ceiling: all parsed lines are held in memory; stream per line if a single file outgrows RAM.
+  const buf = readFileSync(path)
+  const out: RecordLine[] = []
+  for (let start = 0; start < buf.length; ) {
+    let end = buf.indexOf(0x0a, start)
+    if (end === -1) end = buf.length
+    const line = buf.toString('utf8', start, end).trim()
+    if (line !== '') out.push(parseRecordLine(line))
+    start = end + 1
+  }
+  return out
 }
 
 /**
