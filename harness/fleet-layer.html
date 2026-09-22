@@ -1,0 +1,20 @@
+<!-- harness/fleet-layer.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness: fleet layer</title>
+    <style>
+      html, body, #globe { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+      #info { position: absolute; top: 8px; left: 8px; padding: 6px 10px; font: 12px/1.5 ui-monospace, monospace; color: #fff; background: rgba(0, 0, 0, 0.7); border-radius: 4px; white-space: pre; pointer-events: none; }
+      #legend { position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); display: flex; justify-content: center; }
+    </style>
+  </head>
+  <body>
+    <div id="globe"></div>
+    <div id="info"></div>
+    <div id="legend"></div>
+    <script type="module" src="/harness/fleet-layer.ts"></script>
+  </body>
+</html>
