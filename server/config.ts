@@ -14,6 +14,7 @@ export interface ServerConfig {
   recordDir: string | null // RECORD_DIR; unset or empty = no recording (replay is never recorded)
   port: number // PORT, default 8787
   showPiaLadd: boolean // SHOW_PIA_LADD=1 serves PIA/LADD-flagged aircraft
+  routes: boolean // ROUTES=1 looks up flight routes on adsb.lol (only used with ADSB_SOURCE=adsblol); default off
   staticDir: string // the built client (`npm run build` → dist/)
 }
 
@@ -32,6 +33,13 @@ function num(env: Env, name: string, def: number, ok: (v: number) => boolean, ru
   const v = Number(raw)
   if (!Number.isFinite(v) || !ok(v)) throw new Error(`${name} must be ${rule}, got "${raw}"`)
   return v
+}
+
+/** An unset/empty, 0 or 1 switch; anything else throws. */
+function flag(env: Env, name: string): boolean {
+  const v = str(env, name)
+  if (v !== '' && v !== '0' && v !== '1') throw new Error(`${name} must be 0 or 1, got "${v}"`)
+  return v === '1'
 }
 
 function coverage(raw: string): { lat: number; lon: number; radiusNm: number } {
@@ -77,9 +85,6 @@ export function readServerConfig(env: Env): ServerConfig {
   const replayFiles = kind === 'replay' ? expand(patterns) : []
   if (kind === 'replay' && replayFiles.length === 0) throw new Error(`REPLAY_FILES matched no files: ${patterns}`)
 
-  const show = str(env, 'SHOW_PIA_LADD')
-  if (show !== '' && show !== '0' && show !== '1') throw new Error(`SHOW_PIA_LADD must be 0 or 1, got "${show}"`)
-
   return {
     source: kind,
     contact,
@@ -90,7 +95,8 @@ export function readServerConfig(env: Env): ServerConfig {
     replaySpeed: num(env, 'REPLAY_SPEED', 1, (v) => v > 0, 'a number > 0'),
     recordDir: str(env, 'RECORD_DIR') || null,
     port: num(env, 'PORT', 8787, (v) => Number.isInteger(v) && v >= 0 && v <= 65535, 'an integer 0..65535'),
-    showPiaLadd: show === '1',
+    showPiaLadd: flag(env, 'SHOW_PIA_LADD'),
+    routes: flag(env, 'ROUTES'),
     staticDir: 'dist',
   }
 }

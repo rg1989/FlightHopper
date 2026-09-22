@@ -21,6 +21,7 @@ test('defaults: replay at 1 req/s on port 8787, no recording, PIA/LADD hidden, c
     recordDir: null,
     port: 8787,
     showPiaLadd: false,
+    routes: false,
     staticDir: 'dist',
   })
 })
@@ -96,6 +97,13 @@ test('RECORD_DIR, REPLAY_SPEED, PORT, SHOW_PIA_LADD', () => {
   assert.equal(blank.showPiaLadd, false)
 })
 
+test('ROUTES: 1 turns route lookups on, 0 or unset leaves them off', () => {
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, ROUTES: '1' }).routes, true)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, ROUTES: '0' }).routes, false)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, ROUTES: ' ' }).routes, false)
+  assert.equal(readServerConfig({ ADSB_SOURCE: 'adsblol', CONTACT: 'me@example.invalid', ROUTES: '1' }).routes, true)
+})
+
 test('invalid values throw a message that names the variable', () => {
   const cases: [Record<string, string>, RegExp][] = [
     [{ ADSB_SOURCE: 'opensky' }, /^Error: ADSB_SOURCE must be one of adsblol, readsb, replay, got "opensky"$/],
@@ -108,6 +116,7 @@ test('invalid values throw a message that names the variable', () => {
     [{ PORT: '80.5' }, /PORT must be an integer 0..65535/],
     [{ PORT: 'http' }, /PORT must be an integer 0..65535/],
     [{ SHOW_PIA_LADD: 'yes' }, /^Error: SHOW_PIA_LADD must be 0 or 1, got "yes"$/],
+    [{ ROUTES: 'on' }, /^Error: ROUTES must be 0 or 1, got "on"$/],
   ]
   for (const [env, re] of cases) assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, ...env }), re, JSON.stringify(env))
 })
