@@ -1,0 +1,5 @@
+[
+  { "ident": "KSFO", "role": "landing hero; datum gate (EGM96 N -32 m)" },
+  { "ident": "LLBG", "role": "local landing hero near the receiver; datum gate (EGM96 N +20 m)" },
+  { "ident": "LOWI", "role": "terrain showcase (Inn valley approach)" }
+]
