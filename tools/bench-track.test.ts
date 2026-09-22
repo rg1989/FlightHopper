@@ -1,7 +1,186 @@
 // tools/bench-track.test.ts
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { evaluateG2, type G2Metrics } from './bench-track.ts'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { recordingToSamples, type RecordLine } from '../server/recording.ts'
+import { Enu } from '../shared/enu.ts'
+import type { ReadsbAircraft, Sample } from '../shared/types.ts'
+import { benchTrack, evaluateG2, forEachSample, readLines, run, type G2Metrics } from './bench-track.ts'
+
+// Synthetic recording, adsb.lol envelope, 1 Hz server polls for 211 s. Aircraft abc123 (ADS-B v2, 100 m/s):
+// north for 60 s, a 2 °/s right turn for 90 s (180°), then south. No new position in (30 s, 42 s): the gap
+// opens with 5 re-served copies of the 30 s position, then the aircraft is missing. Every 4th second a second
+// poll re-serves the current position (a duplicate). def456 is seen for 20 s; 000002 is LADD (dbFlags 8) and is in
+// every poll, so it has the most samples but must stay hidden. One 429 line has no body.
+const T0 = 1_790_000_000_000
+const HEX = 'abc123'
+const V = 100 // m/s
+const W = 2 // °/s
+const R = V / ((W * Math.PI) / 180) // turn radius, 2864.8 m
+const GAP_FROM = 30
+const GAP_TO = 42
+const ORIGIN = new Enu(32, 34.9, 0)
+
+function truthAt(t: number): { e: number; n: number; trackDeg: number } {
+  if (t < 60) return { e: 0, n: V * t, trackDeg: 0 }
+  if (t < 150) {
+    const th = (W * (t - 60) * Math.PI) / 180
+    return { e: R - R * Math.cos(th), n: V * 60 + R * Math.sin(th), trackDeg: W * (t - 60) }
+  }
+  return { e: 2 * R, n: V * 60 - V * (t - 150), trackDeg: 180 }
+}
+
+/** abc123 at position time t (s after T0), reported seenPos seconds before the response's `now`. */
+function abc(t: number, seenPos: number): ReadsbAircraft {
+  const p = truthAt(t)
+  const g = ORIGIN.inv(p.e, p.n, 0)
+  const altFt = Math.round((10_000 - (1000 * t) / 60) / 25) * 25 // −1000 fpm, 25 ft quantised
+  return {
+    hex: HEX, type: 'adsb_icao', flight: 'TST1    ', lat: g.lat, lon: g.lon, alt_baro: altFt, alt_geom: altFt + 300,
+    gs: V / 0.514444, track: p.trackDeg, baro_rate: -1000, geom_rate: -1000, nav_qnh: 1013.2, version: 2, nic: 8, seen_pos: seenPos,
+  }
+}
+
+function line(tRecvMs: number, nowMs: number, ac: ReadsbAircraft[], status = 200): RecordLine {
+  const body = status === 200 ? JSON.stringify({ ac, msg: 'No error', now: nowMs, total: ac.length, ctime: nowMs, ptime: 1 }) : ''
+  return { v: 1, source: 'adsblol', url: 'synthetic', status, tSendMs: tRecvMs - 100, tRecvMs, bytes: body.length, body }
+}
+
+function recording(): RecordLine[] {
+  const out: RecordLine[] = []
+  for (let i = 0; i <= 210; i++) {
+    const now = T0 + i * 1000 + 250 // upstream clock; the position at T0 + i s is 0.25 s old
+    const rx = now + 150 + (i % 3) * 40 // latency 150–230 ms, so the stamping offset is 150 ms
+    const ac: ReadsbAircraft[] = [{ hex: '000002', type: 'adsb_icao', dbFlags: 8, version: 2, lat: 32.5, lon: 34.5, alt_baro: 30_000, seen_pos: 0.1 }]
+    if (i < 20) ac.push({ hex: 'def456', type: 'adsb_icao', version: 2, lat: 32.2, lon: 34.6 + i * 0.001, alt_baro: 5000, gs: 180, track: 90, seen_pos: 0.3 })
+    const inGap = i > GAP_FROM && i < GAP_TO
+    if (!inGap) ac.push(abc(i, 0.25))
+    else if (i <= GAP_FROM + 5) ac.push(abc(GAP_FROM, 0.25 + i - GAP_FROM))
+    out.push(line(rx, now, ac))
+    if (i % 4 === 2 && !inGap) out.push(line(rx + 500, now + 500, [abc(i, 0.75)]))
+  }
+  out.splice(100, 0, line(T0 + 99_900, 0, [], 429))
+  return out
+}
+
+const tmp = (prefix: string): string => {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  after(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+
+/** Writes the recording as two JSONL files, the later half first, so the bench must merge them by tRecvMs. */
+function files(): string[] {
+  const dir = tmp('bench-track-')
+  const lines = recording()
+  const late = join(dir, 'late.jsonl')
+  const early = join(dir, 'early.jsonl')
+  writeFileSync(late, lines.slice(120).map((l) => JSON.stringify(l)).join('\n') + '\n')
+  writeFileSync(early, lines.slice(0, 120).map((l) => JSON.stringify(l)).join('\n') + '\n')
+  return [late, early]
+}
+
+const FILES = files()
+const main = benchTrack(FILES, { noDedupe: true })
+
+test('lines replay in arrival order; server stamping and dedupe equal recordingToSamples', () => {
+  const lines = readLines(FILES)
+  assert.deepEqual(lines.map((l) => l.tRecvMs), recording().map((l) => l.tRecvMs).toSorted((a, b) => a - b))
+  const unique: Sample[] = []
+  let dups = 0
+  forEachSample(lines, (s, dup) => (dup ? dups++ : unique.push(s)))
+  assert.deepEqual(unique, recordingToSamples(lines))
+  assert.ok(dups > 0)
+})
+
+test('auto hex: the visible hex with the most samples (LADD 000002 stays hidden)', () => {
+  assert.equal(main.metrics.hex, HEX)
+  assert.equal(main.metrics.quality, 'adsb2')
+  assert.equal(main.metrics.samples, 211 - (GAP_TO - GAP_FROM - 1))
+  assert.equal(main.session.fromMs, T0 + 150) // stamped: upstream now − seen_pos + 150 ms offset
+})
+
+test('starvation is 0 at the chosen D; the 12 s gap extrapolates, then goes stale, then re-joins within 1.5 s', () => {
+  const m = main.metrics
+  assert.deepEqual(m.delayS, { start: 3, p50: 3, max: 3 })
+  assert.equal(m.starvationFrames, 0)
+  const off = main.frames.filter((f) => f.mode !== 'interp')
+  assert.equal(m.gapFrames, off.length)
+  const extrap = off.filter((f) => f.mode === 'extrap')
+  const stale = off.filter((f) => f.mode === 'stale')
+  assert.ok(extrap.length > 0 && stale.length > 0)
+  for (const f of off) assert.ok(f.t > GAP_FROM && f.t < GAP_TO, `non-interp frame at ${f.t} s is outside the gap`)
+  assert.ok(extrap.at(-1)!.t < stale[0].t, 'extrapolation comes before stale')
+  assert.ok(Math.abs(extrap.length / 60 - 8) < 0.05, `8 s of extrapolation, got ${extrap.length / 60} s`)
+  assert.equal(m.rejoin.count, 1)
+  assert.ok(m.rejoin.errP95M > 100, `frozen pose vs hindsight: ${m.rejoin.errP95M} m`)
+  assert.ok(m.rejoin.blendMaxS > 1 && m.rejoin.blendMaxS <= 1.5, `blend ${m.rejoin.blendMaxS} s`)
+})
+
+test('every G2 metric is finite; frames are 60 Hz in one ENU frame at the first sample', () => {
+  const m = main.metrics
+  for (const [name, v] of Object.entries({
+    discMax: m.frameDiscontinuity.maxM, discP99: m.frameDiscontinuity.p99M, latP99: m.lateralAccel.p99, latMax: m.lateralAccel.max,
+    jerkP99: m.jerk.p99, vsErrP95: m.vertical.vsErrP95, maxStepM: m.vertical.maxStepM, delaySlew: m.delaySlew,
+  })) assert.ok(Number.isFinite(v), `${name} = ${v}`)
+  assert.ok(m.delaySlew <= 0.2 + 1e-9)
+  assert.ok(m.frameDiscontinuity.maxM < 2, `interp discontinuity ${m.frameDiscontinuity.maxM} m`)
+  const f = main.frames
+  assert.equal(m.frames, f.length)
+  assert.ok(Math.abs(f[1].t - f[0].t - 1 / 60) < 1e-6)
+  assert.ok(Math.hypot(f[0].e, f[0].n) < V * 1.5, 'starts near the origin')
+  const turn = f.filter((x) => x.t > 80 && x.t < 130)
+  const lat = Math.max(...turn.map((x) => Math.abs(x.rollDeg)))
+  assert.ok(lat > 15 && lat < 25, `coordinated-turn roll ≈ atan(v·ω/g) = 20°, got ${lat}`)
+  assert.ok(main.rates.length > 0 && Math.abs(main.rates[0].vsMs + 5.08) < 1e-9)
+})
+
+test('dedupe: re-served positions counted and removed; the no-dedupe replay is scored too', () => {
+  const d = main.metrics.dedupe
+  assert.equal(d.unique, main.metrics.samples)
+  assert.ok(d.served > d.unique)
+  assert.ok(d.duplicateFraction > 0.15 && d.duplicateFraction < 0.3, `duplicate fraction ${d.duplicateFraction}`)
+  assert.ok(Number.isFinite(d.jerkP99NoDedupe))
+  assert.equal(benchTrack(FILES, { decimate: [] }).metrics.dedupe.jerkP99NoDedupe, null)
+})
+
+test('decimate 3 and 5 score held-out truth, split turn vs straight, against linear interpolation', () => {
+  const [c3, c5] = main.metrics.crossTrack
+  assert.deepEqual([c3.k, c5.k], [3, 5])
+  for (const c of [c3, c5]) {
+    assert.ok(c.nTurn > 20 && c.nStraight > 20, `k=${c.k}: ${c.nTurn} turn, ${c.nStraight} straight`)
+    assert.ok(c.turnP95M <= 0.5 * c.linearTurnP95M, `k=${c.k}: ${c.turnP95M} m vs linear ${c.linearTurnP95M} m`)
+  }
+  assert.ok(c3.turnP95M < 5 && c3.linearTurnP95M > 2, `chord sag at 3 s ≈ 3.5 m: ${c3.linearTurnP95M}`)
+  assert.ok(c5.turnP95M < 15 && c5.linearTurnP95M > c3.linearTurnP95M)
+})
+
+test('--hex and --from/--to select one aircraft and window', () => {
+  const r = benchTrack(FILES, { hex: 'DEF456', decimate: [] })
+  assert.equal(r.metrics.hex, 'def456')
+  assert.equal(r.metrics.samples, 20)
+  const w = benchTrack(FILES, { hex: HEX, fromMs: T0 + 60_000, toMs: T0 + 150_999, decimate: [3] })
+  assert.equal(w.session.fromMs, T0 + 60_150)
+  assert.equal(w.session.toMs, T0 + 150_150)
+  assert.equal(w.metrics.samples, 91)
+  assert.equal(w.metrics.gapFrames, 0)
+  assert.throws(() => benchTrack(FILES, { hex: 'zzz999' }), /no samples/)
+})
+
+test('run() writes .planning-style G2-<hex>-<date>.json and returns the verdict', () => {
+  const out = tmp('bench-report-')
+  const { report, path } = run(['--recordings', ...FILES, '--hex', HEX, '--decimate', '3', '--out', out])
+  assert.equal(path, join(out, `G2-${HEX}-${new Date().toISOString().slice(0, 10)}.json`))
+  assert.ok(existsSync(path))
+  const j = JSON.parse(readFileSync(path, 'utf8'))
+  assert.equal(j.gate, 'G2')
+  assert.equal(j.hex, HEX)
+  assert.equal(j.pass, report.pass)
+  assert.ok(j.checks.some((c: { name: string }) => c.name === 'crossTrackTurnP95M@5'))
+  assert.throws(() => run(['--out', out]), /no recordings/)
+})
 
 // ---- evaluateG2 on hand-made metrics ----
 
