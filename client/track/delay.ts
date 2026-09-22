@@ -31,3 +31,30 @@ export function p90(xs: number[]): number {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b)
   return s.length === 0 ? 0 : s[Math.ceil(0.9 * s.length) - 1]
 }
+
+/**
+ * Render time = server now − delay. The delay walks toward its target at ≤ maxSlewSPerS, so render time
+ * advances at 0.8–1.2× the server clock's rate (default) and the delay never jumps. It lands exactly on
+ * the target, no overshoot. A jump in serverNowMs passes straight through: smoothing that is the caller's job.
+ */
+export class RenderClock {
+  #delayS: number
+  readonly maxSlewSPerS: number
+
+  constructor(delayS: number, maxSlewSPerS = 0.2) {
+    this.#delayS = delayS
+    this.maxSlewSPerS = maxSlewSPerS
+  }
+
+  /** Returns tRenderMs. dtS ≤ 0 or NaN (first frame, clock hiccup) leaves the delay unchanged. */
+  tick(serverNowMs: number, targetDelayS: number, dtS: number): number {
+    const step = this.maxSlewSPerS * (dtS > 0 ? dtS : 0)
+    const diff = targetDelayS - this.#delayS
+    this.#delayS = Math.abs(diff) <= step ? targetDelayS : this.#delayS + Math.sign(diff) * step
+    return serverNowMs - this.#delayS * 1000
+  }
+
+  get delayS(): number {
+    return this.#delayS
+  }
+}

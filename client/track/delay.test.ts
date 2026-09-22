@@ -1,7 +1,7 @@
 // client/track/delay.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { delayFloorS, p90, targetDelayS } from './delay.ts'
+import { delayFloorS, p90, RenderClock, targetDelayS } from './delay.ts'
 
 test('delay floor per quality: adsb2 3 s, adsb01 4 s, mlat 6 s, other 6 s', () => {
   assert.equal(delayFloorS('adsb2'), 3)
@@ -51,4 +51,75 @@ test('p90 of nothing is 0 (no gap term); non-finite values are skipped; input is
   const xs = [3, 1, 2]
   p90(xs)
   assert.deepEqual(xs, [3, 1, 2])
+})
+
+const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
+
+test('RenderClock at its target returns serverNowMs − delay·1000', () => {
+  const c = new RenderClock(4)
+  assert.equal(c.delayS, 4)
+  assert.equal(c.tick(100_000, 4, 1 / 60), 96_000)
+  assert.equal(c.delayS, 4)
+})
+
+test('RenderClock slews at most 0.2 s per second by default, both directions', () => {
+  const up = new RenderClock(3)
+  near(up.tick(50_000, 10, 1), 50_000 - 3200, 1e-9)
+  near(up.delayS, 3.2, 1e-12)
+  up.tick(50_000, 10, 0.5)
+  near(up.delayS, 3.3, 1e-12)
+  const down = new RenderClock(10)
+  down.tick(50_000, 3, 2)
+  near(down.delayS, 9.6, 1e-12)
+})
+
+test('RenderClock honours a custom maxSlewSPerS', () => {
+  const c = new RenderClock(3, 1)
+  c.tick(0, 10, 2)
+  near(c.delayS, 5, 1e-12)
+})
+
+test('RenderClock over many 60 Hz ticks: slew-limited, render time keeps moving forward, converges without overshoot', () => {
+  const c = new RenderClock(3)
+  const dt = 1 / 60
+  let server = 1_000_000
+  let prevRender = c.tick(server, 10, 0)
+  let prevDelay = c.delayS
+  let reachedAtS: number | null = null
+  for (let i = 1; i <= 60 * 40; i++) {
+    server += dt * 1000
+    const render = c.tick(server, 10, dt)
+    const step = c.delayS - prevDelay
+    assert.ok(Math.abs(step) <= 0.2 * dt + 1e-12, `tick ${i}: slew ${step / dt} s/s`)
+    assert.ok(c.delayS <= 10, `overshoot ${c.delayS}`)
+    const rate = (render - prevRender) / (dt * 1000)
+    assert.ok(rate >= 0.8 - 1e-9 && rate <= 1.2 + 1e-9, `tick ${i}: render rate ${rate}`)
+    if (reachedAtS === null && c.delayS === 10) reachedAtS = i * dt
+    prevRender = render
+    prevDelay = c.delayS
+  }
+  assert.ok(reachedAtS !== null, 'never reached the target')
+  near(reachedAtS, 35, 2 * dt)  // (10 − 3) / 0.2
+  assert.equal(c.delayS, 10)
+  assert.equal(c.tick(server, 10, dt), server - 10_000)
+})
+
+test('RenderClock retargeted mid-slew turns around at once, still rate-limited', () => {
+  const c = new RenderClock(3)
+  for (let i = 0; i < 60 * 5; i++) c.tick(0, 10, 1 / 60)   // 5 s up → 4
+  near(c.delayS, 4, 1e-9)
+  for (let i = 0; i < 60 * 2; i++) c.tick(0, 3, 1 / 60)    // 2 s down → 3.6
+  near(c.delayS, 3.6, 1e-9)
+  for (let i = 0; i < 60 * 10; i++) c.tick(0, 3, 1 / 60)
+  assert.equal(c.delayS, 3)
+})
+
+test('RenderClock: a long frame (tab hidden 10 s) moves the delay at most 2 s; zero, negative or NaN dt moves nothing', () => {
+  const c = new RenderClock(3)
+  c.tick(0, 10, 10)
+  near(c.delayS, 5, 1e-12)
+  for (const dt of [0, -1, Number.NaN]) {
+    assert.equal(c.tick(20_000, 3, dt), 20_000 - c.delayS * 1000)
+    near(c.delayS, 5, 1e-12)
+  }
 })
