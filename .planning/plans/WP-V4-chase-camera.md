@@ -617,12 +617,449 @@ git commit -m "test(scene): chase camera harness page (descending circle over LO
 
 ---
 
-### Task 4: WP gate
+### Task 4: Mouse orbit and zoom (user feedback, 2026-09-22)
+
+In the preview, a chased aircraft could not be looked around. `update()` re-applied a fixed "150 m behind, 12° down" view every frame, so mouse input was overwritten. This task hands angle and distance to the user: **drag** orbits (relative to the aircraft's nose, so the view turns with it), **wheel** zooms (25 m – 3 km), **double-click** resets to behind. While chasing, Cesium's globe controls are disabled; `release()` (Esc) restores them. The clearance rule still wins: the camera stays ≥ 15 m above terrain whatever the user asks for.
+
+**Files:**
+- Modify: `client/scene/chaseCamera.ts` (complete new version below)
+- Test: `client/scene/chaseCamera.test.ts` (complete new version below)
+
+**Interfaces:**
+- Consumes: Cesium `ScreenSpaceEventHandler`, `ScreenSpaceEventType` (LEFT_DOWN, LEFT_UP, MOUSE_MOVE, WHEEL, LEFT_DOUBLE_CLICK), `scene.screenSpaceCameraController.enableInputs`.
+- Produces: `class OrbitControl { constructor(pitchDeg: number, rangeM: number); headingOffsetDeg: number; pitchDeg: number; rangeM: number; drag(dxPx: number, dyPx: number): void; wheel(delta: number): void; reset(): void }` and `ChaseCamera.orbit: OrbitControl` (readonly). Drag convention as three.js OrbitControls: the aircraft follows the mouse (drag right → heading offset +0.3°/px; drag down → pitch −0.25°/px, clamped −89…+10°). Wheel: `range ×= exp(−delta·0.0015)`, clamped 25–3000 m. `release()` resets the heading offset but keeps zoom and pitch. Input attaches on the first chased frame and only when `scene.canvas` has `addEventListener` (so node tests run without a DOM).
+
+- [ ] **Step 1: Write the failing tests** (four new tests at the end; the rest of the file is unchanged)
+
+```ts
+// client/scene/chaseCamera.test.ts
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { Camera, Cartesian3, Cartographic, Ellipsoid, GeographicProjection, MapMode2D, Matrix4, SceneMode } from 'cesium'
+import type { Viewer } from 'cesium'
+import type { RenderState } from '../types.ts'
+import { chaseOffsetEnu, ChaseCamera, OrbitControl } from './chaseCamera.ts'
+
+const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
+const DEG = 180 / Math.PI
+
+type Terrain = (c: Cartographic) => number | undefined
+
+/** A real Cesium Camera on the smallest scene its constructor and lookAtTransform read; the globe answers from `terrain`. */
+function fakeViewer(terrain: Terrain) {
+  const scene = {
+    canvas: { clientWidth: 800, clientHeight: 600 },
+    drawingBufferWidth: 800,
+    drawingBufferHeight: 600,
+    mapProjection: new GeographicProjection(),
+    mode: SceneMode.SCENE3D,
+    mapMode2D: MapMode2D.INFINITE_SCROLL,
+    ellipsoid: Ellipsoid.WGS84,
+    screenSpaceCameraController: { minimumZoomDistance: 1, maximumZoomDistance: Number.POSITIVE_INFINITY },
+    globe: { ellipsoid: Ellipsoid.WGS84, getHeight: (c: Cartographic) => terrain(c) },
+  }
+  const camera = new Camera(scene as never)
+  return { camera, viewer: { scene, camera } as unknown as Viewer }
+}
+
+const LOWI = { lat: 47.2602, lon: 11.3439 }
+const st = (o: Partial<RenderState> = {}): RenderState => ({
+  hex: '4b1805', lat: LOWI.lat, lon: LOWI.lon, hM: 1000, headingDeg: 0, pitchDeg: -3, rollDeg: 0,
+  gsKt: 140, trackDeg: 0, altBaroFt: 3100, vsFpm: -700, mode: 'interp', altSource: 'geom',
+  onGround: false, ageS: 1, quality: 'adsb2', callsign: 'AUA905', typeCode: 'A320', ...o,
+})
+
+/** Metres south of LOWI (positive = south), for terrain that rises behind a northbound aircraft. */
+const southM = (c: Cartographic): number => (LOWI.lat - c.latitude * DEG) * 111_200
+/** Camera heading as seen from its offset in the target frame: the camera looks from its position towards the target. */
+const lookHeadingDeg = (cam: Camera): number => ((Math.atan2(-cam.position.x, -cam.position.y) * DEG) + 360) % 360
+const clearanceOf = (cam: Camera, terrain: Terrain): number => cam.positionCartographic.height - (terrain(cam.positionCartographic) as number)
+
+test('chaseOffsetEnu: heading 0 → camera due south of the target, above it when looking down', () => {
+  const [e, n, u] = chaseOffsetEnu(0, -12, 150)
+  near(e, 0, 1e-9)
+  assert.ok(n < 0)
+  assert.ok(u > 0)
+  near(Math.hypot(e, n, u), 150, 1e-9)
+  near(u, 150 * Math.sin(12 / DEG), 1e-9)
+})
+
+test('chaseOffsetEnu: heading 90 → west; heading 225 → north-east', () => {
+  const [e, n] = chaseOffsetEnu(90, -12, 150)
+  assert.ok(e < 0)
+  near(n, 0, 1e-9)
+  const [e2, n2, u2] = chaseOffsetEnu(225, -30, 100)
+  assert.ok(e2 > 0 && n2 > 0)
+  near(e2, n2, 1e-9)
+  near(u2, 50, 1e-9)
+})
+
+test('the camera Cesium places matches chaseOffsetEnu (same convention as HeadingPitchRange)', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  for (const h of [0, 37, 90, 181, 300]) {
+    const cc = new ChaseCamera(viewer, { rangeM: 120, pitchDeg: -15 })
+    cc.update(st({ headingDeg: h }), 0.016)
+    const [e, n, u] = chaseOffsetEnu(h, -15, 120)
+    near(camera.position.x, e, 1e-6, `e @ ${h}`)
+    near(camera.position.y, n, 1e-6, `n @ ${h}`)
+    near(camera.position.z, u, 1e-6, `u @ ${h}`)
+  }
+})
+
+test('update: camera behind and above the aircraft; clearance = camera height − terrain height', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  const { clearanceM } = cc.update(st({ hM: 1000 }), 0.016)
+  const c = camera.positionCartographic
+  assert.ok(c.latitude * DEG < LOWI.lat, 'south of a northbound aircraft')
+  near(c.longitude * DEG, LOWI.lon, 1e-9)
+  assert.ok(c.height > 1000)
+  assert.equal(clearanceM, c.height)
+})
+
+test('defaults: range 150 m, pitch −12°, heading follows the aircraft on the first frame', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  new ChaseCamera(viewer).update(st({ headingDeg: 123 }), 0.016)
+  near(Math.hypot(camera.position.x, camera.position.y, camera.position.z), 150, 1e-6)
+  near(camera.position.z, 150 * Math.sin(12 / DEG), 1e-6)
+  near(lookHeadingDeg(camera), 123, 1e-6)
+})
+
+test('heading is damped exponentially (tau 1 s) and wraps through north, not the long way round', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.update(st({ headingDeg: 350 }), 0.016)
+  cc.update(st({ headingDeg: 10 }), 1.0)
+  near(lookHeadingDeg(camera), (350 + 20 * (1 - Math.exp(-1))) % 360, 1e-6)
+  cc.update(st({ headingDeg: 10 }), 0)
+  near(lookHeadingDeg(camera), (350 + 20 * (1 - Math.exp(-1))) % 360, 1e-6, 'dt 0 changes nothing')
+  for (let i = 0; i < 100; i++) cc.update(st({ headingDeg: 10 }), 0.1)
+  near(lookHeadingDeg(camera), 10, 0.01)
+})
+
+test('headingTauS option: a slower camera turns less in the same time', () => {
+  const a = fakeViewer(() => 0)
+  const b = fakeViewer(() => 0)
+  const fast = new ChaseCamera(a.viewer)
+  const slow = new ChaseCamera(b.viewer, { headingTauS: 4 })
+  for (const cc of [fast, slow]) cc.update(st({ headingDeg: 0 }), 0.016)
+  fast.update(st({ headingDeg: 90 }), 0.5)
+  slow.update(st({ headingDeg: 90 }), 0.5)
+  near(lookHeadingDeg(b.camera), 90 * (1 - Math.exp(-0.5 / 4)), 1e-6)
+  assert.ok(lookHeadingDeg(a.camera) > lookHeadingDeg(b.camera))
+})
+
+test('low over flat ground: pitches down just enough to stay ≥ 15 m above terrain', () => {
+  const terrain: Terrain = () => 990 // the aircraft is 10 m above the runway
+  const { camera, viewer } = fakeViewer(terrain)
+  const { clearanceM } = new ChaseCamera(viewer, { pitchDeg: 0 }).update(st({ hM: 1000 }), 0.016)
+  assert.ok(clearanceM !== null && clearanceM >= 15 && clearanceM < 17, `${clearanceM}`)
+  near(clearanceOf(camera, terrain), clearanceM as number, 1e-9)
+  assert.ok(camera.position.z > 0, 'now looking down')
+})
+
+test('no correction when already clear', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  new ChaseCamera(viewer, { pitchDeg: -12 }).update(st({ hM: 1000 }), 0.016)
+  near(camera.position.z, 150 * Math.sin(12 / DEG), 1e-6)
+})
+
+test('terrain rising behind the aircraft (valley approach): camera ends ≥ 15 m above the terrain under it', () => {
+  for (const slope of [0.3, 1.0, 3.0]) {
+    const terrain: Terrain = (c) => 990 + slope * Math.max(0, southM(c))
+    const { camera, viewer } = fakeViewer(terrain)
+    const { clearanceM } = new ChaseCamera(viewer).update(st({ hM: 1000 }), 0.016)
+    assert.ok(clearanceM !== null && clearanceM >= 15, `slope ${slope}: ${clearanceM}`)
+    near(clearanceOf(camera, terrain), clearanceM as number, 1e-9)
+  }
+})
+
+test('a cliff behind: going straight above is enough, so the camera stays at range (no lift overshoot)', () => {
+  const terrain: Terrain = (c) => 990 + 3.0 * Math.max(0, southM(c))
+  const { camera, viewer } = fakeViewer(terrain)
+  const { clearanceM } = new ChaseCamera(viewer).update(st({ hM: 1000 }), 0.016)
+  assert.ok(clearanceM !== null && clearanceM >= 15, `${clearanceM}`)
+  near(Cartesian3.distance(camera.positionWC, Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1000)), 150, 1e-3)
+})
+
+test('aircraft below the terrain model (datum/DEM error): camera goes straight above and is lifted just clear', () => {
+  const terrain: Terrain = () => 1200
+  const { camera, viewer } = fakeViewer(terrain)
+  const { clearanceM } = new ChaseCamera(viewer).update(st({ hM: 1000 }), 0.016)
+  assert.ok(clearanceM !== null && clearanceM >= 15 && clearanceM < 16, `${clearanceM}`)
+  near(clearanceOf(camera, terrain), clearanceM as number, 1e-9)
+})
+
+test('terrain not loaded under the camera: clearance null, no correction', () => {
+  const { camera, viewer } = fakeViewer(() => undefined)
+  const { clearanceM } = new ChaseCamera(viewer, { pitchDeg: 0 }).update(st({ hM: 1000 }), 0.016)
+  assert.equal(clearanceM, null)
+  near(camera.position.z, 0, 1e-6)
+})
+
+test('release hands the camera back (identity transform) and the next chase starts from the new heading', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.update(st({ headingDeg: 0 }), 0.016)
+  assert.ok(!Matrix4.equals(camera.transform, Matrix4.IDENTITY))
+  cc.release()
+  assert.ok(Matrix4.equals(camera.transform, Matrix4.IDENTITY))
+  cc.update(st({ headingDeg: 200 }), 0.016)
+  near(lookHeadingDeg(camera), 200, 1e-6)
+})
+
+test('OrbitControl: drag right swings the view clockwise, drag down raises the camera; both clamp', () => {
+  const o = new OrbitControl(-12, 150)
+  o.drag(300, 0) // 0.3°/px
+  near(o.headingOffsetDeg, 90, 1e-9)
+  o.drag(-600, 0)
+  near(o.headingOffsetDeg, 270, 1e-9)
+  o.drag(0, 100) // 0.25°/px, down = look more steeply down
+  near(o.pitchDeg, -37, 1e-9)
+  o.drag(0, 10_000)
+  near(o.pitchDeg, -89, 1e-9)
+  o.drag(0, -10_000)
+  near(o.pitchDeg, 10, 1e-9)
+})
+
+test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 3 km; reset restores the start', () => {
+  const o = new OrbitControl(-12, 150)
+  o.wheel(100)
+  assert.ok(o.rangeM < 150 && o.rangeM > 120, `${o.rangeM}`)
+  o.wheel(-200)
+  assert.ok(o.rangeM > 150, `${o.rangeM}`)
+  o.wheel(1e6)
+  near(o.rangeM, 25, 1e-9)
+  o.wheel(-1e6)
+  near(o.rangeM, 3000, 1e-9)
+  o.drag(123, 45)
+  o.reset()
+  assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [0, -12, 150])
+})
+
+test('ChaseCamera follows the orbit: 90° offset looks east from the west side; zoom sets the distance', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.drag(300, 0)
+  cc.orbit.wheel(-200)
+  cc.update(st({ headingDeg: 0 }), 1 / 60)
+  near(lookHeadingDeg(camera), 90, 0.5)
+  near(Cartesian3.magnitude(camera.position), cc.orbit.rangeM, 0.01)
+})
+
+test('release: next chase starts behind the aircraft again but keeps zoom and pitch', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.drag(300, 40)
+  cc.orbit.wheel(150)
+  const [pitch, range] = [cc.orbit.pitchDeg, cc.orbit.rangeM]
+  cc.update(st(), 1 / 60)
+  cc.release()
+  assert.equal(cc.orbit.headingOffsetDeg, 0)
+  assert.deepEqual([cc.orbit.pitchDeg, cc.orbit.rangeM], [pitch, range])
+  cc.update(st({ headingDeg: 0 }), 1 / 60)
+  near(lookHeadingDeg(camera), 0, 0.5)
+})
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `node --test client/scene/chaseCamera.test.ts`
+Expected: FAIL — `SyntaxError: The requested module './chaseCamera.ts' does not provide an export named 'OrbitControl'`
+
+- [ ] **Step 3: Write the implementation**
+
+```ts
+// client/scene/chaseCamera.ts
+import { Cartesian3, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
+import type { Camera, Globe, Scene, Viewer } from 'cesium'
+import type { RenderState } from '../types.ts'
+
+const RAD = Math.PI / 180
+const STEEPEST_DEG = -89 // looking straight down makes lookAt's heading degenerate
+const AIM_ABOVE_MIN_M = 0.5 // correct to min + 0.5 m so float noise never reads as a violation
+const CLEARANCE_PASSES = 4 // terrain under the camera changes as it moves; 4 re-measures settle real slopes
+const DEG_PER_PX_H = 0.3 // horizontal drag: a 1,200 px swipe ≈ one full orbit
+const DEG_PER_PX_V = 0.25
+const PITCH_MAX_DEG = 10 // slightly below the aircraft, looking up
+const ZOOM_PER_WHEEL = 0.0015 // Cesium wheel delta ≈ ±100 per notch → ×0.86 / ×1.16
+const RANGE_MIN_M = 25
+const RANGE_MAX_M = 3000
+
+/**
+ * Camera position relative to the target, in the target's local east-north-up frame (metres).
+ * Same convention as Cesium's lookAt(HeadingPitchRange): the camera looks along headingDeg, so it sits behind
+ * the nose direction; pitchDeg is the camera's look angle, negative = looking down, so it sits above.
+ */
+export function chaseOffsetEnu(headingDeg: number, pitchDeg: number, rangeM: number): [number, number, number] {
+  const h = headingDeg * RAD
+  const p = pitchDeg * RAD
+  const horizontal = rangeM * Math.cos(p)
+  return [-horizontal * Math.sin(h), -horizontal * Math.cos(h), -rangeM * Math.sin(p)]
+}
+
+/**
+ * User-controlled orbit around the chased aircraft: horizontal angle relative to its nose, look pitch and distance.
+ * Drag convention as in three.js OrbitControls: the aircraft follows the mouse (drag right → camera swings to its left).
+ */
+export class OrbitControl {
+  headingOffsetDeg = 0
+  pitchDeg: number
+  rangeM: number
+  #pitch0: number
+  #range0: number
+
+  constructor(pitchDeg: number, rangeM: number) {
+    this.pitchDeg = this.#pitch0 = pitchDeg
+    this.rangeM = this.#range0 = rangeM
+  }
+
+  drag(dxPx: number, dyPx: number): void {
+    this.headingOffsetDeg = wrap360(this.headingOffsetDeg + dxPx * DEG_PER_PX_H)
+    this.pitchDeg = clamp(this.pitchDeg - dyPx * DEG_PER_PX_V, STEEPEST_DEG, PITCH_MAX_DEG)
+  }
+
+  /** Cesium wheel delta: positive = wheel up = closer. */
+  wheel(delta: number): void {
+    this.rangeM = clamp(this.rangeM * Math.exp(-delta * ZOOM_PER_WHEEL), RANGE_MIN_M, RANGE_MAX_M)
+  }
+
+  /** Back behind the aircraft at the starting pitch and distance. */
+  reset(): void {
+    this.headingOffsetDeg = 0
+    this.pitchDeg = this.#pitch0
+    this.rangeM = this.#range0
+  }
+}
+
+export interface ChaseCameraOpts {
+  rangeM?: number
+  pitchDeg?: number
+  minClearanceM?: number
+  headingTauS?: number
+}
+
+/**
+ * Third-person camera on one aircraft, heading-damped, kept ≥ minClearanceM above the loaded terrain.
+ * While chasing, mouse input orbits (drag), zooms (wheel) and resets (double-click) instead of moving the globe.
+ */
+export class ChaseCamera {
+  readonly orbit: OrbitControl
+  #camera: Camera
+  #scene: Scene
+  #globe: Globe
+  #input: ScreenSpaceEventHandler | null = null
+  #minClearanceM: number
+  #tauS: number
+  #headingDeg: number | null = null
+  #target = new Cartesian3()
+  #frame = new Matrix4()
+  #hpr = new HeadingPitchRange()
+
+  constructor(viewer: Viewer, opts: ChaseCameraOpts = {}) {
+    this.#camera = viewer.camera
+    this.#scene = viewer.scene
+    this.#globe = viewer.scene.globe
+    this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? 150)
+    this.#minClearanceM = opts.minClearanceM ?? 15
+    this.#tauS = opts.headingTauS ?? 1.0
+  }
+
+  update(state: RenderState, dtS: number): { clearanceM: number | null } {
+    this.#attachInput()
+    const heading = wrap360(this.#smoothHeading(state.headingDeg, dtS) + this.orbit.headingOffsetDeg)
+    let pitch = this.orbit.pitchDeg
+    let liftM = 0
+    let clearance = this.#place(state, heading, pitch, liftM)
+    // ponytail: the correction is recomputed every frame, not smoothed. Ceiling: a cliff under the camera snaps the pitch;
+    // upgrade: low-pass the correction with the heading tau.
+    for (let i = 0; i < CLEARANCE_PASSES && clearance !== null && clearance < this.#minClearanceM; i++) {
+      // Pitching from p to p' raises the camera by range·(sin p − sin p'), so solve for the missing metres.
+      const needM = this.#minClearanceM + AIM_ABOVE_MIN_M - clearance
+      const sinP = Math.sin(pitch * RAD) - needM / this.orbit.rangeM
+      if (sinP >= Math.sin(STEEPEST_DEG * RAD)) pitch = Math.asin(sinP) / RAD
+      else if (pitch > STEEPEST_DEG) pitch = STEEPEST_DEG // go (almost) straight above first, then measure again
+      else liftM += needM // already above: the aircraft is under the terrain model, so raise the whole rig
+      clearance = this.#place(state, heading, pitch, liftM)
+    }
+    return { clearanceM: clearance }
+  }
+
+  /** Hand the camera back to the globe controls. The next chase starts behind its aircraft; zoom and pitch are kept. */
+  release(): void {
+    this.#camera.lookAtTransform(Matrix4.IDENTITY)
+    this.#headingDeg = null
+    this.orbit.headingOffsetDeg = 0
+    this.#input?.destroy()
+    this.#input = null
+    this.#scene.screenSpaceCameraController.enableInputs = true
+  }
+
+  /** First chased frame: route the mouse to the orbit instead of Cesium's globe controls. No-op without a DOM canvas. */
+  #attachInput(): void {
+    if (this.#input || typeof (this.#scene.canvas as { addEventListener?: unknown }).addEventListener !== 'function') return
+    this.#scene.screenSpaceCameraController.enableInputs = false
+    const h = (this.#input = new ScreenSpaceEventHandler(this.#scene.canvas))
+    let dragging = false
+    h.setInputAction(() => (dragging = true), ScreenSpaceEventType.LEFT_DOWN)
+    h.setInputAction(() => (dragging = false), ScreenSpaceEventType.LEFT_UP)
+    h.setInputAction((m: ScreenSpaceEventHandler.MotionEvent) => {
+      if (dragging) this.orbit.drag(m.endPosition.x - m.startPosition.x, m.endPosition.y - m.startPosition.y)
+    }, ScreenSpaceEventType.MOUSE_MOVE)
+    h.setInputAction((delta: number) => this.orbit.wheel(delta), ScreenSpaceEventType.WHEEL)
+    h.setInputAction(() => this.orbit.reset(), ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
+  }
+
+  /** Exponential smoothing towards the aircraft heading along the shorter way round; the first frame snaps. */
+  #smoothHeading(targetDeg: number, dtS: number): number {
+    if (this.#headingDeg === null) return (this.#headingDeg = wrap360(targetDeg))
+    const k = this.#tauS > 0 ? 1 - Math.exp(-Math.max(0, dtS) / this.#tauS) : 1
+    const delta = wrap360(targetDeg - this.#headingDeg + 180) - 180
+    return (this.#headingDeg = wrap360(this.#headingDeg + k * delta))
+  }
+
+  /** Put the camera on the target's ENU frame; returns camera height − terrain height, null while that tile is not loaded. */
+  #place(state: RenderState, headingDeg: number, pitchDeg: number, liftM: number): number | null {
+    Cartesian3.fromDegrees(state.lon, state.lat, state.hM + liftM, Ellipsoid.WGS84, this.#target)
+    Transforms.eastNorthUpToFixedFrame(this.#target, Ellipsoid.WGS84, this.#frame)
+    this.#hpr.heading = headingDeg * RAD
+    this.#hpr.pitch = pitchDeg * RAD
+    this.#hpr.range = this.orbit.rangeM
+    this.#camera.lookAtTransform(this.#frame, this.#hpr)
+    const c = this.#camera.positionCartographic
+    const terrain = this.#globe.getHeight(c) ?? null
+    return terrain === null ? null : c.height - terrain
+  }
+}
+
+const wrap360 = (deg: number): number => ((deg % 360) + 360) % 360
+const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x))
+```
+
+- [ ] **Step 4: Run them to verify they pass**
+
+Run: `node --test client/scene/chaseCamera.test.ts`
+Expected: PASS — `ℹ tests 18`, `ℹ pass 18`, `ℹ fail 0`.
+
+- [ ] **Step 5: Check it by hand**
+
+Run the app (or `harness/chase-camera.html`), chase an aircraft: drag left/right/up/down orbits, the wheel zooms, double-click snaps back behind, `Esc` returns the mouse to the globe. Validated in the preview on 2026-09-22: a 180 px drag → heading offset +54°, 30 px down → pitch −19.5°; 5 wheel notches up zoomed in; double-click → heading 298° / pitch −12°; after `Esc`, `enableInputs === true`; no console errors.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add client/scene/chaseCamera.ts client/scene/chaseCamera.test.ts
+git commit -m "feat(camera): mouse orbit, wheel zoom and double-click reset while chasing"
+```
+
+---
+
+### Task 5: WP gate
 
 - [ ] **Step 1: This package's tests**
 
 Run: `node --test client/scene/chaseCamera.test.ts`
-Expected: `ℹ tests 14`, `ℹ pass 14`, `ℹ fail 0`.
+Expected: `ℹ tests 18`, `ℹ pass 18`, `ℹ fail 0`.
 
 - [ ] **Step 2: Type-check this package's files**
 
@@ -632,7 +1069,7 @@ Expected: no output. grep exits 1 because nothing matched.
 - [ ] **Step 3: Full check in the worktree**
 
 Run: `npm run check`
-Expected: `tsc` prints nothing. On a worktree branched from `wave-0` the counts are `ℹ tests 55`, `ℹ pass 55`, `ℹ fail 0` (41 from WP-00 + 14 here).
+Expected: `tsc` prints nothing. On a worktree branched from `wave-0` the counts are `ℹ tests 59`, `ℹ pass 59`, `ℹ fail 0` (41 from WP-00 + 18 here).
 
 - [ ] **Step 4: Confirm there is nothing left to commit**
 
