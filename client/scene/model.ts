@@ -171,8 +171,10 @@ export class ChaseModel {
 
   static async load(viewer: Viewer, m: ModelManifestEntry): Promise<ChaseModel> {
     // Model clones its own identity modelMatrix, which update() then rewrites. The scale is in modelMatrixFor, so
-    // Model.scale stays 1. minimumPixelSize keeps a distant model visible.
-    const model = await Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false })
+    // Model.scale stays 1. minimumPixelSize keeps a distant model visible. Cesium exaggerates models with the terrain
+    // by default (squashed towards verticalExaggerationRelativeHeight, flat at factor 0); the aircraft keeps its true
+    // height while the topography toggle flattens or grows the ground.
+    const model = await Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
     return new ChaseModel(viewer, m, model)
   }
 

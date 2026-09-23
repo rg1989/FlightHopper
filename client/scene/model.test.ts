@@ -2,8 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
-import { Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix4, Transforms } from 'cesium'
-import type { Model, Viewer } from 'cesium'
+import { Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Transforms } from 'cesium'
+import type { Viewer } from 'cesium'
 import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg } from '../../shared/geo.ts'
 import type { ModelManifest, RenderState } from '../types.ts'
@@ -178,4 +178,15 @@ test('ChaseModel: added hidden; update rewrites modelMatrix in place and shows i
 
   cm.destroy()
   assert.deepEqual(f.added, [])
+})
+
+test('ChaseModel.load: the model does not follow terrain exaggeration (keeps its true HAE) and starts hidden', async (t) => {
+  const f = fakes()
+  const fromGltf = t.mock.method(Model, 'fromGltfAsync', async () => f.model as unknown as Model)
+  const cm = await ChaseModel.load(f.viewer, m)
+  // Cesium's default would squash the aircraft towards relH with the ground, and flatten it at factor 0.
+  assert.deepEqual(fromGltf.mock.calls[0].arguments, [{ url: `/${m.uri}`, minimumPixelSize: 32, show: false, enableVerticalExaggeration: false }])
+  assert.equal(cm.model, f.model)
+  assert.deepEqual(f.added, [f.model])
+  assert.equal(f.model.show, false)
 })
