@@ -6,7 +6,7 @@ import type { SourceKind } from '../../shared/types.ts'
 import './sourceBadge.css'
 
 const SOURCES: Record<SourceKind, { name: string; href: string | null; credit: string }> = {
-  adsbfi: { name: 'adsb.fi', href: 'https://adsb.fi', credit: 'Flight data: adsb.fi (adsb.fi), personal non-commercial use' },
+  adsbfi: { name: 'adsb.fi', href: 'https://adsb.fi', credit: 'Flight data: adsb.fi, non-commercial use' }, // one line on a phone
   adsblol: { name: 'adsb.lol', href: 'https://adsb.lol', credit: 'Flight data © adsb.lol contributors, ODbL 1.0' },
   readsb: { name: 'own receiver', href: null, credit: 'Flight data: own receiver (readsb)' },
   replay: { name: 'recording', href: null, credit: 'Flight data © adsb.lol contributors, ODbL 1.0' }, // the recorder polls adsb.lol

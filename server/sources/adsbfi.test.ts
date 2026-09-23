@@ -51,9 +51,16 @@ test('circle: /v3/lat/{lat}/lon/{lon}/dist/{nm}, radius whole nm in 1..250; the 
   assert.equal(seen.at(-1)!.url, '/api/v3/lat/0.0000/lon/0.0000/dist/1')
 })
 
-test('hexes: one hex per request, /v2/hex/{hex}', async () => {
+test('hexes: one ICAO hex per request, /v2/hex/{hex}; non-ICAO ("~") addresses are never sent', async () => {
   const r = await src.hexes(['4ca87c', 'abcdef'])
   assert.equal(seen.at(-1)!.url, '/api/v2/hex/4ca87c')
   assert.equal(r.snapshot!.aircraft.length, 1)
+  await src.hexes(['~a1b2c3', '71bd79'])
+  assert.equal(seen.at(-1)!.url, '/api/v2/hex/71bd79', 'the first ICAO one')
+  const n = seen.length
+  const skipped = await src.hexes(['~a1b2c3'])
+  assert.equal(seen.length, n, 'nothing sent')
+  assert.equal(skipped.status, 200)
+  assert.deepEqual(skipped.snapshot!.aircraft, [])
   await assert.rejects(src.all(), /unsupported/)
 })

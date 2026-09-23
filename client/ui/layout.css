@@ -80,9 +80,9 @@
    width (half the lines, ~139px with the night-lights line). Chasing (no legend), the panel (top, detail.css) and the
    HUD need the screen: the table hides, the credits drop to the legend's place, the HUD sits 8px above them (72px +
    ~139px + 8px, rounded to 220px) and the panel stops 8px above the HUD (~172px tall). The panel spans the width there,
-   so it starts below the scene toggles (8px + 38px + the column's 6px gap) and its height leaves 452px (52px + 220px +
-   172px + 8px). Not above the credits instead: on a 375px screen the toggles (~166px) would share a row with the HUD
-   (180–250px). */
+   so it starts below the source badge and the scene toggles (8px + 24px + 6px + 38px + the column's 6px gap) and its
+   height leaves 482px (82px + 220px + 172px + 8px). Not above the credits instead: on a 375px screen the toggles
+   (~166px) would share a row with the HUD (180–250px). */
 @media (max-width: 640px) {
   .fh-right {
     bottom: 108px;
@@ -110,7 +110,7 @@
   }
 
   .fh-ui[data-mode='chase'] .fh-detail {
-    top: 52px;
-    max-height: max(120px, calc(100% - 452px));
+    top: 82px;
+    max-height: max(120px, calc(100% - 482px));
   }
 }

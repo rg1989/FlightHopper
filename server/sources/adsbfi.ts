@@ -20,9 +20,17 @@ export function makeAdsbfi(opts: { userAgent: string; baseUrl?: string; timeoutM
       return get(`/v3/lat/${lat.toFixed(4)}/lon/${lon.toFixed(4)}/dist/${nm}`)
     },
     // ponytail: one hex per request (the docs show no batch form); one person's app chases one aircraft. The poller
-    // only asks when the view circle has not delivered the chased aircraft lately.
+    // only asks when the view circle has not delivered the chased aircraft lately. Non-ICAO addresses ('~…', TIS-B and
+    // the like) are never sent: the route takes ICAO addresses, and a 400/404 can get the IP restricted. They are
+    // answered here as not found (the poller then waits 30 s), and the view circle still carries them.
     async hexes(hexes) {
-      return get(`/v2/hex/${encodeURIComponent(hexes[0] ?? '')}`)
+      const hex = hexes.find((h) => /^[0-9a-f]{6}$/i.test(h))
+      if (hex === undefined) {
+        const now = Date.now()
+        const body = JSON.stringify({ ac: [], msg: 'not asked: no ICAO address', now, total: 0 })
+        return { url: 'adsbfi:not-asked', status: 200, tSendMs: now, tRecvMs: now, bytes: 0, body, retryAfterS: null, snapshot: { nowMs: now, aircraft: [] } }
+      }
+      return get(`/v2/hex/${hex}`)
     },
     async all() {
       throw new Error('unsupported')
