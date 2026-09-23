@@ -67,3 +67,19 @@ export interface FleetEntry {
   quality: Quality
   info: AircraftInfo | null
 }
+
+/** The user’s scene toggles (design D11). Persisted: URL > localStorage > defaults (both on). */
+export interface ScenePrefs {
+  topo: boolean                                 // 3-D terrain: exaggeration TOPO_ON, else flat (0) around relH
+  light: boolean                                // sun lighting in chase (browse stays unlit)
+}
+
+/**
+ * Terrain exaggeration for one frame, returned by Topography.update() and passed to the app, the runways and the fleet
+ * layer. Topography reuses one object: read it during the frame, never keep it.
+ */
+export interface TerrainFrame {
+  fSampled: number                              // factor the tiles held when globe.getHeight ran this frame (last render’s)
+  fNow: number                                  // factor drawn this frame (scene.verticalExaggeration)
+  relHM: number                                 // scene.verticalExaggerationRelativeHeight drawn this frame, HAE metres
+}
