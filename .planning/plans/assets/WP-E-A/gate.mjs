@@ -1,5 +1,5 @@
 // Gate GE driver: headless Chrome (Metal) over CDP against the running app (default http://localhost:5173, i.e. `make`).
-// usage: [HOST=http://localhost:5173] node gate.mjs <outDir> <scenario…>
+// usage: [HOST=http://localhost:5173] [CDP_PORT=9334] node gate.mjs <outDir> <scenario…>
 // scenarios: topo lag clear diag profile toggles (harness pages) · app-ridge app-ground app-grow app-ksfo app-browse-night app-keys
 //            app-phone ge-8-lowi-morning ge-9-lowi-golden ge-10-lowi-night (the app; most need the LOWI replay, see WP-E-A Task 5)
 import { spawn } from 'node:child_process'
@@ -9,7 +9,7 @@ const OUT = process.argv[2]
 const WANT = process.argv.slice(3)
 mkdirSync(OUT, { recursive: true })
 const HOST = process.env.HOST ?? 'http://localhost:5173'
-const PORT = 9334
+const PORT = Number(process.env.CDP_PORT ?? 9334) // other sessions' headless Chromes may hold 9334
 const [W, H] = WANT.some((s) => s.startsWith('app')) ? [1440, 900] : [1280, 800]
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
   '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${OUT}/profile`, `--window-size=${W},${H}`,
