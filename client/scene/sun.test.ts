@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 import { Cartesian3, Clock, Color, DirectionalLight, DynamicAtmosphereLightingType, ImageBasedLighting, JulianDate } from 'cesium'
 import type { ImageryLayer, Model, Viewer } from 'cesium'
 import { makeNightLayer } from './nightLights.ts'
-import { Sun, aimLight, lightsFactor, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
+import { Sun, aimLight, lightsFactor, moonLook, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
+import { moonPositionWC } from './moon.ts'
 
 // Cesium asks for its IAU 2006 XYS table the first time the ICRF frame is needed. Without CESIUM_BASE_URL (Node) that is
 // a file: URL next to the engine, so the TEME fallback is used. Record every request and refuse it: no network here.
@@ -183,7 +184,9 @@ function fakeViewer() {
 }
 const AIRCRAFT = at(LOWI, 2700)
 const T10 = Date.parse('2026-09-22T10:00:00Z') // LOWI 12:00 local, sun +41°
-const T19 = Date.parse('2026-09-22T19:00:00Z') // LOWI 21:00 local, sun −18.7°
+const T19 = Date.parse('2026-09-22T19:00:00Z') // LOWI 21:00 local, sun −18.7°; moon +21.6°, 84 % lit
+const TNEW = Date.parse('2026-10-10T19:00:00Z') // LOWI 21:00 local, sun −25°; new moon, −29°
+const TFULL = Date.parse('2026-09-26T22:30:00Z') // LOWI 00:30 local, sun −43.5°; full moon +46.6°, SSE
 
 test('new Sun: its own DirectionalLight, sky and model environment from the real sun, clock paused, starts off', () => {
   const s = fakeViewer()
@@ -238,12 +241,12 @@ test('lit at LOWI 12:00 local: the light follows the sun, white, full strength; 
   assert.equal(s.model.environmentMapManager.maximumPositionEpsilon, 20_000)
 })
 
-test('lit at LOWI 21:00 local: a dim light from straight overhead, city lights, darker land, dimmed aircraft', () => {
+test('moonless night at LOWI (new moon, 10 Oct): a dim light from straight overhead, city lights, darker land, dimmed aircraft', () => {
   const s = fakeViewer()
   s.attach()
   s.sun.setEnabled(true)
-  const r = s.sun.update(T19, AIRCRAFT)!
-  near(r.elevDeg, -18.7, 0.5)
+  const r = s.sun.update(TNEW, AIRCRAFT)!
+  near(r.elevDeg, -25, 0.5)
   assert.equal(r.night, 1)
   const [, , up] = enu(LOWI)
   assert.ok(Cartesian3.equalsEpsilon(s.light.direction, Cartesian3.negate(up, new Cartesian3()), 1e-5))
@@ -256,6 +259,39 @@ test('lit at LOWI 21:00 local: a dim light from straight overhead, city lights, 
   near(s.ibl()[1], 0.15, 1e-12)
   assert.equal(s.globe.vertexShadowDarkness, 0.3)
   assert.equal(s.viewer.shadows, false) // D10
+})
+
+test('full moon at LOWI (26 Sep, 22:30Z): the night light comes from the Moon, 1.7 strong and cool blue', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  s.sun.update(TFULL, AIRCRAFT)
+  const toMoon = Cartesian3.normalize(Cartesian3.subtract(moonPositionWC(JulianDate.fromDate(new Date(TFULL)), new Cartesian3()), AIRCRAFT, new Cartesian3()), new Cartesian3())
+  assert.ok(Cartesian3.dot(s.light.direction, toMoon) < -0.9999, 'travels away from the Moon')
+  near(s.light.intensity, 1.7, 0.005)
+  near(s.light.color.red, 0.62, 0.002)
+  near(s.light.color.green, 0.74, 0.002)
+  assert.equal(s.light.color.blue, 1)
+})
+
+test('a partly lit moon at LOWI (22 Sep, 21:00 local, 84 %, +21.6°): between the overhead light and the full-moon look', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  s.sun.update(T19, AIRCRAFT)
+  near(s.light.intensity, 0.45 + 1.25 * 0.843, 0.01)
+  const [, , up] = enu(LOWI)
+  const lean = Cartesian3.dot(Cartesian3.negate(s.light.direction, new Cartesian3()), up)
+  assert.ok(lean > Math.sin(21.6 * DEG) && lean < 1, `from between the Moon and overhead: ${lean}`)
+})
+
+test('moonLook: moonlight only at night, in proportion to the moon weight; no moon leaves the look as it was', () => {
+  const plain = sunLook(-15)
+  assert.deepEqual(moonLook(sunLook(-15), 0), plain)
+  const full = moonLook(sunLook(-15), 1)
+  near(full.intensity, 1.7, 1e-12)
+  near(full.red, 0.62, 1e-12)
+  near(full.green, 0.74, 1e-12)
+  assert.equal(full.blue, 1)
+  assert.deepEqual(moonLook(sunLook(45), 1), sunLook(45)) // by day the Sun rules
 })
 
 test('lightsFactor: 12 % of the city lights at or below 1.5 km camera height, all of them from 5 km, smooth between', () => {

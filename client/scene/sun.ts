@@ -18,6 +18,7 @@ import {
 } from 'cesium'
 import type { ImageryLayer, Model, Viewer } from 'cesium'
 import { smoothstep } from './exaggeration.ts'
+import { moonLitFraction, moonPositionWC, moonWeight } from './moon.ts'
 
 const RAD = Math.PI / 180
 /** The light never comes from lower: a low sun must not light slopes that face it from below the horizon. */
@@ -25,6 +26,10 @@ const MIN_LIGHT_ELEV_DEG = 2
 const MIN_LIGHT_TAN = Math.tan(MIN_LIGHT_ELEV_DEG * RAD)
 const DAY_INTENSITY = 2 // SunLight's default: czm_lightColorHdr = colour × intensity
 const NIGHT_INTENSITY = 0.45
+/** A full moon high up (the user's pick, 2026-09-23): stronger than the moonless overhead light, and cool blue. */
+const MOON_INTENSITY = 1.7
+const MOON_RED = 0.62
+const MOON_GREEN = 0.74 // blue stays 1
 const WARM_GREEN = 0.8 // warm low sun (1.0, 0.8, 0.62)
 const WARM_BLUE = 0.62
 /** Below 1, so the day layer's APPLY_BRIGHTNESS shader variant is compiled from the start, not at the first dusk. */
@@ -109,17 +114,37 @@ export function lightsFactor(heightM: number): number {
   return LIGHTS_NEAR + (1 - LIGHTS_NEAR) * smoothstep((heightM - LIGHTS_NEAR_M) / (LIGHTS_FULL_M - LIGHTS_NEAR_M))
 }
 
+/** Moonlight on a look (w: moonWeight): by night, towards the MOON_* light in proportion to w; by day the Sun rules. Writes into look. */
+export function moonLook(look: SunLook, w: number): SunLook {
+  const m = look.night * w
+  look.intensity += (MOON_INTENSITY - NIGHT_INTENSITY) * m
+  look.red += (MOON_RED - 1) * m
+  look.green += (MOON_GREEN - 1) * m
+  return look
+}
+
+/** dirWC (unit) raised to at least 2° above the horizon on its own azimuth. Not normalised; 0 for straight down. */
+function raise(dirWC: Cartesian3, upWC: Cartesian3, result: Cartesian3): Cartesian3 {
+  const v = Cartesian3.dot(dirWC, upWC)
+  const h = Cartesian3.subtract(dirWC, Cartesian3.multiplyByScalar(upWC, v, scratchH), scratchH) // horizontal part
+  Cartesian3.multiplyByScalar(upWC, Math.max(v, MIN_LIGHT_TAN * Cartesian3.magnitude(h)), result)
+  return Cartesian3.add(h, result, result)
+}
+
 /**
  * The scene light's travel direction (DirectionalLight.direction, unit): from the sun, raised to at least 2° above the
- * horizon on the sun's own azimuth, then blended towards a light from straight overhead by night (dim relief at night,
- * design §7.1). Normalised once after the blend: at the antisolar point the raised vector is 0, but night is 1 there.
+ * horizon on the sun's own azimuth, then blended by night towards nightFromWC, where the night light comes from (unit:
+ * straight overhead by default, dim relief at night, design §7.1; towards the Moon when it is up, nightFrom). Normalised
+ * once after the blend: at the antisolar point the raised vector is 0, but night is 1 there.
  */
-export function aimLight(sunWC: Cartesian3, upWC: Cartesian3, night: number, result: Cartesian3): Cartesian3 {
-  const v = Cartesian3.dot(sunWC, upWC)
-  const h = Cartesian3.subtract(sunWC, Cartesian3.multiplyByScalar(upWC, v, scratchH), scratchH) // horizontal part
-  Cartesian3.multiplyByScalar(upWC, Math.max(v, MIN_LIGHT_TAN * Cartesian3.magnitude(h)), result)
-  Cartesian3.lerp(Cartesian3.add(h, result, result), upWC, night, result)
+export function aimLight(sunWC: Cartesian3, upWC: Cartesian3, night: number, result: Cartesian3, nightFromWC: Cartesian3 = upWC): Cartesian3 {
+  Cartesian3.lerp(raise(sunWC, upWC, result), nightFromWC, night, result)
   return Cartesian3.negate(Cartesian3.normalize(result, result), result)
+}
+
+/** Where the night light comes from (unit): straight overhead, blended by w (moonWeight) towards the Moon raised to 2°. */
+export function nightFrom(upWC: Cartesian3, toMoonWC: Cartesian3, w: number, result: Cartesian3): Cartesian3 {
+  return Cartesian3.normalize(Cartesian3.lerp(upWC, raise(toMoonWC, upWC, result), w, result), result)
 }
 
 /** ?sun= from the page URL: a fixed instant, or an offset from the render time. */
@@ -174,6 +199,9 @@ export class Sun {
   #date = new Date(0)
   #jd = new JulianDate()
   #sun = new Cartesian3()
+  #moon = new Cartesian3()
+  #toMoon = new Cartesian3()
+  #nightFrom = new Cartesian3()
   #up = new Cartesian3()
   #at = new Cartesian3() // the last update() position: where the off light stands
   #enu = new Matrix4()
@@ -247,8 +275,14 @@ export class Sun {
       this.#aimOff()
       return st
     }
+    // The Moon lights the night (look D, the user's pick): its weight fades with phase and height, to the overhead light.
+    const moon = moonPositionWC(this.#jd, this.#moon)
+    const toMoon = Cartesian3.normalize(Cartesian3.subtract(moon, atWC, this.#toMoon), this.#toMoon)
+    const moonW = moonWeight(sunElevationDeg(toMoon, atWC), moonLitFraction(moon, sun))
+    moonLook(look, moonW)
     const light = this.#light
-    aimLight(sun, Ellipsoid.WGS84.geodeticSurfaceNormal(atWC, this.#up), look.night, light.direction)
+    const up = Ellipsoid.WGS84.geodeticSurfaceNormal(atWC, this.#up)
+    aimLight(sun, up, look.night, light.direction, nightFrom(up, toMoon, moonW, this.#nightFrom))
     light.intensity = look.intensity
     light.color.red = look.red
     light.color.green = look.green

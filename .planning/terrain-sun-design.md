@@ -60,7 +60,7 @@ So "topography" = vertex normals + sun lighting + a way to switch the relief off
 | `night01(el)` | smoothstep((2 − el)/10) | 0 at +2°, 1 at −8° |
 | `golden01(el)` | smoothstep((15 − el)/15) | 0 at +15°, 1 at 0° |
 | `MIN_LIGHT_ELEV_DEG` | 2 | the light never comes from lower |
-| light intensity | 2.0 → 0.45 by `night01` | day → night |
+| light intensity | 2.0 → 0.45 by `night01`; at night + 1.25 × moon weight (1.7 full moon, colour 0.62 / 0.74 / 1) | day → night; moonlight (§7 item 5) |
 | light colour | white → (1.0, 0.8, 0.62) by `golden01·(1 − night)` | warm low sun |
 | `globe.vertexShadowDarkness` | 0.3 + 0.2·golden·(1 − night) | ambient floor |
 | day layer brightness | min(0.9999, 1 − 0.7·night) | darker land at night |
@@ -91,7 +91,8 @@ On the MacBook Air M2, synthetic LOWI replay (valley arrival + Nordkette pass), 
 
 ## 7. Decisions taken with the user
 
-1. **Night look** (decided 2026-09-22): mountains stay faintly visible under a dim light from overhead, so peak clearance stays readable.
+1. **Night look** (decided 2026-09-22; moon added 2026-09-23, item 5): mountains stay faintly visible under a dim light from overhead, so peak clearance stays readable.
 2. **Replay lighting** (decided 2026-09-22): the recorded time (D12, WP-E5).
 3. **Upstream note.** The TerrainPicker race (D3) is a Cesium bug worth reporting with a Sandcastle repro. Our nudge works around it; a report is the user's call.
 4. **City lights near the ground** (decided 2026-09-23): VIIRS at z8 (≈ 500 m/px) made a big city one flat white-beige blob from a low chase camera (Tel Aviv, `.planning/reports/night-washout/`). Below 1.5 km camera height (above the ellipsoid, so a valley city still glows seen from a ridge) the lights fade to a faint 12 % glow and the day imagery shows through; from 5 km they are full. Brightness 1.6 → 1 (from 34,000 ft, 1.6 was a smooth white-orange glow; 1 shows orange patches with dark gaps).
+5. **Moonlight** (decided 2026-09-23): the real Moon lights the night (`client/scene/moon.ts`). Its weight is the lit fraction × a fade-in from −1° to +10° above the horizon. At weight 1 the night light comes from the Moon (raised to 2°) at intensity 1.7, cool blue (0.62, 0.74, 1): the user's pick "D" of four renders (full moon over the Karwendel, 26 Sep 2026 22:30Z). It fades to the overhead light of item 1 as the Moon wanes or sets. The Moon Cesium draws in the sky uses the same clock, so replays show their recorded moon. The 3-D buildings take `night` from the Sun state, not from the light's strength, which the Moon raises.
