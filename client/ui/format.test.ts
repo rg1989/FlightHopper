@@ -105,7 +105,7 @@ test('banner: extrapolating → predicting; otherwise nothing', () => {
   assert.equal(bannerText(live, state({ mode: 'extrap', ageS: 2 })), 'Predicting (no fresh data)')
   assert.equal(bannerText(live, state()), null)
   assert.equal(bannerText(live, null), null)
-  assert.equal(bannerText(live, null, true), 'No position for this aircraft yet', 'chasing with no state: say so')
+  assert.equal(bannerText(live, null, true), 'No recent position for this aircraft', 'chasing with no state: say so')
 })
 
 test('attribution always ends up with the not-for-navigation line, once', () => {

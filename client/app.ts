@@ -61,6 +61,9 @@ const MIN_VIEW_NM = 20
 const MAX_VIEW_NM = 5400
 const DEFAULT_AIRPORT = 'LLBG' // the first view without ?at= or ?airport= (the author's home); a reload keeps ?at=
 const URL_EVERY_MS = 1000 // how often the address bar follows the view (history.replaceState)
+// After a selection snaps the render delay, later changes are small (the arrival age's p90 moving by tenths of a
+// second): at the default 0.2 s/s the chased aircraft visibly lurches (20 % faster or slower for a moment); 5 % is not seen.
+const CHASE_SLEW_S_PER_S = 0.05
 const HOVER_PICK_MS = 100 // at most ten hover picks a second while the mouse moves (each pick is a small render pass)
 const HEX = /^~?[0-9a-f]{6}$/
 // Until the first reply. Nothing is drawn before it, so the source named here is never shown.
@@ -541,7 +544,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
         if (snapClock && registry.get(hex) !== undefined) {
-          clock = new RenderClock(delayTargetS())
+          clock = new RenderClock(delayTargetS(), CHASE_SLEW_S_PER_S)
           snapClock = false
         }
       }

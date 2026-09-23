@@ -79,7 +79,7 @@ export function hudTitle(s: RenderState): string {
 /** chasing: an aircraft is selected, so no state means no data for it (yet): say so instead of an empty screen. */
 export function bannerText(status: StatusBrief, s: RenderState | null, chasing = false): string | null {
   if (status.degraded !== null) return DEGRADED_TEXT[status.degraded]
-  if (s === null) return chasing ? 'No position for this aircraft yet' : null
+  if (s === null) return chasing ? 'No recent position for this aircraft' : null
   if (isStale(s)) return Number.isFinite(s.ageS) ? `Signal lost ${Math.round(Math.max(0, s.ageS))}s ago` : 'Signal lost'
   if (s.mode === 'extrap') return 'Predicting (no fresh data)'
   return null
