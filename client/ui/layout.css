@@ -77,11 +77,11 @@
 
 /* Phones: Cesium's credit block wraps to about three lines (~64px), so the legend sits 72px up and the column (table
    above the credits, full width: collapse the table to see the map) ends above the legend. The credits use the full
-   width (half the lines, ~139px with the night-lights line). Chasing (no legend), the panel (top, detail.css) and the
-   HUD need the screen: the table hides, the credits drop to the legend's place, the HUD sits 8px above them (72px +
-   ~139px + 8px, rounded to 220px) and the panel stops 8px above the HUD (~172px tall). The panel spans the width there,
-   so it starts below the source badge and the scene toggles (8px + 24px + 6px + 38px + the column's 6px gap) and its
-   height leaves 482px (82px + 220px + 172px + 8px). Not above the credits instead: on a 375px screen the toggles
+   width (eleven lines, ~200px with the night-lights and buildings lines). Chasing (no legend), the panel (top,
+   detail.css) and the HUD need the screen: the table hides, the credits drop to the legend's place, the HUD sits 8px
+   above them (72px + ~200px + 8px = 280px) and the panel stops 8px above the HUD (~172px tall). The panel spans the
+   width there, so it starts below the source badge and the scene toggles (8px + 24px + 6px + 38px + the column's 6px
+   gap) and its height leaves 542px (82px + 280px + 172px + 8px). Not above the credits instead: on a 375px screen the toggles
    (~166px) would share a row with the HUD (180–250px). */
 @media (max-width: 640px) {
   .fh-right {
@@ -106,11 +106,11 @@
   }
 
   .fh-ui[data-mode='chase'] .fh-hud {
-    bottom: 220px;
+    bottom: 280px;
   }
 
   .fh-ui[data-mode='chase'] .fh-detail {
     top: 82px;
-    max-height: max(120px, calc(100% - 482px));
+    max-height: max(120px, calc(100% - 542px));
   }
 }
