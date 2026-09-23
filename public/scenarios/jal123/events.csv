@@ -1,0 +1,48 @@
+time,type,value,label,src
+18:11:15,phase,,Take-off Haneda 15L,EN:p.286
+18:11:15,gear,1,Gear down,R10:p.290
+18:11:15,flaps,10,Flaps 10 for take-off (DFDR chart),R11:p.14
+18:12:16,phase,,Climb over Tokyo Bay,R10:p.290
+18:12:25,gear,0,"Gear up (not recorded; estimated, 9 s after lift-off)",R10:p.290
+18:14:04,flaps,5,Flaps retracting (DFDR chart),R11:p.14
+18:14:16,flaps,3,Flaps retracting (DFDR chart),R11:p.14
+18:14:28,flaps,2,Flaps retracting (DFDR chart),R11:p.14
+18:14:36,flaps,1,Flaps retracting (DFDR chart),R11:p.14
+18:14:50,flaps,0,Flaps up (DFDR chart),R11:p.14
+18:18:33,phase,,Direct to Seaperch,EN:p.286
+18:24:35,phase,,Failure: loss of hydraulics,R10:p.290
+18:24:35,mark,,Aft pressure bulkhead fails,R10:p.290
+18:24:35,damage,fin,"Most of the fin, the rudders and the tail cone lost",R10:p.290
+18:26:00,phase,,Phugoid and Dutch roll,R10:p.291
+18:28:35,mark,,“But now uncontrol”,EN:p.299
+18:31:00,phase,,Turning north over Suruga Bay,R11:p.3
+18:34:53,phase,,West of Mt Fuji,R05:p.137
+18:39:32,phase,,Gear down,R10:p.291
+18:39:32,mark,,Gear lowered,R10:p.291
+18:39:32,gear,1,Gear lowered,R10:p.291
+18:39:51,phase,,Otsuki loop,R10:p.291
+18:45:21,phase,,Descent toward Okutama,R10:p.292
+18:45:46,mark,,“Japan Air 123 uncontrollable”,EN:p.316
+18:47:17,phase,,Low over Okutama,R05:p.137
+18:47:17,mark,,“Can you control the aircraft now?” “It's uncontrollable.”,EN:p.318
+18:49:09,phase,,Stall and recovery,R11:p.5
+18:49:42,mark,,"Stall: 108 kt, angle of attack 30.9°",R10:p.292
+18:51:06,phase,,Flaps on alternate power,R10:p.292
+18:51:06,mark,,Flaps start to extend on alternate power,R10:p.292
+18:51:40,flaps,1,Flaps extending (DFDR chart),R11:p.17
+18:52:36,flaps,2,Flaps extending (DFDR chart),R11:p.17
+18:53:31,mark,,"“Uncontrol, Japan Air 123 uncontrol”",EN:p.324
+18:53:42,flaps,3,Flaps extending (DFDR chart),R11:p.17
+18:54:13,flaps,4,Flaps extending (DFDR chart),R11:p.17
+18:54:31,flaps,5,Flaps 5,R10:p.293
+18:54:50,phase,,Final turn,R10:p.293
+18:54:50,flaps,10,Flaps 10,R10:p.293
+18:55:05,mark,,Last exchange with ATC,EN:p.325
+18:55:08,flaps,15,Flaps extending (DFDR chart),R11:p.17
+18:55:33,flaps,20,Flaps 20,R10:p.292
+18:55:42,flaps,25,Flaps about 25; retraction begins at once,R10:p.293
+18:55:47,flaps,23,Flaps retracting (DFDR chart),R11:p.17
+18:55:52,flaps,21,Flaps retracting (DFDR chart),R11:p.17
+18:56:00,flaps,19,Flaps retracting (DFDR chart),R11:p.17
+18:56:09,flaps,17,Flaps retracting (DFDR chart),R11:p.17
+18:56:15,flaps,15,Flaps retracting (DFDR chart),R11:p.17

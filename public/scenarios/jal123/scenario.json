@@ -1,0 +1,146 @@
+{
+  "format": 1,
+  "id": "jal123",
+  "title": "Japan Air Lines Flight 123",
+  "subtitle": "Tokyo Haneda → Osaka Itami",
+  "date": "1985-08-12",
+  "utcOffset": "+09:00",
+  "clockLabel": "JST",
+  "start": "18:11:15",
+  "end": "18:56:28",
+  "note": "A reconstruction of a real accident in which 520 people died. It ends before the impact.",
+  "summary": [
+    "A Boeing 747SR-46 on a domestic flight from Tokyo Haneda to Osaka Itami, with 509 passengers and 15 crew aboard.",
+    "At 18:24:35, twelve minutes after take-off, the aft pressure bulkhead failed at 23,900 ft off the east coast of the Izu Peninsula. Most of the fin and all four hydraulic systems were lost.",
+    "For 32 minutes the crew kept the aircraft flying, steering with engine thrust: over Suruga Bay, west of Mt Fuji, in a loop near Otsuki, then over Okutama and the mountains to the north-west.",
+    "At 18:56 the aircraft struck the Osutaka Ridge in Ueno Village, Gunma. 520 people died. Four survived."
+  ],
+  "crew": [
+    { "role": "Captain", "name": "Masami Takahama", "detail": "instructor, right seat" },
+    { "role": "First Officer", "name": "Yutaka Sasaki", "detail": "flying from the left seat, in captain training" },
+    { "role": "Flight Engineer", "name": "Hiroshi Fukuda" }
+  ],
+  "aircraft": {
+    "registration": "JA8119",
+    "type": "Boeing 747SR-46",
+    "callsign": "JAL123",
+    "operator": "Japan Air Lines",
+    "model": "b744",
+    "shape": { "halfSpanM": 29.8 },
+    "livery": {
+      "base": "#f4f4f1",
+      "belly": "#bfc3c7",
+      "fin": "#f4f4f1",
+      "engine": "#b9bdc1",
+      "body": "livery/body.png",
+      "finLogo": "local/fin.png"
+    }
+  },
+  "speakers": {
+    "CAP": { "name": "Captain", "kind": "crew" },
+    "COP": { "name": "First Officer", "kind": "crew" },
+    "FE": { "name": "Flight Engineer", "kind": "crew" },
+    "JL123": { "name": "JAL 123", "kind": "crew" },
+    "PUR": { "name": "Purser", "kind": "cabin" },
+    "STH": { "name": "Cabin crew", "kind": "cabin" },
+    "PRA": { "name": "Cabin announcement (recorded)", "kind": "cabin" },
+    "TWR": { "name": "Tokyo Tower", "kind": "atc" },
+    "DEP": { "name": "Tokyo Departure", "kind": "atc" },
+    "ACC": { "name": "Tokyo Control", "kind": "atc" },
+    "APC": { "name": "Tokyo Approach", "kind": "atc" },
+    "YOK": { "name": "Yokota Approach", "kind": "atc" },
+    "COM": { "name": "JAL company radio", "kind": "company" },
+    "SELCAL": { "name": "Company call chime", "kind": "company" },
+    "GPWS": { "name": "Ground proximity warning", "kind": "alert" },
+    "STALL": { "name": "Stall warning", "kind": "alert" },
+    "ALARM": { "name": "Cabin altitude warning", "kind": "alert" },
+    "UNK": { "name": "Unidentified", "kind": "other" }
+  },
+  "imagery": [
+    {
+      "url": "https://cyberjapandata.gsi.go.jp/xyz/gazo3/{z}/{x}/{y}.jpg",
+      "rect": [139.70, 35.46, 139.84, 35.62],
+      "minZoom": 10,
+      "maxZoom": 17,
+      "credit": "GSI Japan, aerial photographs 1984–1986"
+    }
+  ],
+  "ending": {
+    "fadeFrom": "18:56:17",
+    "darkAt": "18:56:22",
+    "cardAfterS": 5,
+    "card": {
+      "title": "Japan Air Lines Flight 123",
+      "lines": [
+        "12 August 1985 · Boeing 747SR-46 JA8119, Tokyo Haneda to Osaka Itami.",
+        "At 18:56 the aircraft struck the Osutaka Ridge in Ueno Village, Gunma. Of the 524 people aboard, 509 passengers and 15 crew, 520 died. Four survived.",
+        "The crew kept the aircraft flying for 32 minutes after its aft pressure bulkhead failed and took all four hydraulic systems with it.",
+        "Every 12 August families and JAL staff climb to the ridge; a moment of silence is held at 18:56.",
+        "JAL's Safety Promotion Center at Haneda keeps the wreckage and the lessons of this accident.",
+        "Reconstruction from the official report of the Aircraft Accident Investigation Commission (1987)."
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "EN",
+      "title": "Aircraft Accident Investigation Commission (AAIC), accident investigation report on JA8119, 12 August 1985 (1987), English edition",
+      "url": "https://jtsb.mlit.go.jp/eng-air_report/JA8119.pdf",
+      "note": "Pages are PDF page numbers of this file; the scanned attachments restart their printed numbers. ATC and company radio (Attachments 3–4): pp. 285–287. CVR record (Attachment 6), the English wording of every caption: pp. 293–327."
+    },
+    {
+      "id": "JA",
+      "title": "AAIC, 航空事故調査報告書 JA8119 (1987), Japanese original",
+      "url": "https://jtsb.mlit.go.jp/aircraft/rep-acci/62-2-JA8119.pdf",
+      "note": "Pages are the report's printed page numbers. The CVR record (別添6, printed pp. 310–343) gives every caption its second. The same report split into parts: R05, R10, R11."
+    },
+    {
+      "id": "R05",
+      "title": "AAIC report (1987), Japanese, part 05: figures (付図)",
+      "url": "https://jtsb.mlit.go.jp/aircraft/download/62-2-JA8119-05.pdf",
+      "note": "Printed page numbers. 付図-1, the flight-path map with time, altitude and speed labels: p. 137. Wreckage maps: pp. 149, 155."
+    },
+    {
+      "id": "R10",
+      "title": "AAIC report (1987), Japanese, part 10: attachments 2–5 (ATC and company transcripts, DFDR parameters, the official reading of the DFDR)",
+      "url": "https://jtsb.mlit.go.jp/aircraft/download/62-2-JA8119-10.pdf",
+      "note": "Printed page numbers. The official reading of the DFDR (DFDR記録より認められる飛行状況): pp. 290–294."
+    },
+    {
+      "id": "R11",
+      "title": "AAIC report (1987), Japanese, part 11: DFDR charts (DFDR図-1…6) and the CVR record (別添6)",
+      "url": "https://jtsb.mlit.go.jp/aircraft/download/62-2-JA8119-11.pdf",
+      "note": "PDF page numbers of this file. DFDR charts: pp. 1–42 (flap position on DFDR図-3, pp. 13–17). CVR record: pp. 44–77 (printed pp. 310–343)."
+    },
+    {
+      "id": "K",
+      "title": "Japan Transport Safety Board (JTSB), commentary on the JAL 123 accident report (解説, July 2011)",
+      "url": "https://jtsb.mlit.go.jp/kaisetsu/nikkou123.html",
+      "note": "PDF: https://jtsb.mlit.go.jp/kaisetsu/nikkou123-kaisetsu.pdf. Timeline 別添1 cross-checks the caption times; 図16 gives the failure point."
+    },
+    {
+      "id": "GSI",
+      "title": "Geospatial Information Authority of Japan (GSI), aerial photographs 1984–1986 (gazo3)",
+      "url": "https://maps.gsi.go.jp/development/ichiran.html",
+      "note": "Tiles: https://cyberjapandata.gsi.go.jp/xyz/gazo3/{z}/{x}/{y}.jpg. Runway 15L of 1985 was traced from them."
+    },
+    {
+      "id": "DEM",
+      "title": "GSI, elevation API",
+      "url": "https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php",
+      "note": "Ground heights for the terrain-clearance check and the final ground points."
+    },
+    {
+      "id": "UWYO",
+      "title": "University of Wyoming, upper-air soundings: Tateno (47646) and Hamamatsu (47681), 12 August 1985, 00Z and 12Z",
+      "url": "https://weather.uwyo.edu/wsgi/sounding?datetime=1985-08-12%2000:00:00&id=47646&type=TEXT:LIST",
+      "note": "Winds and temperatures aloft for true airspeed, true altitude and the wind drift."
+    },
+    {
+      "id": "MAG",
+      "title": "NOAA NCEI magnetic declination calculator (DGRF 1985)",
+      "url": "https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#declination",
+      "note": "Magnetic to true heading for 1985.6."
+    }
+  ]
+}
