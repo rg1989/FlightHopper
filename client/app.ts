@@ -21,7 +21,7 @@ import type { ReadsbAircraft, Sample, SourceKind } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
 import { Fleet } from './browse/fleet.ts'
-import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
+import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, heightToFit, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
@@ -64,7 +64,10 @@ const MIN_VIEW_NM = 20
 // The visible hemisphere. The server polls a view up to 250 nm as one circle and a wider one as grid cells, each at a
 // period that grows with the view (Poller.viewPeriodMs): the globe view asks each area about every 30 min.
 const MAX_VIEW_NM = 5400
-const DEFAULT_AIRPORT = 'LLBG' // the first view without ?at= or ?airport= (the author's home); a reload keeps ?at=
+const DEFAULT_AIRPORT = 'LLBG' // a ?hex= link without ?at= starts over it (the author's home)
+// The first view without ?at=, ?airport= or ?hex=: all of Israel (the author's home), so its traffic loads first; a
+// reload keeps ?at=.
+const HOME_BOX: RectDeg = { south: 29.45, north: 33.35, west: 34.2, east: 35.9 }
 const URL_EVERY_MS = 1000 // how often the address bar follows the view (history.replaceState)
 // After a selection snaps the render delay, the delay shrinks at 0.05 s/s: at the default 0.2 s/s a small shrink (the
 // arrival age's p90 moving by tenths of a second) showed as a 20 % speed-up lurch. It grows at the default 0.2 s/s, so an
@@ -418,10 +421,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const measure = bench === null ? null : (name: string, startMs: number): void => void performance.measure(name, { start: startMs })
   ;(window as unknown as { viewer?: Viewer }).viewer = viewer // console access for debugging and G3, as in WP-00
 
-  // The first view: ?at= (a reload or a shared link), else ?airport=, else the default home airport.
+  // The first view: ?at= (a reload or a shared link), else ?airport=, else all of Israel (a chase: over the home airport).
   const urlView = readView(location.search)
   const home = airports.find((a) => a.ident === (params.airport ?? DEFAULT_AIRPORT)) ?? airports[0]
-  const start = urlView.at ?? (home ? { lat: home.lat, lon: home.lon, heightKm: BROWSE_HEIGHT_M / 1000 } : null)
+  const homeBox = params.airport === null && !chasing
+    ? { lat: (HOME_BOX.south + HOME_BOX.north) / 2, lon: (HOME_BOX.west + HOME_BOX.east) / 2, heightKm: heightToFit(HOME_BOX, viewer.canvas.clientWidth, viewer.canvas.clientHeight) / 1000 }
+    : null
+  const start = urlView.at ?? homeBox ?? (home ? { lat: home.lat, lon: home.lon, heightKm: BROWSE_HEIGHT_M / 1000 } : null)
   if (!chasing) enterBrowse(viewer, start, { flyS: 0, heightM: start === null ? undefined : start.heightKm * 1000 })
   else {
     map.show = false

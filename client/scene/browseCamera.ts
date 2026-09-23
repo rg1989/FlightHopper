@@ -43,6 +43,19 @@ export function heightForViewWidthM(widthM: number, fovRad: number = CESIUM_FOV_
   return Number.POSITIVE_INFINITY
 }
 
+/**
+ * The camera height that shows the whole of box, top-down, on a canvas widthPx × heightPx, with a little to spare. The
+ * field of view spans the wider axis; the narrower one sees proportionally less.
+ */
+export function heightToFit(box: RectDeg, widthPx: number, heightPx: number, spare = 1.05): number {
+  const mPerDeg = (EARTH_R * Math.PI) / 180
+  const nsM = (box.north - box.south) * mPerDeg
+  const ewM = (box.east - box.west) * mPerDeg * Math.cos((((box.north + box.south) / 2) * Math.PI) / 180)
+  const narrowFov = 2 * Math.atan((Math.tan(CESIUM_FOV_RAD / 2) * Math.min(widthPx, heightPx)) / Math.max(widthPx, heightPx))
+  const [fovX, fovY] = widthPx >= heightPx ? [CESIUM_FOV_RAD, narrowFov] : [narrowFov, CESIUM_FOV_RAD]
+  return Math.max(heightForViewWidthM(ewM * spare, fovX), heightForViewWidthM(nsM * spare, fovY))
+}
+
 /** Is (lat, lon) inside r? Edges count as inside; a rectangle with west > east wraps across the antimeridian. */
 export function containsDeg(r: RectDeg, lat: number, lon: number): boolean {
   if (lat < r.south || lat > r.north) return false

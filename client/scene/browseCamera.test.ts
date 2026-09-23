@@ -6,7 +6,7 @@ import { Camera, Cartesian2, Cartesian3, Ellipsoid, GeographicProjection, Headin
 import type { Viewer } from 'cesium'
 import {
   BROWSE_FLY_S, BROWSE_HEIGHT_M, MAX_ZOOM_M, MIN_ZOOM_M,
-  containsDeg, enterBrowse, exitBrowse, heightForViewWidthM, isBrowsing, viewRectangleDeg, viewWidthM,
+  containsDeg, enterBrowse, exitBrowse, heightForViewWidthM, heightToFit, isBrowsing, viewRectangleDeg, viewWidthM,
 } from './browseCamera.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
@@ -226,4 +226,15 @@ test('containsDeg: edges inclusive; latitude outside → false', () => {
   assert.ok(containsDeg(r, 29, 30) && containsDeg(r, 34, 36))
   assert.ok(!containsDeg(r, 28.99, 32) && !containsDeg(r, 34.01, 32))
   assert.ok(!containsDeg(r, 32, 29.99) && !containsDeg(r, 32, 36.01))
+})
+
+test('heightToFit: the whole box shows on either axis, wide or tall canvas, with 5 % to spare', () => {
+  const israel = { south: 29.45, north: 33.35, west: 34.2, east: 35.9 } // tall and narrow
+  const nsM = 3.9 * 111_319.5
+  for (const [w, h] of [[1600, 900], [390, 844]]) {
+    const hM = heightToFit(israel, w, h)
+    const fovY = w >= h ? 2 * Math.atan(Math.tan(Math.PI / 6) * h / w) : Math.PI / 3
+    near(viewWidthM(hM, fovY), nsM * 1.05, 1) // north–south decides: it fills the vertical axis
+  }
+  assert.ok(heightToFit(israel, 1600, 900) > heightToFit(israel, 390, 844), 'a landscape canvas needs more height')
 })
