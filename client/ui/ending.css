@@ -1,0 +1,118 @@
+/* client/ui/ending.css */
+/* The end of a scenario (ending.ts): a black veil over everything but the play bar, its opacity driven by the scenario
+   clock (no CSS transition: it would lag a drag), and the closing card, which fades in slowly. Plain and still. */
+.fh-ending {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /* The card is centred in the room above the play bar (playbar.css), never under it. */
+  padding: calc(24px + env(safe-area-inset-top, 0px)) 16px calc(16px + var(--fh-playbar-space, 8px + env(safe-area-inset-bottom, 0px)));
+  pointer-events: none;
+}
+
+/* While the ending shows, the play bar stands above the veil (spec §7: in the dark seconds, dark and the clock only):
+   its clock, pause, scrubber and exit stay in reach, so a paused second in the dark before the card (a drag there, or a
+   reload of ?t=) is never a black screen with nothing to press, and a drag back lifts the veil. The rail, its panel and
+   the scene stay under it. */
+.fh-ui:has(.fh-ending:not([hidden])) .fh-playbar {
+  z-index: 31;
+}
+
+.fh-ending[hidden] {
+  display: none;
+}
+
+.fh-ending-veil {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+}
+
+/* Fully dark: the veil holds the pointer, so nothing under it (the scene, the rail) is touched blind. */
+.fh-ending-solid .fh-ending-veil {
+  pointer-events: auto;
+}
+
+.fh-ending-card {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 24px 26px 18px;
+  box-shadow: none;
+  pointer-events: auto;
+  animation: fh-ending-in 1.2s ease-out both;
+}
+
+.fh-ending-card[hidden] {
+  display: none;
+}
+
+@keyframes fh-ending-in {
+  from { opacity: 0; }
+}
+
+.fh-ending-title {
+  margin: 0 0 14px;
+  font: 600 16px/1.35 var(--fh-font);
+  letter-spacing: 0.005em;
+}
+
+.fh-ending-line {
+  margin: 0;
+  color: #d5dce5;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.fh-ending-line + .fh-ending-line {
+  margin-top: 10px;
+}
+
+.fh-ending-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--fh-hairline);
+}
+
+/* Phones: the card shares the height with the play bar under it, so it sets a little tighter to fit a 375 x 812 screen
+   whole; on a shorter one it scrolls inside itself. */
+@media (max-width: 640px) {
+  .fh-ending {
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  }
+
+  .fh-ending-card {
+    padding: 18px 18px 14px;
+  }
+
+  .fh-ending-title {
+    margin-bottom: 12px;
+    font-size: 17px;
+  }
+
+  .fh-ending-line {
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+
+  .fh-ending-line + .fh-ending-line {
+    margin-top: 8px;
+  }
+
+  .fh-ending-foot {
+    margin-top: 14px;
+    padding-top: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-ending-card {
+    animation: none;
+  }
+}

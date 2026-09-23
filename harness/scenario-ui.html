@@ -1,0 +1,54 @@
+<!-- harness/scenario-ui.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Harness: scenario UI</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+      /* A still stand-in for the chase view: sky, three ridges, the aircraft from behind. Day, bright haze (the hardest
+         case for legibility) and night. */
+      body[data-bg='day'] { --sky-top: #5f8fcb; --sky-bottom: #c9dcee; --far: #8298ae; --mid: #4d6a58; --near: #2c4632; --plane: #e9ecef; --plane-shade: #9aa3ad; }
+      body[data-bg='bright'] { --sky-top: #e3ecf5; --sky-bottom: #ffffff; --far: #edf1f5; --mid: #d6e0da; --near: #f6f8fa; --plane: #f4f5f7; --plane-shade: #aab2bb; }
+      body[data-bg='night'] { --sky-top: #03050a; --sky-bottom: #111827; --far: #0c111b; --mid: #080c14; --near: #05080d; --plane: #5b6470; --plane-shade: #303740; }
+      #scene { position: absolute; inset: 0; }
+      #scene svg { width: 100%; height: 100%; display: block; }
+      #chrome { position: absolute; top: 8px; left: 8px; z-index: 40; display: flex; flex-wrap: wrap; gap: 4px; max-width: min(520px, calc(100% - 90px));
+        font: 12px system-ui, sans-serif; }
+      #chrome button { font: inherit; padding: 3px 8px; }
+      #log { flex-basis: 100%; margin: 2px 0 0; padding: 4px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.88); color: #111;
+        font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+      body[data-chrome='0'] #chrome { display: none; }
+    </style>
+  </head>
+  <body data-bg="day">
+    <div id="scene" aria-hidden="true">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" style="stop-color: var(--sky-top)" />
+            <stop offset="1" style="stop-color: var(--sky-bottom)" />
+          </linearGradient>
+        </defs>
+        <rect width="1600" height="1000" fill="url(#sky)" />
+        <path style="fill: var(--far)" d="M0 640 L140 590 L260 612 L420 548 L560 596 L720 560 L860 604 L1010 540 L1180 590 L1320 556 L1460 600 L1600 570 V1000 H0Z" />
+        <path style="fill: var(--mid)" d="M0 720 L180 660 L330 700 L500 640 L690 700 L850 672 L1040 716 L1220 650 L1400 706 L1600 668 V1000 H0Z" />
+        <path style="fill: var(--near)" d="M0 820 L240 760 L460 800 L700 750 L960 812 L1200 770 L1420 820 L1600 790 V1000 H0Z" />
+        <g transform="translate(800 460)">
+          <path style="fill: var(--plane-shade)" d="M-178 -4 L-24 12 L24 12 L178 -4 L178 3 L24 22 L-24 22 L-178 3Z" />
+          <ellipse style="fill: var(--plane-shade)" cx="-64" cy="24" rx="11" ry="9" />
+          <ellipse style="fill: var(--plane-shade)" cx="64" cy="24" rx="11" ry="9" />
+          <ellipse style="fill: var(--plane-shade)" cx="-116" cy="17" rx="10" ry="8" />
+          <ellipse style="fill: var(--plane-shade)" cx="116" cy="17" rx="10" ry="8" />
+          <path style="fill: var(--plane)" d="M-58 -6 L58 -6 L58 -2 L-58 -2Z" />
+          <path style="fill: var(--plane)" d="M-3 -4 L-2 -66 L2 -66 L3 -4Z" />
+          <ellipse style="fill: var(--plane)" cx="0" cy="12" rx="23" ry="21" />
+        </g>
+      </svg>
+    </div>
+    <div class="fh-ui" id="ui" data-mode="chase" data-scenario="jal123"></div>
+    <div id="chrome"></div>
+    <script type="module" src="./scenario-ui.ts"></script>
+  </body>
+</html>

@@ -36,6 +36,11 @@ const P: Record<string, string> = {
   // A camera, struck through: no photo of this aircraft.
   cameraOff: 'M3.5 7.5H7L8.5 5h7L17 7.5h3.5v12h-17v-12ZM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM3 3l18 18',
   keyboard: 'M3.5 6.5h17v11h-17zM7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8',
+  // A strip of film with its sprocket holes: the scenarios (recorded flights).
+  film: 'M5.5 3.5h13a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2ZM7.5 3.5v17M16.5 3.5v17M3.5 8h4M3.5 12h4M3.5 16h4M16.5 8h4M16.5 12h4M16.5 16h4',
+  // Media controls (the scenario play bar fills them).
+  play: 'M7.5 5.2v13.6L18.8 12 7.5 5.2Z',
+  pause: 'M7 5.5h3v13H7zM14 5.5h3v13h-3z',
 }
 
 const NS = 'http://www.w3.org/2000/svg'

@@ -1,0 +1,349 @@
+/* client/ui/playbar.css */
+/* The scenario play bar (playbar.ts): along the bottom between the left gutter and the rail; on phones on top of the tab
+   bar, full width. --fh-playbar-space is how far its top edge sits from the bottom of the screen: the captions (and any
+   overlay that must clear the bar) stand on it. While the ending shows, ending.css lifts the bar above its veil. */
+:root {
+  --fh-playbar-h: 64px;
+  --fh-playbar-space: calc(12px + env(safe-area-inset-bottom, 0px) + var(--fh-playbar-h));
+}
+
+.fh-playbar {
+  --fh-thumb: 14px;
+  position: absolute;
+  z-index: 17;
+  right: calc(64px + var(--fh-right));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  left: var(--fh-left);
+  display: grid;
+  grid-template-columns: auto clamp(150px, 20vw, 230px) minmax(0, 1fr) auto auto;
+  grid-template-areas: 'play meta track rate exit';
+  align-items: center;
+  column-gap: 12px;
+  height: var(--fh-playbar-h);
+  padding: 0 8px 0 12px;
+  pointer-events: auto;
+  animation: fh-playbar-in 180ms var(--fh-ease);
+}
+
+@keyframes fh-playbar-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* Play/pause: a quiet round button, the icon filled. */
+.fh-ibtn.fh-playbar-play {
+  grid-area: play;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fh-text);
+}
+
+.fh-ibtn.fh-playbar-play:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.fh-playbar-play .fh-icon {
+  fill: currentColor;
+}
+
+.fh-playbar-meta {
+  grid-area: meta;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fh-playbar-title,
+.fh-playbar-phase {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fh-playbar-title {
+  color: var(--fh-faint);
+  font: 600 10px/1.3 var(--fh-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fh-playbar-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font: 600 17px/1.3 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fh-playbar-zone {
+  color: var(--fh-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.fh-playbar-phase {
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fh-playbar-phase[hidden] {
+  display: none;
+}
+
+/* The scrubber: a thin track, the played part in the accent, a white thumb; ticks for the marks under it. The ticks'
+   band is the track's bottom padding: their hit areas sit wholly below the scrubber's, so a press on the thumb or the
+   track always scrubs, and only a press below it picks a mark. */
+.fh-playbar-track {
+  grid-area: track;
+  position: relative;
+  min-width: 0;
+  padding-bottom: 12px;
+}
+
+.fh-playbar-range {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none; /* a horizontal drag scrubs; it does not pan the page */
+}
+
+.fh-playbar-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--fh-accent) var(--fh-p, 0%), rgba(255, 255, 255, 0.18) var(--fh-p, 0%));
+}
+
+.fh-playbar-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.fh-playbar-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fh-accent);
+}
+
+.fh-playbar-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--fh-thumb);
+  height: var(--fh-thumb);
+  margin-top: calc((4px - var(--fh-thumb)) / 2);
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.fh-playbar-range::-moz-range-thumb {
+  width: var(--fh-thumb);
+  height: var(--fh-thumb);
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.fh-playbar-range:focus-visible {
+  outline: none;
+}
+
+.fh-playbar-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(90, 169, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.fh-playbar-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgba(90, 169, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* Inset by half a thumb, so a tick sits where the thumb's centre is at that time. */
+.fh-playbar-ticks {
+  position: absolute;
+  right: calc(var(--fh-thumb) / 2);
+  bottom: 0;
+  left: calc(var(--fh-thumb) / 2);
+  height: 12px;
+  pointer-events: none;
+}
+
+.fh-playbar-tick {
+  position: absolute;
+  top: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.fh-playbar-tick::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  width: 2px;
+  height: 7px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.42);
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-playbar-tick:hover::before {
+  background: var(--fh-text);
+}
+
+.fh-playbar-tick:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 0;
+}
+
+/* Speed: a small outlined chip with the rate in it. */
+.fh-playbar-rate {
+  grid-area: rate;
+  min-width: 42px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fh-text);
+  font: 600 12px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-playbar-rate:hover {
+  background: var(--fh-hover);
+}
+
+.fh-playbar-rate:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-playbar-exit {
+  grid-area: exit;
+}
+
+/* Touch screens: 44 px targets for play, speed and exit; a 32 px scrubber (the 22 px thumb inside it) with the 24 px
+   tick band under it. */
+@media (pointer: coarse) {
+  :root {
+    --fh-playbar-h: 72px;
+  }
+
+  .fh-playbar {
+    --fh-thumb: 22px;
+    right: calc(72px + var(--fh-right));
+    column-gap: 8px;
+  }
+
+  .fh-ibtn.fh-playbar-play,
+  .fh-ibtn.fh-playbar-exit {
+    width: 44px;
+    height: 44px;
+  }
+
+  .fh-playbar-rate {
+    min-width: 52px;
+    height: 44px;
+    border-radius: 22px;
+    font-size: 13px;
+  }
+
+  .fh-playbar-track {
+    padding-bottom: 24px;
+  }
+
+  .fh-playbar-range {
+    height: 32px;
+  }
+
+  .fh-playbar-ticks {
+    height: 24px;
+  }
+
+  /* 24 px (WCAG 2.5.8; its "equivalent" exception also holds: the scrubber and its keys reach every mark): late in
+     JAL 123 marks sit 7-12 px apart on a phone, so 44 px targets would swallow their neighbours. */
+  .fh-playbar-tick {
+    width: 24px;
+    height: 24px;
+    margin-left: -12px;
+  }
+
+  .fh-playbar-tick::before {
+    top: 0;
+    height: 8px;
+  }
+
+  .fh-playbar-play,
+  .fh-playbar-rate,
+  .fh-playbar-exit,
+  .fh-playbar-tick {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Phones: full width on top of the tab bar; the clock and phase on a row above the controls; no title (the view needs
+   the room, and the panel names the scenario). */
+@media (max-width: 640px) {
+  :root {
+    --fh-playbar-h: 88px; /* 1 border + 4 + the 22 px meta row + 1 + the 56 px control row + 4 */
+    --fh-playbar-space: calc(var(--fh-tabbar-h) + var(--fh-playbar-h));
+  }
+
+  .fh-playbar {
+    right: 0;
+    bottom: var(--fh-tabbar-h);
+    left: 0;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: 22px 56px;
+    grid-template-areas:
+      'meta meta meta meta'
+      'play track rate exit';
+    row-gap: 1px;
+    column-gap: 6px;
+    padding: 4px 8px;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .fh-playbar-meta {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10px;
+    padding: 0 6px;
+  }
+
+  .fh-playbar-title {
+    display: none;
+  }
+
+  .fh-playbar-clock {
+    flex: none;
+    font-size: 15px;
+  }
+
+  .fh-playbar-phase {
+    min-width: 0;
+    font-size: 13px;
+  }
+}

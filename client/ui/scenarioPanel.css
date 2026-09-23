@@ -1,0 +1,218 @@
+/* client/ui/scenarioPanel.css */
+/* The Scenarios panel (scenarioPanel.ts): a card per recorded flight inside the rail panel. Quiet type: these are real
+   accidents, so no badges, colour or flourish beyond the one Play button. */
+.fh-scn {
+  display: flex;
+  flex-direction: column;
+}
+
+.fh-scn-card {
+  padding: 14px 14px 16px;
+}
+
+.fh-scn-card + .fh-scn-card {
+  border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-scn-head {
+  margin-bottom: 8px;
+}
+
+.fh-scn-title {
+  margin: 0;
+  font: 600 15px/1.3 var(--fh-font);
+  letter-spacing: 0.005em;
+}
+
+.fh-scn-sub {
+  margin: 2px 0 0;
+  color: var(--fh-muted);
+  font-size: 12.5px;
+}
+
+.fh-scn-date,
+.fh-scn-ac {
+  margin: 0;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fh-scn-summary {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.fh-scn-summary p {
+  margin: 0;
+}
+
+.fh-scn-summary p + p {
+  margin-top: 6px;
+}
+
+/* Crew: a disclosure row styled as a section title, with a chevron that turns when open. */
+.fh-scn-crew {
+  margin-top: 10px;
+  border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-scn-crew-t {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--fh-faint);
+  font: 600 10px/1.2 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  list-style: none;
+  cursor: pointer;
+}
+
+.fh-scn-crew-t::-webkit-details-marker {
+  display: none;
+}
+
+.fh-scn-crew-t::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  transition: transform var(--fh-fast) var(--fh-ease);
+}
+
+.fh-scn-crew[open] > .fh-scn-crew-t::after {
+  margin-top: 2px;
+  transform: rotate(-135deg);
+}
+
+.fh-scn-crew-t:hover {
+  color: var(--fh-muted);
+}
+
+.fh-scn-crew-t:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.fh-scn-crew-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.fh-scn-crew-list li {
+  display: grid;
+  grid-template-columns: 8.5em minmax(0, 1fr); /* one role column for every row ('Flight Engineer' fits) */
+  column-gap: 12px;
+}
+
+.fh-scn-crew-role {
+  color: var(--fh-muted);
+}
+
+.fh-scn-crew-detail {
+  grid-column: 2;
+  color: var(--fh-faint);
+  font-size: 11px;
+}
+
+.fh-scn-note {
+  margin: 10px 0 0;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fh-scn-foot {
+  display: flex;
+  margin-top: 14px;
+}
+
+.fh-scn-play .fh-icon {
+  fill: currentColor;
+}
+
+.fh-scn-play:disabled {
+  cursor: default;
+  filter: none;
+}
+
+/* Loading: a card's shape in shimmer bars (title, subtitle, three text lines). */
+.fh-scn-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 14px;
+}
+
+.fh-scn-skel .fh-skel {
+  display: block;
+  height: 10px;
+}
+
+.fh-scn-skel .fh-skel:nth-child(1) { width: 62%; height: 14px; }
+.fh-scn-skel .fh-skel:nth-child(2) { width: 44%; margin-bottom: 8px; }
+.fh-scn-skel .fh-skel:nth-child(3) { width: 100%; }
+.fh-scn-skel .fh-skel:nth-child(4) { width: 92%; }
+.fh-scn-skel .fh-skel:nth-child(5) { width: 70%; }
+
+.fh-scn-error,
+.fh-scn-empty {
+  margin: 0;
+  padding: 16px 14px;
+  color: var(--fh-muted);
+}
+
+.fh-scn-error-t {
+  margin: 0 0 10px;
+  color: #ffb4b4;
+}
+
+/* Phones: larger type, as the other sheets. */
+@media (max-width: 640px) {
+  .fh-scn-card {
+    padding: 14px 18px 18px;
+  }
+
+  .fh-scn-title {
+    font-size: 17px;
+  }
+
+  .fh-scn-sub,
+  .fh-scn-summary {
+    font-size: 14px;
+  }
+
+  .fh-scn-date,
+  .fh-scn-ac,
+  .fh-scn-crew-list {
+    font-size: 13px;
+  }
+
+  .fh-scn-crew-t {
+    min-height: 44px;
+    font-size: 11px;
+  }
+
+  .fh-scn-crew-detail,
+  .fh-scn-note {
+    font-size: 12.5px;
+  }
+}
+
+@media (pointer: coarse) {
+  .fh-scn-crew-t {
+    min-height: 44px;
+  }
+}
