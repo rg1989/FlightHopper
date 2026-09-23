@@ -53,15 +53,6 @@ export function northAt(latDeg: number, lonDeg: number, out: Cartesian3): Cartes
   return out
 }
 
-/**
- * Chase: which aircraft show. near: those within range (as icons); models: those drawn as 3-D models (client/scene/
- * traffic.ts), placed with the icon hidden. The rest hide, except the selected one.
- */
-export interface TrafficView {
-  near: ReadonlySet<string>
-  models: ReadonlySet<string>
-}
-
 /** Per-hex state: what was last written to the billboard, so unchanged properties are never touched. */
 interface Slot {
   b: Billboard
@@ -158,9 +149,10 @@ export class FleetLayer {
    * modelShown: the chased aircraft is drawn as the 3-D model, so its icon, ring and label go (the icon sits at the
    * fleet's dead-reckoned position, which can run ahead of the model and read as a second aircraft). Otherwise the
    * selected icon shows at any distance: focus is on the top-down map, zoomed in as close as it goes.
-   * traffic (chase): only the aircraft in range show (TrafficView); null shows all.
+   * models (chase): the hexes drawn as 3-D traffic models (client/scene/traffic.ts), placed with their icon hidden; every
+   * other icon but the selected one hides (chase shows no flat icons). null (browse): every icon shows.
    */
-  update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null, modelShown = false, traffic: TrafficView | null = null): void {
+  update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null, modelShown = false, models: ReadonlySet<string> | null = null): void {
     const frame = ++this.#frame
     this.#frameMoveThreshold()
     let touched = 0
@@ -174,10 +166,10 @@ export class FleetLayer {
       if (s.frame !== frame) touched++
       s.frame = frame
       // The Fleet's own age limit per aircraft (it prunes them later); the chased one gives way to its 3-D model. In
-      // chase (traffic), only the aircraft in range, as icons or, placed for their 3-D model, with the icon hidden.
+      // chase (models), only the traffic drawn as 3-D models is placed, with its icon hidden.
       s.placed = e.ageS <= e.staleS && !(modelShown && e.hex === selectedHex) &&
-        (traffic === null || e.hex === selectedHex || traffic.near.has(e.hex))
-      const visible = s.placed && !(traffic !== null && traffic.models.has(e.hex))
+        (models === null || e.hex === selectedHex || models.has(e.hex))
+      const visible = s.placed && !(models !== null && models.has(e.hex))
       if (visible !== s.show) {
         s.b.show = visible
         s.show = visible

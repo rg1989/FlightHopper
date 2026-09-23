@@ -3,7 +3,8 @@
 // - Browse: a north-up, top-down street map. Every aircraft is an icon turned to its track and coloured by altitude.
 //   Clicking one (or a list row) focuses it: its flight card shows and the map stays as it is.
 // - Chase (the card's "Chase in 3-D", ?chase=1, or a bare ?hex= link): the 3-D model and the chase camera over the
-//   satellite imagery, with the card. The other aircraft stay on screen as icons. The sun lights the chase view, and
+//   satellite imagery, with the card. The other aircraft within 10 nm show as 3-D models framed by corner brackets
+//   (scene/traffic.ts); chase shows no flat icons. The sun lights the chase view, and
 //   the relief can sink into the map and grow back (the Scene panel's switches, keys T and L).
 // The tools (status, aircraft list, scene, altitude colours, about) sit behind a rail of icon buttons (ui/rail.ts).
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
@@ -28,6 +29,7 @@ import { FleetLayer } from './scene/fleetLayer.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { ChaseModel } from './scene/model.ts'
+import { Traffic } from './scene/traffic.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
@@ -77,6 +79,7 @@ const FOCUS_ASK_MS = 10_000 // a focused (not chased) aircraft: how often its ch
 const HOVER_PICK_MS = 100 // at most ten hover picks a second while the mouse moves (each pick is a small render pass)
 const HEX = /^~?[0-9a-f]{6}$/
 // Until the first reply. Nothing is drawn before it, so the source named here is never shown.
+const NO_HEXES: ReadonlySet<string> = new Set()
 const NO_STATUS: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null }
 const NO_ENTRIES: readonly FleetEntry[] = []
 
@@ -326,6 +329,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
+  // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
+  const traffic = entry ? new Traffic(viewer, entry, div('fh-traffic', root)) : null
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
   // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
@@ -536,10 +541,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
       tSunMs = tRenderMs
-      // ponytail: the fleet is drawn at server now, the chased aircraft at the delayed render time (3–30 s earlier), so
-      // traffic around it runs a few seconds ahead of it. Upgrade: draw the fleet at tRenderMs, which needs Fleet to
-      // interpolate between samples instead of only dead-reckoning past the newest.
-      all = fleet.entries(tServerMs)
+      // Chasing, the fleet is drawn at the chased aircraft's (delayed) render time, so the traffic around it is where
+      // it was at that moment (dead-reckoned back from newer samples); browse draws it at server now.
+      // ponytail: dead reckoning, not interpolation between samples: a turning aircraft is off by its turn. Upgrade:
+      // keep two samples per hex in Fleet.
+      all = fleet.entries(chasing ? tRenderMs : tServerMs)
       if (selected !== null) {
         const track = registry.get(selected)
         s = track?.stateAt(tRenderMs) ?? null
@@ -550,7 +556,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       }
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
-    fleetLayer.update(all, selected, tableHover ?? mapHover, chasing && s !== null && model !== null)
+    // Chase shows the traffic in range as 3-D models and no flat icons (none at all without the traffic model).
+    const chaseModels = traffic?.select(all, selected, chasing && s !== null ? s : null) ?? NO_HEXES
+    fleetLayer.update(all, selected, tableHover ?? mapHover, chasing && s !== null && model !== null, chasing ? chaseModels : null)
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
     const inView = entriesIn(all, viewRectangleDeg(viewer), onScreen, selected)
@@ -583,6 +591,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
       model?.update(placed)
       clearanceM = chaseCam.update(placed, dtS).clearanceM
+      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame
       chased = placed
       sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt)
     }
@@ -721,6 +730,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
+    // A traffic model's bracket square (chase) takes the click first. ponytail: caught with no action yet; the
+    // aircraft's own menu comes later.
+    if (traffic !== null && traffic.hitAt(e.position.x, e.position.y) !== null) return
     const hex = fleetLayer.pick(e.position, tapPx)
     if (hex !== null) select(hex)
     else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
@@ -784,6 +796,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       chaseCam.release()
       exitBrowse(viewer)
       model?.destroy()
+      traffic?.destroy()
       fleetLayer.destroy()
       pendingLayer.destroy()
       map.destroy()

@@ -22,6 +22,7 @@ export interface GlbAxes {
   lengthM: number // extent along nose
   spanM: number // extent along right
   belowOriginM: number // origin → lowest vertex (wheel bottom)
+  centre: Cartesian3 // bounding-box centre
 }
 
 /**
@@ -86,7 +87,8 @@ export function measureGlb(glb: Uint8Array): GlbAxes {
     for (const p of pts) { const d = Cartesian3.dot(p, v); lo = Math.min(lo, d); hi = Math.max(hi, d) }
     return hi - lo
   }
-  return { nose, up, right, lengthM: extent(nose), spanM: extent(right), belowOriginM: -zMin }
+  const centre = new Cartesian3((xMin + xMax) / 2, (yMin + yMax) / 2, (zMin + zMax) / 2)
+  return { nose, up, right, lengthM: extent(nose), spanM: extent(right), belowOriginM: -zMin, centre }
 }
 
 // ---------- attitude → Cesium ----------
