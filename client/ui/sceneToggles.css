@@ -1,0 +1,68 @@
+/* client/ui/sceneToggles.css */
+/* The chase view's scene toggles: two small buttons in one dark translucent box, in the palette of the table and the
+   detail panel (table.css, detail.css). The group places nothing itself: the app puts it at the top of the right-hand
+   column and hides it in browse (layout.css). It takes the pointer, unlike the column around it. */
+.fh-toggles {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  width: max-content;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.82);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  font: 12px/1.3 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  pointer-events: auto;
+}
+
+.fh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #9aa6b2;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fh-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.fh-toggle:focus-visible {
+  outline: 2px solid #4aa3ff;
+  outline-offset: 1px;
+}
+
+/* A lamp before the label: filled when on, a ring when off, so the state does not rest on colour alone. */
+.fh-toggle::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.fh-toggle[aria-pressed='true'] {
+  border-color: rgba(74, 163, 255, 0.7);
+  background: rgba(33, 136, 255, 0.35);
+  color: #fff;
+}
+
+.fh-toggle[aria-pressed='true']::before {
+  background: currentColor;
+}
+
+/* Phones: taller buttons for a finger. The labels never wrap, so the width stays that of the two labels. */
+@media (max-width: 640px) {
+  .fh-toggle {
+    min-height: 32px;
+  }
+}
