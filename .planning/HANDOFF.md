@@ -48,7 +48,10 @@ The dev server's `/api` proxy is fixed to port 8787 (`vite.config.ts`). Give the
 
 ### 0. Apply the terrain & sun plans · WP-E0, E1–E5, E-A · S (mechanical)
 1. Branch into a worktree: `git worktree add ../FlightHopper-e -b build/terrain-sun main`, then `npm ci`.
-2. Apply: `python3 .planning/tools/apply_plans.py ../FlightHopper-e WP-E0-terrain-sun-contract WP-E1-topography WP-E2-sun WP-E3-ground-objects WP-E4-scene-toggles WP-E5-recorded-sun-time WP-E-A-integration`. Each WP's full check must stay green; expect 680 tests at the end.
+2. Apply, in this order: `python3 .planning/tools/apply_plans.py ../FlightHopper-e WP-E0-terrain-sun-contract WP-E5-recorded-sun-time WP-E1-topography WP-E2-sun WP-E3-ground-objects WP-E4-scene-toggles WP-E-A-integration`. Each WP's full check must stay green; expect 680 tests at the end.
+   - **Caveat (dry run, 2026-09-23):** E0–E4 apply green. WP-E5 gives four edits to `server/poller.test.ts` and `server/main.test.ts` as prose ("after the line …, insert …"), not as complete-file blocks, so the tool skips them and E5's check fails (3 tests).
+   - **The fix is requested** from the plan's author: complete `File:` blocks for those two tests. Until it lands, apply those four edits by hand, exactly as written in E5 Task 1 Step 1, then continue.
+   - Two timing tests can flake under full-suite load ("sortRows and filterRows stay cheap at 12,000 rows", "/api/view of a 250 nm circle with 5,000 aircraft"). Re-run those files alone before treating them as failures.
 3. Run gate GE on your Mac, following WP-E-A Task 5.
 4. Fast-forward `main`.
 
