@@ -146,6 +146,14 @@ export class ChaseCamera {
   }
 
   /**
+   * The next update() turns the camera to the aircraft's heading at once, not through the damping: after a seek (a
+   * scenario's timeline) the aircraft may point anywhere. The orbit, the zoom and the mouse stay as they are.
+   */
+  snapHeading(): void {
+    this.#headingDeg = null
+  }
+
+  /**
    * First chased frame: route the mouse and touch to the orbit instead of Cesium's globe controls: drag (one finger)
    * orbits, wheel or pinch zooms, a double click or double tap goes back behind the aircraft. No-op without a DOM canvas.
    */

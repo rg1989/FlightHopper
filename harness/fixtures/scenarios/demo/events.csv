@@ -1,0 +1,13 @@
+time,type,value,label,src
+10:00:00,phase,,Take-off roll,S
+10:00:00,gear,1,Gear down,S
+10:00:00,flaps,10,Flaps 10,S
+10:00:44,mark,,Lift-off,S
+10:00:45,phase,,Climb,S
+10:00:52,gear,0,Gear up,S
+10:01:20,flaps,0,Flaps up,S
+10:01:40,phase,,Turn with a roll wiggle,S
+10:01:40,mark,,Turn,S
+10:02:10,damage,fin,Fin cut (test),S
+10:02:10,mark,,Damage,S
+10:02:40,phase,,Roll-out,S

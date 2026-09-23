@@ -1,0 +1,52 @@
+{
+  "format": 1,
+  "id": "demo",
+  "title": "Demo flight (synthetic)",
+  "subtitle": "Tokyo Haneda: a take-off and a turn",
+  "date": "2001-06-15",
+  "utcOffset": "+09:00",
+  "clockLabel": "JST",
+  "start": "10:00:00",
+  "end": "10:03:00",
+  "note": "Synthetic test data for the scenario player (harness/fixtures). Not a real flight.",
+  "summary": [
+    "A take-off roll on the old runway 15L, a climb over Tokyo Bay and a right turn with a decaying roll wiggle.",
+    "Every number is made up by make.ts beside this file."
+  ],
+  "crew": [{ "role": "Captain", "name": "Test Captain" }, { "role": "First Officer", "name": "Test First Officer", "detail": "flying" }],
+  "aircraft": {
+    "registration": "JA0000",
+    "type": "Boeing 747 (test)",
+    "callsign": "DEMO1",
+    "operator": "Test",
+    "model": "b744",
+    "shape": { "halfSpanM": 29.8 },
+    "livery": { "base": "#f4f4f1", "belly": "#bfc3c7", "fin": "#b8202a", "engine": "#b9bdc1" }
+  },
+  "speakers": {
+    "CAP": { "name": "Captain", "kind": "crew" },
+    "FO": { "name": "First Officer", "kind": "crew" },
+    "TWR": { "name": "Tower", "kind": "atc" },
+    "DEP": { "name": "Departure", "kind": "atc" },
+    "GPWS": { "name": "Warning", "kind": "alert" }
+  },
+  "imagery": [
+    {
+      "url": "https://cyberjapandata.gsi.go.jp/xyz/gazo3/{z}/{x}/{y}.jpg",
+      "rect": [139.7, 35.45, 139.9, 35.62],
+      "minZoom": 10,
+      "maxZoom": 17,
+      "credit": "GSI Japan, aerial photographs 1984–1986"
+    }
+  ],
+  "ending": {
+    "fadeFrom": "10:02:48",
+    "darkAt": "10:02:53",
+    "cardAfterS": 4,
+    "card": {
+      "title": "Demo flight (synthetic)",
+      "lines": ["The end of the demo.", "Synthetic data for testing the scenario player; no real flight is shown."]
+    }
+  },
+  "sources": [{ "id": "S", "title": "Synthetic test data (make.ts)", "note": "harness/fixtures/scenarios/demo" }]
+}

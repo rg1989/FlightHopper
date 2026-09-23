@@ -14,7 +14,7 @@ import type { FleetEntry, ModelManifestEntry } from './types.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, sceneKey, statusShown, viewRadiusNm } =
+const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm } =
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
@@ -175,4 +175,33 @@ test('attribution: the satellite imagery in use, as plain source lines (Esri key
 
 test('attribution: the night lights credit NASA GIBS (design D13)', () => {
   assert.ok(attributionFor(null).includes('Night lights: NASA GIBS, VIIRS Black Marble'))
+})
+
+test('safeArea (the flight-data frame): the canvas minus its covers, each cut from the side that keeps the most room', () => {
+  // 1400 × 900: the rail at the right, the flight card top-left, the play bar and two caption lines along the bottom.
+  const rail = { x: 1324, y: 12, w: 64, h: 380 }
+  const card = { x: 12, y: 12, w: 300, h: 420 }
+  const bar = { x: 12, y: 824, w: 1300, h: 64 }
+  const captions = { x: 12, y: 700, w: 1300, h: 112 }
+  const hidden = { x: 0, y: 0, w: 0, h: 0 }
+  assert.deepEqual(safeArea(1400, 900, [rail, card, bar, captions, hidden]), { x: 320, y: 8, w: 996, h: 684 })
+  assert.deepEqual(safeArea(1400, 900, [rail]), { x: 8, y: 8, w: 1308, h: 884 }, 'live chase, no card: only the rail')
+  assert.deepEqual(safeArea(1400, 900, []), { x: 8, y: 8, w: 1384, h: 884 })
+  assert.deepEqual(safeArea(1400, 900, [{ x: 2000, y: 0, w: 50, h: 50 }]), { x: 8, y: 8, w: 1384, h: 884 }, 'off the canvas: ignored')
+})
+
+test('safeArea: a phone (375 × 812): the tab bar, the play bar and the captions all come off the bottom', () => {
+  const tabs = { x: 0, y: 752, w: 375, h: 60 }
+  const bar = { x: 0, y: 664, w: 375, h: 88 }
+  const captions = { x: 8, y: 560, w: 359, h: 96 }
+  assert.deepEqual(safeArea(375, 812, [tabs, bar, captions]), { x: 8, y: 8, w: 359, h: 544 })
+})
+
+test('scenarioBaseFor: the app base, or in development ?scenarioBase=/a/path/ (the harness demo); never another origin or ..', () => {
+  assert.equal(scenarioBaseFor('?scenario=demo', '/', true), '/')
+  assert.equal(scenarioBaseFor('?scenarioBase=/harness/fixtures/', '/', true), '/harness/fixtures/')
+  assert.equal(scenarioBaseFor('?scenarioBase=/harness/fixtures/', '/', false), '/', 'a production build ignores it')
+  for (const bad of ['//evil.test/', 'https://evil.test/', '/a/../b/', '/no-slash', 'harness/', '/a b/']) {
+    assert.equal(scenarioBaseFor(`?scenarioBase=${encodeURIComponent(bad)}`, '/app/', true), '/app/', bad)
+  }
 })

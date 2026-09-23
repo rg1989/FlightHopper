@@ -1,0 +1,11 @@
+time,dur,speaker,to,channel,lang,text,original,q,src
+10:00:01,4,TWR,CAP,radio,en,"Demo 1, runway 15L, cleared for take-off.",,D,S
+10:00:05,3,CAP,TWR,radio,en,"Cleared for take-off, Demo 1.",,D,S
+10:00:30,,FO,CAP,cockpit,en,V1.,,D,S
+10:00:40,,FO,CAP,cockpit,en,Rotate.,,D,S
+10:00:50,,CAP,FO,cockpit,ja,Gear up.,ギアアップ,T,S
+10:01:05,3,CAP,,cockpit,ja,[unintelligible],,U,S
+10:01:15,5,TWR,CAP,radio,en,"Demo 1, contact departure.",,D,S
+10:01:41,,CAP,FO,cockpit,en,Turning right.,,D,S
+10:02:12,3,GPWS,,alert,en,Bank angle.,,D,S
+10:02:30,4,DEP,CAP,radio,en,"Demo 1, radar contact.",,D,S

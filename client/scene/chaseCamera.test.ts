@@ -192,6 +192,21 @@ test('release hands the camera back (identity transform) and the next chase star
   near(lookHeadingDeg(camera), 200, 1e-6)
 })
 
+test('snapHeading: the next frame is behind the aircraft at once (a seek), keeping the orbit and the chase', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.set(30, -20, 400)
+  cc.update(st({ headingDeg: 0 }), 0.016)
+  cc.update(st({ headingDeg: 120 }), 0.016)
+  assert.ok(lookHeadingDeg(camera) < 40, 'damped: still near the old heading')
+  cc.snapHeading()
+  assert.ok(!Matrix4.equals(camera.transform, Matrix4.IDENTITY), 'still chasing: the camera is not handed back')
+  cc.update(st({ headingDeg: 120 }), 0.016)
+  near(lookHeadingDeg(camera), 150, 1e-6, 'the new heading plus the orbit offset')
+  near(Math.hypot(camera.position.x, camera.position.y, camera.position.z), 400, 1e-6, 'zoom kept')
+  near(cc.orbit.pitchDeg, -20, 1e-9)
+})
+
 test('OrbitControl: drag right swings the view clockwise, drag down raises the camera; both clamp', () => {
   const o = new OrbitControl(-12, 150)
   o.drag(300, 0) // 0.3°/px

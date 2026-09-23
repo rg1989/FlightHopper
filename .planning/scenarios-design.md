@@ -263,9 +263,9 @@ The dossier's own track and attitude columns are not used (10–30 km off on mos
 ### 6.2 Livery
 
 From photos of JA8119 (Haneda 3 Mar 1985; Itami 1984; Wikimedia Commons, CC BY-SA; reference only, not shipped):
-white `#F4F4F1` upper body; a thin red pinstripe `#C80019` over a navy band `#1C2451` that holds the cabin windows,
-nose to tail cone, not up the fin; "JAPAN AIR LINES" in black bold sans capitals on the main deck from behind door L1
-to the wing root; a small red sun disc behind L1; "JA8119" small black between L4 and L5; aluminium belly `#BFC3C7`;
+white `#F4F4F1` upper body; a red band `#C80019` about 0.4 m tall over a navy band `#1C2451` about 0.47 m tall that
+holds the cabin windows, nose to tail cone, not up the fin; "JAPAN AIR LINES" in black wide bold italic capitals on
+the main deck from behind door L1 to the wing root (as measured on the Haneda 1985 photograph); a small red sun disc behind L1; "JA8119" small black between L4 and L5; aluminium belly `#BFC3C7`;
 grey wings `#A6AAAD`; metallic nacelles `#B9BDC1`. `livery/body.png` (drawn by a script from this spec) carries
 stripes, titles, disc and registration; `local/fin.png` carries the crane (git-ignored).
 

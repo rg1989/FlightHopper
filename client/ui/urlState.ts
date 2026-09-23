@@ -3,8 +3,10 @@
 // browse centre and height, or the chased aircraft's position), the focused aircraft (?hex=), the 3-D chase view of it
 // (?chase=1), the chase orbit
 // (?cam=heading,pitch,range: offset from the nose °, look pitch °, distance m) and the scene toggles that differ from
-// the defaults (?topo=0 …, read by scenePrefs). Other parameters (?bench, ?sun, ?airport) are kept as they are.
-// Pure: the app passes location.search and writes the result with history.replaceState.
+// the defaults (?topo=0 …, read by scenePrefs). A running scenario replaces at, hex and chase with ?scenario=<id>&t=<s>
+// (t: the scenario clock in whole seconds since its local midnight, as in the package files, so a link survives a
+// package whose start moves) and keeps ?cam=. Other parameters (?bench, ?sun, ?airport, ?scenarioBase) are kept as they
+// are. Pure: the app passes location.search and writes the result with history.replaceState.
 import { DEFAULT_PREFS } from './scenePrefs.ts'
 import type { ScenePrefs } from '../types.ts'
 
@@ -26,7 +28,11 @@ export interface UrlState {
   chase: boolean // in the 3-D chase view (?chase=1)
   cam: Orbit | null
   prefs: ScenePrefs
+  scenario?: { id: string; t: number } | null // a running scenario and its clock
 }
+
+/** A scenario id as the URL may name it: it becomes a path segment (public/scenarios/<id>/). */
+const SCENARIO_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i
 
 const nums = (v: string | null, n: number): number[] | null => {
   if (v === null) return null
@@ -49,14 +55,31 @@ export function readView(search: string): { at: ViewAt | null; cam: Orbit | null
   }
 }
 
+/** ?scenario=<id>&t=<s>: the scenario to start on load and where (t null: its start); null without a valid id. */
+export function readScenario(search: string): { id: string; t: number | null } | null {
+  const q = new URLSearchParams(search)
+  const id = q.get('scenario') ?? ''
+  if (!SCENARIO_ID.test(id)) return null
+  const t = q.get('t')
+  const n = t === null || t.trim() === '' ? Number.NaN : Number(t)
+  return { id, t: Number.isFinite(n) && n >= 0 ? n : null }
+}
+
 /** The search string for s, keeping every parameter this module does not own. Rounded so small moves do not churn history. */
 export function writeUrl(search: string, s: UrlState): string {
   const q = new URLSearchParams(search)
-  for (const k of ['at', 'hex', 'chase', 'cam', 'topo', 'light', 'glass']) q.delete(k)
-  if (s.at) q.set('at', `${s.at.lat.toFixed(4)},${s.at.lon.toFixed(4)},${Number(s.at.heightKm.toPrecision(3))}`)
-  if (s.hex) q.set('hex', s.hex)
-  if (s.hex && s.chase) q.set('chase', '1')
-  if (s.hex && s.chase && s.cam) q.set('cam', `${Math.round(s.cam.headingDeg)},${Math.round(s.cam.pitchDeg)},${Math.round(s.cam.rangeM)}`)
+  for (const k of ['at', 'hex', 'chase', 'cam', 'scenario', 't', 'topo', 'light', 'glass']) q.delete(k)
+  const cam = s.cam && `${Math.round(s.cam.headingDeg)},${Math.round(s.cam.pitchDeg)},${Math.round(s.cam.rangeM)}`
+  if (s.scenario) {
+    q.set('scenario', s.scenario.id)
+    q.set('t', String(Math.floor(s.scenario.t)))
+    if (cam) q.set('cam', cam)
+  } else {
+    if (s.at) q.set('at', `${s.at.lat.toFixed(4)},${s.at.lon.toFixed(4)},${Number(s.at.heightKm.toPrecision(3))}`)
+    if (s.hex) q.set('hex', s.hex)
+    if (s.hex && s.chase) q.set('chase', '1')
+    if (s.hex && s.chase && cam) q.set('cam', cam)
+  }
   for (const k of ['topo', 'light', 'glass'] as const) if (s.prefs[k] !== DEFAULT_PREFS[k]) q.set(k, s.prefs[k] ? '1' : '0')
   const out = q.toString().replaceAll('%2C', ',')
   return out === '' ? '' : `?${out}`

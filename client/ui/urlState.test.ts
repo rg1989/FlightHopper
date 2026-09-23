@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_PREFS } from './scenePrefs.ts'
-import { readView, writeUrl } from './urlState.ts'
+import { readScenario, readView, writeUrl } from './urlState.ts'
 
 test('writeUrl: camera, chase, orbit and non-default toggles; other parameters kept; round trip through readView', () => {
   const url = writeUrl('?bench=1&at=1,2,3&glass=1', {
@@ -28,6 +28,27 @@ test('writeUrl: a focused aircraft on the map keeps hex but writes no chase or c
 test('writeUrl: browse drops hex, chase and cam; defaults write nothing; small heights keep 3 significant digits', () => {
   assert.equal(writeUrl('?hex=a1b2c3&cam=1,2,3', { at: { lat: -33.9, lon: 151.2, heightKm: 2.345 }, hex: null, chase: true, cam: { headingDeg: 0, pitchDeg: 0, rangeM: 1 }, prefs: DEFAULT_PREFS }), '?at=-33.9000,151.2000,2.35')
   assert.equal(writeUrl('', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS }), '')
+})
+
+test('writeUrl: a running scenario writes its id, t in whole seconds and the orbit; no at, hex or chase', () => {
+  const url = writeUrl('?bench=1&at=1,2,3&hex=a1b2c3&chase=1&scenarioBase=/harness/fixtures/', {
+    at: { lat: 35.5, lon: 139.8, heightKm: 1 }, hex: 'a1b2c3', chase: true, cam: { headingDeg: 12.4, pitchDeg: -12.2, rangeM: 150.4 }, prefs: DEFAULT_PREFS,
+    scenario: { id: 'jal123', t: 66275.9 },
+  })
+  assert.equal(url, '?bench=1&scenarioBase=%2Fharness%2Ffixtures%2F&scenario=jal123&t=66275&cam=12,-12,150')
+  assert.deepEqual(readScenario(url), { id: 'jal123', t: 66275 })
+  assert.deepEqual(readView(url).cam, { headingDeg: 12, pitchDeg: -12, rangeM: 150 })
+  assert.equal(writeUrl('?scenario=jal123&t=1&cam=1,2,3', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS }), '', 'left: all of it goes')
+  assert.equal(writeUrl('', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS, scenario: { id: 'demo', t: 5 } }), '?scenario=demo&t=5')
+})
+
+test('readScenario: an id of letters, digits, - and _; t a number of seconds, else null; no id, no scenario', () => {
+  assert.deepEqual(readScenario('?scenario=jal123&t=65475'), { id: 'jal123', t: 65475 })
+  assert.deepEqual(readScenario('?scenario=demo'), { id: 'demo', t: null })
+  assert.deepEqual(readScenario('?scenario=demo&t=abc'), { id: 'demo', t: null })
+  assert.deepEqual(readScenario('?scenario=demo&t=-5'), { id: 'demo', t: null })
+  assert.deepEqual(readScenario('?scenario=my_scn-2&t=12.5'), { id: 'my_scn-2', t: 12.5 })
+  for (const q of ['', '?t=5', '?scenario=', '?scenario=../x', '?scenario=a/b', '?scenario=%3Cb%3E']) assert.equal(readScenario(q), null, q)
 })
 
 test('readView: malformed or out-of-range values are null', () => {

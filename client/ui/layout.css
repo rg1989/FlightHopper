@@ -2,7 +2,10 @@
 /* Where the overlays sit. client/app.ts builds .fh-ui[data-mode=browse|chase] over the globe with:
      the rail and its panel (rail.css, right edge; on phones a bottom tab bar and sheets), the flight card
      (flightCard.css, top-left when an aircraft is focused; on phones above the tab bar), the toast (ui.css, top
-     centre), the ?bench=1 overlay.
+     centre), the ?bench=1 overlay; while a scenario plays ([data-scenario=<id>], data-mode chase) its play bar, captions
+     and ending (playbar.css, captions.css, ending.css).
+   Under it, in the globe's element: the chase traffic's brackets (.fh-traffic, below) and the flight-data frame
+   (.fh-frame, flightFrame.css), so every panel and the ending's veil cover them.
    The overlay layer itself never takes the pointer: the map stays draggable everywhere between the boxes. */
 .fh-ui {
   position: absolute;
@@ -48,3 +51,17 @@
 }
 .fh-bracket::before { top: 0; right: 0; border-left: 0; border-bottom: 0; }
 .fh-bracket::after { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+
+/* A scenario's play bar sits along the bottom, left of the rail: a panel stops above it, so the bar's right end (speed,
+   exit) stays in reach while one is open. On phones the sheet rises from the top of the bar, not from the tab bar. */
+.fh-ui[data-scenario] .fh-panel {
+  max-height: calc(100% - var(--fh-top) - var(--fh-playbar-space) - 12px);
+}
+
+@media (max-width: 640px) {
+  .fh-ui[data-scenario] .fh-panel,
+  .fh-ui[data-scenario] .fh-panel.fh-wide {
+    bottom: var(--fh-playbar-space);
+    max-height: calc(100% - var(--fh-playbar-space) - 64px);
+  }
+}
