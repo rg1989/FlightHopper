@@ -2,14 +2,14 @@
 // Chase traffic (.planning/chase-traffic-design.md): the other aircraft within RANGE_NM of the chased one as 3-D models
 // (the one GLB, sized by ADS-B emitter category), each framed on screen by two corner brackets whose square is also
 // its click target.
-import { Cartesian2, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
+import { Cartesian2, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { targetAttitude } from '../track/attitude.ts'
 import type { FleetEntry, ModelManifestEntry } from '../types.ts'
 import { LiveryShaders, liveryCode } from './livery.ts'
 import type { ModelPicker } from './modelFor.ts'
-import { modelUrl } from './model.ts'
+import { fixMatrix, hprFor, modelUrl } from './model.ts'
 
 export const RANGE_NM = 10
 export const MAX_MODELS = 30
@@ -75,29 +75,27 @@ export function hitAt(boxes: readonly Box[], n: number, x: number, y: number): s
 }
 
 /**
- * Cesium HeadingPitchRoll of a traffic aircraft on model m: the nose along its track (headingDeg when it has none),
+ * Cesium HeadingPitchRoll of a traffic aircraft (trafficMatrix turns model m to it): the nose along its track (headingDeg when it has none),
  * pitch from its climb (targetAttitude: flight-path angle + AoA), wings level (the fleet keeps only the newest sample,
  * so no turn rate). ponytail: roll 0; upgrade: the track change between samples, as the chased Track does.
  */
-export function trafficHpr(e: FleetEntry, m: ModelManifestEntry, headingDeg: number, out: HeadingPitchRoll): HeadingPitchRoll {
+export function trafficHpr(e: FleetEntry, headingDeg: number, out: HeadingPitchRoll): HeadingPitchRoll {
   const gs = e.gsKt ?? 0
   const att = targetAttitude({
     gsMs: gs * KT, vsMs: gs >= SLOW_KT ? (e.vsFpm ?? 0) * FPM : 0, headingDeg: e.trackDeg ?? headingDeg,
     broadcastRollDeg: 0, turnRateDegS: 0, onGround: e.onGround, phase: null, mlat: false,
   })
-  const fix = m.forwardAxisFix
-  out.heading = CesiumMath.toRadians(att.headingDeg + fix.headingDeg)
-  out.pitch = CesiumMath.toRadians(att.pitchDeg + fix.pitchDeg)
-  out.roll = CesiumMath.toRadians(fix.rollDeg)
-  return out
+  return hprFor(att, out)
 }
 
 const lift = new Cartesian3()
+const fix = new Matrix3()
 
 /** World matrix of a traffic model: wheels at pos (the origin k × gearHeightM above, along body up), attitude hpr, k × m.scale. */
 export function trafficMatrix(pos: Cartesian3, hpr: HeadingPitchRoll, m: ModelManifestEntry, k: number, out: Matrix4): Matrix4 {
   Transforms.headingPitchRollToFixedFrame(pos, hpr, undefined, undefined, out)
   Matrix4.multiplyByTranslation(out, Cartesian3.fromElements(0, 0, m.gearHeightM * k, lift), out)
+  Matrix4.multiplyByMatrix3(out, fixMatrix(m, fix), out)
   return Matrix4.multiplyByUniformScale(out, m.scale * k, out)
 }
 
@@ -219,7 +217,7 @@ export class Traffic {
       const rM = (m.box?.half ?? BOX_HALF) * m.scale * k
       const depth0 = Cartesian3.dot(Cartesian3.subtract(pos, cam.positionWC, this.#v), cam.directionWC)
       const g = depth0 > 1 ? minScale(rM, depth0, fovy, hPx) : 1
-      const mm = trafficMatrix(pos, trafficHpr(e, m, s.headingDeg, this.#hpr), m, k * g, s.model.modelMatrix)
+      const mm = trafficMatrix(pos, trafficHpr(e, s.headingDeg, this.#hpr), m, k * g, s.model.modelMatrix)
       if (ibl) s.model.imageBasedLighting.imageBasedLightingFactor = ibl // the setter copies it
       s.model.show = true
       const bc = m.box ? Cartesian3.fromArray(m.box.centre, 0, this.#bc) : BOX_CENTRE

@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { Cartesian3, Cartographic, HeadingPitchRoll, Matrix4 } from 'cesium'
+import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRoll, Matrix4 } from 'cesium'
 import { destination } from '../../shared/geo.ts'
 import type { FleetEntry, ModelManifest } from '../types.ts'
 import { measureGlb, noseAzimuthDeg } from './model.ts'
@@ -85,18 +85,28 @@ test('hitAt: inside a square hits; overlapping squares → the nearest to the ca
 test('traffic model: nose along the track, pitched with the climb, wings level, wheels at the placed height', () => {
   const pos = Cartesian3.fromDegrees(-0.1, 51.5, 5_000)
   for (const trk of [0, 90, 237, 359]) {
-    const hpr = trafficHpr(fe('x', { trackDeg: trk }), m, 0, new HeadingPitchRoll())
+    const hpr = trafficHpr(fe('x', { trackDeg: trk }), 0, new HeadingPitchRoll())
     const mm = trafficMatrix(pos, hpr, m, 1, new Matrix4())
     assert.ok(azErr(noseAzimuthDeg(mm, axes.nose), trk) < 1, `track ${trk}`)
   }
-  const climb = trafficHpr(fe('x', { vsFpm: 2_000, gsKt: 250 }), m, 0, new HeadingPitchRoll())
+  const climb = trafficHpr(fe('x', { vsFpm: 2_000, gsKt: 250 }), 0, new HeadingPitchRoll())
   assert.ok(climb.pitch > 0.1, 'nose up in a climb')
   assert.equal(climb.roll, 0)
-  const slow = trafficHpr(fe('x', { vsFpm: 1_500, gsKt: 20 }), m, 0, new HeadingPitchRoll())
+  const slow = trafficHpr(fe('x', { vsFpm: 1_500, gsKt: 20 }), 0, new HeadingPitchRoll())
   assert.ok(Math.abs(slow.pitch) < 0.05, 'a slow aircraft stays about level')
-  const noTrack = trafficHpr(fe('x', { trackDeg: null }), m, 123, new HeadingPitchRoll())
+  const noTrack = trafficHpr(fe('x', { trackDeg: null }), 123, new HeadingPitchRoll())
   const mm = trafficMatrix(pos, noTrack, m, 1, new Matrix4())
   assert.ok(azErr(noseAzimuthDeg(mm, axes.nose), 123) < 1, 'no track: the heading given')
-  const h = Cartographic.fromCartesian(Matrix4.getTranslation(trafficMatrix(pos, trafficHpr(fe('x'), m, 0, new HeadingPitchRoll()), m, 2, new Matrix4()), new Cartesian3())).height
+  const h = Cartographic.fromCartesian(Matrix4.getTranslation(trafficMatrix(pos, trafficHpr(fe('x'), 0, new HeadingPitchRoll()), m, 2, new Matrix4()), new Cartesian3())).height
   near(h - 5_000, m.gearHeightM * 2, 0.2, 'origin a gear height above the wheels, times the factor')
+})
+
+test('traffic: a climbing type model (its nose on glTF −Z) raises its nose, not its tail', () => {
+  const b738 = manifest.models.find((x) => x.id === 'b738')!
+  const nose = measureGlb(readFileSync(new URL(`public/${b738.uri}`, root))).nose
+  const pos = Cartesian3.fromDegrees(-0.1, 51.5, 5_000)
+  const mm = trafficMatrix(pos, trafficHpr(fe('x', { vsFpm: 2_000, gsKt: 250, trackDeg: 90 }), 0, new HeadingPitchRoll()), b738, 1, new Matrix4())
+  const w = Cartesian3.normalize(Matrix4.multiplyByPointAsVector(mm, nose, new Cartesian3()), new Cartesian3())
+  assert.ok(Cartesian3.dot(w, Ellipsoid.WGS84.geodeticSurfaceNormal(pos, new Cartesian3())) > 0.05, 'nose up')
+  assert.ok(azErr(noseAzimuthDeg(mm, nose), 90) < 1, 'nose along the track')
 })

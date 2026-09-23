@@ -2,7 +2,7 @@
 // WP-V3 model calibration: place the chase model so that its nose points along RenderState.headingDeg.
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
 // ChaseModel also carries a scenario's look: its livery, a folded span, damage and a separate landing gear.
-import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Quaternion, Transforms } from 'cesium'
+import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, Quaternion, Transforms } from 'cesium'
 import type { CustomShader, Viewer } from 'cesium'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
 import { LiveryShaders } from './livery.ts'
@@ -101,27 +101,43 @@ export function measureGlb(glb: Uint8Array): GlbAxes {
 //
 // Cesium's conventions, read from the cesium 1.145 source (@cesium/engine Core/Quaternion.js fromHeadingPitchRoll and
 // Core/Transforms.js headingPitchRollToFixedFrame): the matrix is ENU(origin) · Rz(−heading) · Ry(−pitch) · Rx(roll),
-// with ENU x = east, y = north, z = up. In the model frame above (nose +X, left wing +Y, up +Z) that means:
-// - heading 0 points the nose EAST, and positive heading turns it clockwise seen from above: azimuth = 90° + heading.
-//   A model whose nose is +X therefore needs forwardAxisFix.headingDeg = −90.
+// with ENU x = east, y = north, z = up. For a body whose nose is +X (left wing +Y, up +Z) that means:
+// - heading 0 points the nose EAST, and positive heading turns it clockwise seen from above: azimuth = 90° + heading,
+//   so hprFor subtracts 90°.
 // - positive pitch raises +X: nose up, the same sign as RenderState.pitchDeg.
 // - positive roll lifts +Y (the left wing): right wing down, the same sign as RenderState.rollDeg.
-// So hprFor only adds the fix. No sign is flipped.
+// An asset facing elsewhere is first turned in its own frame by fixMatrix, so that pitch and roll act on its real nose
+// and wings. (Adding its turn to the heading instead, as before, flipped both for the type models, which face −X.)
 
-/** Cesium HeadingPitchRoll (radians) for a RenderState: its attitude plus the model's forwardAxisFix. */
-export function hprFor(state: RenderState, m: ModelManifestEntry, result: HeadingPitchRoll = new HeadingPitchRoll()): HeadingPitchRoll {
-  const fix = m.forwardAxisFix
-  result.heading = CesiumMath.toRadians(state.headingDeg + fix.headingDeg)
-  result.pitch = CesiumMath.toRadians(state.pitchDeg + fix.pitchDeg)
-  result.roll = CesiumMath.toRadians(state.rollDeg + fix.rollDeg)
+/** Cesium HeadingPitchRoll (radians) of an attitude, for a body whose nose is +X: no sign is flipped. */
+export function hprFor(a: Pick<RenderState, 'headingDeg' | 'pitchDeg' | 'rollDeg'>, result: HeadingPitchRoll = new HeadingPitchRoll()): HeadingPitchRoll {
+  result.heading = CesiumMath.toRadians(a.headingDeg - 90)
+  result.pitch = CesiumMath.toRadians(a.pitchDeg)
+  result.roll = CesiumMath.toRadians(a.rollDeg)
   return result
+}
+
+const scratchFixHpr = new HeadingPitchRoll()
+
+/**
+ * The model's forwardAxisFix as a turn in the asset's own frame, applied before the attitude: it brings the nose to +X
+ * and the left wing to +Y. The manifest keeps its heading as "degrees added to the heading": −90 for a +X nose (no
+ * turn), 90 for a −X nose (half a turn).
+ */
+export function fixMatrix(m: ModelManifestEntry, result: Matrix3 = new Matrix3()): Matrix3 {
+  const f = m.forwardAxisFix
+  scratchFixHpr.heading = CesiumMath.toRadians(f.headingDeg + 90)
+  scratchFixHpr.pitch = CesiumMath.toRadians(f.pitchDeg)
+  scratchFixHpr.roll = CesiumMath.toRadians(f.rollDeg)
+  return Matrix3.fromHeadingPitchRoll(scratchFixHpr, result)
 }
 
 const scratchPos = new Cartesian3()
 const scratchHpr = new HeadingPitchRoll()
+const scratchFix = new Matrix3()
 
 /**
- * World matrix of the chase model: origin at (lat, lon, hM + heightM), attitude from hprFor, uniform m.scale
+ * World matrix of the chase model: origin at (lat, lon, hM + heightM), attitude from hprFor after fixMatrix, uniform m.scale
  * baked in (so ChaseModel leaves Model.scale at 1). heightM is origin → wheel bottom: gearHeightM, or gear.heightM
  * while ChaseModel draws the separate gear.
  * ponytail: hM is the wheel-bottom height in every phase, not only on the ground, so touchdown has no gear-height
@@ -130,7 +146,8 @@ const scratchHpr = new HeadingPitchRoll()
  */
 export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4, heightM = m.gearHeightM): Matrix4 {
   const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + heightM, undefined, scratchPos)
-  const mm = Transforms.headingPitchRollToFixedFrame(pos, hprFor(state, m, scratchHpr), undefined, undefined, result ?? new Matrix4())
+  const mm = Transforms.headingPitchRollToFixedFrame(pos, hprFor(state, scratchHpr), undefined, undefined, result ?? new Matrix4())
+  Matrix4.multiplyByMatrix3(mm, fixMatrix(m, scratchFix), mm)
   return Matrix4.multiplyByUniformScale(mm, m.scale, mm)
 }
 

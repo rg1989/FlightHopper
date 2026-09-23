@@ -2,13 +2,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
-import { Cartesian2, Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Transforms } from 'cesium'
+import { Cartesian2, Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, Transforms } from 'cesium'
 import type { CustomShader, Viewer } from 'cesium'
 import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg } from '../../shared/geo.ts'
 import type { ModelManifest, RenderState } from '../types.ts'
 import { liveryFromSpec } from './livery.ts'
-import { ChaseModel, GLTF_TO_CESIUM, hprFor, loadGearModel, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
+import { ChaseModel, GLTF_TO_CESIUM, fixMatrix, hprFor, loadGearModel, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
 
 const root = new URL('../../', import.meta.url)
 const manifest: ModelManifest = JSON.parse(readFileSync(new URL('public/models/manifest.json', root), 'utf8'))
@@ -88,9 +88,10 @@ test('Cesium convention: HeadingPitchRoll(0, 0, 0) points model +X east; +90° t
   near(at(90), 180, 1e-9)
 })
 
-test('hprFor adds forwardAxisFix (−90° for a +X nose) to the state, in radians, with no sign flips', () => {
+test('hprFor: the attitude for a +X nose (heading − 90°), in radians, with no sign flips; the +X default needs no fix', () => {
   assert.deepEqual(m.forwardAxisFix, { headingDeg: -90, pitchDeg: 0, rollDeg: 0 })
-  const h = hprFor(state(0, 0, 0, 297.9, 3, -7), m)
+  assert.ok(Matrix3.equalsEpsilon(fixMatrix(m), Matrix3.IDENTITY, 1e-12))
+  const h = hprFor(state(0, 0, 0, 297.9, 3, -7))
   near(h.heading, (297.9 - 90) * DEG, 1e-12)
   near(h.pitch, 3 * DEG, 1e-12)
   near(h.roll, -7 * DEG, 1e-12)
@@ -239,6 +240,19 @@ test('every manifest model: ≤ 1 MB (the default ≤ 5 MB), provenance, true si
     const nose = e.id === 'ec135' ? new Cartesian3(-1, 0, 0) : a.nose
     const s = state(KSFO.lat, KSFO.lon, 0, 297.9)
     assert.ok(azErr(azimuth(enu(modelMatrixFor(s, e), nose, s.lat, s.lon)), 297.9) <= 1, `${e.id} nose`)
+  }
+})
+
+test('every manifest model: pitch +10° raises the nose and roll +20° lowers the right wing, whichever way the asset faces', () => {
+  for (const e of manifest.models) {
+    const a = measureGlb(readFileSync(new URL(`public/${e.uri}`, root)))
+    const nose = e.id === 'ec135' ? new Cartesian3(-1, 0, 0) : a.nose
+    const right = Cartesian3.cross(nose, Cartesian3.UNIT_Z, new Cartesian3())
+    for (const hdg of [0, 297.9]) {
+      const up = (v: Cartesian3, p: number, r: number): number => enu(modelMatrixFor(state(KSFO.lat, KSFO.lon, 300, hdg, p, r), e), v, KSFO.lat, KSFO.lon)[2]
+      near(up(nose, 10, 0), Math.sin(10 * DEG), 0.02, `${e.id} heading ${hdg}: nose up`)
+      near(up(right, 0, 20), -Math.sin(20 * DEG), 0.02, `${e.id} heading ${hdg}: right wing down`)
+    }
   }
 })
 
