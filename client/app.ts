@@ -28,6 +28,7 @@ import { FleetLayer } from './scene/fleetLayer.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { ChaseModel } from './scene/model.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
+import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
 import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
@@ -150,7 +151,7 @@ export function relHFor(at: { lat: number; lon: number } | null, groundM: number
 const TYPING = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
 
 /**
- * The scene toggle a keydown asks for (design D11): T topography, L sun. null with a modifier (Cmd/Ctrl+L and Ctrl+T are
+ * The scene toggle a keydown asks for (design D11): T topography, L sun, X see-through buildings. null with a modifier (Cmd/Ctrl+L and Ctrl+T are
  * the browser's), on auto-repeat and while typing in a field.
  */
 export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; repeat: boolean; target: unknown }): keyof ScenePrefs | null {
@@ -158,7 +159,7 @@ export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; a
   const t = e.target as { tagName?: string; isContentEditable?: boolean } | null
   if (t?.isContentEditable || TYPING.has(t?.tagName ?? '')) return null
   const k = e.key.toLowerCase()
-  return k === 't' ? 'topo' : k === 'l' ? 'light' : null
+  return k === 't' ? 'topo' : k === 'l' ? 'light' : k === 'x' ? 'glass' : null
 }
 
 export interface AppParams {
@@ -187,6 +188,7 @@ export function attributionFor(model: ModelManifestEntry | null): string[] {
     'Map: © OpenStreetMap contributors, ODbL',
     'Photos: planespotters.net, © each photographer',
     'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the full GIBS acknowledgment is in Cesium's credit list
+    BUILDINGS_CREDIT,
   ]
   // Manifest licences read "<SPDX id>: <note>"; the id is enough on screen.
   if (model) lines.push(`3D model: ${model.author}, ${model.license.split(':')[0].trim()}`)
@@ -303,6 +305,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   mountAttribution(right, attributionFor(entry))
   const legend = mountLegend(div('fh-legend-root', ui))
   const runways = addRunways(viewer, airports)
+  const buildings = new Buildings(viewer) // chase only: update() gets no focus in browse
+  buildings.setGlass(prefs.glass)
   // The city lights go right above the satellite base layer, under the street map added next (browse shows it on top).
   const day = viewer.imageryLayers.length > 0 ? viewer.imageryLayers.get(0) : null
   const night = makeNightLayer()
@@ -376,6 +380,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     if (next.topo !== prefs.topo) topo.set(next.topo, performance.now(), relHFor(chased, groundM, topo.relHM, airports))
     prefs = next
     sun.setEnabled(selected !== null && next.light)
+    buildings.setGlass(next.glass)
     writeScenePrefs(next, store)
     toggles.update(next)
   }
@@ -430,6 +435,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // time (D12): the server reports how far its clock is ahead of the upstream's.
     const st = sun.update(sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
     runways.update(tf)
+    buildings.update(selected === null ? null : chased, tf) // around the chased aircraft; hidden in browse
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
     runways.setLight(selected !== null && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
@@ -569,6 +575,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       map.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()
+    buildings.destroy()
       viewer.destroy()
       delete (window as unknown as { viewer?: Viewer }).viewer
     },

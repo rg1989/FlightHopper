@@ -63,76 +63,87 @@ function mount(prefs: ScenePrefs) {
   return { root, group, topo, light, t, changes, pressed }
 }
 
-test('one group of two real buttons: "3-D terrain" and "Sun", titles naming the keys', () => {
-  const { root, group, topo, light } = mount({ topo: true, light: true })
+test('one group of real buttons: "3-D terrain", "Sun", "See-through", titles naming the keys', () => {
+  const { root, group, topo, light } = mount({ topo: true, light: true, glass: false })
+  const glass = group.children[2]
   assert.equal(root.children.length, 1)
   assert.equal(group.className, 'fh-toggles')
   assert.equal(group.attrs.role, 'group')
   assert.equal(group.attrs['aria-label'], 'Terrain and sun')
-  assert.equal(group.children.length, 2)
-  for (const b of [topo, light]) {
+  assert.equal(group.children.length, 3)
+  for (const b of [topo, light, glass]) {
     assert.equal(b.tag, 'button')
     assert.equal(b.type, 'button') // never a form submit; Enter and Space work as on any button
     assert.equal(b.className, 'fh-toggle')
   }
   assert.deepEqual([topo.textContent, topo.title], ['3-D terrain', 'Topography — T'])
   assert.deepEqual([light.textContent, light.title], ['Sun', 'Sun lighting — L'])
+  assert.deepEqual([glass.textContent, glass.title], ['See-through', 'See-through buildings — X'])
+  assert.equal(glass.attrs['aria-pressed'], 'false')
+})
+
+test('See-through asks for glass toggled and keeps the others', () => {
+  const root = new El('div')
+  const changes: ScenePrefs[] = []
+  mountSceneToggles(root as unknown as HTMLElement, { prefs: { topo: false, light: true, glass: false }, onChange: (n) => changes.push(n) })
+  root.children[0].children[2].click()
+  assert.deepEqual(changes, [{ topo: false, light: true, glass: true }])
 })
 
 test('aria-pressed shows the prefs it was mounted with', () => {
-  assert.deepEqual(mount({ topo: true, light: true }).pressed(), ['true', 'true'])
-  assert.deepEqual(mount({ topo: false, light: true }).pressed(), ['false', 'true'])
-  assert.deepEqual(mount({ topo: true, light: false }).pressed(), ['true', 'false'])
-  assert.deepEqual(mount({ topo: false, light: false }).pressed(), ['false', 'false'])
+  assert.deepEqual(mount({ topo: true, light: true, glass: false }).pressed(), ['true', 'true'])
+  assert.deepEqual(mount({ topo: false, light: true, glass: false }).pressed(), ['false', 'true'])
+  assert.deepEqual(mount({ topo: true, light: false, glass: false }).pressed(), ['true', 'false'])
+  assert.deepEqual(mount({ topo: false, light: false, glass: false }).pressed(), ['false', 'false'])
 })
 
 test('a click asks for the toggled copy and changes nothing itself: the app answers with update()', () => {
-  const prefs = { topo: true, light: true }
+  const prefs = { topo: true, light: true, glass: false }
   const { topo, light, changes, pressed } = mount(prefs)
   topo.click()
-  assert.deepEqual(changes, [{ topo: false, light: true }])
+  assert.deepEqual(changes, [{ topo: false, light: true, glass: false }])
   assert.notEqual(changes[0], prefs)
-  assert.deepEqual(prefs, { topo: true, light: true }) // the caller's object is not touched
+  assert.deepEqual(prefs, { topo: true, light: true, glass: false }) // the caller's object is not touched
   assert.deepEqual(pressed(), ['true', 'true']) // not until update()
   light.click()
-  assert.deepEqual(changes[1], { topo: true, light: false }) // still from the mounted prefs
+  assert.deepEqual(changes[1], { topo: true, light: false, glass: false }) // still from the mounted prefs
 })
 
 test('update() only re-renders: no onChange, and the next click toggles from the new prefs', () => {
-  const { topo, light, t, changes, pressed } = mount({ topo: true, light: true })
-  t.update({ topo: false, light: true })
+  const { topo, light, t, changes, pressed } = mount({ topo: true, light: true, glass: false })
+  t.update({ topo: false, light: true, glass: false })
   assert.deepEqual(pressed(), ['false', 'true'])
   assert.equal(changes.length, 0)
   topo.click()
-  assert.deepEqual(changes, [{ topo: true, light: true }])
-  const p = { topo: false, light: false }
+  assert.deepEqual(changes, [{ topo: true, light: true, glass: false }])
+  const p = { topo: false, light: false, glass: false }
   t.update(p)
   assert.deepEqual(pressed(), ['false', 'false'])
   p.topo = true // a caller reusing its object later does not change what the group holds
   light.click()
-  assert.deepEqual(changes[1], { topo: false, light: true })
+  assert.deepEqual(changes[1], { topo: false, light: true, glass: false })
 })
 
 test('update() with unchanged prefs writes nothing (cheap to call every frame)', () => {
-  const { topo, light, t } = mount({ topo: true, light: false })
+  const { topo, light, t } = mount({ topo: true, light: false, glass: false })
   const writes = (): number => topo.attrWrites + light.attrWrites
   const before = writes()
-  for (let i = 0; i < 100; i++) t.update({ topo: true, light: false })
+  for (let i = 0; i < 100; i++) t.update({ topo: true, light: false, glass: false })
   assert.equal(writes(), before)
-  t.update({ topo: true, light: true })
+  t.update({ topo: true, light: true, glass: false })
   assert.equal(writes(), before + 1) // only the button that changed
 })
 
 test('keys and storage belong to the app: no listeners outside the group', () => {
   outside.length = 0
-  const { topo, t } = mount({ topo: true, light: true })
+  const { topo, t } = mount({ topo: true, light: true, glass: false })
   topo.click()
-  t.update({ topo: false, light: true })
+  t.update({ topo: false, light: true, glass: false })
   assert.deepEqual(outside, [])
 })
 
 test('destroy removes the group; twice is harmless', () => {
-  const { root, t } = mount({ topo: true, light: true })
+  const { root, t } = mount({ topo: true, light: true, glass: false })
   t.destroy()
   assert.equal(root.children.length, 0)
   t.destroy()

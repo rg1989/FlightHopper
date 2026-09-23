@@ -73,6 +73,7 @@ export interface FleetEntry {
 export interface ScenePrefs {
   topo: boolean                                 // 3-D terrain: exaggeration TOPO_ON, else flat (0) around relH
   light: boolean                                // sun lighting in chase (browse stays unlit)
+  glass: boolean                                // 3-D buildings see-through (translucent) instead of solid
 }
 
 /**

@@ -58,7 +58,34 @@ const ASPHALT = Color.fromCssColorString('#3a3a3a')
 const MARKER_RANGE = new DistanceDisplayCondition(0, 30_000) // markers only near an airport
 /** The smallest scale along up in a modelMatrix: at 0 it is singular, and Cesium inverts it (Matrix4.inverse throws). */
 const MIN_SCALE = 1e-3
-const COLS = Matrix4.toArray(Matrix4.IDENTITY) // update()'s scratch (column-major): it allocates nothing
+const COLS = Matrix4.toArray(Matrix4.IDENTITY) // followExaggeration's scratch (column-major): it allocates nothing
+
+/**
+ * The modelMatrix that moves geometry built at true heights to where the terrain is drawn at factor f around relHM: along
+ * up (n), a scale by max(f, 1e-3) about base (the point hM above the reference, n · base = upDotBase), then a shift by
+ * drawnHeightM(hM, f, relHM) − hM. The drawn height is affine in the true one, so every height near the reference lands on
+ * its drawn height, not only hM; what one n cannot follow is the Earth's curvature, (1 − f)·d²/2R at d from the reference.
+ * Writes result (and a module scratch): allocates nothing. f = 1: the identity.
+ */
+export function followExaggeration(up: Cartesian3, upDotBase: number, hM: number, f: number, relHM: number, result: Matrix4): Matrix4 {
+  // x ↦ x + k·n·(n·x − n·base) + n·(drawn(h) − h): I + k·n·nᵀ, then a translation along n.
+  const k = Math.max(f, MIN_SCALE) - 1
+  const { x, y, z } = up
+  const t = drawnHeightM(hM, f, relHM) - hM - k * upDotBase
+  COLS[0] = 1 + k * x * x
+  COLS[1] = k * y * x
+  COLS[2] = k * z * x
+  COLS[4] = k * x * y
+  COLS[5] = 1 + k * y * y
+  COLS[6] = k * z * y
+  COLS[8] = k * x * z
+  COLS[9] = k * y * z
+  COLS[10] = 1 + k * z * z
+  COLS[12] = t * x
+  COLS[13] = t * y
+  COLS[14] = t * z
+  return Matrix4.fromColumnMajorArray(COLS, result)
+}
 
 /** One airport's planes and markers: they move together with the terrain exaggeration (design D7). */
 interface Placed {
@@ -178,24 +205,8 @@ export function addRunways(
       if (!Number.isFinite(frame.fNow) || !Number.isFinite(frame.relHM)) return
       f = frame.fNow
       relHM = frame.relHM
-      const k = Math.max(f, MIN_SCALE) - 1
       for (const p of placed) {
-        // x ↦ x + k·n·(n·x − n·base) + n·(drawn(h) − h): I + k·n·nᵀ, then a translation along n. f = 1: the identity.
-        const { x, y, z } = p.up
-        const t = drawnHeightM(p.hM, f, relHM) - p.hM - k * p.upDotBase
-        COLS[0] = 1 + k * x * x
-        COLS[1] = k * y * x
-        COLS[2] = k * z * x
-        COLS[4] = k * x * y
-        COLS[5] = 1 + k * y * y
-        COLS[6] = k * z * y
-        COLS[8] = k * x * z
-        COLS[9] = k * y * z
-        COLS[10] = 1 + k * z * z
-        COLS[12] = t * x
-        COLS[13] = t * y
-        COLS[14] = t * z
-        Matrix4.fromColumnMajorArray(COLS, p.model)
+        followExaggeration(p.up, p.upDotBase, p.hM, f, relHM, p.model)
         Matrix4.clone(p.model, p.planes.modelMatrix) // in place: Primitive compares it every frame
       }
     },

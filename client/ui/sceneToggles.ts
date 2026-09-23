@@ -27,18 +27,21 @@ function button(label: string, title: string, onClick: () => void): HTMLButtonEl
 }
 
 export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): SceneTogglesHandle {
-  // What the buttons show, as two booleans: update() may run every frame and allocates nothing.
+  // What the buttons show, as booleans: update() may run every frame and allocates nothing.
   let topo = opts.prefs.topo
   let light = opts.prefs.light
+  let glass = opts.prefs.glass
   const el = document.createElement('div')
   el.className = 'fh-toggles'
   el.setAttribute('role', 'group')
   el.setAttribute('aria-label', 'Terrain and sun')
-  const topoBtn = button('3-D terrain', 'Topography — T', () => opts.onChange({ topo: !topo, light }))
-  const lightBtn = button('Sun', 'Sun lighting — L', () => opts.onChange({ topo, light: !light }))
+  const topoBtn = button('3-D terrain', 'Topography — T', () => opts.onChange({ topo: !topo, light, glass }))
+  const lightBtn = button('Sun', 'Sun lighting — L', () => opts.onChange({ topo, light: !light, glass }))
+  const glassBtn = button('See-through', 'See-through buildings — X', () => opts.onChange({ topo, light, glass: !glass }))
   topoBtn.setAttribute('aria-pressed', String(topo))
   lightBtn.setAttribute('aria-pressed', String(light))
-  el.append(topoBtn, lightBtn)
+  glassBtn.setAttribute('aria-pressed', String(glass))
+  el.append(topoBtn, lightBtn, glassBtn)
   root.append(el)
 
   return {
@@ -46,6 +49,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     update(prefs) {
       if (prefs.topo !== topo) topoBtn.setAttribute('aria-pressed', String((topo = prefs.topo)))
       if (prefs.light !== light) lightBtn.setAttribute('aria-pressed', String((light = prefs.light)))
+      if (prefs.glass !== glass) glassBtn.setAttribute('aria-pressed', String((glass = prefs.glass)))
     },
     destroy() {
       el.remove()
