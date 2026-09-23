@@ -1,6 +1,6 @@
 // client/scene/chaseCamera.ts
 import { Cartesian3, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
-import type { Camera, Globe, Scene, Viewer } from 'cesium'
+import type { Camera, Cartographic, Scene, Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
 
 const RAD = Math.PI / 180
@@ -65,6 +65,12 @@ export interface ChaseCameraOpts {
   pitchDeg?: number
   minClearanceM?: number
   headingTauS?: number
+  /**
+   * Ground height (HAE m) under a point, null while unknown. Default: globe.getHeight. The app passes the ground drawn
+   * this frame, because globe.getHeight lags one frame behind the topography animation (Topography.ground). Called once
+   * per clearance pass, up to 5 times a frame, each time at the camera's new position.
+   */
+  groundAt?: (c: Cartographic) => number | null
 }
 
 /**
@@ -75,7 +81,7 @@ export class ChaseCamera {
   readonly orbit: OrbitControl
   #camera: Camera
   #scene: Scene
-  #globe: Globe
+  #groundAt: (c: Cartographic) => number | null
   #input: ScreenSpaceEventHandler | null = null
   #minClearanceM: number
   #tauS: number
@@ -87,7 +93,8 @@ export class ChaseCamera {
   constructor(viewer: Viewer, opts: ChaseCameraOpts = {}) {
     this.#camera = viewer.camera
     this.#scene = viewer.scene
-    this.#globe = viewer.scene.globe
+    const globe = viewer.scene.globe
+    this.#groundAt = opts.groundAt ?? ((c) => globe.getHeight(c) ?? null)
     this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? 150)
     this.#minClearanceM = opts.minClearanceM ?? 15
     this.#tauS = opts.headingTauS ?? 1.0
@@ -146,7 +153,7 @@ export class ChaseCamera {
     return (this.#headingDeg = wrap360(this.#headingDeg + k * delta))
   }
 
-  /** Put the camera on the target's ENU frame; returns camera height − terrain height, null while that tile is not loaded. */
+  /** Put the camera on the target's ENU frame; returns camera height − ground height, null while the ground is unknown. */
   #place(state: RenderState, headingDeg: number, pitchDeg: number, liftM: number): number | null {
     Cartesian3.fromDegrees(state.lon, state.lat, state.hM + liftM, Ellipsoid.WGS84, this.#target)
     Transforms.eastNorthUpToFixedFrame(this.#target, Ellipsoid.WGS84, this.#frame)
@@ -155,8 +162,8 @@ export class ChaseCamera {
     this.#hpr.range = this.orbit.rangeM
     this.#camera.lookAtTransform(this.#frame, this.#hpr)
     const c = this.#camera.positionCartographic
-    const terrain = this.#globe.getHeight(c) ?? null
-    return terrain === null ? null : c.height - terrain
+    const ground = this.#groundAt(c)
+    return ground === null ? null : c.height - ground
   }
 }
 

@@ -163,6 +163,24 @@ test('terrain not loaded under the camera: clearance null, no correction', () =>
   near(camera.position.z, 0, 1e-6)
 })
 
+test('groundAt: clearance is kept against the ground it returns (this frame’s drawn ground), not globe.getHeight', () => {
+  // Growing relief: globe.getHeight still answers last frame’s surface; the ground drawn this frame is 17 m higher.
+  const stale: Terrain = () => 975
+  const drawn: Terrain = () => 992
+  const { camera, viewer } = fakeViewer(stale)
+  const cc = new ChaseCamera(viewer, { pitchDeg: 0, groundAt: (c) => drawn(c) ?? null })
+  const { clearanceM } = cc.update(st({ hM: 1000 }), 0.016)
+  assert.ok(clearanceM !== null && clearanceM >= 15 && clearanceM < 17, `${clearanceM}`)
+  near(clearanceOf(camera, drawn), clearanceM as number, 1e-9)
+})
+
+test('groundAt returning null (tile not loaded): clearance null, no correction', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const { clearanceM } = new ChaseCamera(viewer, { pitchDeg: 0, groundAt: () => null }).update(st({ hM: 1000 }), 0.016)
+  assert.equal(clearanceM, null)
+  near(camera.position.z, 0, 1e-6)
+})
+
 test('release hands the camera back (identity transform) and the next chase starts from the new heading', () => {
   const { camera, viewer } = fakeViewer(() => 0)
   const cc = new ChaseCamera(viewer)
