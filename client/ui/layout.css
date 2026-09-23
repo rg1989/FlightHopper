@@ -21,3 +21,30 @@
 .fh-bench > pre {
   left: 324px !important;
 }
+
+/* Chase traffic (client/scene/traffic.ts): two corner brackets (top right, bottom left) around each 3-D traffic
+   model, sized to it on screen. Under the overlays; the click test is in JS (the canvas keeps the pointer). */
+.fh-traffic {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+.fh-bracket {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+}
+.fh-bracket::before,
+.fh-bracket::after {
+  content: '';
+  position: absolute;
+  width: clamp(5px, 26%, 16px);
+  height: clamp(5px, 26%, 16px);
+  border: 1.5px solid rgb(255 255 255 / 0.9);
+  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.75));
+}
+.fh-bracket::before { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.fh-bracket::after { bottom: 0; left: 0; border-right: 0; border-top: 0; }
