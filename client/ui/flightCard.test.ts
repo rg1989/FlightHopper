@@ -241,16 +241,18 @@ test('mountFlightCard: the pill says Chase on the map and Top-down map in the ch
   c.destroy()
 }))
 
-test('mountFlightCard: the photo is asked for only when expanded, once per selection; credit links to its page', async () => {
+test('mountFlightCard: the photo sits above the stats, collapsed or not, asked for once per selection; credit links to its page', async () => {
   const { card, c, fetches } = setup()
+  const photo = byClass(card, 'fh-card-photo')
+  assert.equal(card.children.indexOf(photo) + 1, card.children.indexOf(byClass(card, 'fh-card-stats')), 'right above the stats, not in the details')
   for (let i = 0; i < 20; i++) c.update('4691c4', S, RAW, INFO, LIVE, false) // per-frame calls, collapsed
-  await flush()
-  assert.deepEqual(fetches, [], 'collapsed: no photo request')
-  button(card, /Show details/).fire('click')
-  assert.equal(byClass(card, 'fh-card-more').hidden, false)
-  for (let i = 0; i < 20; i++) c.update('4691c4', S, RAW, INFO, LIVE, false)
+  assert.equal(photo.classList.contains('fh-skel'), true, 'skeleton (and spinner) while it loads')
   await flush()
   assert.deepEqual(fetches, ['https://api.planespotters.net/pub/photos/hex/4691C4'])
+  button(card, /Show details/).fire('click') // expanding does not ask again
+  assert.equal(byClass(card, 'fh-card-more').hidden, false)
+  await flush()
+  assert.equal(fetches.length, 1)
   const img = all(card).find((e) => e.tag === 'img')!
   assert.equal(img.src, 'https://t.plnspttrs.net/1/4691c4_280.jpg')
   const credit = byClass(card, 'fh-card-credit')
@@ -269,7 +271,6 @@ test('mountFlightCard: a photo that arrives after the selection moved on is drop
   let release!: () => void
   const gate = new Promise<void>((r) => (release = r))
   const { card, c, fetches } = setup(gate)
-  button(card, /Show details/).fire('click')
   c.update('4691c4', S, RAW, INFO, LIVE, false)
   c.update('abcdef', null, null, null, LIVE, false)
   release()
@@ -284,7 +285,6 @@ test('mountFlightCard: a photo that arrives after the selection moved on is drop
 
 test('mountFlightCard: a failed photo lookup says so, rather than "No photo"', async () => {
   const { card, c } = setup(undefined, 503)
-  button(card, /Show details/).fire('click')
   c.update('4691c4', S, RAW, INFO, LIVE, false)
   await flush()
   assert.equal(byClass(card, 'fh-card-note').textContent, 'Photo unavailable')

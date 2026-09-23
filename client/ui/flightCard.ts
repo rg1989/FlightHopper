@@ -1,7 +1,7 @@
 // client/ui/flightCard.ts
 // The focused aircraft's card, top-left: who it is (flag, callsign, type, airline), four live numbers (altitude, speed,
-// vertical rate, track) and a status line (Live · Predicting · Signal lost · Locating). Collapsed by default; expand
-// shows the photo and every detail section (detail.ts detailRows). It replaces the old detail panel, HUD and chase
+// vertical rate, track) under its photo, and a status line (Live · Predicting · Signal lost · Locating). Collapsed by
+// default; expand shows every detail section (detail.ts detailRows). It replaces the old detail panel, HUD and chase
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
 import type { StatusBrief } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
@@ -146,7 +146,7 @@ function iconButton(name: Parameters<typeof icon>[0], label: string): HTMLButton
 
 /**
  * Mounts the (hidden) card. update() may be called every frame: texts are rewritten at most every UPDATE_MS, with a
- * trailing render so the newest state always lands. A new selection renders at once and asks for its photo (once).
+ * trailing render so the newest state always lands. A new selection renders at once and asks for its photo (once per selection).
  * Values go in with textContent only: callsigns and photo credits come from upstream and are never parsed as HTML.
  */
 export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): FlightCardHandle {
@@ -209,9 +209,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const statusText = h('span', 'fh-card-status-t')
   statusRow.append(dot, spin, statusText)
 
-  // Expanded: photo (3:2 box, so the layout does not jump when it arrives) and the detail sections.
-  const more = h('div', 'fh-card-more')
-  more.hidden = true
+  // The photo, above the stats, collapsed or not: a 3:2 skeleton with a spinner until it arrives, so nothing jumps.
   const figure = h('figure', 'fh-card-photo fh-skel')
   const imgLink = h('a', 'fh-card-imglink')
   const img = h('img', 'fh-card-img')
@@ -225,9 +223,12 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     a.target = '_blank'
     a.rel = 'noopener'
   }
-  figure.append(imgLink, note, credit)
+  figure.append(imgLink, h('span', 'fh-spin'), note, credit)
   figure.hidden = opts.photos === undefined
-  more.append(figure)
+
+  // Expanded: the detail sections.
+  const more = h('div', 'fh-card-more')
+  more.hidden = true
   const rowEls = new Map<string, { row: HTMLElement; value: HTMLElement; text: string; alert: boolean; hint: string | null }>()
   for (const sec of detailRows(null, null, null, NO_LOOKUP)) {
     if (sec.id === 'header') continue
@@ -245,7 +246,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
 
   const foot = h('div', 'fh-card-foot')
   foot.append(statusRow, chaseBtn)
-  card.append(head, stats, foot, more)
+  card.append(head, figure, stats, foot, more)
   root.append(card)
 
   let curHex: string | null = null
@@ -313,8 +314,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (hex !== shown) {
       shown = hex
       selectedAtMs = Date.now()
-      if (expanded) showPhoto(hex)
-      else figure.dataset.pending = hex
+      showPhoto(hex)
     }
     const cs = curInfo?.callsign ?? curS?.callsign ?? null
     const key = `${hex}/${cs}`
@@ -364,10 +364,6 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     const label = expanded ? 'Hide details' : 'Show details'
     expandBtn.setAttribute('aria-label', label)
     expandBtn.title = label
-    if (expanded && shown !== null && figure.dataset.pending === shown) {
-      delete figure.dataset.pending
-      showPhoto(shown)
-    }
     render()
   })
   closeBtn.addEventListener('click', () => opts.onClose())

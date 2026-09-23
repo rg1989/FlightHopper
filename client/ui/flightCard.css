@@ -1,5 +1,5 @@
 /* client/ui/flightCard.css */
-/* The chased aircraft's card, top-left: identity, four live numbers, status; expanded, a photo and the details. */
+/* The chased aircraft's card, top-left: identity, photo, four live numbers, status; expanded, the details. */
 .fh-card {
   position: absolute;
   z-index: 18;
@@ -169,7 +169,7 @@
   color: #f5d38a;
 }
 
-/* Expanded: photo and details, scrolling inside the card. */
+/* Expanded: the details, scrolling inside the card. */
 .fh-card-more {
   overflow-y: auto;
   border-top: 1px solid var(--fh-hairline);
@@ -182,11 +182,23 @@
 
 .fh-card-photo {
   position: relative;
+  flex: none; /* expanded, the details scroll; the photo keeps its size */
   aspect-ratio: 3 / 2;
-  margin: 12px 12px 4px;
+  max-height: 30vh; /* short screens (a phone on its side): the stats and Chase stay on screen */
+  margin: 8px 10px 0;
   overflow: hidden;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.fh-card-photo .fh-spin {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
+.fh-card-photo:not(.fh-skel) .fh-spin {
+  display: none;
 }
 
 .fh-card-photo[hidden] {
