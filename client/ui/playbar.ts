@@ -85,7 +85,13 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   phase.hidden = true
   meta.append(h('span', 'fh-playbar-title', opts.title), clock, phase)
 
+  // The scrubber in three layers: the rail (its played part and a dot per mark) under a native range input whose own
+  // track is transparent (the thumb and the keys are the browser's), and over it the marks' buttons, round and clear,
+  // each on its dot: a press on a dot seeks to that mark, a press anywhere else scrubs. A mark's label shows in a bubble
+  // above it on hover or focus.
   const track = h('div', 'fh-playbar-track')
+  const rail = h('div', 'fh-playbar-rail')
+  rail.append(h('div', 'fh-playbar-fill'))
   const range = h('input', 'fh-playbar-range')
   range.type = 'range'
   range.min = String(start)
@@ -93,19 +99,25 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   range.step = '0.1'
   range.setAttribute('aria-label', 'Scenario time')
   const ticks = h('div', 'fh-playbar-ticks')
+  const dots: { t: number; el: HTMLElement }[] = []
   for (const m of opts.marks) {
     if (!(m.t >= start && m.t <= stop)) continue
     const label = `${m.label} · ${clockText(m.t)} ${opts.clockLabel}`
+    const left = `${pct(m.t).toFixed(3)}%`
+    const dot = h('span', 'fh-playbar-dot')
+    dot.style.setProperty('left', left)
+    rail.append(dot)
+    dots.push({ t: m.t, el: dot })
     const tick = button('fh-playbar-tick', label)
-    tick.title = label
-    tick.style.setProperty('left', `${pct(m.t).toFixed(3)}%`)
+    tick.setAttribute('data-label', label)
+    tick.style.setProperty('left', left)
     tick.addEventListener('click', (e) => {
       opts.onSeek(m.t)
       dropPointerFocus(tick, e)
     })
     ticks.append(tick)
   }
-  track.append(range, ticks)
+  track.append(rail, range, ticks)
 
   const rate = button('fh-playbar-rate fh-num', 'Playback speed')
   rate.title = 'Playback speed'
@@ -131,6 +143,8 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
     if (f === shownFill) return
     shownFill = f
     range.style.setProperty('--fh-p', f)
+    rail.style.setProperty('--fh-p', f)
+    for (const d of dots) d.el.classList.toggle('fh-past', d.t <= at) // the marks already passed, on the played part
   }
 
   play.addEventListener('click', () => opts.onToggle())

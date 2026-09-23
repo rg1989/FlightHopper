@@ -26,7 +26,7 @@ import type {
 
 const SPEAKER_KINDS: readonly SpeakerKind[] = ['crew', 'cabin', 'atc', 'company', 'alert', 'other']
 const CHANNELS: readonly Channel[] = ['cockpit', 'radio', 'company', 'cabin', 'interphone', 'alert']
-const EVENT_TYPES: readonly EventType[] = ['phase', 'mark', 'gear', 'flaps', 'damage']
+const EVENT_TYPES: readonly EventType[] = ['phase', 'mark', 'gear', 'flaps', 'damage', 'story']
 
 export class ScenarioError extends Error {
   readonly problems: string[]
@@ -462,7 +462,9 @@ function parseEvents(file: string, text: string, sourceIds: ReadonlySet<string>,
     if (type === 'gear' && value !== '0' && value !== '1') problems.push(`${file}:${r}: value: gear must be 0 or 1: ${JSON.stringify(value)}`)
     if (type === 'flaps' && (value === '' || !Number.isFinite(Number(value)))) problems.push(`${file}:${r}: value: flaps must be a number: ${JSON.stringify(value)}`)
     if (type === 'damage' && value === '') problems.push(`${file}:${r}: value: damage requires a value`)
+    if (type === 'story' && value !== '' && !(Number(value) > 0)) problems.push(`${file}:${r}: value: a story's seconds on screen must be a positive number: ${JSON.stringify(value)}`)
     const label = cell(row, col('label'))
+    if (type === 'story' && label.trim() === '') problems.push(`${file}:${r}: label: a story needs its text`)
     const srcCell = cell(row, col('src'))
     let src: string | null = null
     if (srcCell !== '') {

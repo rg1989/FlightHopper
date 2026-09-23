@@ -1,7 +1,7 @@
 // client/scenario/timeline.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { captionsAt, endingAt, eventStateAt, marks } from './timeline.ts'
+import { captionsAt, endingAt, eventStateAt, marks, storyAt, STORY_S } from './timeline.ts'
 import type { EndingSpec, EventRow, Line } from './types.ts'
 
 function ev(p: Partial<EventRow>): EventRow {
@@ -103,4 +103,18 @@ test('endingAt: card is true once darkAt + cardAfterS is reached', () => {
 
 test('endingAt: a null ending is always {fade: 0, card: false}', () => {
   assert.deepEqual(endingAt(null, 999), { fade: 0, card: false })
+})
+
+test('storyAt: the latest story at or before t while it lasts (its value in seconds, else STORY_S); other types ignored', () => {
+  const events = [
+    ev({ t: 100, type: 'story', label: 'Take-off' }),
+    ev({ t: 105, type: 'mark', label: 'not a story' }),
+    ev({ t: 130, type: 'story', value: '5', label: 'Bang' }),
+  ]
+  assert.equal(storyAt(events, 99), null)
+  assert.deepEqual(storyAt(events, 100), { key: 's0', t: 100, text: 'Take-off' })
+  assert.equal(storyAt(events, 100 + STORY_S - 0.01)?.text, 'Take-off')
+  assert.equal(storyAt(events, 100 + STORY_S), null, 'gone after its seconds')
+  assert.equal(storyAt(events, 134.9)?.text, 'Bang', 'its own 5 s')
+  assert.equal(storyAt(events, 135), null)
 })

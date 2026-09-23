@@ -216,7 +216,7 @@ test('an unchanged update writes nothing (it runs every frame)', () => {
 test('marks: a tick for each mark on the timeline, placed by time, labelled with the clock; a press seeks to it', () => {
   const { ticks, calls } = mount()
   assert.equal(ticks.length, 2)
-  assert.deepEqual(ticks.map((t) => [t.tag, t.title, t.attrs['aria-label']]), [
+  assert.deepEqual(ticks.map((t) => [t.tag, t.attrs['data-label'], t.attrs['aria-label']]), [
     ['button', 'Failure · 18:24:35 JST', 'Failure · 18:24:35 JST'],
     ['button', 'Gear down · 18:39:32 JST', 'Gear down · 18:39:32 JST'],
   ])
@@ -272,7 +272,7 @@ test('when the ending card waits past the last data second (stop > end), the scr
 
 test('clock text: tick labels and the clock use format.ts sToClock on whole seconds (floored), so they agree', () => {
   const { ticks } = mount({ marks: [{ t: 66275.8, label: 'Failure' }] })
-  assert.equal(ticks[0].title, 'Failure · 18:24:35 JST', '18:24:35.8 is still 18:24:35 on the clock')
+  assert.equal(ticks[0].attrs['data-label'], 'Failure · 18:24:35 JST', '18:24:35.8 is still 18:24:35 on the clock')
   assert.deepEqual([clockText(66275), clockText(66275.8), clockText(66275.99), clockText(90061)], ['18:24:35', '18:24:35', '18:24:35', '25:01:01'])
 })
 

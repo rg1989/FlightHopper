@@ -37,6 +37,28 @@ export function eventStateAt(events: readonly EventRow[], t: number): EventState
   return { phase, gear, flaps, damage }
 }
 
+/** How long a story message stays, in scenario seconds, when its row gives no value. */
+export const STORY_S = 12
+
+/** A story message: the moment it tells of, and its text. key: stable per row. */
+export interface Story {
+  key: string
+  t: number
+  text: string
+}
+
+/** The story message at t: the latest `story` event with e.t ≤ t < e.t + (its value, else STORY_S) seconds; else null. */
+export function storyAt(events: readonly EventRow[], t: number): Story | null {
+  let out: Story | null = null
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]
+    if (e.type !== 'story' || e.t > t) continue
+    const dur = Number(e.value) > 0 ? Number(e.value) : STORY_S
+    out = t < e.t + dur ? { key: `s${i}`, t: e.t, text: e.label } : null
+  }
+  return out
+}
+
 /** The timeline's tick marks: every `mark` event, in file order. */
 export function marks(events: readonly EventRow[]): { t: number; label: string }[] {
   return events.filter((e) => e.type === 'mark').map((e) => ({ t: e.t, label: e.label }))

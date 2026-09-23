@@ -2,7 +2,9 @@ time,type,value,label,src
 18:11:15,phase,,Take-off Haneda 15L,EN:p.286
 18:11:15,gear,1,Gear down,R10:p.290
 18:11:15,flaps,10,Flaps 10 for take-off (DFDR chart),R11:p.14
+18:11:20,story,14,"JAL 123, a Boeing 747SR bound for Osaka, is cleared for take-off from Haneda runway 15L. 509 passengers and 15 crew are aboard on the eve of the Obon holiday.",EN:p.286
 18:12:16,phase,,Climb over Tokyo Bay,R10:p.290
+18:12:16,story,12,"Lift-off. The first officer flies from the left seat as part of his captain training; the captain, his instructor, sits on the right.",R10:p.290
 18:12:25,gear,0,"Gear up (not recorded; estimated, 9 s after lift-off)",R10:p.290
 18:14:04,flaps,5,Flaps retracting (DFDR chart),R11:p.14
 18:14:16,flaps,3,Flaps retracting (DFDR chart),R11:p.14
@@ -10,39 +12,62 @@ time,type,value,label,src
 18:14:36,flaps,1,Flaps retracting (DFDR chart),R11:p.14
 18:14:50,flaps,0,Flaps up (DFDR chart),R11:p.14
 18:18:33,phase,,Direct to Seaperch,EN:p.286
+18:18:33,story,12,"Tokyo Control clears the flight direct to the Seaperch waypoint. The climb to 24,000 ft continues over Sagami Bay.",EN:p.286
 18:24:35,phase,,Failure: loss of hydraulics,R10:p.290
 18:24:35,mark,,Aft pressure bulkhead fails,R10:p.290
 18:24:35,damage,fin,"Most of the fin, the rudders and the tail cone lost",R10:p.290
+18:24:35,story,12,"A loud bang at 23,900 ft. The aft pressure bulkhead, weakened by an improper repair after a 1978 tail strike, bursts. Cabin air rushes into the tail.",R10:p.290
+18:24:47,story,12,The blast tears away most of the vertical fin and the rudder and severs all four hydraulic systems. The crew sets the emergency code 7700.,R10:p.290
+18:25:21,story,12,The captain reports trouble to Tokyo Control and asks to return to Haneda.,EN:p.295
 18:26:00,phase,,Phugoid and Dutch roll,R10:p.291
+18:26:00,story,14,"The aircraft begins to oscillate: a slow climb-and-sink cycle of about 90 seconds (phugoid) and a rolling, yawing sway every 11 seconds (Dutch roll).",R10:p.291
+18:27:47,story,12,The flight engineer confirms all hydraulic pressure is lost. From now on the crew can steer only by changing the thrust of the engines.,EN:p.298
 18:28:35,mark,,“But now uncontrol”,EN:p.299
 18:31:00,phase,,Turning north over Suruga Bay,R11:p.3
+18:31:14,story,14,"Tokyo Control offers Nagoya, 72 miles away; the captain asks for Haneda instead. To make it easier for the crew, the controller switches to Japanese.",EN:p.302
+18:32:17,story,12,"The flight engineer learns that the ceiling at the rear of the cabin has collapsed, and suggests an emergency descent.",EN:p.303
 18:34:53,phase,,West of Mt Fuji,R05:p.137
+18:35:34,story,12,"He tells JAL's company radio that a rear door, R5, has broken and that they are descending. No one yet knows the real cause.",EN:p.306
+18:37:10,story,12,"The aircraft passes north of Mount Fuji and turns east toward Tokyo, still climbing and sinking every minute or so.",R05:p.137
+18:38:32,story,12,The crew tries to lower the landing gear to steady the aircraft. It will not come down: the normal system needs hydraulic pressure.,EN:p.309
 18:39:32,phase,,Gear down,R10:p.291
 18:39:32,mark,,Gear lowered,R10:p.291
 18:39:32,gear,1,Gear lowered,R10:p.291
+18:39:32,story,12,"The flight engineer lowers the gear with the alternate system, letting it fall under its own weight. The extra drag damps the pitching.",R10:p.291
 18:39:51,phase,,Otsuki loop,R10:p.291
+18:40:30,story,14,"Over Otsuki the aircraft circles to the right, a full turn and more, descending from about 22,000 to 17,000 ft. Uneven engine thrust is turning it.",R10:p.291
 18:45:21,phase,,Descent toward Okutama,R10:p.292
 18:45:46,mark,,“Japan Air 123 uncontrollable”,EN:p.316
+18:45:46,story,12,"Down to 13,500 ft, the aircraft turns northeast toward the Okutama mountains. The captain radios again that it is uncontrollable.",EN:p.316
 18:47:17,phase,,Low over Okutama,R05:p.137
 18:47:17,mark,,“Can you control the aircraft now?” “It's uncontrollable.”,EN:p.318
+18:47:39,story,12,Mountains ahead. The captain calls for a right turn and maximum power to climb away from them.,EN:p.318
+18:48:30,story,12,"Full power stops the descent low over the Okutama mountains, but the nose now pitches steeply up.",R10:p.292
 18:49:09,phase,,Stall and recovery,R11:p.5
 18:49:42,mark,,"Stall: 108 kt, angle of attack 30.9°",R10:p.292
+18:49:42,story,12,The nose rises to almost 40° and the speed falls to 108 knots: the aircraft stalls. The stall warning sounds; maximum power recovers it.,R10:p.292
+18:50:50,story,12,The captain and the flight engineer agree to control the pitch with engine power alone.,EN:p.321
 18:51:06,phase,,Flaps on alternate power,R10:p.292
 18:51:06,mark,,Flaps start to extend on alternate power,R10:p.292
+18:51:06,story,12,"To gain some control, the flaps are lowered with the slow alternate electric system. They will take minutes to move.",R10:p.292
 18:51:40,flaps,1,Flaps extending (DFDR chart),R11:p.17
 18:52:36,flaps,2,Flaps extending (DFDR chart),R11:p.17
 18:53:31,mark,,"“Uncontrol, Japan Air 123 uncontrol”",EN:p.324
+18:53:31,story,12,"The captain reports a third time that the aircraft is uncontrollable. It has climbed back to about 13,000 ft, heading west-northwest into the mountains of Gunma.",EN:p.324
 18:53:42,flaps,3,Flaps extending (DFDR chart),R11:p.17
 18:54:13,flaps,4,Flaps extending (DFDR chart),R11:p.17
 18:54:31,flaps,5,Flaps 5,R10:p.293
+18:54:42,story,14,"Tokyo Approach gives their position: 55 miles northwest of Haneda, 25 miles west of Kumagaya. Haneda and the Yokota air base are both ready to receive them.",EN:p.325
 18:54:50,phase,,Final turn,R10:p.293
 18:54:50,flaps,10,Flaps 10,R10:p.293
 18:55:05,mark,,Last exchange with ATC,EN:p.325
 18:55:08,flaps,15,Flaps extending (DFDR chart),R11:p.17
 18:55:33,flaps,20,Flaps 20,R10:p.292
 18:55:42,flaps,25,Flaps about 25; retraction begins at once,R10:p.293
+18:55:42,story,12,"As the flaps reach about 25 units, the aircraft rolls steeply to the right and the nose drops. The crew retracts the flaps and adds power.",R10:p.293
 18:55:47,flaps,23,Flaps retracting (DFDR chart),R11:p.17
 18:55:52,flaps,21,Flaps retracting (DFDR chart),R11:p.17
 18:56:00,flaps,19,Flaps retracting (DFDR chart),R11:p.17
+18:56:05,story,10,"The aircraft dives at more than 18,000 ft per minute, 36° nose down and banked 70° to the right. The ground proximity warning sounds.",R10:p.293
 18:56:09,flaps,17,Flaps retracting (DFDR chart),R11:p.17
 18:56:15,flaps,15,Flaps retracting (DFDR chart),R11:p.17

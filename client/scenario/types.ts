@@ -9,7 +9,7 @@ export type Channel = 'cockpit' | 'radio' | 'company' | 'cabin' | 'interphone' |
 export type LineQuality = 'D' | 'T' | 'U'
 /** A: documented value · M: measured from an official chart or figure · R: reconstructed or modelled. */
 export type RowQuality = 'A' | 'M' | 'R'
-export type EventType = 'phase' | 'mark' | 'gear' | 'flaps' | 'damage'
+export type EventType = 'phase' | 'mark' | 'gear' | 'flaps' | 'damage' | 'story'
 
 /** One row of track.csv. Angles in degrees: heading true 0–360, pitch nose-up +, roll right-wing-down +. */
 export interface TrackRow {

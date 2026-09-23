@@ -13,10 +13,11 @@ import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
 import { mountCaptions, type CaptionView } from '../ui/captions.ts'
 import { mountEnding } from '../ui/ending.ts'
 import { clockText, mountPlaybar } from '../ui/playbar.ts'
+import { mountStory } from '../ui/story.ts'
 import { AudioSync } from './audio.ts'
 import { ScenarioClock } from './clock.ts'
 import { PoseTrack, type PoseData } from './pose.ts'
-import { captionsAt, endingAt, eventStateAt, marks, type EventState } from './timeline.ts'
+import { captionsAt, endingAt, eventStateAt, marks, storyAt, type EventState, type Story } from './timeline.ts'
 import type { ImagerySpec, Line, Scenario, SpeakerDef } from './types.ts'
 
 /** A move of the clock by more than this between two frames, other than by playing, is a seek: the camera snaps behind. */
@@ -32,6 +33,7 @@ export interface ScenarioFrame {
   fade: number // 0…1: the ending's veil (and the sound's fade)
   card: boolean // the ending card is up
   lines: readonly Line[] // the captions on screen (none once dark)
+  story: Story | null // the story message at t (none once the ending fades in)
   jumped: boolean // a seek since the last step
 }
 
@@ -90,6 +92,7 @@ export class ScenarioPlayer {
       fade,
       card,
       lines: fade >= 1 ? [] : captionsAt(s.lines, t),
+      story: fade > 0 ? null : storyAt(s.events, t),
       jumped,
     }
   }
@@ -230,6 +233,7 @@ export class ScenarioRun {
   readonly #views = new Map<Line, CaptionView>()
   readonly #bar: ReturnType<typeof mountPlaybar>
   readonly #captions: ReturnType<typeof mountCaptions>
+  readonly #story: ReturnType<typeof mountStory>
   readonly #ending: ReturnType<typeof mountEnding>
   readonly #audioEl: HTMLAudioElement | null = null
   readonly #audio: AudioSync | null = null
@@ -248,6 +252,7 @@ export class ScenarioRun {
     s.lines.forEach((l, i) => this.#views.set(l, captionView(l, i, s.speakers)))
     const clock = this.player.clock
     this.#captions = mountCaptions(o.ui)
+    this.#story = mountStory(o.ui)
     this.#ending = mountEnding(o.ui, { onClose: () => o.onExit() })
     this.#bar = mountPlaybar(o.ui, {
       start: s.start, stop: clock.stop, end: s.end, marks: marks(s.events), clockLabel: s.clockLabel, title: s.title,
@@ -291,6 +296,7 @@ export class ScenarioRun {
     const clock = this.player.clock
     this.#bar.update({ t: f.t, playing: clock.playing, rate: clock.rate, clock: clockText(f.t), phase: f.event.phase })
     this.#captions.update(f.lines.map((l) => this.#views.get(l)!))
+    this.#story.update(f.story === null ? null : { key: f.story.key, clock: `${clockText(f.story.t)} ${this.scenario.clockLabel}`, text: f.story.text })
     this.#ending.update(f.fade, f.card ? this.scenario.ending!.card : null)
     this.#audio?.update(f.t, clock.playing, clock.rate, 1 - f.fade)
     // The era imagery takes the base's brightness, which the Sun lowers at dusk.
@@ -305,6 +311,7 @@ export class ScenarioRun {
     window.removeEventListener('keydown', this.#onKey)
     this.#bar.destroy()
     this.#captions.destroy()
+    this.#story.destroy()
     this.#ending.destroy()
     const layers = this.#viewer.imageryLayers
     for (const l of this.#layers) if (!layers.isDestroyed() && layers.contains(l)) layers.remove(l, true)

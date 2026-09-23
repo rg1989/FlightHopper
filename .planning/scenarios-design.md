@@ -150,6 +150,7 @@ second** (JAL 123's Dutch roll has an ≈11 s period).
 | `gear` | `1` down / `0` up | gear model shown/hidden; frame shows GEAR DN |
 | `flaps` | units (number) | frame shows FLAPS n |
 | `damage` | `fin` | from this time the model lacks the upper fin, rudder and tail cone (§6.3) |
+| `story` | seconds on screen (empty: 12) | a narrative message (label) that fades in top-left and out again (added 2026-09-23 at the user's request) |
 
 ### 3.5 transcript.csv
 

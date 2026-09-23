@@ -128,6 +128,7 @@ Columns: `time,type,value,label,src`.
 | `gear` | `1` down, `0` up | Shows or hides the landing gear. The flight-data frame shows GEAR DN. |
 | `flaps` | a number (flap units) | The frame shows FLAPS n. At 0 the chip goes away. |
 | `damage` | `fin` | From this time the model has no upper fin, rudder or tail cone (b744 only, see 1.3). |
+| `story` | seconds on screen (empty: 12) | A short narrative message, top-left, that fades in at this time and out after its seconds (at least 5 s of real time at any speed). Write `label` as one or two plain sentences: what happens and why it matters. Only facts from the record; cite `src`. |
 
 - Events have no `q` column. When a time is an estimate, say so in `label`, for example "Gear up (not recorded,
   estimated)".

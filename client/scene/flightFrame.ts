@@ -230,23 +230,27 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
   return e
 }
 
-/** "AGL 11,850 ft" as label, value and unit spans, with real spaces between (copy and screen readers read it whole). */
-function fieldEl(f: Field): HTMLSpanElement {
-  const s = h('span', `fh-ff${f.big ? ' fh-big' : ''}${f.est ? ' fh-est' : ''}`)
-  s.dataset.key = f.key
-  if (f.label !== '') s.append(h('span', 'fh-fl', f.label), ' ')
-  s.append(h('span', 'fh-fv', f.value))
-  if (f.unit !== '') s.append(' ', h('span', 'fh-fu', f.unit))
-  return s
+/** The tile's label when the field has none of its own: the altitude, vertical speed, g and wind read by their figures. */
+const TILE_LABEL: Readonly<Record<string, string>> = { altFt: 'Alt', vsFpm: 'V/S', g: 'Load', wind: 'Wind' }
+
+/**
+ * One quantity as a tile, the flight card's stat style: the figure over a small caps label with the unit ("ALT ft"). The
+ * text reads whole for copy and screen readers ("11,850 AGL ft").
+ */
+function fieldEl(f: Field): HTMLDivElement {
+  const tile = h('div', `fh-ft${f.big ? ' fh-big' : ''}${f.est ? ' fh-est' : ''}`)
+  tile.dataset.key = f.key
+  const label = h('div', 'fh-ft-l', f.label || TILE_LABEL[f.key] || '')
+  if (f.unit !== '') label.append(' ', h('span', 'fh-ft-u', f.unit))
+  tile.append(h('div', 'fh-ft-v', f.value), label)
+  return tile
 }
 
-function lineEl(row: readonly Field[]): HTMLDivElement {
-  const line = h('div', 'fh-fline')
-  row.forEach((f, i) => {
-    if (i > 0) line.append(' ', h('span', 'fh-fsep', '·'), ' ')
-    line.append(fieldEl(f))
-  })
-  return line
+/** A row of tiles. */
+function rowEl(fields: readonly Field[]): HTMLDivElement {
+  const row = h('div', 'fh-frow')
+  row.append(...fields.map(fieldEl))
+  return row
 }
 
 /** The wind dial, 18 px: a ring, a small aircraft nose-up in the middle, and the arrow blowing in from the wind's side. */
@@ -297,17 +301,23 @@ export class FlightFrame {
   readonly #blocks: Record<BlockId, HTMLDivElement>
   readonly #sizes: Record<BlockId, { w: number; h: number }> = { left: ZERO(), right: ZERO(), top: ZERO(), bottom: ZERO() }
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
-  // Text slots, rebuilt when their text changes, beside the glyphs, which stay.
-  readonly #rightRows = h('div', 'fh-fcol')
-  readonly #epr = h('div', 'fh-epr')
+  // Text slots, rebuilt when their text changes, beside the glyphs, which stay attached (their transitions smooth the
+  // 10 Hz steps).
+  readonly #leftTop = h('div', 'fh-frow') // the altitude
+  readonly #leftRow = h('div', 'fh-frow') // height above ground, vertical speed
+  readonly #rightRow = h('div', 'fh-frow') // airspeed, ground speed
+  readonly #epr = h('div', 'fh-ft fh-ft-epr') // thrust: one bar per engine
   readonly #bars = h('div', 'fh-bars')
   readonly #fills: HTMLDivElement[] = []
-  readonly #nav = h('span', 'fh-fslot')
-  readonly #navDiv = h('span', 'fh-fdiv')
+  readonly #nav = h('div', 'fh-fslot') // heading (or track)
+  readonly #windTile = h('div', 'fh-ft fh-ft-wind')
+  readonly #windText = h('span', 'fh-ft-wv')
+  readonly #windLabel = h('div', 'fh-ft-l')
   readonly #dial = dialEl()
-  readonly #wind = h('span', 'fh-fslot')
   readonly #hz = horizonEl()
-  readonly #bottomRows = h('div', 'fh-fcol')
+  readonly #hzTile = h('div', 'fh-ft fh-ft-hz')
+  readonly #att = h('div', 'fh-frow') // bank, pitch, g
+  readonly #chips = h('div', 'fh-fchips') // GEAR DN, FLAPS 10
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
   readonly #c = new Cartesian3()
   readonly #v = new Cartesian3()
@@ -324,10 +334,21 @@ export class FlightFrame {
       b.dataset.block = id
       b.hidden = true
     }
-    this.#epr.append(h('span', 'fh-fl', 'EPR'), this.#bars)
-    blocks.right.append(this.#rightRows, this.#epr)
-    blocks.top.append(this.#nav, this.#navDiv, this.#dial.root, this.#wind) // HDG 250° │ (dial) 220°/16 kt
-    blocks.bottom.append(this.#hz.root, this.#bottomRows) // (horizon) Bank 38° R · Pitch +9° / 1.8 g GEAR DN FLAPS 10
+    const eprLabel = h('div', 'fh-ft-l', 'Thrust')
+    eprLabel.append(' ', h('span', 'fh-ft-u', 'EPR'))
+    this.#epr.append(this.#bars, eprLabel)
+    blocks.left.append(this.#leftTop, this.#leftRow)
+    blocks.right.append(this.#rightRow, this.#epr)
+    const windV = h('div', 'fh-ft-v')
+    windV.append(this.#dial.root, this.#windText)
+    this.#windTile.append(windV, this.#windLabel)
+    const topRow = h('div', 'fh-frow')
+    topRow.append(this.#nav, this.#windTile)
+    blocks.top.append(topRow) // HDG 250° · (dial) 220°/16 WIND kt
+    this.#hzTile.append(this.#hz.root)
+    const bottomRow = h('div', 'fh-frow')
+    bottomRow.append(this.#hzTile, this.#att)
+    blocks.bottom.append(bottomRow, this.#chips) // (horizon) BANK · PITCH · LOAD, then GEAR DN FLAPS 10
     this.#blocks = blocks
     layer.append(this.#bracket, ...IDS.map((id) => blocks[id]))
   }
@@ -415,36 +436,42 @@ export class FlightFrame {
   }
 
   #fill(id: BlockId, v: BlockView): void {
+    const fields = v.rows.flat()
     if (id === 'left') {
-      this.#blocks.left.replaceChildren(...v.rows.map(lineEl))
+      // The altitude on its own row, the rest beside each other under it.
+      const [first, ...rest] = v.rows
+      this.#leftTop.replaceChildren(...(first ?? []).map(fieldEl))
+      this.#leftRow.replaceChildren(...rest.flat().map(fieldEl))
+      this.#leftRow.hidden = rest.length === 0
     } else if (id === 'right') {
-      this.#rightRows.replaceChildren(...v.rows.map(lineEl))
-      this.#rightRows.hidden = v.rows.length === 0
+      this.#rightRow.replaceChildren(...fields.map(fieldEl))
+      this.#rightRow.hidden = fields.length === 0
       this.#epr.hidden = v.bars === null
       if (v.bars !== null && v.bars.bars.length !== this.#fills.length) this.#buildBars(v.bars.bars)
     } else if (id === 'top') {
-      const row = v.rows[0] ?? []
-      const nav = row.find((f) => f.key !== 'wind')
-      const wind = row.find((f) => f.key === 'wind')
+      const nav = fields.find((f) => f.key !== 'wind')
+      const wind = fields.find((f) => f.key === 'wind')
       this.#nav.replaceChildren(...(nav ? [fieldEl(nav)] : []))
-      this.#wind.replaceChildren(...(wind ? [fieldEl(wind)] : []))
       this.#nav.hidden = nav === undefined
-      this.#wind.hidden = wind === undefined
-      this.#navDiv.hidden = nav === undefined || wind === undefined
+      this.#windTile.hidden = wind === undefined
+      if (wind !== undefined) {
+        this.#windTile.classList.toggle('fh-est', wind.est)
+        this.#windText.textContent = wind.value
+        this.#windLabel.replaceChildren('Wind', ...(wind.unit === '' ? [] : [' ', h('span', 'fh-ft-u', wind.unit)]))
+      }
       this.#dial.root.style.display = v.wind === null ? 'none' : ''
     } else {
-      this.#hz.root.hidden = v.horizon === null
-      const lines = v.rows.map(lineEl)
-      if (v.chips.length > 0) {
-        const gi = v.rows.findIndex((row) => row[0]?.key === 'g') // the chips share the g line, else have their own
-        const line = gi >= 0 ? lines[gi] : lines[lines.push(h('div', 'fh-fline')) - 1]
-        for (const c of v.chips) {
+      this.#hzTile.hidden = v.horizon === null
+      this.#att.replaceChildren(...fields.map(fieldEl))
+      this.#att.hidden = fields.length === 0
+      this.#chips.replaceChildren(
+        ...v.chips.map((c) => {
           const chip = h('span', `fh-chip${c.est ? ' fh-est' : ''}`, c.text)
           chip.dataset.chip = c.key
-          line.append(chip)
-        }
-      }
-      this.#bottomRows.replaceChildren(...lines)
+          return chip
+        }),
+      )
+      this.#chips.hidden = v.chips.length === 0
     }
   }
 
