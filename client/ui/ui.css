@@ -1,95 +1,33 @@
 /* client/ui/ui.css */
-/* HUD bottom-left, banner top-centre, attribution bottom-right. Dark translucent panels plus a text shadow keep the
-   text readable over snow, cloud, sea and busy terrain imagery. Overlays never take pointer events, so globe drag and
-   aircraft picking work through them. */
-.fh-hud,
-.fh-banner,
-.fh-attribution {
+/* The toast (top centre, provider trouble only). */
+.fh-toast {
   position: absolute;
-  z-index: 10;
-  box-sizing: border-box;
+  z-index: 21;
+  top: 12px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 140px);
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  font-size: 12px;
   pointer-events: none;
-  border-radius: 4px;
-  background: rgba(8, 12, 18, 0.72);
-  color: #f2f5f8;
-  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-shadow: 0 1px 2px #000;
+  animation: fh-toast-in 200ms var(--fh-ease);
 }
 
-/* An author display value would beat the hidden attribute's UA style; say it again. */
-.fh-hud[hidden],
-.fh-banner[hidden] {
+.fh-toast[hidden] {
   display: none;
 }
 
-/* 40px up clears Cesium's own credit bar, which sits on the bottom-left edge. */
-.fh-hud {
-  left: 8px;
-  bottom: 40px;
-  min-width: 24ch;
-  padding: 6px 10px;
+@keyframes fh-toast-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
 }
 
-.fh-hud-title {
-  margin-bottom: 2px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.fh-hud-row {
-  white-space: nowrap;
-}
-
-.fh-hud-label {
-  display: inline-block;
-  width: 5ch;
-  color: #9aa6b2;
-}
-
-/* Honesty tags. Derived is also italic so it does not rely on colour alone. */
-.fh-observed {
-  color: #f2f5f8;
-}
-
-.fh-derived {
-  color: #7cc8ff;
-  font-style: italic;
-}
-
-.fh-stale {
-  color: #ffb347;
-}
-
-.fh-unknown {
-  color: #7d8793;
-}
-
-.fh-hud-legend {
-  display: flex;
-  gap: 1.5ch;
-  margin-top: 4px;
-  font-size: 10px;
-}
-
-/* left/right + fit-content + auto margins centre it; left: 50% with a transform would wrap it at half the width. */
-.fh-banner {
-  top: 8px;
-  left: 16px;
-  right: 16px;
-  width: fit-content;
-  margin: 0 auto;
-  padding: 6px 14px;
-  background: rgba(110, 55, 0, 0.88);
-  font-size: 13px;
-  text-align: center;
-}
-
-.fh-attribution {
-  right: 8px;
-  bottom: 8px;
-  max-width: min(44ch, 45vw);
-  padding: 4px 8px;
-  color: #c9d1d9;
-  font-size: 10px;
-  text-align: right;
+@media (max-width: 640px) {
+  .fh-toast {
+    top: auto;
+    bottom: 12px;
+  }
 }

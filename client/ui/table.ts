@@ -1,14 +1,18 @@
 // client/ui/table.ts
-// Right-hand sidebar listing the aircraft on screen: flag, callsign, route, type, squawk, altitude, speed. Sortable by
-// any column, searchable, with "Total aircraft" / "On screen" counts; a row click selects the aircraft.
+// The aircraft list (the rail's "Aircraft" panel): flag, callsign, type, altitude, speed of the aircraft in view.
+// Sortable by any column, searchable (callsign, hex, registration, type, squawk); a row click selects the aircraft.
+// It refreshes every REFRESH_MS (10 s), so rows do not move under the cursor; a ring around the refresh button counts
+// down, a click refreshes now, and while a refresh runs the list dims and ignores clicks.
 // Built for thousands of rows with update() called every frame:
-// - once a second (RESORT_MS) the on-screen entries are copied into table-owned objects, then filtered and sorted.
+// - on each refresh the on-screen entries are copied into table-owned objects, then filtered and sorted.
 //   Fleet reuses its FleetEntry objects every frame, so the table never keeps a reference to one. The sort starts
 //   from the last display order, which V8's adaptive sort finishes in about one pass;
 // - a header click or a search re-sorts that copy at once;
 // - only the rows in the scroll viewport plus OVERSCAN exist in the DOM. Row i always uses row element i % poolSize,
 //   so scrolling rewrites only the rows that come into view, and a cell is written only when its text changes.
 import type { FleetEntry } from '../types.ts'
+import { STALE_AGE_S } from './format.ts'
+import { icon } from './icons.ts'
 import './table.css'
 
 /** What a column sorts by. The flag column sorts by ICAO address: address blocks are allocated per country. */
@@ -21,22 +25,20 @@ export interface TableColumn {
   num: boolean // right-aligned number
 }
 
-/** The columns, in order. cellText(e, i) is the text of column i. */
+/** The columns shown, in order. The route and squawk columns went (routes are rarely known; squawk stays searchable and
+ * an emergency squawk marks the row). */
 export const COLUMNS: readonly TableColumn[] = [
-  { key: 'hex', label: '⚑', title: 'Country of registration (sorts by ICAO address, which groups countries)', num: false },
+  { key: 'hex', label: '', title: 'Country of registration (sorts by ICAO address, which groups countries)', num: false },
   { key: 'callsign', label: 'Callsign', title: 'Callsign (ICAO address when there is none)', num: false },
-  { key: 'route', label: 'Route', title: 'Route (origin - destination)', num: false },
   { key: 'type', label: 'Type', title: 'ICAO aircraft type designator', num: false },
-  { key: 'squawk', label: 'Sqk', title: 'Squawk (7500, 7600 and 7700 highlighted)', num: false },
   { key: 'alt', label: 'Alt ft', title: 'Barometric altitude in feet; ▲ climbing / ▼ descending faster than 300 ft/min', num: true },
-  { key: 'speed', label: 'Spd kt', title: 'Ground speed in knots', num: true },
+  { key: 'speed', label: 'Kt', title: 'Ground speed in knots', num: true },
 ]
 
-export const ROW_H = 22 // px; fixed, the virtual scroll depends on it (table.css .fh-row height)
+export const ROW_H = 30 // px; fixed, the virtual scroll depends on it (table.css .fh-row height)
 export const OVERSCAN = 8 // rows kept above and below the viewport so a fast scroll never shows a gap
-// ponytail: rows show values up to RESORT_MS old (a list, not a gauge; tar1090 also refreshes its table about once a
-// second). Upgrade if a live column is wanted: repaint only the visible rows every frame from a hex → entry lookup.
-export const RESORT_MS = 1000 // at most one copy + filter + sort per second from update()
+export const REFRESH_MS = 10_000 // the list's own rhythm: stable rows between refreshes
+export const REFRESHING_MS = 380 // how long a refresh shows (dimmed, clicks ignored) before the new rows land
 const VS_ARROW_FPM = 300
 const GROUND = -1e9 // sort key: below every airborne altitude
 const noFlag = (): string => ''
@@ -108,23 +110,22 @@ export function isEmergencySquawk(squawk: string | null): boolean {
   return squawk === '7500' || squawk === '7600' || squawk === '7700'
 }
 
-/** Text of column `col` (index into COLUMNS) for one row; '' when unknown. */
-export function cellText(e: FleetEntry, col: number, flagOf: (hex: string) => string = noFlag): string {
+/** Text of the column with this key for one row; '' when unknown. */
+export function cellText(e: FleetEntry, key: TableKey, flagOf: (hex: string) => string = noFlag): string {
   const i = e.info
-  switch (col) {
-    case 0: return flagOf(e.hex)
-    case 1: return i?.callsign ?? e.hex
-    case 2: return i?.route == null ? '' : i.route.replace(/\s*-\s*/g, ' - ')
-    case 3: return i?.typeCode ?? ''
-    case 4: return i?.squawk ?? ''
-    case 5: {
+  switch (key) {
+    case 'hex': return flagOf(e.hex)
+    case 'callsign': return i?.callsign ?? e.hex.toUpperCase()
+    case 'route': return i?.route == null ? '' : i.route.replace(/\s*-\s*/g, ' - ')
+    case 'type': return i?.typeCode ?? ''
+    case 'squawk': return i?.squawk ?? ''
+    case 'alt': {
       if (e.onGround) return 'ground'
       if (!finite(e.altFt)) return ''
       const vs = e.vsFpm
       return grouped(e.altFt) + (finite(vs) && vs > VS_ARROW_FPM ? ' ▲' : finite(vs) && vs < -VS_ARROW_FPM ? ' ▼' : '')
     }
-    case 6: return finite(e.gsKt) ? String(Math.round(e.gsKt)) : ''
-    default: return ''
+    case 'speed': return finite(e.gsKt) ? String(Math.round(e.gsKt)) : ''
   }
 }
 
@@ -144,8 +145,13 @@ export interface TableOpts {
 }
 
 export interface TableHandle {
-  /** all = every aircraft known, onScreen = the ones in the view. Cheap to call every frame (see the file comment). */
-  update(all: readonly FleetEntry[], onScreen: readonly FleetEntry[], selectedHex: string | null): void
+  /**
+   * all = every aircraft known, onScreen = the ones in the view; ready = the first data has arrived (skeleton rows
+   * before). Cheap to call every frame: the rows change only on a refresh (see the file comment).
+   */
+  update(all: readonly FleetEntry[], onScreen: readonly FleetEntry[], selectedHex: string | null, ready: boolean): void
+  /** Refresh at the next update() (e.g. when the panel opens). */
+  refresh(): void
   destroy(): void
 }
 
@@ -164,9 +170,12 @@ interface Slot {
   hex: string
   sel: boolean
   emerg: boolean
+  stale: boolean
 }
 
 const NCOL = COLUMNS.length
+const RING_R = 12.5
+const RING_C = 2 * Math.PI * RING_R
 
 function blankRow(): Row {
   return { hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, quality: 'other', info: null, gen: 0 }
@@ -195,27 +204,67 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, tex
   return el
 }
 
-export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
+const SVG = 'http://www.w3.org/2000/svg'
+
+/** The refresh button: a countdown ring around a refresh arrow. */
+function refreshButton(): { btn: HTMLButtonElement; ring: SVGCircleElement } {
+  const btn = h('button', 'fh-ibtn fh-sm fh-refresh')
+  btn.type = 'button'
+  btn.setAttribute('aria-label', 'Refresh the list now')
+  btn.dataset.tip = 'Refresh now'
+  const svg = document.createElementNS(SVG, 'svg')
+  svg.setAttribute('viewBox', '0 0 28 28')
+  svg.setAttribute('width', '28')
+  svg.setAttribute('height', '28')
+  svg.setAttribute('aria-hidden', 'true')
+  const track = document.createElementNS(SVG, 'circle')
+  const ring = document.createElementNS(SVG, 'circle')
+  for (const c of [track, ring]) {
+    c.setAttribute('cx', '14')
+    c.setAttribute('cy', '14')
+    c.setAttribute('r', String(RING_R))
+    c.setAttribute('fill', 'none')
+    c.setAttribute('stroke-width', '1.75')
+  }
+  track.setAttribute('class', 'fh-ring-track')
+  ring.setAttribute('class', 'fh-ring')
+  ring.setAttribute('stroke-dasharray', String(RING_C))
+  ring.setAttribute('transform', 'rotate(-90 14 14)')
+  const arrow = document.createElementNS(SVG, 'path')
+  // The refresh arrows, scaled into the ring.
+  arrow.setAttribute('d', 'M19 13.5a5 5 0 0 0-9-2.6L9 12.2M9 9.3v2.9h2.9M9 14.5a5 5 0 0 0 9 2.6l1-1.3M19 18.7v-2.9h-2.9')
+  arrow.setAttribute('fill', 'none')
+  arrow.setAttribute('stroke', 'currentColor')
+  arrow.setAttribute('stroke-width', '1.6')
+  arrow.setAttribute('stroke-linecap', 'round')
+  arrow.setAttribute('stroke-linejoin', 'round')
+  svg.append(track, ring, arrow)
+  btn.append(svg)
+  return { btn, ring }
+}
+
+/**
+ * Mounts the list into `body` (the panel body) and its counts and refresh button into `head` (the panel header).
+ */
+export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts): TableHandle {
   const flagOf = opts.flagOf ?? noFlag
 
-  const el = h('aside', 'fh-table')
-  el.setAttribute('aria-label', 'Aircraft on screen')
-  const head = h('div', 'fh-table-head')
-  const toggle = h('button', 'fh-table-toggle', '▸')
-  toggle.type = 'button'
-  toggle.title = 'Hide the aircraft list'
-  toggle.setAttribute('aria-expanded', 'true')
-  const totalEl = h('span', 'fh-table-count')
-  const shownEl = h('span', 'fh-table-count')
-  head.append(toggle, totalEl, shownEl)
+  const el = h('div', 'fh-table')
+  el.setAttribute('aria-label', 'Aircraft in view')
+  const counts = h('span', 'fh-table-counts fh-num')
+  const { btn: refreshBtn, ring } = refreshButton()
+  head.append(counts, refreshBtn)
 
-  const body = h('div', 'fh-table-body')
-  const search = h('input', 'fh-table-search')
+  const searchBox = h('label', 'fh-table-search')
+  const search = h('input', 'fh-field')
   search.type = 'search'
   search.placeholder = 'Search callsign, hex, reg, type, squawk'
   search.spellcheck = false
   search.autocomplete = 'off'
   search.setAttribute('aria-label', 'Search aircraft')
+  searchBox.append(icon('search', 15), search)
+
+  const bar = h('div', 'fh-progress fh-table-progress')
   const cols = h('div', 'fh-table-cols fh-grid')
   const colButtons = COLUMNS.map((c) => {
     const b = h('button', c.num ? 'fh-num' : '', c.label)
@@ -226,19 +275,28 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
   })
   cols.append(...colButtons)
   const empty = h('div', 'fh-table-empty')
+  const emptyTitle = h('div', 'fh-table-empty-title')
+  const emptyHint = h('div', 'fh-table-empty-hint')
+  empty.append(emptyTitle, emptyHint)
+  const skeleton = h('div', 'fh-table-skeleton')
+  for (let i = 0; i < 9; i++) {
+    const r = h('div', 'fh-skel-row')
+    r.append(h('span', 'fh-skel'), h('span', 'fh-skel'), h('span', 'fh-skel'))
+    skeleton.append(r)
+  }
   const scroll = h('div', 'fh-table-scroll')
   const spacer = h('div', 'fh-table-spacer')
   scroll.append(spacer)
-  body.append(search, cols, empty, scroll)
-  el.append(head, body)
-  root.append(el)
+  el.append(searchBox, bar, cols, skeleton, empty, scroll)
+  body.append(el)
 
   let sortKey: TableKey = 'callsign'
   let desc = false
   let query = ''
-  let collapsed = false
   let selected: string | null = null
-  let lastCopyMs = -Infinity
+  let nextRefreshMs = -Infinity // refresh at the first update()
+  let applyAtMs: number | null = null // a refresh is showing; the new rows land at this time
+  let isReady = false
   let total = 0
   let viewH = 0
   let list: FleetEntry[] = [] // filtered + sorted Rows
@@ -251,19 +309,16 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
   const slots: Slot[] = []
   let hoverSlot = -1
   let hoverHex: string | null = null
-  let shownTotal = ''
-  let shownOnScreen = ''
+  let shownCounts = ''
 
   function setText(node: HTMLElement, text: string): void {
     if (node.textContent !== text) node.textContent = text
   }
 
   function paintCounts(): void {
-    const t = `Total aircraft: ${grouped(total)}`
     const q = query.trim() === '' ? '' : ` · ${grouped(Math.max(count, 0))} match`
-    const s = `On screen: ${grouped(snap.length)}${q}`
-    if (t !== shownTotal) totalEl.textContent = shownTotal = t
-    if (s !== shownOnScreen) shownEl.textContent = shownOnScreen = s
+    const t = isReady ? `${grouped(snap.length)} in view · ${grouped(total)} tracked${q}` : ''
+    if (t !== shownCounts) counts.textContent = shownCounts = t
   }
 
   function paintHeader(): void {
@@ -282,7 +337,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
     const cells: HTMLSpanElement[] = []
     const text: Text[] = []
     for (const c of COLUMNS) {
-      const cell = h('span', c.num ? 'fh-num' : '')
+      const cell = h('span', c.num ? 'fh-num' : c.key === 'callsign' ? 'fh-cs' : c.key === 'type' ? 'fh-type' : '')
       const t = document.createTextNode('')
       cell.append(t)
       row.append(cell)
@@ -290,7 +345,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
       text.push(t)
     }
     spacer.append(row)
-    return { el: row, cells, text, shown: new Array<string>(NCOL).fill(''), row: -1, hex: '', sel: false, emerg: false }
+    return { el: row, cells, text, shown: new Array<string>(NCOL).fill(''), row: -1, hex: '', sel: false, emerg: false, stale: false }
   }
 
   function write(s: Slot, c: number, t: string): void {
@@ -311,21 +366,22 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
       if (s.row === -1) s.el.hidden = false
       s.row = i
       s.el.style.transform = `translateY(${i * ROW_H}px)`
-      s.el.classList.toggle('fh-odd', (i & 1) === 1)
     }
     if (s.hex !== e.hex) {
       s.hex = e.hex
       write(s, 0, flagOf(e.hex))
     }
-    for (let c = 1; c < NCOL; c++) write(s, c, cellText(e, c))
+    for (let c = 1; c < NCOL; c++) write(s, c, cellText(e, COLUMNS[c].key))
     const sel = e.hex === selected
     if (sel !== s.sel) s.el.classList.toggle('fh-sel', (s.sel = sel))
     const emerg = isEmergencySquawk(e.info?.squawk ?? null)
-    if (emerg !== s.emerg) s.cells[4].classList.toggle('fh-emerg', (s.emerg = emerg))
+    if (emerg !== s.emerg) s.el.classList.toggle('fh-emerg', (s.emerg = emerg))
+    // Signal lost: two of its usual update gaps without a position (staleS is three), never under the card's threshold.
+    const stale = e.ageS > Math.max(STALE_AGE_S, (2 / 3) * e.staleS)
+    if (stale !== s.stale) s.el.classList.toggle('fh-stale', (s.stale = stale))
   }
 
   function render(): void {
-    if (collapsed) return
     const { first, end } = windowRange(scroll.scrollTop, viewH, ROW_H, count, OVERSCAN)
     if (end - first > slots.length) {
       // More rows fit than there are elements: grow, and forget the old row → element mapping (it was i % old size).
@@ -345,7 +401,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
     }
   }
 
-  /** Filter + sort the last copy and redraw. Runs on each copy (≤ 1 Hz) and at once on a sort or search change. */
+  /** Filter + sort the last copy and redraw. Runs on each refresh and at once on a sort or search change. */
   function refilter(): void {
     list = sortRows(filterRows(snap, query), sortKey, desc)
     if (query.trim() === '') snap = list as Row[] // same rows, now in display order
@@ -353,9 +409,14 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
       count = list.length
       spacer.style.height = `${count * ROW_H}px`
     }
-    const none = count === 0
+    skeleton.hidden = isReady
+    const none = isReady && count === 0
     empty.hidden = !none
-    if (none) setText(empty, query.trim() === '' ? 'No aircraft on screen' : 'No match')
+    if (none) {
+      const searching = query.trim() !== ''
+      setText(emptyTitle, searching ? 'No match' : 'No aircraft in view')
+      setText(emptyHint, searching ? 'Try a callsign, registration, type or squawk.' : 'Zoom out or move the map to find traffic.')
+    }
     paintCounts()
     render()
   }
@@ -386,10 +447,17 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
     if (key === sortKey) desc = !desc
     else {
       sortKey = key
-      desc = false
+      desc = key === 'alt' || key === 'speed' // numbers: highest first
     }
     paintHeader()
     refilter()
+  }
+
+  /** Restart the countdown ring (a CSS animation over REFRESH_MS). */
+  function restartRing(): void {
+    ring.style.animation = 'none'
+    void ring.getBoundingClientRect() // reflow, so the animation starts over
+    ring.style.animation = ''
   }
 
   function slotOf(target: EventTarget | null): Slot | null {
@@ -406,17 +474,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
     opts.onHover(hex)
   }
 
-  toggle.onclick = () => {
-    collapsed = !collapsed
-    el.classList.toggle('fh-collapsed', collapsed)
-    toggle.textContent = collapsed ? '◂' : '▸'
-    toggle.title = collapsed ? 'Show the aircraft list' : 'Hide the aircraft list'
-    toggle.setAttribute('aria-expanded', String(!collapsed))
-    if (collapsed) {
-      hoverSlot = -1
-      emitHover()
-    } else refilter()
-  }
+  refreshBtn.addEventListener('click', () => (nextRefreshMs = -Infinity))
   search.addEventListener('input', () => {
     query = search.value
     refilter()
@@ -435,6 +493,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
   // ponytail: rows are mouse-only (header buttons and the search box are keyboard-reachable). Upgrade: a roving
   // tabindex on the recycled rows plus Up/Down/Enter handling, scrolling the list to keep the focused row in view.
   scroll.addEventListener('click', (ev) => {
+    if (applyAtMs !== null) return // refreshing: the row under the cursor is about to change
     const s = slotOf(ev.target)
     if (s !== null) opts.onSelect(s.hex)
   })
@@ -447,7 +506,7 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
     hoverSlot = -1
     emitHover()
   })
-  // The viewport height changes with the window and on expand; reading it here keeps layout reads out of render().
+  // The viewport height changes with the window and when the panel opens; reading it here keeps layout reads out of render().
   const resize = new ResizeObserver(() => {
     viewH = scroll.clientHeight
     render()
@@ -458,22 +517,39 @@ export function mountTable(root: HTMLElement, opts: TableOpts): TableHandle {
   refilter()
 
   return {
-    update(all, onScreen, selectedHex) {
+    update(all, onScreen, selectedHex, ready) {
       if (selectedHex !== selected) {
         selected = selectedHex
         paintSelection()
       }
       const now = performance.now()
-      if (now - lastCopyMs < RESORT_MS) return
-      lastCopyMs = now
-      copy(all, onScreen)
-      if (collapsed) paintCounts()
-      else refilter()
+      if (applyAtMs !== null) {
+        if (now < applyAtMs) return
+        applyAtMs = null
+        el.classList.remove('fh-refreshing')
+        isReady = ready
+        copy(all, onScreen)
+        refilter()
+        return
+      }
+      if (ready && !isReady) nextRefreshMs = -Infinity // the first data: at once
+      if (now < nextRefreshMs) return
+      nextRefreshMs = now + REFRESH_MS
+      restartRing()
+      if (!ready) return
+      // Show the refresh (dimmed, clicks ignored) for a moment, then land the new rows (above, at applyAtMs).
+      applyAtMs = now + (isReady ? REFRESHING_MS : 0)
+      el.classList.add('fh-refreshing')
+    },
+    refresh() {
+      nextRefreshMs = -Infinity
     },
     destroy() {
       resize.disconnect()
       if (hoverHex !== null) opts.onHover(null)
       el.remove()
+      counts.remove()
+      refreshBtn.remove()
     },
   }
 }

@@ -1,12 +1,9 @@
 // client/ui/detail.ts
-// Left-hand detail panel for the selected aircraft: callsign and hex, photo with credit, identity, then Spatial,
-// Signal, FMS SEL and Wind sections. detailRows() is the pure text; mountDetail() builds the DOM once and then only
-// rewrites the value texts, at most 4 times a second.
+// The selected aircraft's details as pure text: callsign and hex, identity, then Spatial, Signal, FMS SEL and Wind
+// sections. flightCard.ts shows them (expanded) under its photo.
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Quality, ReadsbAircraft } from '../../shared/types.ts'
 import type { RenderState } from '../types.ts'
-import type { PhotoCache } from './photo.ts'
-import './detail.css'
 
 /** Country and airline for one aircraft, found by the caller (B-A wires countryOf/flagEmoji and airlineOf). */
 export interface Lookup {
@@ -28,17 +25,6 @@ export interface DetailSection {
   id: SectionId
   title: string // '' for the header and the identity block (not collapsible)
   rows: DetailRow[]
-}
-
-export interface DetailOpts {
-  onClose(): void
-  photos?: PhotoCache
-  lookup(hex: string, callsign: string | null): Lookup
-}
-
-export interface DetailHandle {
-  update(s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null): void
-  destroy(): void
 }
 
 export const UPDATE_MS = 250 // at most 4 text updates a second; a new selection shows at once
@@ -178,185 +164,4 @@ export function detailRows(s: RenderState | null, raw: ReadsbAircraft | null, in
       row('tat', 'TAT', num(raw?.tat) ? `${int(raw.tat)} °C` : null),
     ] },
   ]
-}
-
-const NO_LOOKUP: Lookup = { country: null, airline: null }
-
-function h(tag: string, className = '', text = ''): HTMLElement {
-  const el = document.createElement(tag)
-  el.className = className
-  el.textContent = text
-  return el
-}
-
-/**
- * Mounts the (hidden) panel. update() may be called every frame: the text is rewritten at most every UPDATE_MS, with a
- * trailing render so the newest state always lands. A new selection renders at once and asks photos (once per hex).
- * Values go in with textContent only: callsigns and photo credits come from upstream and are never parsed as HTML.
- */
-export function mountDetail(root: HTMLElement, opts: DetailOpts): DetailHandle {
-  const panel = h('aside', 'fh-detail')
-  panel.hidden = true
-  panel.setAttribute('aria-label', 'Selected aircraft')
-
-  const head = h('div', 'fh-detail-head')
-  const callsign = h('span', 'fh-detail-callsign')
-  const hexEl = h('span', 'fh-detail-hex')
-  const copy = h('button', 'fh-detail-btn fh-detail-copy', 'Copy link')
-  copy.setAttribute('type', 'button')
-  copy.title = 'Copy a link that opens this aircraft'
-  const close = h('button', 'fh-detail-btn fh-detail-close', '×')
-  close.setAttribute('type', 'button')
-  close.setAttribute('aria-label', 'Close')
-  close.title = 'Close (back to the map)'
-  head.append(callsign, hexEl, h('span', 'fh-detail-spacer'), copy, close)
-
-  // Photo: a 3:2 box (the API's thumbnails are 3:2) so the layout does not jump when the image arrives.
-  const figure = h('figure', 'fh-detail-photo')
-  const imgLink = h('a', 'fh-detail-imglink')
-  const img = h('img', 'fh-detail-img')
-  img.setAttribute('alt', 'Aircraft photo')
-  img.hidden = true
-  imgLink.append(img)
-  const note = h('span', 'fh-detail-note')
-  const credit = h('a', 'fh-detail-credit')
-  credit.hidden = true
-  for (const a of [imgLink, credit]) {
-    a.setAttribute('target', '_blank')
-    a.setAttribute('rel', 'noopener')
-  }
-  figure.append(imgLink, note, credit)
-  figure.hidden = opts.photos === undefined
-  panel.append(head, figure)
-
-  // Sections and rows, built once from the fixed shape of detailRows().
-  const slots = new Map<string, { row: HTMLElement; value: HTMLElement; text: string; alert: boolean; hint: string | null }>()
-  slots.set('callsign', { row: callsign, value: callsign, text: '', alert: false, hint: null })
-  slots.set('hex', { row: hexEl, value: hexEl, text: '', alert: false, hint: null })
-  for (const sec of detailRows(null, null, null, NO_LOOKUP)) {
-    if (sec.id === 'header') continue
-    let box: HTMLElement
-    if (sec.title === '') box = h('div', 'fh-detail-section')
-    else {
-      box = h('details', 'fh-detail-section')
-      ;(box as HTMLDetailsElement).open = true
-      box.append(h('summary', 'fh-detail-title', sec.title))
-    }
-    for (const r of sec.rows) {
-      const rowEl = h('div', 'fh-detail-row')
-      rowEl.setAttribute('data-key', r.key)
-      const value = h('span', 'fh-detail-value')
-      rowEl.append(h('span', 'fh-detail-label', r.label), value)
-      box.append(rowEl)
-      slots.set(r.key, { row: rowEl, value, text: '', alert: false, hint: null })
-    }
-    panel.append(box)
-  }
-  root.append(panel)
-
-  let curS: RenderState | null = null // newest arguments of update(); kept in three variables so a frame allocates nothing
-  let curRaw: ReadsbAircraft | null = null
-  let curInfo: AircraftInfo | null = null
-  let shown: string | null = null // hex on screen
-  let lastMs = -Infinity
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let lk: Lookup = NO_LOOKUP
-  let lkKey = ''
-  let destroyed = false
-
-  function showPhoto(hex: string): void {
-    img.hidden = true
-    img.removeAttribute('src')
-    credit.hidden = true
-    note.textContent = 'Loading photo…'
-    opts.photos?.get(hex).then((p) => {
-      if (destroyed || shown !== hex) return // the selection moved on
-      if (p === null) {
-        note.textContent = opts.photos?.failed(hex) ? 'Photo unavailable' : 'No photo'
-        return
-      }
-      note.textContent = ''
-      img.setAttribute('src', p.thumbUrl)
-      img.hidden = false
-      imgLink.setAttribute('href', p.link)
-      credit.setAttribute('href', p.link)
-      credit.textContent = `Image © ${p.photographer}`
-      credit.hidden = false
-    })
-  }
-  img.addEventListener('error', () => {
-    img.hidden = true
-    credit.hidden = true
-    note.textContent = 'Photo unavailable'
-  })
-
-  function render(): void {
-    if (timer !== null) clearTimeout(timer)
-    timer = null
-    lastMs = Date.now()
-    const s = curS
-    const raw = curRaw
-    const info = curInfo
-    const hex = hexOf(s, raw, info)
-    if (hex === null) {
-      panel.hidden = true
-      shown = null
-      return
-    }
-    panel.hidden = false
-    if (hex !== shown) {
-      shown = hex
-      showPhoto(hex)
-    }
-    const cs = callsignOf(s, raw, info)
-    const key = `${hex}/${cs}`
-    if (key !== lkKey) {
-      lk = opts.lookup(hex, cs)
-      lkKey = key
-    }
-    for (const sec of detailRows(s, raw, info, lk)) {
-      for (const r of sec.rows) {
-        const slot = slots.get(r.key)
-        if (slot === undefined) continue
-        if (slot.text !== r.value) slot.value.textContent = slot.text = r.value
-        if (slot.alert !== r.alert) slot.row.classList.toggle('fh-alert', (slot.alert = r.alert))
-        if (slot.hint !== r.hint) slot.row.title = (slot.hint = r.hint) ?? ''
-      }
-    }
-  }
-
-  close.addEventListener('click', () => opts.onClose())
-  copy.addEventListener('click', () => {
-    if (shown === null) return
-    // The address bar holds the whole view (camera, orbit, toggles: urlState.ts) once it names this aircraft.
-    const url = new URLSearchParams(location.search).get('hex') === shown ? location.href : shareLink(location.origin, shown)
-    const done = (): void => {
-      copy.textContent = 'Copied'
-      setTimeout(() => (copy.textContent = 'Copy link'), 1500)
-    }
-    // The async clipboard needs a secure context (https or localhost); elsewhere the user copies from a prompt.
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link', url))
-    else window.prompt('Copy this link', url)
-  })
-
-  return {
-    update(s, raw, info) {
-      if (destroyed) return
-      curS = s
-      curRaw = raw
-      curInfo = info
-      const hex = hexOf(s, raw, info)
-      if (hex !== shown) return render() // selection changed (or cleared): at once
-      if (hex === null) return
-      const wait = lastMs + UPDATE_MS - Date.now()
-      if (wait <= 0) render()
-      else if (timer === null) timer = setTimeout(render, wait)
-    },
-    destroy() {
-      destroyed = true
-      if (timer !== null) clearTimeout(timer)
-      timer = null
-      panel.remove()
-    },
-  }
 }

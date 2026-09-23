@@ -1,0 +1,195 @@
+/* client/ui/rail.css */
+/* The tool rail (right edge) and its panel (beside it; a bottom sheet on phones). */
+.fh-rail {
+  position: absolute;
+  z-index: 20;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  pointer-events: auto;
+}
+
+.fh-rail-sep {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--fh-hairline);
+}
+
+/* The state dot sits on the button's corner. */
+.fh-ibtn-dot {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--fh-glass-strong);
+}
+
+.fh-ibtn-dot[data-state='live'] {
+  animation: none;
+}
+
+/* Busy: a thin spinning arc around the button. */
+.fh-ibtn.fh-busy::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1.5px solid transparent;
+  border-top-color: var(--fh-accent);
+  border-radius: 9px;
+  animation: fh-rot 1s linear infinite;
+  pointer-events: none;
+}
+
+/* Tooltips to the left of the rail, only while no panel is open (they would cover it). */
+.fh-rail .fh-ibtn[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: var(--fh-glass-strong);
+  border: 1px solid var(--fh-hairline);
+  color: var(--fh-text);
+  font: 12px/1.3 var(--fh-font);
+  white-space: pre;
+  pointer-events: none;
+  box-shadow: var(--fh-shadow);
+}
+
+.fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after {
+  display: none;
+}
+
+.fh-panel {
+  position: absolute;
+  z-index: 19;
+  top: 12px;
+  right: 64px;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+  pointer-events: auto;
+  animation: fh-panel-in var(--fh-fast) var(--fh-ease);
+}
+
+.fh-panel[hidden] {
+  display: none;
+}
+
+.fh-panel.fh-wide {
+  width: 440px;
+}
+
+@keyframes fh-panel-in {
+  from { opacity: 0; transform: translateX(8px); }
+}
+
+.fh-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 44px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--fh-hairline);
+}
+
+.fh-panel-icon {
+  display: grid;
+  color: var(--fh-accent);
+}
+
+.fh-panel-title {
+  margin: 0;
+  font: 600 13px/1 var(--fh-font);
+  letter-spacing: 0.01em;
+}
+
+.fh-panel-extras {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.fh-panel-extra {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fh-panel-extra[hidden],
+.fh-panel-body[hidden] {
+  display: none;
+}
+
+.fh-panel-bodies {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.fh-panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Panel tooltips (the close button) sit below it. */
+.fh-panel-head .fh-ibtn[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--fh-glass-strong);
+  border: 1px solid var(--fh-hairline);
+  color: var(--fh-text);
+  font: 12px/1.3 var(--fh-font);
+  white-space: pre;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Phones: the panel is a sheet across the bottom, the rail stays on the right. */
+@media (max-width: 640px) {
+  .fh-rail {
+    top: 8px;
+    right: 8px;
+  }
+
+  .fh-panel,
+  .fh-panel.fh-wide {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+    max-height: 62%;
+    animation-name: fh-sheet-in;
+  }
+
+  .fh-rail .fh-ibtn[data-tip]:hover::after {
+    display: none;
+  }
+}
+
+@keyframes fh-sheet-in {
+  from { opacity: 0; transform: translateY(12px); }
+}

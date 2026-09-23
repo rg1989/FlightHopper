@@ -1,0 +1,59 @@
+/* client/ui/splash.css */
+.fh-splash {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: radial-gradient(ellipse at 50% 40%, #16202f 0%, #080b11 70%);
+  color: var(--fh-text);
+  font: 13px/1.4 var(--fh-font);
+  transition: opacity 400ms var(--fh-ease);
+}
+
+.fh-splash.fh-out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fh-splash-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(90, 169, 255, 0.28), rgba(90, 169, 255, 0.08));
+  border: 1px solid rgba(90, 169, 255, 0.35);
+  color: var(--fh-accent);
+}
+
+.fh-splash-mark .fh-icon {
+  transform: rotate(45deg);
+}
+
+.fh-splash-name {
+  font: 700 20px/1.2 var(--fh-font);
+  letter-spacing: 0.02em;
+}
+
+.fh-splash .fh-spin {
+  margin-top: 10px;
+}
+
+.fh-splash-text {
+  min-height: 18px;
+  color: var(--fh-muted);
+}
+
+.fh-splash.fh-failed .fh-splash-text {
+  max-width: min(560px, 90vw);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 93, 93, 0.12);
+  color: #ffc9c9;
+  text-align: center;
+  white-space: pre-wrap;
+}

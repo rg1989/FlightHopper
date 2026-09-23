@@ -37,18 +37,22 @@ import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
-import { mountAttribution, mountBanner } from './ui/banner.ts'
-import { mountDetail } from './ui/detail.ts'
+import { mountBanner } from './ui/banner.ts'
 import type { Lookup } from './ui/detail.ts'
-import { mountHud } from './ui/hud.ts'
+import { mountFlightCard } from './ui/flightCard.ts'
+import { icon } from './ui/icons.ts'
+import { mountInfoPanel, type InfoPanelHandle } from './ui/info.ts'
 import { mountLegend } from './ui/legend.ts'
+import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
-import { mountImageryBadge } from './ui/imageryBadge.ts'
-import { flightCredit, mountSourceBadge } from './ui/sourceBadge.ts'
+import { badgeView } from './ui/imageryBadge.ts'
+import { flightCredit, mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readView, writeUrl } from './ui/urlState.ts'
-import { mountTable } from './ui/table.ts'
+import { mountTable, type TableHandle } from './ui/table.ts'
+import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
+import './ui/theme.css'
 import './ui/layout.css'
 
 const POLL_MS = 1000 // view and chase both poll at 1 Hz; TrackRegistry's pollPeriodS says the same
@@ -122,6 +126,12 @@ export function entriesIn(entries: readonly FleetEntry[], r: RectDeg | null, out
     if (e.hex === keepHex || (r !== null && containsDeg(r, e.lat, e.lon))) out.push(e)
   }
   return out
+}
+
+/** A count short enough for a badge: 7, 842, 1.2k, 12k. */
+export function compactCount(n: number): string {
+  if (n < 1000) return String(n)
+  return n < 10_000 ? `${(Math.floor(n / 100) / 10).toFixed(1)}k` : `${Math.floor(n / 1000)}k`
 }
 
 /** Flag emoji of the country the ICAO address is allocated to; '' when none (non-ICAO '~' address, unallocated block). */
@@ -239,7 +249,7 @@ function div(className: string, parent: HTMLElement): HTMLDivElement {
  * Runways and the model are optional: if their files fail to load, the app runs without them. createViewer failing
  * (terrain unreachable) rejects.
  */
-export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ stop(): void }> {
+export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { onFirstData?(): void } = {}): Promise<{ stop(): void }> {
   const params = readParams(location.search)
   const sunParam = parseSunParam(location.search) // ?sun=<ISO> fixes the sun's time, ?sun=+6h shifts it (demos)
   // The localStorage getter and getItem both throw where storage is blocked: then only the URL and the defaults count.
@@ -281,7 +291,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       })
     : null
 
-  let selected: string | null = params.hex // ?hex= is chased from the start; the camera engages at its first state
+  // Selected = focused: its flight card shows, the map stays top-down. Chasing = the 3-D chase view of the selected
+  // aircraft (the card's Chase button; ?chase=1). The chase camera engages at its first state.
+  let selected: string | null = params.hex
+  let chasing = selected !== null && readView(location.search).chase
   let chased: RenderState | null = null // the selected aircraft as drawn in the last frame that had it
   let groundM: number | null = null // the ground drawn under it (lag-corrected), null while unknown
   // The last terrain readings under the aircraft and under the chase camera, with the points they were read at.
@@ -289,7 +302,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   // 50 m of that point: about the first 0.5 s of a run at 180 kt. Reset on each selection.
   const acGround = groundMemo()
   const camGround = groundMemo()
-  let relatchPending = selected !== null // a new selection moves a flat map's plane at its first state (D4)
+  let relatchPending = chasing // a new chase moves a flat map's plane at its first state (D4)
   let tf: TerrainFrame // this frame's exaggeration: topo.update() writes it first in every frame
   let chaseRaw: ReadsbAircraft | null = null // newest full upstream object and info of the selected aircraft
   let chaseInfo: AircraftInfo | null = null
@@ -307,18 +320,48 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   const ui = div('fh-ui', root)
-  ui.dataset.mode = selected === null ? 'browse' : 'chase'
-  const right = div('fh-right', ui) // the scene toggles, then the table above the credits
-  const toggles = mountSceneToggles(right, { prefs, onChange: (next) => setPrefs(next) })
-  const imageryBadge = mountImageryBadge(toggles.el, imageryStatus(cfg))
-  const hud = mountHud(ui)
+  ui.dataset.mode = chasing ? 'chase' : 'browse'
+  // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
+  let toggles!: SceneTogglesHandle
+  let table!: TableHandle
+  let statusPanel!: StatusPanelHandle
+  let info!: InfoPanelHandle
+  let legend!: { destroy(): void }
+  const rail = mountRail(ui, [
+    { id: 'status', icon: 'status', label: 'Live status', panel: { title: 'Status', mount: (b) => (statusPanel = mountStatusPanel(b)) } },
+    { id: 'aircraft', icon: 'list', label: 'Aircraft in view', group: 1, panel: {
+      title: 'Aircraft', wide: true,
+      mount: (b, head) => (table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })),
+    } },
+    { id: 'scene', icon: 'layers', label: 'Scene: terrain, sun, buildings', group: 1, panel: {
+      title: 'Scene', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
+    } },
+    { id: 'legend', icon: 'altitude', label: 'Altitude colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
+    { id: 'info', icon: 'info', label: 'Controls and credits', group: 2, panel: { title: 'About', mount: (b) => (info = mountInfoPanel(b)) } },
+    { id: 'fullscreen', icon: 'maximize', label: 'Full screen', group: 2, action: () => toggleFullscreen() },
+  ], (id) => {
+    if (id === 'aircraft') table.refresh() // opening the list shows it fresh
+  })
+  const imagery0 = badgeView(imageryStatus(cfg))
+  statusPanel.setImagery(imagery0.text, imagery0.state)
+  const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos: new PhotoCache(), lookup: lookupFor })
   const banner = mountBanner(ui)
-  const detail = mountDetail(ui, { onClose: () => select(null), photos: new PhotoCache(), lookup: lookupFor })
-  const table = mountTable(right, { onSelect: (hex) => select(hex), onHover: (hex) => (tableHover = hex), flagOf })
-  const credits = mountAttribution(right, attributionFor(entry, null))
-  const sourceBadge = mountSourceBadge(right) // prepended: heads the column
   let creditSource: SourceKind | null = null
-  const legend = mountLegend(div('fh-legend-root', ui))
+  info.setCredits(attributionFor(entry, null))
+  let firstData = false
+  let lastBadgeMs = -Infinity
+  const toggleFullscreen = (): void => {
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else void document.documentElement.requestFullscreen?.()
+  }
+  const onFullscreen = (): void => {
+    const b = rail.button('fullscreen')
+    const full = document.fullscreenElement !== null
+    b.replaceChildren(icon(full ? 'minimize' : 'maximize'))
+    b.dataset.tip = full ? 'Exit full screen' : 'Full screen'
+    b.setAttribute('aria-label', b.dataset.tip)
+  }
+  document.addEventListener('fullscreenchange', onFullscreen)
   const runways = addRunways(viewer, airports)
   const buildings = new Buildings(viewer) // chase only: update() gets no focus in browse
   buildings.setGlass(prefs.glass)
@@ -330,11 +373,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   if (cfg.imagery === 'esri' && day) {
     eoxOnEsriFailure(viewer.imageryLayers, day, (eox, why) => {
       sun.setDay(eox)
-      imageryBadge.set({ source: 'eox', fallback: why })
+      const v = badgeView({ source: 'eox', fallback: why })
+      statusPanel.setImagery(v.text, v.state)
     })
   }
   sun.attachModel(model?.model ?? null)
-  sun.setEnabled(selected !== null && prefs.light)
+  sun.setEnabled(chasing && prefs.light)
   // VITE_MAP_URL: another tile server ({z}/{x}/{y}.png is appended), as the OpenStreetMap tile policy asks to allow.
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
@@ -370,7 +414,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const urlView = readView(location.search)
   const home = airports.find((a) => a.ident === (params.airport ?? DEFAULT_AIRPORT)) ?? airports[0]
   const start = urlView.at ?? (home ? { lat: home.lat, lon: home.lon, heightKm: BROWSE_HEIGHT_M / 1000 } : null)
-  if (selected === null) enterBrowse(viewer, start, { flyS: 0, heightM: start === null ? undefined : start.heightKm * 1000 })
+  if (!chasing) enterBrowse(viewer, start, { flyS: 0, heightM: start === null ? undefined : start.heightKm * 1000 })
   else {
     map.show = false
     // Over the chased aircraft's last position (?at=) so the first view poll already holds it and its traffic.
@@ -387,47 +431,71 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     const heightKm = cam.height / 1000
     // Browse: the point under the (top-down) camera. Chase: the chased aircraft; before its first state, the camera.
     const here = { lat: CesiumMath.toDegrees(cam.latitude), lon: CesiumMath.toDegrees(cam.longitude), heightKm }
-    const at = selected === null ? (isBrowsing(viewer) ? here : null) : chased !== null ? { lat: chased.lat, lon: chased.lon, heightKm } : here
+    const at = !chasing ? (isBrowsing(viewer) ? here : null) : chased !== null ? { lat: chased.lat, lon: chased.lon, heightKm } : here
     const o = chaseCam.orbit
-    const next = writeUrl(location.search, { at, hex: selected, cam: { headingDeg: o.headingOffsetDeg, pitchDeg: o.pitchDeg, rangeM: o.rangeM }, prefs })
+    const orbit = chasing ? { headingDeg: o.headingOffsetDeg, pitchDeg: o.pitchDeg, rangeM: o.rangeM } : null
+    const next = writeUrl(location.search, { at, hex: selected, chase: chasing, cam: orbit, prefs })
     if (next !== location.search) history.replaceState(history.state, '', `${location.pathname}${next}${location.hash}`)
   }
 
-  /** Browse ↔ chase. The camera leaves browse at once and engages behind the aircraft at its first state. */
+  /**
+   * Focus an aircraft (its card; the map stays as it is), switch to another one (a chase stays a chase, on the new
+   * aircraft), or clear the selection (null: a chase goes back to the map first).
+   */
   function select(hex: string | null): void {
     if (hex === selected) return
-    const last = chased
-    chaseCam.release() // hands the mouse back to Cesium's controls; the next chase starts behind its aircraft
+    if (hex === null && chasing) setChase(false) // back to the map over the last chased position
+    chaseCam.release() // the next chase starts behind its aircraft
     selected = hex
     chased = null
     groundM = null
     acGround.ok = camGround.ok = false // the next readings are under another aircraft
-    relatchPending = hex !== null
+    relatchPending = chasing && hex !== null
     chaseRaw = null
     chaseInfo = null
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     snapClock = hex !== null
     arrivalAgesS.length = 0
+    seedSample = null
     if (hex !== null) {
       const seed = fleet.newest(hex)
       seedSample = seed ?? null
       if (seed) registry.ingest([seed])
-      exitBrowse(viewer) // restores tilt and zoom limits; nothing when already chasing
+    }
+  }
+
+  /** A row of the list: focus that aircraft and, on the map, fly over it at the same zoom (it may be off-screen). */
+  function pickFromList(hex: string): void {
+    select(hex)
+    const e = fleet.get(hex)
+    if (!chasing && e !== undefined) enterBrowse(viewer, e, { heightM: viewer.camera.positionCartographic.height })
+  }
+
+  /** The selected aircraft in the 3-D chase view (on), or back to the top-down map over it (off). */
+  function setChase(on: boolean): void {
+    if (on === chasing || (on && selected === null)) return
+    chasing = on
+    chaseCam.release() // hands the mouse back to Cesium's controls; a chase starts behind its aircraft
+    if (on) {
+      exitBrowse(viewer) // restores tilt and zoom limits
       map.show = false
+      relatchPending = true
+      acGround.ok = camGround.ok = false
     } else {
       map.show = true
-      enterBrowse(viewer, last) // over the last chased position, else where the camera is
+      const e = selected === null ? undefined : fleet.get(selected)
+      enterBrowse(viewer, chased ?? (e === undefined ? null : e)) // over the aircraft, else where the camera is
     }
-    sun.setEnabled(hex !== null && prefs.light) // chase only (D9): browse stays the unlit street map
-    ui.dataset.mode = hex === null ? 'browse' : 'chase'
+    sun.setEnabled(on && prefs.light) // chase only (D9): browse stays the unlit street map
+    ui.dataset.mode = on ? 'chase' : 'browse'
   }
 
   /** Every scene-toggle change, from a button or a key: apply it, store it, show it. */
   function setPrefs(next: ScenePrefs): void {
     if (next.topo !== prefs.topo) topo.set(next.topo, performance.now(), relHFor(chased, groundM, topo.relHM, airports))
     prefs = next
-    sun.setEnabled(selected !== null && next.light)
+    sun.setEnabled(chasing && next.light)
     buildings.setGlass(next.glass)
     writeScenePrefs(next, store)
     toggles.update(next)
@@ -460,14 +528,24 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       }
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
-    fleetLayer.update(all, selected, tableHover ?? mapHover, s !== null && model !== null)
+    fleetLayer.update(all, selected, tableHover ?? mapHover, chasing && s !== null && model !== null)
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
-    table.update(all, entriesIn(all, viewRectangleDeg(viewer), onScreen, selected), selected) // re-sorts ≤ 1 Hz itself
+    const inView = entriesIn(all, viewRectangleDeg(viewer), onScreen, selected)
+    table.update(all, inView, selected, status !== NO_STATUS) // refreshes every 10 s itself
+    if (now - lastBadgeMs > 1000) {
+      lastBadgeMs = now
+      rail.setBadge('aircraft', status === NO_STATUS ? null : compactCount(inView.length))
+    }
+    if (!firstData && status !== NO_STATUS) {
+      firstData = true
+      hooks.onFirstData?.()
+    }
     measure?.('fh:table', tTable)
     let clearanceM: number | null = null
     let sunWC = viewer.camera.positionWC // browse, or no state yet: the sun where the camera is
-    if (s !== null) {
+    if (s !== null && !chasing) chased = s // focused: where it is, for the table and a chase that starts
+    if (s !== null && chasing) {
       if (relatchPending && !topo.animating) {
         relatchPending = false
         topo.relatch(relHFor(s, null, topo.relHM, airports)) // takes effect only while the map is flat
@@ -489,19 +567,23 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
     // time (D12): the server reports how far its clock is ahead of the upstream's.
     const st = sun.update(sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
-    buildings.setNight(selected !== null && prefs.light && st !== null ? st.night : 0) // the Sun's night, not the moon's
+    buildings.setNight(chasing && prefs.light && st !== null ? st.night : 0) // the Sun's night, not the moon's
     runways.update(tf)
-    buildings.update(selected === null ? null : chased, tf) // around the chased aircraft; hidden in browse
+    buildings.update(chasing ? chased : null, tf) // around the chased aircraft; hidden in browse
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
-    runways.setLight(selected !== null && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
+    runways.setLight(chasing && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
     // No state (before the first samples, pruned, or a gap > 2 min): the model goes; the camera stays put.
-    if (model) model.show = s !== null
-    hud.update(s, shown)
+    if (model) model.show = chasing && s !== null
+    toggles.setBusy(topo.animating)
+    toggles.setChasing(chasing)
     // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
-    detail.update(s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null))) // ≤ 4 Hz
-    banner.update(shown, s, selected !== null && api.ready)
-    sourceBadge.update(status === NO_STATUS ? null : shown, api.ready ? api.serverNowMs() : null)
+    card.update(selected, s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null)), shown, chasing) // ≤ 4 Hz
+    banner.update(shown)
+    const known = status === NO_STATUS ? null : shown
+    statusPanel.update(known, api.ready ? api.serverNowMs() : null)
+    rail.setDot('status', statusDot(known))
+    rail.setBusy('status', known === null || (known.pendingAreas ?? 0) > 0)
     syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
@@ -510,7 +592,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
 
   /** Centre and radius of the view poll: browse, around the visible map; else the chased aircraft, else the globe point at the canvas centre, else below the camera. */
   function viewCircle(): { lat: number; lon: number; nm: number } {
-    if (selected === null) {
+    if (!chasing) {
       const r = viewRectangleDeg(viewer)
       const c = r === null ? null : browseCircle(r)
       // A rectangle spanning every longitude (the globe, or a pole in view) says nothing by its centre: then the point
@@ -579,7 +661,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
-    if (status.source !== creditSource) credits.set(attributionFor(entry, (creditSource = status.source)))
+    if (status.source !== creditSource) info.setCredits(attributionFor(entry, (creditSource = status.source)))
     if (ok) failedPolls = 0
     else if (failedPolls++ === 0) console.warn('FlightHopper: poll failed:', (view as PromiseRejectedResult).reason)
     if (api.ready) {
@@ -610,6 +692,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
     const hex = fleetLayer.pick(e.position)
     if (hex !== null) select(hex)
+    else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
   }, ScreenSpaceEventType.LEFT_CLICK)
   // Hover over an icon: its callsign label and a pointer cursor. Picks at most every HOVER_PICK_MS, at the newest position.
   const mousePos = new Cartesian2()
@@ -635,10 +718,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') select(null)
-    else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
-    else if (selected !== null) {
-      const k = sceneKey(e) // the toggles belong to chase, like their buttons (D9, D11)
+    // Esc steps back one level: an open panel, then the chase (to the map), then the focus.
+    if (e.key === 'Escape') {
+      if (!rail.close()) {
+        if (chasing) setChase(false)
+        else select(null)
+      }
+    } else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
+    else {
+      const k = sceneKey(e) // T, L, X: they apply in the chase view (D9, D11), and can be set beforehand
       if (k !== null) setPrefs({ ...prefs, [k]: !prefs[k] })
     }
   }
@@ -654,12 +742,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
       bench?.destroy()
+      document.removeEventListener('fullscreenchange', onFullscreen)
       toggles.destroy()
-      hud.destroy()
       banner.destroy()
-      detail.destroy()
+      card.destroy()
       table.destroy()
       legend.destroy()
+      rail.destroy()
       ui.remove()
       chaseCam.release()
       exitBrowse(viewer)

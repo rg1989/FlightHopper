@@ -63,19 +63,18 @@ test('gradient: evenly spaced ticks, each tick in its altitude colour, sampled i
   assert.ok(g.split('%').length - 1 > 60, 'enough stops for the HSL path')
 })
 
-test('mountLegend: one element with a ground swatch, the bar and the tick labels at their positions', () => {
+test('mountLegend: a vertical scale (0 at the bottom), the tick labels at their heights, the ground swatch, a caption', () => {
   const { root } = mount()
-  assert.equal(root.children.length, 1)
+  assert.equal(root.children.length, 2)
   const el = root.children[0]
   assert.match(el.attrs['aria-label'], /altitude/i)
   const gnd = el.find('fh-legend-gnd') as El
-  assert.equal(gnd.textContent, 'GND')
   assert.equal(gnd.style.background, altitudeColor(null, true))
-  assert.equal((el.find('fh-legend-bar') as El).style.background, legendGradient())
+  assert.equal((el.find('fh-legend-unit') as El).textContent, 'On the ground')
+  assert.equal((el.find('fh-legend-bar') as El).style.background, legendGradient('to top'))
   const ticks = (el.find('fh-legend-ticks') as El).children
-  assert.deepEqual(ticks.map((t) => t.textContent), LEGEND_TICKS_FT.map(tickLabel))
-  assert.deepEqual(ticks.map((t) => t.style.left), LEGEND_TICKS_FT.map((_, i) => `${((i / 9) * 100).toFixed(2)}%`))
-  assert.equal((el.find('fh-legend-unit') as El).textContent, 'ft')
+  assert.deepEqual(ticks.map((t) => t.textContent), LEGEND_TICKS_FT.map((ft) => `${tickLabel(ft)} ft`))
+  assert.deepEqual(ticks.map((t) => t.style.bottom), LEGEND_TICKS_FT.map((_, i) => `${((i / 9) * 100).toFixed(2)}%`))
   assert.equal(el.style.pointerEvents, 'none', 'never blocks the map under it')
 })
 

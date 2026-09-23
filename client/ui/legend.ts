@@ -11,8 +11,8 @@ export function tickLabel(ft: number): string {
   return ft === LEGEND_TICKS_FT[LEGEND_TICKS_FT.length - 1] ? `${s}+` : s
 }
 
-/** The bar's CSS background: every tick at i/(n−1) of the width in its altitude colour, 8 samples per gap. */
-export function legendGradient(): string {
+/** The bar's CSS background: every tick at i/(n−1) of its length in its altitude colour, 8 samples per gap. */
+export function legendGradient(direction = 'to right'): string {
   const n = LEGEND_TICKS_FT.length - 1
   const stops: string[] = []
   for (let i = 0; i < n; i++) {
@@ -24,7 +24,7 @@ export function legendGradient(): string {
     }
   }
   stops.push(`${altitudeColor(LEGEND_TICKS_FT[n], false)} 100.00%`)
-  return `linear-gradient(to right, ${stops.join(', ')})`
+  return `linear-gradient(${direction}, ${stops.join(', ')})`
 }
 
 function el(tag: string, className: string, style: Partial<CSSStyleDeclaration>, text = ''): HTMLElement {
@@ -36,50 +36,52 @@ function el(tag: string, className: string, style: Partial<CSSStyleDeclaration>,
 }
 
 /**
- * The altitude colour key (ground swatch + gradient bar + ft ticks) appended to `root`. Inline styles, so it needs no
- * stylesheet; the caller positions `root`. It ignores the pointer, so the map under it stays draggable.
+ * The altitude colour key, for its panel: a vertical scale (40,000+ ft at the top, 0 at the bottom) with the tick
+ * labels beside it, the ground swatch under it and one line of explanation. Inline styles, so it needs no stylesheet.
  */
 export function mountLegend(root: HTMLElement): { destroy(): void } {
+  const n = LEGEND_TICKS_FT.length - 1
   const box = el('div', 'fh-legend', {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
+    display: 'grid',
+    gridTemplateColumns: '12px 1fr',
+    columnGap: '12px',
     boxSizing: 'border-box',
-    width: '100%',
-    maxWidth: '520px',
-    padding: '4px 8px 2px',
-    background: 'rgba(255, 255, 255, 0.88)',
-    color: '#1d1f24',
-    borderRadius: '4px',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
-    font: '10px/1.2 system-ui, sans-serif',
+    padding: '18px 16px 8px',
+    color: 'var(--fh-text)',
+    font: '12px/1 var(--fh-font)',
     pointerEvents: 'none',
     userSelect: 'none',
   })
   box.setAttribute('role', 'img')
   box.setAttribute('aria-label', 'Altitude colours: grey on the ground, then orange at 0 ft through yellow, green, cyan, blue and violet to magenta at 40,000 ft and above')
-  const gnd = el('span', 'fh-legend-gnd', {
-    flex: 'none',
-    padding: '1px 4px',
-    borderRadius: '2px',
-    background: altitudeColor(null, true),
-    color: '#fff',
-    fontWeight: '600',
-  }, 'GND')
-  const scale = el('div', 'fh-legend-scale', { flex: '1', minWidth: '0', padding: '0 16px 0 6px' })
-  const bar = el('div', 'fh-legend-bar', { height: '8px', borderRadius: '2px', background: legendGradient() })
-  const ticks = el('div', 'fh-legend-ticks', { position: 'relative', height: '13px', marginTop: '2px' })
-  const n = LEGEND_TICKS_FT.length - 1
+  const bar = el('div', 'fh-legend-bar', { height: '240px', borderRadius: '6px', background: legendGradient('to top') })
+  const ticks = el('div', 'fh-legend-ticks', { position: 'relative', height: '240px', color: 'var(--fh-muted)' })
   LEGEND_TICKS_FT.forEach((ft, i) => {
     ticks.append(el('span', 'fh-legend-tick', {
       position: 'absolute',
-      left: `${((i / n) * 100).toFixed(2)}%`,
-      transform: 'translateX(-50%)',
+      left: '0',
+      bottom: `${((i / n) * 100).toFixed(2)}%`,
+      transform: 'translateY(50%)',
       whiteSpace: 'nowrap',
-    }, tickLabel(ft)))
+      fontVariantNumeric: 'tabular-nums',
+    }, `${tickLabel(ft)} ft`))
   })
-  scale.append(bar, ticks)
-  box.append(gnd, scale, el('span', 'fh-legend-unit', { flex: 'none', alignSelf: 'flex-end', opacity: '0.7' }, 'ft'))
-  root.append(box)
-  return { destroy: () => box.remove() }
+  const gnd = el('span', 'fh-legend-gnd', {
+    width: '12px',
+    height: '12px',
+    marginTop: '14px',
+    borderRadius: '4px',
+    background: altitudeColor(null, true),
+  })
+  const gndText = el('span', 'fh-legend-unit', { marginTop: '14px', color: 'var(--fh-muted)', alignSelf: 'center' }, 'On the ground')
+  box.append(bar, ticks, gnd, gndText)
+  const caption = el('p', 'fh-legend-caption', { margin: '6px 16px 16px', color: 'var(--fh-muted)', fontSize: '12px', lineHeight: '1.4' },
+    'Each aircraft icon is coloured by its altitude.')
+  root.append(box, caption)
+  return {
+    destroy: () => {
+      box.remove()
+      caption.remove()
+    },
+  }
 }

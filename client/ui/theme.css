@@ -1,0 +1,283 @@
+/* client/ui/theme.css */
+/* Design tokens and the shared pieces every overlay uses: glass surface, square icon button, panel, switch, spinner,
+   skeleton, badge. One accent (blue) marks what is on; green/amber/red mark state. */
+:root {
+  --fh-glass: rgba(13, 17, 25, 0.8);
+  --fh-glass-strong: rgba(13, 17, 25, 0.92);
+  --fh-hairline: rgba(255, 255, 255, 0.09);
+  --fh-hover: rgba(255, 255, 255, 0.07);
+  --fh-press: rgba(255, 255, 255, 0.12);
+  --fh-text: #e9eef4;
+  --fh-muted: #8e9aab;
+  --fh-faint: #5d6878;
+  --fh-accent: #5aa9ff;
+  --fh-accent-soft: rgba(90, 169, 255, 0.16);
+  --fh-ok: #3ccf6e;
+  --fh-warn: #f2b53a;
+  --fh-err: #ff5d5d;
+  --fh-radius: 12px;
+  --fh-radius-sm: 8px;
+  --fh-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --fh-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --fh-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fh-fast: 150ms;
+}
+
+.fh-ui {
+  font: 13px/1.4 var(--fh-font);
+  color: var(--fh-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.fh-ui *,
+.fh-splash * {
+  box-sizing: border-box;
+}
+
+/* Panels are nearly opaque and not blurred: a backdrop blur over the globe costs a GPU pass on every frame it redraws,
+   which a large panel makes expensive. Small surfaces (rail, flight card, toast) add .fh-blur. */
+.fh-glass {
+  background: var(--fh-glass-strong);
+  border: 1px solid var(--fh-hairline);
+  border-radius: var(--fh-radius);
+  box-shadow: var(--fh-shadow);
+}
+
+.fh-glass.fh-blur {
+  background: var(--fh-glass);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+
+.fh-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Square icon button (36 px on the rail, 28 px inside panels). */
+.fh-ibtn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fh-muted);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease), color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-ibtn:hover {
+  background: var(--fh-hover);
+  color: var(--fh-text);
+}
+
+.fh-ibtn:active {
+  background: var(--fh-press);
+}
+
+.fh-ibtn[aria-expanded='true'],
+.fh-ibtn[aria-pressed='true'] {
+  background: var(--fh-accent-soft);
+  color: var(--fh-accent);
+}
+
+.fh-ibtn:focus-visible,
+.fh-switch:focus-visible,
+.fh-field:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-ibtn.fh-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.fh-ibtn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* A small count on a rail button. */
+.fh-badge {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--fh-accent);
+  box-shadow: 0 0 0 2px var(--fh-glass-strong);
+  color: #06111f;
+  font: 700 9.5px/15px var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  pointer-events: none;
+}
+
+.fh-badge[hidden] {
+  display: none;
+}
+
+/* State dot (live / replay / trouble). */
+.fh-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fh-faint);
+}
+
+.fh-dot[data-state='live'] {
+  background: var(--fh-ok);
+  box-shadow: 0 0 0 0 rgba(60, 207, 110, 0.55);
+  animation: fh-pulse 2.4s infinite;
+}
+
+.fh-dot[data-state='replay'] {
+  background: var(--fh-warn);
+}
+
+.fh-dot[data-state='trouble'] {
+  background: var(--fh-err);
+}
+
+.fh-dot[data-state='wait'] {
+  background: var(--fh-muted);
+}
+
+@keyframes fh-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(60, 207, 110, 0.5); }
+  70% { box-shadow: 0 0 0 7px rgba(60, 207, 110, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(60, 207, 110, 0); }
+}
+
+/* Spinner: a ring with a gap, turning. */
+.fh-spin {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--fh-accent);
+  border-radius: 50%;
+  animation: fh-rot 0.8s linear infinite;
+}
+
+.fh-spin.fh-lg {
+  width: 28px;
+  height: 28px;
+  border-width: 2.5px;
+}
+
+@keyframes fh-rot {
+  to { transform: rotate(360deg); }
+}
+
+/* Skeleton: a soft shimmer where content will be. */
+.fh-skel {
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.11) 50%, rgba(255, 255, 255, 0.05) 75%);
+  background-size: 200% 100%;
+  animation: fh-shimmer 1.3s linear infinite;
+}
+
+@keyframes fh-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Indeterminate progress bar (a band sliding across). */
+.fh-progress {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.fh-progress::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -40%;
+  width: 40%;
+  background: var(--fh-accent);
+  border-radius: 2px;
+  animation: fh-slide 0.9s var(--fh-ease) infinite;
+}
+
+@keyframes fh-slide {
+  to { left: 100%; }
+}
+
+/* On/off switch. */
+.fh-switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: transform var(--fh-fast) var(--fh-ease);
+}
+
+.fh-switch[aria-checked='true'] {
+  background: var(--fh-accent);
+}
+
+.fh-switch[aria-checked='true']::after {
+  transform: translateX(14px);
+}
+
+/* Text field (search). */
+.fh-field {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px 0 32px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: var(--fh-radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fh-text);
+  font: inherit;
+  outline: none;
+}
+
+.fh-field::placeholder {
+  color: var(--fh-faint);
+}
+
+/* A tooltip-like hint line under a heading. */
+.fh-muted {
+  color: var(--fh-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-ui *,
+  .fh-splash * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

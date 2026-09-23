@@ -1,40 +1,65 @@
 /* client/ui/sourceBadge.css */
-/* The data-source chip on top of the right column (sourceBadge.ts): a link to the source when it has a site. */
-.fh-source {
+/* The Status panel. */
+.fh-status-hero {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: none;
-  padding: 3px 9px;
-  border-radius: 4px;
-  background: rgba(8, 12, 18, 0.72);
-  color: #c9d3dd;
-  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-decoration: none;
-  white-space: nowrap;
-  pointer-events: auto;
+  gap: 12px;
+  padding: 14px 14px 10px;
 }
 
-.fh-source[hidden] {
+.fh-status-hero .fh-dot {
+  width: 10px;
+  height: 10px;
+}
+
+.fh-status-mode {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.fh-status-src[hidden] {
   display: none;
 }
 
-.fh-source::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #3fb950;
+.fh-status-link {
+  color: var(--fh-accent);
+  font-size: 12px;
+  text-decoration: none;
 }
 
-.fh-source[data-state='replay']::before {
-  background: #f0b429;
+.fh-status-link[href]:hover {
+  text-decoration: underline;
 }
 
-.fh-source[data-state='trouble'] {
-  color: #f0b429;
+.fh-status-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--fh-hairline);
+  font-size: 12px;
 }
 
-.fh-source[data-state='trouble']::before {
-  background: #f85149;
+.fh-status-rows dt {
+  color: var(--fh-muted);
+}
+
+.fh-status-rows dd {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: 0;
+  text-align: right;
+}
+
+.fh-status-rows .fh-spin {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+}
+
+.fh-status-rows dd[data-state='fallback'] {
+  color: var(--fh-warn);
 }

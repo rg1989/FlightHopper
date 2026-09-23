@@ -1,6 +1,6 @@
 // client/ui/sourceBadge.ts
-// Where the aircraft come from, at the top of the right column in both modes: "LIVE · adsb.fi" (linked, as adsb.fi's
-// terms ask), "REPLAY · <recording time>" for a recording, plus "loading N areas" while a wide view fills centre-out.
+// Where the aircraft come from: the Status panel ("Live traffic", the source linked as adsb.fi's terms ask, "Replay ·
+// <recording time>" for a recording), how often the map refreshes, areas still loading, and the rail's status dot.
 import type { StatusBrief } from '../../shared/api.ts'
 import type { SourceKind } from '../../shared/types.ts'
 import './sourceBadge.css'
@@ -45,27 +45,79 @@ export function sourceView(status: StatusBrief, serverNowMs: number | null): Sou
   }
 }
 
-export function mountSourceBadge(root: HTMLElement): { update(status: StatusBrief | null, serverNowMs: number | null): void } {
-  const el = document.createElement('a')
-  el.className = 'fh-source'
-  el.target = '_blank'
-  el.rel = 'noopener'
-  el.hidden = true
-  root.prepend(el)
+/** The rail's status dot for a status (null before the first one). */
+export function statusDot(status: StatusBrief | null): 'live' | 'replay' | 'trouble' | 'wait' {
+  if (status === null) return 'wait'
+  if (status.degraded !== null) return 'trouble'
+  return status.source === 'replay' ? 'replay' : 'live'
+}
+
+export interface StatusPanelHandle {
+  update(status: StatusBrief | null, serverNowMs: number | null): void
+  setImagery(text: string, state: 'ok' | 'fallback' | 'plain'): void
+}
+
+/** The Status panel: mode and source (linked), how often the view refreshes, areas still loading, imagery. */
+export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
+  const h = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] => {
+    const e = document.createElement(tag)
+    e.className = className
+    if (text !== '') e.textContent = text
+    return e
+  }
+  const hero = h('div', 'fh-status-hero')
+  const dot = h('span', 'fh-dot')
+  const heroText = h('div', 'fh-status-hero-t')
+  const mode = h('div', 'fh-status-mode', 'Connecting…')
+  const sourceLine = h('div', 'fh-status-src')
+  const link = h('a', 'fh-status-link')
+  link.target = '_blank'
+  link.rel = 'noopener'
+  sourceLine.append(link)
+  heroText.append(mode, sourceLine)
+  hero.append(dot, heroText)
+
+  const rows = h('dl', 'fh-status-rows')
+  const row = (label: string): HTMLElement => {
+    const v = h('dd', '')
+    rows.append(h('dt', '', label), v)
+    return v
+  }
+  const refreshV = row('Map refresh')
+  const coverageV = row('Coverage')
+  const imageryV = row('Imagery')
+  root.append(hero, rows)
+
   let shown = ''
   return {
     update(status, serverNowMs) {
-      if (status === null) return
-      const v = sourceView(status, serverNowMs)
-      const key = `${v.text}|${v.state}|${v.title}`
+      const v = status === null ? null : sourceView(status, serverNowMs)
+      const src = status === null ? null : SOURCES[status.source]
+      const pending = status?.pendingAreas ?? 0
+      const every = status?.viewEveryS
+      const key = `${v?.text}|${v?.state}|${pending}|${every}|${statusDot(status)}`
       if (key === shown) return
       shown = key
-      el.hidden = false
-      el.textContent = v.text
-      el.title = v.title
-      el.dataset.state = v.state
-      if (v.href === null) el.removeAttribute('href')
-      else el.href = v.href
+      dot.dataset.state = statusDot(status)
+      mode.textContent = v === null ? 'Connecting…' : v.text.split(' · ')[0] === 'REPLAY' ? v.text.replace('REPLAY', 'Replay') : v.state === 'trouble' ? v.title : 'Live traffic'
+      if (src !== null && src.href !== null) {
+        link.href = src.href
+        link.textContent = src.name
+        sourceLine.hidden = false
+      } else {
+        link.removeAttribute('href')
+        link.textContent = src?.name ?? ''
+        sourceLine.hidden = src === null
+      }
+      refreshV.textContent = every === undefined ? '—' : every < 60 ? `every ${Math.round(every)} s` : `every ${Math.round(every / 60)} min`
+      coverageV.replaceChildren()
+      if (pending > 0) {
+        coverageV.append(h('span', 'fh-spin'), document.createTextNode(` Loading ${pending} area${pending === 1 ? '' : 's'}`))
+      } else coverageV.textContent = status === null ? '—' : 'Up to date'
+    },
+    setImagery(text, state) {
+      imageryV.textContent = text.replace(/^Imagery: /, '')
+      imageryV.dataset.state = state
     },
   }
 }

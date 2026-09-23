@@ -162,7 +162,9 @@ function resetStats(): void {
   longTasks = 0
 }
 
-const table = mountTable(document.body, {
+const tableHead = document.createElement('div')
+document.body.append(tableHead)
+const table = mountTable(document.body, tableHead, {
   onSelect: (hex) => (selected = hex),
   onHover: (hex) => (hovered = hex),
   flagOf,
@@ -223,7 +225,7 @@ function frame(now: number): void {
   lastFrame = now
   step(dtS, now / 1000)
   const t0 = performance.now()
-  table.update(all, onScreenBuf, selected)
+  table.update(all, onScreenBuf, selected, true)
   const dt = performance.now() - t0
   updMs[nUpd++ % N_KEEP] = dt
   if (now - secStart >= 1000) {

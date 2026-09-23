@@ -93,32 +93,32 @@ test('filterRows: an empty or blank query keeps every row, in a new array', () =
   }
 })
 
-test('cellText: flag, callsign (hex when none), route with spaced dashes, type, squawk', () => {
+test('cellText: flag, callsign (upper-case hex when none), route with spaced dashes, type, squawk', () => {
   const e = entry('738a1b', {}, { callsign: 'ELY001', route: 'LLBG-LOWI', typeCode: 'B738', squawk: '7700' })
   const flagOf = (hex: string): string => (hex.startsWith('738') ? '🇮🇱' : '')
-  assert.equal(cellText(e, 0, flagOf), '🇮🇱')
-  assert.equal(cellText(e, 0), '') // no flagOf given
-  assert.equal(cellText(e, 1), 'ELY001')
-  assert.equal(cellText(entry('abc123', {}, null), 1), 'abc123')
-  assert.equal(cellText(e, 2), 'LLBG - LOWI')
-  assert.equal(cellText(entry('x', {}, { route: 'OTP-VIE-DOH' }), 2), 'OTP - VIE - DOH')
-  assert.equal(cellText(e, 3), 'B738')
-  assert.equal(cellText(e, 4), '7700')
-  assert.deepEqual([2, 3, 4].map((c) => cellText(entry('x', {}, null), c)), ['', '', ''])
+  assert.equal(cellText(e, 'hex', flagOf), '🇮🇱')
+  assert.equal(cellText(e, 'hex'), '') // no flagOf given
+  assert.equal(cellText(e, 'callsign'), 'ELY001')
+  assert.equal(cellText(entry('abc123', {}, null), 'callsign'), 'ABC123')
+  assert.equal(cellText(e, 'route'), 'LLBG - LOWI')
+  assert.equal(cellText(entry('x', {}, { route: 'OTP-VIE-DOH' }), 'route'), 'OTP - VIE - DOH')
+  assert.equal(cellText(e, 'type'), 'B738')
+  assert.equal(cellText(e, 'squawk'), '7700')
+  assert.deepEqual((['route', 'type', 'squawk'] as const).map((k) => cellText(entry('x', {}, null), k)), ['', '', ''])
 })
 
 test('cellText: altitude in ft with thousands separators, ground, and ▲/▼ only beyond ±300 fpm; speed in whole knots', () => {
-  assert.equal(cellText(entry('x', { altFt: 35000, vsFpm: 0 }), 5), '35,000')
-  assert.equal(cellText(entry('x', { altFt: 2375.4, vsFpm: 301 }), 5), '2,375 ▲')
-  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: 300 }), 5), '2,375')
-  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: -300 }), 5), '2,375')
-  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: -1200 }), 5), '2,375 ▼')
-  assert.equal(cellText(entry('x', { altFt: 1100, vsFpm: null }), 5), '1,100')
-  assert.equal(cellText(entry('x', { altFt: -150, vsFpm: 0 }), 5), '-150')
-  assert.equal(cellText(entry('x', { altFt: null, onGround: true, vsFpm: 0 }), 5), 'ground')
-  assert.equal(cellText(entry('x', { altFt: null }), 5), '')
-  assert.equal(cellText(entry('x', { gsKt: 451.6 }), 6), '452')
-  assert.equal(cellText(entry('x', { gsKt: null }), 6), '')
+  assert.equal(cellText(entry('x', { altFt: 35000, vsFpm: 0 }), 'alt'), '35,000')
+  assert.equal(cellText(entry('x', { altFt: 2375.4, vsFpm: 301 }), 'alt'), '2,375 ▲')
+  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: 300 }), 'alt'), '2,375')
+  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: -300 }), 'alt'), '2,375')
+  assert.equal(cellText(entry('x', { altFt: 2375, vsFpm: -1200 }), 'alt'), '2,375 ▼')
+  assert.equal(cellText(entry('x', { altFt: 1100, vsFpm: null }), 'alt'), '1,100')
+  assert.equal(cellText(entry('x', { altFt: -150, vsFpm: 0 }), 'alt'), '-150')
+  assert.equal(cellText(entry('x', { altFt: null, onGround: true, vsFpm: 0 }), 'alt'), 'ground')
+  assert.equal(cellText(entry('x', { altFt: null }), 'alt'), '')
+  assert.equal(cellText(entry('x', { gsKt: 451.6 }), 'speed'), '452')
+  assert.equal(cellText(entry('x', { gsKt: null }), 'speed'), '')
 })
 
 test('isEmergencySquawk: 7500, 7600 and 7700 only', () => {

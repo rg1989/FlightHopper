@@ -152,7 +152,7 @@ test('silhouette follows category/type; one atlas image per kind however many ai
   assert.equal(bb(f, 'eeeeee').image, ICON_ID.heli, 'info arriving later swaps the icon')
 })
 
-test('selected: 1.4× with the ring on it and hidden inside chase range; deselect restores', () => {
+test('selected: 1.4× with the ring on it, shown at any distance (top-down focus); deselect restores', () => {
   const f = fakeViewer()
   const layer = new FleetLayer(f.viewer)
   layer.update([fe('aaaaaa'), fe('bbbbbb', { lat: 48 })], 'bbbbbb', null)
@@ -163,11 +163,9 @@ test('selected: 1.4× with the ring on it and hidden inside chase range; deselec
   assert.equal(halo(f).show, true)
   assert.ok(halo(f).position.equals(b.position), 'ring sits on the selected aircraft')
   assert.equal(halo(f).id, 'bbbbbb', 'clicking the ring picks the aircraft')
-  assert.ok(b.distanceDisplayCondition.near > 1_000, 'icon gives way to the 3-D model when the camera is close')
-  assert.ok(!a.distanceDisplayCondition || a.distanceDisplayCondition.near === 0)
+  assert.ok(!b.distanceDisplayCondition || b.distanceDisplayCondition.near === 0, 'a map zoomed in close still shows it')
   layer.update([fe('aaaaaa'), fe('bbbbbb', { lat: 48 })], null, null)
   assert.equal(b.scale, 1)
-  assert.equal(b.distanceDisplayCondition.near, 0)
   assert.equal(halo(f).show, false)
 })
 

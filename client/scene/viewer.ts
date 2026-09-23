@@ -6,8 +6,8 @@ import { makeImagery } from './imagery.ts'
 import { makeTerrain } from './terrain.ts'
 
 /**
- * The one Cesium Viewer: configured terrain + imagery, no stock widgets except fullscreen and the credits.
- * The app has its own HUD and picking, so infoBox and selectionIndicator are off too.
+ * The one Cesium Viewer: configured terrain + imagery, no stock widgets. Credits go to a detached element, so no credit
+ * bar or "Powered by" logo shows (a personal-use app); the app has its own fullscreen button, flight card and picking.
  * depthTestAgainstTerrain hides aircraft and runway planes behind hills.
  */
 export async function createViewer(el: HTMLElement | string, cfg: ClientConfig): Promise<Viewer> {
@@ -24,6 +24,8 @@ export async function createViewer(el: HTMLElement | string, cfg: ClientConfig):
     homeButton: false,
     infoBox: false,
     selectionIndicator: false,
+    fullscreenButton: false,
+    creditContainer: document.createElement('div'), // never attached
     requestRenderMode: false,
   })
   viewer.scene.globe.depthTestAgainstTerrain = true

@@ -6,7 +6,6 @@ import {
   Cartesian3,
   Cartographic,
   Color,
-  DistanceDisplayCondition,
   Ellipsoid,
   HorizontalOrigin,
   LabelCollection,
@@ -23,7 +22,6 @@ import type { IconKind } from './icons.ts'
 
 const RAD = Math.PI / 180
 export const SELECTED_SCALE = 1.4
-export const CHASE_HIDE_M = 5_000 // the selected icon, ring and label give way to the 3-D model inside this range
 export const GROUND_LIFT_M = 2 // above the drawn terrain, so a ground icon never z-fights the surface
 const AXIS_STEP_DEG = 0.05 // re-aim a billboard's north axis after moving this far (0.05° of arc is invisible)
 const MIN_MOVE_PX = 0.25 // a position change smaller than this on screen is not written (see #draw)
@@ -41,8 +39,6 @@ const HALO_COLOR = Color.fromCssColorString('#ffd23f')
 const LABEL_BG = Color.fromCssColorString('#16181d')
 /** Icons shrink to half size between 300 km and 8,000 km from the camera (continental views stay readable). */
 const SIZE_BY_DISTANCE = new NearFarScalar(3e5, 1, 8e6, 0.5)
-const ALWAYS = new DistanceDisplayCondition(0, Number.MAX_VALUE)
-const CHASE_HIDE = new DistanceDisplayCondition(CHASE_HIDE_M, Number.MAX_VALUE)
 const LABEL_OFFSET = new Cartesian2(0, -(ICON_PX / 2 + 2))
 const LABEL_OFFSET_SELECTED = new Cartesian2(0, -(HALO_PX / 2 + 2)) // above the selection ring
 
@@ -116,7 +112,7 @@ export class FleetLayer {
     this.#scene = viewer.scene
     // TRANSLUCENT: one pass instead of opaque + translucent (icons have soft edges; they still depth-test against the globe).
     this.#bbs = this.#scene.primitives.add(new BillboardCollection({ blendOption: BlendOption.TRANSLUCENT }))
-    this.#halo = this.#bbs.add({ position: Cartesian3.ZERO, show: false, color: HALO_COLOR, scaleByDistance: SIZE_BY_DISTANCE, distanceDisplayCondition: CHASE_HIDE })
+    this.#halo = this.#bbs.add({ position: Cartesian3.ZERO, show: false, color: HALO_COLOR, scaleByDistance: SIZE_BY_DISTANCE })
     this.#halo.setImage(HALO_ID, haloCanvas())
     this.#labels = this.#scene.primitives.add(new LabelCollection())
     this.#label = this.#labels.add({
@@ -149,9 +145,9 @@ export class FleetLayer {
   }
 
   /**
-   * modelShown: the chased aircraft is drawn as the 3-D model, so its icon, ring and label go. The icon sits at the
-   * fleet's dead-reckoned position (server now), which can run ahead of the model (render time, or frozen on a lost
-   * signal) by more than the icon's 5 km hide distance and read as a second aircraft.
+   * modelShown: the chased aircraft is drawn as the 3-D model, so its icon, ring and label go (the icon sits at the
+   * fleet's dead-reckoned position, which can run ahead of the model and read as a second aircraft). Otherwise the
+   * selected icon shows at any distance: focus is on the top-down map, zoomed in as close as it goes.
    */
   update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null, modelShown = false): void {
     const frame = ++this.#frame
@@ -177,7 +173,6 @@ export class FleetLayer {
       const isSel = e.hex === selectedHex
       if (isSel !== s.sel) {
         s.b.scale = isSel ? SELECTED_SCALE : 1
-        s.b.distanceDisplayCondition = isSel ? CHASE_HIDE : ALWAYS
         s.sel = isSel
       }
       if (isSel) {
@@ -367,7 +362,6 @@ export class FleetLayer {
     }
     l.position = s.b.position
     l.pixelOffset = selected ? LABEL_OFFSET_SELECTED : LABEL_OFFSET
-    l.distanceDisplayCondition = selected ? CHASE_HIDE : ALWAYS
     if (!l.show) l.show = true
   }
 }

@@ -1,0 +1,46 @@
+/* client/ui/info.css */
+.fh-info-sec {
+  padding: 12px 14px;
+}
+
+.fh-info-sec + .fh-info-sec {
+  border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-info-t {
+  margin: 0 0 8px;
+  color: var(--fh-faint);
+  font: 600 10px/1.2 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fh-info-keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.fh-info-keys dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fh-text);
+  white-space: nowrap;
+}
+
+.fh-info-keys dd {
+  margin: 0;
+  color: var(--fh-muted);
+}
+
+.fh-info-credits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--fh-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}

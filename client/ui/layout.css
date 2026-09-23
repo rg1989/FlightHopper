@@ -1,116 +1,29 @@
 /* client/ui/layout.css */
-/* Where the overlays sit (WP-B-A, WP-E-A). client/app.ts builds:
-     .fh-ui[data-mode=browse|chase]
-       .fh-right        the scene toggles (sceneToggles.css, chase only), the aircraft table (table.css) and the credit
-                        box (ui.css), one column on the right
-       .fh-legend-root  the altitude legend (legend.ts), bottom centre of the space left of that column
-       .fh-bench        the ?bench=1 overlay (bench/overlay.ts)
-       + the HUD and banner (ui.css) and the detail panel (detail.css), which place themselves.
-   Browse shows the table and the legend. Chase shows the detail panel top-left and the HUD bottom-left (the panel stops
-   236px above the bottom, so they never meet), the scene toggles at the top of the column, and keeps the table. Every
-   box clears Cesium's credit line (bottom-left) and its fullscreen button (29px, bottom-right). Loaded after the
-   modules' own CSS; the selectors are also more specific, so the order does not matter. */
-
-.fh-right {
+/* Where the overlays sit. client/app.ts builds .fh-ui[data-mode=browse|chase] over the globe with:
+     the rail and its panel (rail.css, right edge), the flight card (flightCard.css, top-left, when an aircraft is
+     focused), the toast (ui.css, top centre), the ?bench=1 overlay.
+   The overlay layer itself never takes the pointer: the map stays draggable everywhere between the boxes. */
+.fh-ui {
   position: absolute;
+  inset: 0;
   z-index: 10;
-  top: 8px;
-  right: 8px;
-  bottom: 36px;
-  width: min(420px, calc(100vw - 16px));
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  pointer-events: none; /* the empty part of the column stays map */
-}
-
-/* The table fills the column above the credits instead of the whole height (table.css places it alone). */
-.fh-right > .fh-table {
-  position: relative;
-  top: auto;
-  right: auto;
-  bottom: auto;
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 0;
-  pointer-events: auto;
-}
-
-.fh-right > .fh-table.fh-collapsed {
-  flex: none;
-  width: auto;
-}
-
-.fh-right > .fh-attribution {
-  position: relative;
-  right: auto;
-  bottom: auto;
-  flex: none;
-  margin-top: auto; /* stays at the bottom when the table is collapsed */
-}
-
-/* The scene toggles head the column (the first child) in chase. Browse is the unlit top-down map (D9, D11). */
-.fh-ui[data-mode='browse'] .fh-toggles {
-  display: none;
-}
-
-.fh-legend-root {
-  position: absolute;
-  z-index: 9;
-  left: 8px;
-  right: calc(min(420px, 100vw - 16px) + 16px);
-  bottom: 32px;
-  display: flex;
-  justify-content: center;
+  overflow: hidden;
   pointer-events: none;
 }
 
-.fh-ui[data-mode='chase'] .fh-legend-root {
+/* Cesium's own bottom bar held its credits (now in the Info panel) and nothing else. */
+.cesium-viewer-bottom {
   display: none;
 }
 
-/* The bench overlay places itself top-left with inline styles, where the detail panel is: move it right of the panel. */
+/* The bench overlay places itself top-left with inline styles, where the flight card is: move it right of the card. */
 .fh-bench > pre {
-  left: 316px !important;
+  left: 324px !important;
 }
 
-/* Phones: Cesium's credit block wraps to about three lines (~64px), so the legend sits 72px up and the column (table
-   above the credits, full width: collapse the table to see the map) ends above the legend. The credits use the full
-   width (eleven lines, ~200px with the night-lights and buildings lines). Chasing (no legend), the panel (top,
-   detail.css) and the HUD need the screen: the table hides, the credits drop to the legend's place, the HUD sits 8px
-   above them (72px + ~200px + 8px = 280px) and the panel stops 8px above the HUD (~172px tall). The panel spans the
-   width there, so it starts below the source badge and the scene toggles (8px + 24px + 6px + 38px + the column's 6px
-   gap) and its height leaves 542px (82px + 280px + 172px + 8px). Not above the credits instead: on a 375px screen the toggles
-   (~166px) would share a row with the HUD (180–250px). */
+/* The list panel on a phone: a sheet of a fixed share of the screen. */
 @media (max-width: 640px) {
-  .fh-right {
-    bottom: 108px;
-  }
-
-  .fh-right > .fh-attribution {
-    max-width: none;
-  }
-
-  .fh-legend-root {
-    right: 8px;
-    bottom: 72px;
-  }
-
-  .fh-ui[data-mode='chase'] .fh-right {
-    bottom: 72px;
-  }
-
-  .fh-ui[data-mode='chase'] .fh-right > .fh-table {
-    display: none;
-  }
-
-  .fh-ui[data-mode='chase'] .fh-hud {
-    bottom: 280px;
-  }
-
-  .fh-ui[data-mode='chase'] .fh-detail {
-    top: 82px;
-    max-height: max(120px, calc(100% - 542px));
+  .fh-panel[data-id='aircraft'] {
+    height: 62%;
   }
 }
