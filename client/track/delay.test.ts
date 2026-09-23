@@ -26,9 +26,10 @@ test('gap term: p90 gap + 1 s wins when it exceeds floor and poll term', () => {
   assert.equal(targetDelayS('mlat', 1, 6.5), 7.5)
 })
 
-test('clamped to [3, 10] s', () => {
-  assert.equal(targetDelayS('adsb2', 1, 30), 10)
-  assert.equal(targetDelayS('mlat', 20, 0), 10)
+test('clamped to [3, 30] s', () => {
+  assert.equal(targetDelayS('adsb2', 1, 24), 25) // live at 0.04 req/s: samples ~24 s apart
+  assert.equal(targetDelayS('adsb2', 1, 60), 30)
+  assert.equal(targetDelayS('mlat', 40, 0), 30)
   assert.equal(targetDelayS('adsb2', -5, -5), 3)
 })
 

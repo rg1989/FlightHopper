@@ -34,7 +34,7 @@ import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
 import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
-import { MIN_DELAY_S, RenderClock } from './track/delay.ts'
+import { MAX_DELAY_S, MIN_DELAY_S, RenderClock } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { mountAttribution, mountBanner } from './ui/banner.ts'
@@ -330,7 +330,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const api = new ApiClient(cfg.apiBase)
   const fleet = new Fleet()
   let registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
-  const clock = new RenderClock(MIN_DELAY_S)
+  let clock = new RenderClock(MIN_DELAY_S)
+  // A new selection is a camera cut: its first chase reply sets the render delay at once. Slewing there at 0.2 s/s would
+  // take ~2 min on a sparse live feed (25 s between samples → 26 s delay).
+  let snapClock = selected !== null
+  /** The track's target, but at least one server refresh of the chased aircraft + 1 s, known before its sample gaps are. */
+  const delayTargetS = (): number => Math.min(MAX_DELAY_S, Math.max(registry.delayTargetS(selected), (status.chasePeriodP95S ?? 0) + 1))
   const bench = params.bench ? new BenchRecorder(viewer, { label: params.hex ?? 'browse' }) : null
   bench?.mountOverlay(div('fh-bench', ui))
   // ?bench=1: User Timing measures fh:frame, fh:fleet, fh:table (each frame) and fh:ingest (each poll), and two marks
@@ -362,6 +367,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     chaseInfo = null
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
+    snapClock = hex !== null
     if (hex !== null) {
       const seed = fleet.newest(hex)
       if (seed) registry.ingest([seed])
@@ -396,9 +402,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     let tSunMs = Date.now() // until the first reply; then the render time (server clock)
     if (api.ready) {
       const tServerMs = api.serverNowMs()
-      const tRenderMs = clock.tick(tServerMs, registry.delayTargetS(selected), dtS)
+      const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
       tSunMs = tRenderMs
-      // ponytail: the fleet is drawn at server now, the chased aircraft at the delayed render time (≥ 3 s earlier), so
+      // ponytail: the fleet is drawn at server now, the chased aircraft at the delayed render time (3–30 s earlier), so
       // traffic around it runs a few seconds ahead of it. Upgrade: draw the fleet at tRenderMs, which needs Fleet to
       // interpolate between samples instead of only dead-reckoning past the newest.
       all = fleet.entries(tServerMs)
@@ -490,6 +496,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
         registry.ingest(r.samples)
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
+        if (snapClock && registry.get(hex) !== undefined) {
+          clock = new RenderClock(delayTargetS())
+          snapClock = false
+        }
       }
       status = r.status
       ok = true
@@ -576,7 +586,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       map.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()
-    buildings.destroy()
+      buildings.destroy()
       viewer.destroy()
       delete (window as unknown as { viewer?: Viewer }).viewer
     },

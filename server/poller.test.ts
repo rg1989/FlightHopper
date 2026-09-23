@@ -134,6 +134,24 @@ test('while chasing, a cell only gets a token when one is left for the next chas
   assert.ok(r.requestsTotal <= 62, `${r.requestsTotal} requests in 60 s at 1 req/s`)
 })
 
+test('singleCircle: only the newest view circle is polled, never the cell cover or a chase batch', async () => {
+  const s = setup({ opts: { singleCircle: true } })
+  s.poller.touchView(KSFO[0], KSFO[1], 60.2) // 2+ cells in the cell cover
+  s.poller.touchChase('a1c7e4')
+  assert.equal(await s.poller.tick(), true)
+  assert.deepEqual(s.calls[0], { t: T0, m: 'circle', args: [KSFO[0], KSFO[1], 61] })
+  s.clock.t += 100
+  assert.equal(await s.poller.tick(), false, 'the circle is not due again before cellPeriodMs')
+  s.poller.touchView(LLBG[0], LLBG[1], 20) // a new view replaces the old one and keeps its period
+  s.clock.t += 3000
+  assert.equal(await s.poller.tick(), true)
+  assert.deepEqual(s.calls[1].args, [LLBG[0], LLBG[1], 20])
+  const r = s.poller.report()
+  assert.deepEqual(r.cells.map((c) => c.id), ['view'])
+  assert.equal(r.chasePeriodP95S, 3.1, 'the circle serves the chase, so its period is the chase period')
+  assert.equal(s.calls.filter((c) => c.m !== 'circle').length, 0)
+})
+
 test('each cell is polled once per cellPeriodMs, most overdue first', async () => {
   const s = setup()
   const cells = s.poller.touchView(KSFO[0], KSFO[1], 40)

@@ -3,7 +3,9 @@
 import type { Quality } from '../../shared/types.ts'
 
 export const MIN_DELAY_S = 3
-export const MAX_DELAY_S = 10
+// Live on adsb.lol at 0.04 req/s an aircraft's samples come ~25 s apart: a 26 s delay interpolates between them instead of
+// freezing for most of each gap (the track stops dead-reckoning 8 s past its newest sample).
+export const MAX_DELAY_S = 30
 
 const FLOOR_S: Record<Quality, number> = { adsb2: 3, adsb01: 4, mlat: 6, other: 6 }
 

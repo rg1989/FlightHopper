@@ -10,7 +10,9 @@ const FT = 0.3048
 const R_NM = 3440.065 // the sphere of shared/geo.ts destination(), so both agree
 const RAD = Math.PI / 180
 const DEG = 180 / Math.PI
-const MAX_AHEAD_S = 20 // dead-reckon at most this far past the newest sample, then hold
+// Dead-reckon at most this far past the newest sample, then hold: FleetLayer's MAX_AGE_S, when the icon hides anyway.
+// Live at 0.04 req/s an aircraft's samples come 25–50 s apart, so a shorter horizon froze most of the map.
+const MAX_AHEAD_S = 60
 const PARKED_KT = 3 // on the ground and slower than this: not moving
 // The server sends an aircraft's info only when it changes, so a hex that drops out of the view and comes back must
 // find its info here. ponytail: fixed 1 h after its newest sample; enough for panning away and back, and it bounds

@@ -18,6 +18,10 @@ export interface PollerOpts {
   recorder: Recorder | null
   hideFlagged: boolean
   nowMs?: () => number
+  // Low-budget mode (F2): poll only the newest view's own circle, and no chase batch (the chase view is centred on the
+  // chased aircraft, so its circle holds it and the traffic around it). At 0.04 req/s the cell cover of one view
+  // (2–4 cells) refreshes each aircraft only every 50–100 s; one circle refreshes it every 25 s.
+  singleCircle?: boolean
   info?: InfoStore // gets every non-hidden aircraft object of every good answer (identity, detail panel, routes)
 }
 
@@ -109,6 +113,14 @@ export class Poller {
   touchView(lat: number, lon: number, radiusNm: number): Cell[] {
     if (this.#source.caps.fullSnapshot) return []
     const expiresMs = this.#now() + this.#opts.interestTtlMs
+    if (this.#opts.singleCircle) {
+      // ponytail: the newest view wins, so two viewers of different areas take turns. Fine for one person's app.
+      const cell: Cell = { id: 'view', lat, lon, radiusNm: Math.ceil(radiusNm) }
+      const c = this.#cells.get('view')
+      if (c) Object.assign(c, { cell, expiresMs })
+      else this.#cells.set('view', { cell, expiresMs, lastReqMs: -Infinity, ok: new OkIntervals() })
+      return [cell]
+    }
     const cells = cellsForView(lat, lon, radiusNm)
     for (const cell of cells) {
       const c = this.#cells.get(cell.id)
@@ -141,7 +153,8 @@ export class Poller {
         }
         return true
       }
-      if (this.#chased.size > 0 && now - this.#lastChaseReqMs >= this.#opts.chasePeriodMs) {
+      const chasing = this.#chased.size > 0 && !this.#opts.singleCircle
+      if (chasing && now - this.#lastChaseReqMs >= this.#opts.chasePeriodMs) {
         if (!this.#bucket.tryTake()) return false // a due chase never yields its token to a cell
         this.#lastChaseReqMs = now
         if (this.#ingest(await this.#source.hexes(this.#batch()))) this.#chaseOk.ok(this.#now())
@@ -149,7 +162,7 @@ export class Poller {
       }
       const c = this.#mostOverdue(now)
       // While chasing, a cell takes a token only if one is left for the next chase: the chase never waits for a cell.
-      if (!c || (this.#chased.size > 0 && this.#bucket.state().tokens < 2) || !this.#bucket.tryTake()) return false
+      if (!c || (chasing && this.#bucket.state().tokens < 2) || !this.#bucket.tryTake()) return false
       c.lastReqMs = now
       if (this.#ingest(await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm))) c.ok.ok(this.#now())
       return true
@@ -178,7 +191,8 @@ export class Poller {
       source: this.#source.caps.kind,
       degraded: this.#bucket.degraded,
       cellPeriodP95S: p95S(cellIntervals),
-      chasePeriodP95S: p95S(this.#chaseOk.intervals),
+      // singleCircle: the view circle serves the chase too (the chase view is centred on the chased aircraft).
+      chasePeriodP95S: p95S(this.#opts.singleCircle ? cellIntervals : this.#chaseOk.intervals),
     }
     // The offset that stamps every sample (#ingest): lets the client light a replay at its recorded time (sun = tRender − it).
     if (this.#offset.ready) b.upstreamOffsetMs = Math.round(this.#offset.get())

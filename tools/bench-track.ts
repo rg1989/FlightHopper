@@ -15,7 +15,7 @@ import { globSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { turnRateDegS } from '../client/track/attitude.ts'
-import { MAX_DELAY_S, RenderClock } from '../client/track/delay.ts'
+import { RenderClock } from '../client/track/delay.ts'
 import { TrackRegistry } from '../client/track/registry.ts'
 import { Track } from '../client/track/track.ts'
 import { readRecording, type RecordLine } from '../server/recording.ts'
@@ -32,7 +32,9 @@ const POLL_MS = 1000 // simulated client chase poll
 const HOP_MS = 100 // server → client: a poll at t sees samples with rxMs ≤ t − 100 ms
 const FPS = 60
 const SESSION_GAP_MS = 60_000 // a longer silence means the aircraft left coverage; the longest session is benched
-const COVERAGE_GAP_MS = MAX_DELAY_S * 1000 // no allowed delay bridges a longer gap: frames in it are coverage, not starvation
+// A longer gap is a coverage hole, not starvation. G2's line: the delay cap (10 s) when G2 was set. MAX_DELAY_S is 30 s
+// since sparse live feeds (25 s between samples), but a 1 Hz track's p90 gap never asks for more than 10 s.
+const COVERAGE_GAP_MS = 10_000
 const TURN_DEGS = 1 // |track rate| above this is a turn (G2 cross-track bar)
 const FPM = 0.00508 // m/s per ft/min
 const G = 9.80665

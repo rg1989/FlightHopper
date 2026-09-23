@@ -32,6 +32,7 @@ const HOST = '127.0.0.1'
 // ponytail: an area source (adsb.lol) polls the cells of at most a 250 nm view; a wider view still gets whatever the
 // store holds. Full-snapshot sources have no cells, so the cap costs them nothing.
 const MAX_POLLED_NM = 250
+const LOW_BUDGET_RPS = 0.5 // below this an area source polls one circle per view, not the cell cover (Poller singleCircle)
 const HEX = /^~?[0-9a-f]{6}$/
 const GZIP_MIN_BYTES = 1024
 // Fastest level: a 5,000-aircraft view (2.7 MB of JSON) → ~430 KB in ~10 ms; level 6 saves 20 % more bytes for 2.4× the time.
@@ -144,11 +145,12 @@ export function createServer(
   const source = deps.source ?? makeSource(cfg)
   const store = new SampleStore()
   const info = new InfoStore({ nowMs })
-  const bucket = new TokenBucket(Math.min(cfg.maxRps, source.caps.maxRps), nowMs)
+  const rps = Math.min(cfg.maxRps, source.caps.maxRps)
+  const bucket = new TokenBucket(rps, nowMs)
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
   // The poller prunes the sample store (180 s horizon) on every 100 ms tick and the info store on every good answer,
   // so no separate prune timer is needed.
-  const poller = new Poller(source, store, bucket, { ...POLLER_DEFAULTS, recorder, hideFlagged: !cfg.showPiaLadd, nowMs, info })
+  const poller = new Poller(source, store, bucket, { ...POLLER_DEFAULTS, singleCircle: rps < LOW_BUDGET_RPS, recorder, hideFlagged: !cfg.showPiaLadd, nowMs, info })
   const routes =
     cfg.routes && cfg.source === 'adsblol' && cfg.contact !== null
       ? new RouteFetcher({ bucket, userAgent: userAgent(cfg.contact), nowMs, fetchFn: deps.routesFetch })

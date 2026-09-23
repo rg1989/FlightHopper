@@ -43,14 +43,14 @@ test('direction follows the track in every quadrant, across the antimeridian and
   }
 })
 
-test('dead-reckoning stops 20 s after the newest sample; before the sample the sample position is used', () => {
+test('dead-reckoning stops 60 s after the newest sample; before the sample the sample position is used', () => {
   const f = new Fleet()
   f.ingest([smp()])
-  const at20 = { ...f.entries(T0 + 20_000)[0] }
+  const at60 = { ...f.entries(T0 + 60_000)[0] }
   const at90 = f.entries(T0 + 90_000)[0]
-  assert.equal(at90.lat, at20.lat)
-  assert.equal(at90.lon, at20.lon)
-  near(distanceNm(32, 34.8, at90.lat, at90.lon), 2, 1e-9)
+  assert.equal(at90.lat, at60.lat)
+  assert.equal(at90.lon, at60.lon)
+  near(distanceNm(32, 34.8, at90.lat, at90.lon), 6, 1e-9)
   assert.equal(at90.ageS, 90) // the age keeps counting
   const early = f.entries(T0 - 5_000)[0]
   assert.equal(early.lat, 32)
@@ -170,7 +170,7 @@ test('prune forgets hexes whose newest sample is older than maxAgeS; the others 
   const left = f.entries(T0 + 90_001)
   assert.deepEqual(left.map((e) => e.hex), ['a00003'])
   assert.equal(left[0], e3)
-  near(distanceNm(32, 34.8, e3.lat, e3.lon), 2, 1e-9) // 40 s old → clamped to 20 s → 2 nm
+  near(distanceNm(32, 34.8, e3.lat, e3.lon), 4.0001, 1e-9) // 40.001 s old at 360 kt
   f.prune(T0 + 1e9, 60)
   assert.equal(f.size, 0)
   assert.equal(f.entries(T0 + 1e9).length, 0)
