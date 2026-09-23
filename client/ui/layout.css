@@ -1,14 +1,15 @@
 /* client/ui/layout.css */
-/* Where the overlays sit (WP-B-A). client/app.ts builds:
+/* Where the overlays sit (WP-B-A, WP-E-A). client/app.ts builds:
      .fh-ui[data-mode=browse|chase]
-       .fh-right        the aircraft table (table.css) above the credit box (ui.css), one column on the right
+       .fh-right        the scene toggles (sceneToggles.css, chase only), the aircraft table (table.css) and the credit
+                        box (ui.css), one column on the right
        .fh-legend-root  the altitude legend (legend.ts), bottom centre of the space left of that column
        .fh-bench        the ?bench=1 overlay (bench/overlay.ts)
        + the HUD and banner (ui.css) and the detail panel (detail.css), which place themselves.
    Browse shows the table and the legend. Chase shows the detail panel top-left and the HUD bottom-left (the panel stops
-   236px above the bottom, so they never meet) and keeps the table. Every box clears Cesium's credit line (bottom-left)
-   and its fullscreen button (29px, bottom-right). Loaded after the modules' own CSS; the selectors are also more
-   specific, so the order does not matter. */
+   236px above the bottom, so they never meet), the scene toggles at the top of the column, and keeps the table. Every
+   box clears Cesium's credit line (bottom-left) and its fullscreen button (29px, bottom-right). Loaded after the
+   modules' own CSS; the selectors are also more specific, so the order does not matter. */
 
 .fh-right {
   position: absolute;
@@ -49,6 +50,11 @@
   margin-top: auto; /* stays at the bottom when the table is collapsed */
 }
 
+/* The scene toggles head the column (the first child) in chase. Browse is the unlit top-down map (D9, D11). */
+.fh-ui[data-mode='browse'] .fh-toggles {
+  display: none;
+}
+
 .fh-legend-root {
   position: absolute;
   z-index: 9;
@@ -71,8 +77,12 @@
 
 /* Phones: Cesium's credit block wraps to about three lines (~64px), so the legend sits 72px up and the column (table
    above the credits, full width: collapse the table to see the map) ends above the legend. The credits use the full
-   width (half the lines, ~124px). Chasing (no legend), the panel (top, detail.css) and the HUD need the screen: the table
-   hides, the credits drop to the legend's place, the HUD sits above them and the panel stops above the HUD. */
+   width (half the lines, ~139px with the night-lights line). Chasing (no legend), the panel (top, detail.css) and the
+   HUD need the screen: the table hides, the credits drop to the legend's place, the HUD sits 8px above them (72px +
+   ~139px + 8px, rounded to 220px) and the panel stops 8px above the HUD (~172px tall). The panel spans the width there,
+   so it starts below the scene toggles (8px + 38px + the column's 6px gap) and its height leaves 452px (52px + 220px +
+   172px + 8px). Not above the credits instead: on a 375px screen the toggles (~166px) would share a row with the HUD
+   (180–250px). */
 @media (max-width: 640px) {
   .fh-right {
     bottom: 108px;
@@ -96,10 +106,11 @@
   }
 
   .fh-ui[data-mode='chase'] .fh-hud {
-    bottom: 204px;
+    bottom: 220px;
   }
 
   .fh-ui[data-mode='chase'] .fh-detail {
-    max-height: max(120px, calc(100% - 392px));
+    top: 52px;
+    max-height: max(120px, calc(100% - 452px));
   }
 }
