@@ -148,7 +148,12 @@ export class FleetLayer {
     this.#relHM = frame.relHM
   }
 
-  update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null): void {
+  /**
+   * modelShown: the chased aircraft is drawn as the 3-D model, so its icon, ring and label go. The icon sits at the
+   * fleet's dead-reckoned position (server now), which can run ahead of the model (render time, or frozen on a lost
+   * signal) by more than the icon's 5 km hide distance and read as a second aircraft.
+   */
+  update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null, modelShown = false): void {
     const frame = ++this.#frame
     this.#frameMoveThreshold()
     let touched = 0
@@ -161,7 +166,8 @@ export class FleetLayer {
       const s = this.#byHex.get(e.hex) ?? this.#add(e.hex)
       if (s.frame !== frame) touched++
       s.frame = frame
-      const visible = e.ageS <= e.staleS // the Fleet's own limit per aircraft (it prunes them later)
+      // The Fleet's own age limit per aircraft (it prunes them later); the chased one gives way to its 3-D model.
+      const visible = e.ageS <= e.staleS && !(modelShown && e.hex === selectedHex)
       if (visible !== s.show) {
         s.b.show = visible
         s.show = visible

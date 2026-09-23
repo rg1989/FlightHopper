@@ -52,7 +52,7 @@ import { mountTable } from './ui/table.ts'
 import './ui/layout.css'
 
 const POLL_MS = 1000 // view and chase both poll at 1 Hz; TrackRegistry's pollPeriodS says the same
-const PRUNE_AGE_S = 60 // forget an aircraft one minute after its newest sample (FleetLayer hides it at that age too)
+const PRUNE_AGE_S = 60 // forget an aircraft at least this long after its newest sample (Fleet: its own staleS if longer)
 const FAILS_DOWN = 3 // failed polls in a row before the banner reports it
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
 const MIN_VIEW_NM = 20
@@ -445,7 +445,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       if (selected !== null) s = registry.get(selected)?.stateAt(tRenderMs) ?? null
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
-    fleetLayer.update(all, selected, tableHover ?? mapHover)
+    fleetLayer.update(all, selected, tableHover ?? mapHover, s !== null && model !== null)
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
     table.update(all, entriesIn(all, viewRectangleDeg(viewer), onScreen, selected), selected) // re-sorts ≤ 1 Hz itself
@@ -485,7 +485,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     hud.update(s, shown)
     // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
     detail.update(s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null))) // ≤ 4 Hz
-    banner.update(shown, s)
+    banner.update(shown, s, selected !== null && api.ready)
     sourceBadge.update(api.ready ? shown : null, api.ready ? api.serverNowMs() : null)
     syncUrl(now)
     bench?.frame(s, clearanceM)
@@ -557,7 +557,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     if (api.ready) {
       const t = api.serverNowMs()
       fleet.prune(t, PRUNE_AGE_S)
-      registry.prune(t, PRUNE_AGE_S)
+      // The chased aircraft is never pruned: on a lost signal it stays frozen at its last position under "Signal lost
+      // Ns ago" (the track goes stale 8 s past its newest sample) until data returns or Esc. Pruning it made the model,
+      // HUD and banner vanish with no word. The registry holds only this aircraft and is replaced on each selection.
     }
   }
 

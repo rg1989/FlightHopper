@@ -205,6 +205,20 @@ test('hexes that leave are hidden and their billboards reused for new hexes (no 
   assert.equal(all(f).filter((x) => x.show).length, 0)
 })
 
+test('while the chased aircraft is drawn as the 3-D model, its icon, ring and label are hidden; the others stay', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const es = [fe('aaaaaa'), fe('bbbbbb', { lat: 48, info: info('bbbbbb', { callsign: 'AFL729' }) })]
+  layer.update(es, 'bbbbbb', null, true)
+  assert.equal(bb(f, 'bbbbbb').show, false)
+  assert.equal(bb(f, 'aaaaaa').show, true)
+  assert.equal(halo(f).show, false)
+  assert.equal(label(f).show, false)
+  layer.update(es, 'bbbbbb', null, false) // no state yet (or the model failed to load): the icon and ring show where it is
+  assert.equal(bb(f, 'bbbbbb').show, true)
+  assert.equal(halo(f).show, true)
+})
+
 test('label: hover callsign, else the selected one; hex when no callsign; hidden when neither', () => {
   const f = fakeViewer()
   const layer = new FleetLayer(f.viewer)

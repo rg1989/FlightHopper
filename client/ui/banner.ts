@@ -5,7 +5,7 @@ import type { RenderState } from '../types.ts'
 import { attributionLines, bannerText } from './format.ts'
 import './ui.css'
 
-export function mountBanner(root: HTMLElement): { update(status: StatusBrief, s: RenderState | null): void; destroy(): void } {
+export function mountBanner(root: HTMLElement): { update(status: StatusBrief, s: RenderState | null, chasing?: boolean): void; destroy(): void } {
   const el = document.createElement('div')
   el.className = 'fh-banner'
   el.setAttribute('role', 'status')
@@ -13,8 +13,8 @@ export function mountBanner(root: HTMLElement): { update(status: StatusBrief, s:
   root.append(el)
 
   return {
-    update(status, s) {
-      const text = bannerText(status, s)
+    update(status, s, chasing = false) {
+      const text = bannerText(status, s, chasing)
       el.hidden = text === null
       if (text !== null && el.textContent !== text) el.textContent = text
     },
