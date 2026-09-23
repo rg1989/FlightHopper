@@ -1,7 +1,7 @@
 // server/store.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SampleStore } from './store.ts'
+import { LATEST_HORIZON_MS, SampleStore } from './store.ts'
 import type { Sample } from '../shared/types.ts'
 
 const KSFO = { lat: 37.6188, lon: -122.3758 }
@@ -66,7 +66,7 @@ test('track(hex, since) = the samples of one hex received after since, oldest fi
   assert.deepEqual(st.track('zzz', 0), [])
 })
 
-test('prune drops samples received before now − horizon (180 s by default)', () => {
+test('prune drops samples received before now − horizon (180 s by default), except each aircraft\'s newest', () => {
   const st = new SampleStore()
   st.add(s('a', 1000, 10_000))
   st.add(s('a', 2000, 20_000, 37.7))
@@ -76,10 +76,15 @@ test('prune drops samples received before now − horizon (180 s by default)', (
   st.prune(190_001)
   assert.equal(st.size, 2)
   assert.deepEqual(st.track('a', 0).map((x) => x.tMs), [2000])
+  st.prune(20_000 + 30 * 60_000) // 30 min later: the newest samples stay (a globe view refreshes its areas every 30 min)
+  assert.equal(st.size, 2)
+  assert.deepEqual(hexes(st.view(KSFO.lat, KSFO.lon, 40, 0)).sort(), ['a@2000', 'b@2000'])
+  st.prune(20_000 + LATEST_HORIZON_MS + 1)
+  assert.equal(st.size, 0)
 })
 
 test('prune forgets emptied hexes everywhere, including the Deduper', () => {
-  const st = new SampleStore({ horizonMs: 60_000 })
+  const st = new SampleStore({ horizonMs: 60_000, latestHorizonMs: 60_000 })
   st.add(s('a', 1000, 1000))
   st.add(s('b', 1000, 50_000))
   st.prune(61_001)

@@ -255,3 +255,26 @@ test('perf: entries() for 10,000 aircraft, CPU p95 ≤ 2 ms', (t) => {
     `CPU p50 ${pct(cpuMs, 0.5).toFixed(3)} ms, p95 ${pct(cpuMs, 0.95).toFixed(3)} ms`)
   assert.ok(pct(cpuMs, 0.95) <= 2, `CPU p95 ${pct(cpuMs, 0.95)} ms`)
 })
+
+test('staleS: 3 of the aircraft\'s own gaps (a 72 s replay cadence keeps it 216 s), at least 60 s or the server hint', () => {
+  const f = new Fleet()
+  f.ingest([smp({ tMs: T0 })])
+  assert.equal(f.entries(T0)[0].staleS, 60, 'one sample: the 60 s floor')
+  f.ingest([smp({ tMs: T0 + 72_000 })])
+  const e = f.entries(T0 + 72_000 + 150_000)[0]
+  assert.equal(e.staleS, 216)
+  near(distanceNm(32, 34.8, e.lat, e.lon), 15, 1e-9) // still dead-reckoned 150 s past its newest sample at 360 kt
+  f.prune(T0 + 72_000 + 216_000, 60)
+  assert.equal(f.size, 1, 'kept up to its own staleS')
+  f.prune(T0 + 72_000 + 216_001, 60)
+  assert.equal(f.size, 0)
+
+  const g = new Fleet()
+  g.setHintS(2.5 * 1800) // a globe view refreshed every 30 min
+  g.ingest([smp({ tMs: T0 })])
+  assert.equal(g.entries(T0 + 1000)[0].staleS, 4500)
+  g.setHintS(2.5 * 15.6) // zoomed in again: back to the 60 s floor
+  assert.equal(g.entries(T0 + 1000)[0].staleS, 60)
+  g.setHintS(Number.NaN)
+  assert.equal(g.entries(T0 + 1000)[0].staleS, 60)
+})

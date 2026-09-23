@@ -4,17 +4,26 @@ import { distanceNm } from '../shared/geo.ts'
 import type { Sample } from '../shared/types.ts'
 
 /**
- * Recent deduped samples per aircraft, kept for horizonMs (default 180 s) of server receipt time (rxMs).
- * Clients poll with `since` = the largest rxMs they have seen, so every answer carries only what is new to them.
+ * How long an aircraft's newest sample is kept: longer than the slowest area refresh (a globe view asks each area every
+ * 30 min, Poller.viewPeriodMs), so a reload or a new view of a wide area still finds what was polled for it.
+ */
+export const LATEST_HORIZON_MS = 35 * 60_000
+
+/**
+ * Recent deduped samples per aircraft, kept for horizonMs (default 180 s) of server receipt time (rxMs); the newest one
+ * of each aircraft stays until latestHorizonMs (default 35 min). Clients poll with `since` = the largest rxMs they have
+ * seen, so every answer carries only what is new to them.
  */
 export class SampleStore {
   #horizonMs: number
+  #latestHorizonMs: number
   #byHex = new Map<string, Sample[]>() // arrival order = tMs ascending (the Deduper rejects older samples)
   #dedupe = new Deduper()
   #size = 0
 
-  constructor(opts: { horizonMs?: number } = {}) {
+  constructor(opts: { horizonMs?: number; latestHorizonMs?: number } = {}) {
     this.#horizonMs = opts.horizonMs ?? 180_000
+    this.#latestHorizonMs = Math.max(this.#horizonMs, opts.latestHorizonMs ?? LATEST_HORIZON_MS)
   }
 
   /** false when the Deduper rejects the sample (re-served, older, or unmoved < 100 ms later). */
@@ -52,14 +61,19 @@ export class SampleStore {
     return list ? list[list.length - 1] : null
   }
 
-  /** Drops samples with rxMs < nowMs − horizon; an aircraft left with none is forgotten, Deduper included. */
+  /**
+   * Drops samples with rxMs < nowMs − horizon, except each aircraft's newest, which goes at nowMs − latestHorizon; an
+   * aircraft left with none is forgotten, Deduper included.
+   */
   prune(nowMs: number): void {
     const cutoff = nowMs - this.#horizonMs
+    const latestCutoff = nowMs - this.#latestHorizonMs
     for (const [hex, list] of this.#byHex) {
       // ponytail: assumes rxMs never decreases within one hex (one poller, one server clock). With several
       // pollers into one store (M6 dual source), switch this to a filter.
       let k = 0
-      while (k < list.length && list[k].rxMs < cutoff) k++
+      while (k < list.length - 1 && list[k].rxMs < cutoff) k++
+      if (list[list.length - 1].rxMs < latestCutoff) k = list.length
       if (k === 0) continue
       this.#size -= k
       if (k === list.length) {

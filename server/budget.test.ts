@@ -211,3 +211,32 @@ test('defaults to the wall clock', () => {
   assert.equal(b.tryTake(), true)
   assert.equal(b.degraded, null)
 })
+
+test('a 400 or 404 backs off like a 5xx (adsb.fi restricts IPs that keep sending bad requests)', () => {
+  const c = { t: 0 }
+  const b = new TokenBucket(0.9, () => c.t, () => 0, 1)
+  assert.equal(b.tryTake(), true)
+  b.onResult(404, null)
+  assert.ok(b.state().pausedUntilMs >= 2000, 'paused ≥ 2 s')
+  c.t = 1500
+  assert.equal(b.tryTake(), false)
+  c.t = 2000
+  assert.equal(b.tryTake(), true, 'one probe after the pause')
+  b.onResult(400, null)
+  assert.ok(b.state().pausedUntilMs - c.t >= 4000, 'the second failure waits longer')
+  assert.equal(b.state().counts.r4xx, 2)
+})
+
+test('burst 1: never two requests less than 1/rps apart, even after idling', () => {
+  const c = { t: 0 }
+  const b = new TokenBucket(0.9, () => c.t, () => 0, 1)
+  const sent: number[] = []
+  for (; c.t < 60_000; c.t += 100) {
+    if (b.tryTake()) {
+      sent.push(c.t)
+      b.onResult(200, null)
+    }
+    if (c.t === 20_000) c.t += 30_000 // idle: tokens must not pile up past 1
+  }
+  for (let i = 1; i < sent.length; i++) assert.ok(sent[i] - sent[i - 1] >= 1100, `${sent[i - 1]} → ${sent[i]}`)
+})

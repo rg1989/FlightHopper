@@ -38,13 +38,16 @@ interface Call {
 }
 
 /** Fake upstream on a fake clock: records calls, answers golden bodies; queued replies override the status. */
-function fakeSource(clock: { t: number }, fullSnapshot: boolean) {
+function fakeSource(clock: { t: number }, fullSnapshot: boolean, liveHexes = false) {
   const calls: Call[] = []
   const replies: { status: number; retryAfterS?: number }[] = []
   const reply = (m: Method, args: unknown[]): Promise<FetchResult> => {
     calls.push({ t: clock.t, m, args })
     const { status, retryAfterS } = replies.shift() ?? { status: 200 }
-    const body = status === 200 ? BODIES[m] : ''
+    // liveHexes: a hex answer's upstream `now` moves with the clock, so each one is a fresh position (the fixed recorded
+    // body is the same position re-served, which the poller rightly treats as nothing new and waits 30 s).
+    const live = liveHexes && m === 'hexes'
+    const body = status !== 200 ? '' : live ? BODIES.hexes.replace(/"now":\s*\d+/, `"now": ${HEXES_NOW_MS + clock.t - T0}`) : BODIES[m]
     const snapshot = status === 200 ? (m === 'all' ? normalizeReadsb(body) : normalizeAdsblol(body)) : null
     const r = { url: `fake:${m}`, status, tSendMs: clock.t, tRecvMs: clock.t, bytes: body.length || 100, body, retryAfterS: retryAfterS ?? null, snapshot }
     return Promise.resolve(r)
@@ -60,9 +63,9 @@ function fakeSource(clock: { t: number }, fullSnapshot: boolean) {
 
 const T0 = 1_000_000
 
-function setup(o: { fullSnapshot?: boolean; maxRps?: number; hideFlagged?: boolean; recorder?: Recorder; opts?: Partial<PollerOpts> } = {}) {
+function setup(o: { fullSnapshot?: boolean; maxRps?: number; hideFlagged?: boolean; recorder?: Recorder; liveHexes?: boolean; opts?: Partial<PollerOpts> } = {}) {
   const clock = { t: T0 }
-  const f = fakeSource(clock, o.fullSnapshot ?? false)
+  const f = fakeSource(clock, o.fullSnapshot ?? false, o.liveHexes ?? false)
   const store = new SampleStore()
   const bucket = new TokenBucket(o.maxRps ?? 100, () => clock.t, () => 0)
   const poller = new Poller(f.source, store, bucket, {
@@ -142,7 +145,7 @@ test('while chasing, the view circle is asked every chasePeriodMs and carries th
 })
 
 test('a chased aircraft outside the view circle gets a hex request every chasePeriodMs; one that is not found, every 30 s', async () => {
-  const s = setup({ opts: { chasePeriodMs: 1400 } })
+  const s = setup({ liveHexes: true, opts: { chasePeriodMs: 1400 } })
   await runUntil(s, 5000, () => {
     if ((s.clock.t - T0) % 1000 !== 0) return
     s.poller.touchView(LLBG[0], LLBG[1], 5) // a1c7e4 (in the golden hex body) flies elsewhere
@@ -150,11 +153,12 @@ test('a chased aircraft outside the view circle gets a hex request every chasePe
   })
   assert.deepEqual(rel(s.calls, 'hexes'), [0, 1400, 2800, 4200])
 
-  const t = setup({ opts: { chasePeriodMs: 1400 } })
-  t.replies.push({ status: 200 }) // the golden hex body…
-  t.poller.touchChase('abcdef')
-  await t.poller.tick()
-  assert.equal(t.calls.length, 1)
+  // A hex the answer does not hold (the golden body has three others): asked once, then not before 30 s.
+  const t = setup({ liveHexes: true, opts: { chasePeriodMs: 1400 } })
+  await runUntil(t, 40_000, () => {
+    if ((t.clock.t - T0) % 1000 === 0) t.poller.touchChase('abcdef')
+  })
+  assert.deepEqual(rel(t.calls, 'hexes'), [0, 30_000])
 })
 
 test('singleCircle: every view, however wide, is one circle of ≤ 250 nm; a new view replaces the old one', async () => {
@@ -204,6 +208,30 @@ test('a wide view: never-asked areas nearest its centre first, then each once pe
   assert.ok(second.length > 0 && second.every((c) => c.t - T0 >= period), 'nothing is asked twice within its period')
 })
 
+test('singleCircle: a globe-wide view is still one 250 nm circle, refreshed at that circle\'s period, not the globe\'s', () => {
+  const s = setup({ maxRps: 1, opts: { singleCircle: true } })
+  s.poller.touchView(LLBG[0], LLBG[1], 5400)
+  assert.equal(s.poller.brief().viewEveryS, viewPeriodMs(250) / 1000)
+})
+
+test('the view circle moved by a third of its radius or more is a new area, asked at once (even after an empty answer)', async () => {
+  const s = setup()
+  const empty = JSON.stringify({ ac: [], msg: 'No error', now: 1_790_000_000_000, total: 0 })
+  s.source.circle = (lat, lon, radiusNm) => {
+    s.calls.push({ t: s.clock.t, m: 'circle', args: [lat, lon, radiusNm] })
+    return Promise.resolve({ url: 'fake', status: 200, tSendMs: s.clock.t, tRecvMs: s.clock.t, bytes: empty.length, body: empty, retryAfterS: null, snapshot: normalizeAdsblol(empty) })
+  }
+  s.poller.touchView(32, 34, 60) // the sea: empty, so next due after 4 × 7.2 s
+  await s.poller.tick()
+  s.clock.t += 1000
+  s.poller.touchView(32, 34.1, 60) // 5 nm: the same area
+  assert.equal(await s.poller.tick(), false)
+  s.clock.t += 1000
+  s.poller.touchView(32, 34.6, 60) // 30 nm east: a new area
+  assert.equal(await s.poller.tick(), true)
+  assert.deepEqual(rel(s.calls), [0, 2000])
+})
+
 test('an area whose last answer was empty is asked 4× less often', async () => {
   const s = setup()
   const empty = JSON.stringify({ ac: [], msg: 'No error', now: 1_790_000_000_000, total: 0 })
@@ -233,7 +261,7 @@ test('interest expires after interestTtlMs; touching again extends it', async ()
 })
 
 test('a chase expires after chaseTtlMs', async () => {
-  const s = setup()
+  const s = setup({ liveHexes: true })
   s.poller.touchChase('a1c7e4')
   assert.deepEqual(s.poller.report().chasedHexes, ['a1c7e4'])
   await runUntil(s, 12_000)
@@ -255,7 +283,7 @@ test('the chase batch holds at most 100 hexes, most recently touched first', asy
 })
 
 test('429: no request until Retry-After has passed, then one probe; degraded rate-limited', async () => {
-  const s = setup({ maxRps: 1 })
+  const s = setup({ maxRps: 1, liveHexes: true })
   s.poller.touchChase('a1c7e4')
   s.replies.push({ status: 429, retryAfterS: 5 })
   assert.equal(await s.poller.tick(), true)
@@ -347,7 +375,7 @@ test('the recorder receives every result, failures included', async () => {
 })
 
 test('report: periods, counters and bytes per hour', async () => {
-  const s = setup()
+  const s = setup({ liveHexes: true })
   s.poller.touchView(LLBG[0], LLBG[1], 5)
   s.poller.touchChase('a1c7e4')
   await runUntil(s, 9950, () => {

@@ -251,6 +251,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // blocked: nothing stored, nothing kept
   }
   let prefs = readScenePrefs(location.search, stored)
+  // Stored at once: the address bar keeps only toggles that differ from the defaults (urlState.ts), so a ?topo=1 read
+  // here must be what a reload finds in storage once the bar has dropped it.
+  writeScenePrefs(prefs, store)
   const base = import.meta.env.BASE_URL
   // Topography takes the scene in the task that builds the viewer, before its first frame: moving the factor off 1
   // with tiles loaded rebuilds every tile (PoC: up to 2 s).

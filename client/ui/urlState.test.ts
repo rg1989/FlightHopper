@@ -21,7 +21,8 @@ test('writeUrl: browse drops hex and cam; defaults write nothing; small heights 
 })
 
 test('readView: malformed or out-of-range values are null', () => {
-  for (const q of ['?at=1,2', '?at=91,0,10', '?at=0,181,10', '?at=0,0,0', '?at=a,b,c', '?at=,,']) assert.equal(readView(q).at, null, q)
+  for (const q of ['?at=1,2', '?at=91,0,10', '?at=0,181,10', '?at=0,0,-1', '?at=a,b,c', '?at=,,']) assert.equal(readView(q).at, null, q)
+  assert.deepEqual(readView('?at=12.9,77.6,-0.04').at, { lat: 12.9, lon: 77.6, heightKm: -0.04 }, 'a chase camera below the ellipsoid')
   assert.equal(readView('?cam=1,2').cam, null)
   assert.equal(readView('?cam=0,-10,0').cam, null)
   assert.deepEqual(readView('').cam, null)

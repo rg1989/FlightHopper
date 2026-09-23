@@ -71,15 +71,17 @@ test('an aircraft without a position still gets its info (the table can show it 
 })
 
 test('the InfoStore is pruned on each good answer with the sample horizon', async () => {
-  assert.equal(INFO_HORIZON_MS, 180_000)
+  assert.equal(INFO_HORIZON_MS, 35 * 60_000)
   const s = setup(true)
   await s.poller.tick()
   assert.equal(s.info.size, 6)
   s.answer.body = JSON.stringify({ now: 1_790_000_000_000, ac: [] })
   s.clock.t = T0 + INFO_HORIZON_MS
+  s.poller.touchView(LLBG[0], LLBG[1], 5) // still watched
   await s.poller.tick()
   assert.equal(s.info.size, 6, 'exactly at the horizon is kept')
   s.clock.t += 20_000 // the area answered empty: next asked after 4 × its 5 s period
+  s.poller.touchView(LLBG[0], LLBG[1], 5)
   await s.poller.tick()
   assert.equal(s.info.size, 0)
 })

@@ -32,13 +32,16 @@ const nums = (v: string | null, n: number): number[] | null => {
   return p.length === n && p.every(Number.isFinite) ? p : null
 }
 
-/** ?at= (|lat| ≤ 90, |lon| ≤ 180, height > 0) and ?cam=; anything malformed is null. */
+/**
+ * ?at= (|lat| ≤ 90, |lon| ≤ 180, height > −1 km: a chase camera near the ground where the geoid is below the
+ * ellipsoid has a negative ellipsoidal height; browse clamps its own) and ?cam=; anything malformed is null.
+ */
 export function readView(search: string): { at: ViewAt | null; cam: Orbit | null } {
   const q = new URLSearchParams(search)
   const a = nums(q.get('at'), 3)
   const c = nums(q.get('cam'), 3)
   return {
-    at: a !== null && Math.abs(a[0]) <= 90 && Math.abs(a[1]) <= 180 && a[2] > 0 ? { lat: a[0], lon: a[1], heightKm: a[2] } : null,
+    at: a !== null && Math.abs(a[0]) <= 90 && Math.abs(a[1]) <= 180 && a[2] > -1 ? { lat: a[0], lon: a[1], heightKm: a[2] } : null,
     cam: c !== null && c[2] > 0 ? { headingDeg: c[0], pitchDeg: c[1], rangeM: c[2] } : null,
   }
 }

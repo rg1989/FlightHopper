@@ -36,7 +36,7 @@ test('non-ICAO hex kept and lowercased; strings trimmed', () => {
   assert.equal(toSample({ ...byHex('71bd79'), hex: 'ABC123', flight: 'UAL1    ' }, 0, 0, 0)!.hex, 'abc123')
   assert.equal(toSample({ ...byHex('71bd79'), flight: 'UAL1    ' }, 0, 0, 0)!.callsign, 'UAL1')
   for (const junk of ['@@@@@@@@', '00000000', '   ', '@@ ']) assert.equal(toSample({ ...byHex('71bd79'), flight: junk }, 0, 0, 0)!.callsign, null, junk)
-  assert.equal(toSample({ ...byHex('71bd79'), flight: 'AB@C1   ' }, 0, 0, 0)!.callsign, 'ABC1')
+  assert.equal(toSample({ ...byHex('71bd79'), flight: 'AB@C1   ' }, 0, 0, 0)!.callsign, null, 'part-decoded: not the real callsign')
 })
 
 test('no position → null', () => {

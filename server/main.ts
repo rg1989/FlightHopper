@@ -29,8 +29,6 @@ import { SampleStore } from './store.ts'
 // ponytail: loopback only. Cloudflare Tunnel and the Vite dev proxy both connect locally, but other machines on the
 // LAN cannot. Add a HOST variable when one needs to.
 const HOST = '127.0.0.1'
-// ponytail: an area source (adsb.lol) polls the cells of at most a 250 nm view; a wider view still gets whatever the
-// store holds. Full-snapshot sources have no cells, so the cap costs them nothing.
 const LOW_BUDGET_RPS = 0.5 // below this an area source polls one circle per view, however wide (Poller singleCircle)
 const HEX = /^~?[0-9a-f]{6}$/
 const GZIP_MIN_BYTES = 1024
@@ -147,7 +145,7 @@ export function createServer(
   const rps = Math.min(cfg.maxRps, source.caps.maxRps)
   const bucket = new TokenBucket(rps, nowMs, Math.random, source.caps.burst)
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
-  // The poller prunes the sample store (180 s horizon) on every 100 ms tick and the info store on every good answer,
+  // The poller prunes the sample store (180 s of track, 35 min for each newest sample) on every 100 ms tick and the info store on every good answer,
   // so no separate prune timer is needed.
   const poller = new Poller(source, store, bucket, { ...POLLER_DEFAULTS, singleCircle: rps < LOW_BUDGET_RPS, recorder, hideFlagged: !cfg.showPiaLadd, nowMs, info })
   const routes =

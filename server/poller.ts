@@ -8,7 +8,7 @@ import { cellsForView, isBusy, type Cell } from './cells.ts'
 import type { InfoStore } from './infoStore.ts'
 import type { Recorder } from './recorder.ts'
 import type { FetchResult, Source } from './sources/types.ts'
-import type { SampleStore } from './store.ts'
+import { LATEST_HORIZON_MS, type SampleStore } from './store.ts'
 
 export interface PollerOpts {
   cellPeriodMs: number
@@ -43,7 +43,7 @@ const TICK_MS = 100
 export const VIEW_CIRCLE_MAX_NM = 250
 const EMPTY_FACTOR = 4 // an area whose last answer was empty (sea, desert) is asked this many times less often…
 const EMPTY_MAX_MS = 3_600_000 // …but at least hourly
-const HEX_RETRY_MS = 30_000 // a chase hex request that found nothing waits this long before the next one
+const HEX_RETRY_MS = 30_000 // a chased hex whose hex request brought no position waits this long before the next one
 
 /** A wide view asks only for the areas within this distance of its centre: the middle of the globe, not its rim. */
 export const WIDE_REACH_NM = 2500
@@ -64,8 +64,8 @@ const OFFSET_WINDOW_MS = 10 * 60_000
 const HOUR_MS = 3_600_000
 const MIN_SPAN_MS = 60_000 // bytes/hour is extrapolated from at least one minute
 const KEEP_INTERVALS = 100 // p95 over the most recent intervals
-/** The InfoStore forgets an aircraft after this long without an answer: the SampleStore's default horizon. */
-export const INFO_HORIZON_MS = 180_000
+/** The InfoStore forgets an aircraft after this long without an answer: as long as the SampleStore keeps its newest sample. */
+export const INFO_HORIZON_MS = LATEST_HORIZON_MS
 
 /** p95 (nearest rank) of intervals in ms, as seconds; null when there are none. */
 function p95S(xs: readonly number[]): number | null {
@@ -121,7 +121,7 @@ export class Poller {
   #viewPeriodMs = 0 // its period
   #chased = new Map<string, number>() // hex → expiresMs
   #lastChaseReqMs = -Infinity
-  #hexEmptyMs = -Infinity // when a chase hex request last found nothing
+  #hexRetryMs = new Map<string, number>() // hex → not asked again before this (its last hex request brought no position)
   #lastAllReqMs = -Infinity
   #chaseOk = new OkIntervals()
   #snapOk = new OkIntervals()
@@ -149,10 +149,11 @@ export class Poller {
     if (this.#source.caps.fullSnapshot) return []
     const now = this.#now()
     const expiresMs = now + this.#opts.interestTtlMs
-    const periodMs = Math.max(this.#opts.cellPeriodMs, viewPeriodMs(radiusNm))
+    const single = this.#opts.singleCircle || radiusNm <= VIEW_CIRCLE_MAX_NM
+    // One circle is at most 250 nm wide whatever the view: its period is that circle's, not the globe's.
+    const periodMs = Math.max(this.#opts.cellPeriodMs, viewPeriodMs(single ? Math.min(VIEW_CIRCLE_MAX_NM, radiusNm) : radiusNm))
     this.#viewAt = { lat, lon }
     this.#viewPeriodMs = periodMs
-    const single = this.#opts.singleCircle || radiusNm <= VIEW_CIRCLE_MAX_NM
     const cells = single
       ? [{ id: 'view', lat, lon, radiusNm: Math.ceil(Math.min(VIEW_CIRCLE_MAX_NM, radiusNm)) }]
       : cellsForView(lat, lon, Math.min(WIDE_REACH_NM, radiusNm))
@@ -163,6 +164,12 @@ export class Poller {
       if (c === undefined) {
         this.#cells.set(cell.id, { cell, expiresMs, lastReqMs: -Infinity, ok: new OkIntervals(), periodMs, periodSetMs: now, count: null })
         continue
+      }
+      // The view circle moved a third of its radius or more (a pan, or the chased aircraft flying on): a new area, asked
+      // at once, whatever the old one's timer (up to 4× a period after an empty answer) said.
+      if (cell.id === 'view' && distanceNm(c.cell.lat, c.cell.lon, cell.lat, cell.lon) > c.cell.radiusNm / 3) {
+        c.lastReqMs = -Infinity
+        c.count = null
       }
       c.cell = cell
       c.expiresMs = Math.max(c.expiresMs, expiresMs)
@@ -205,7 +212,9 @@ export class Poller {
         const r = await this.#source.hexes(batch)
         if (this.#ingest(r)) {
           this.#chaseOk.ok(this.#now())
-          if (r.snapshot!.aircraft.length === 0) this.#hexEmptyMs = now
+          // A good answer without a fresh (shown) position for it: not found, position-less or hidden. That hex waits
+          // before it is asked again. A failed request is the bucket's to pace (Retry-After, back-off).
+          for (const hex of batch) if ((this.#store.latest(hex)?.rxMs ?? -Infinity) < now) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
         }
         return true
       }
@@ -214,8 +223,11 @@ export class Poller {
       c.lastReqMs = now
       const r = await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm)
       if (this.#ingest(r)) {
-        c.ok.ok(this.#now())
+        const t = this.#now()
+        c.ok.ok(t)
         c.count = r.snapshot!.aircraft.length
+        // The view circle is how a chased aircraft in it is refreshed: its answers count as chase answers.
+        if (this.#chased.size > 0 && r.snapshot!.aircraft.some((a) => this.#chased.has(a.hex.toLowerCase()))) this.#chaseOk.ok(t)
       }
       return true
     } finally {
@@ -317,21 +329,23 @@ export class Poller {
   #expire(now: number): void {
     for (const [id, c] of this.#cells) if (c.expiresMs <= now) this.#cells.delete(id)
     for (const [hex, exp] of this.#chased) if (exp <= now) this.#chased.delete(hex)
+    for (const [hex, until] of this.#hexRetryMs) if (until <= now) this.#hexRetryMs.delete(hex)
     if (this.#chased.size === 0) this.#chaseOk.lastOkMs = null // a new chase must not count the idle gap
   }
 
   /**
    * The chased hexes (≤ 100, most recently touched first) that need a hex request: never stored (a ?hex= link), or last
-   * seen outside the view circle (none while the view is grid cells). After a hex request that found nothing
-   * (landed, out of coverage, a mistyped ?hex=), none for HEX_RETRY_MS.
+   * seen outside the view circle (none while the view is grid cells). A hex whose last hex request brought no position
+   * (landed, out of coverage, position-less, hidden, a mistyped ?hex=) is left out for HEX_RETRY_MS.
    * ponytail: more than 100 concurrent chases starve the rest.
    */
   #batch(now: number): string[] {
-    if (this.#chased.size === 0 || now - this.#hexEmptyMs < HEX_RETRY_MS) return []
+    if (this.#chased.size === 0) return []
     const view = this.#cells.get('view')?.cell
     return [...this.#chased]
       .sort((a, b) => b[1] - a[1])
       .filter(([hex]) => {
+        if ((this.#hexRetryMs.get(hex) ?? -Infinity) > now) return false
         const s = this.#store.latest(hex)
         // Inside the view circle its answers carry the aircraft (or, once it is gone, a hex request would not find it either).
         return s === null || view === undefined || distanceNm(view.lat, view.lon, s.lat, s.lon) > view.radiusNm

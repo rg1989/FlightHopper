@@ -12,13 +12,14 @@ export function normalizeAdsblol(body: string): Snapshot {
 }
 
 /**
- * The callsign in a readsb `flight` field, or null: readsb writes '@' for characters it could not decode, and an
- * all-zero callsign is a transponder's placeholder, so both mean "none" (the table then shows the hex).
+ * The callsign in a readsb `flight` field, or null: readsb writes '@' for characters it could not decode (so the rest
+ * is not the real callsign either), and an all-zero callsign is a transponder's placeholder. Both mean "none" (the
+ * table then shows the hex).
  */
 export function callsignOf(flight: unknown): string | null {
   if (typeof flight !== 'string') return null
-  const t = flight.replaceAll('@', '').trim()
-  return t === '' || /^0+$/.test(t) ? null : t
+  const t = flight.trim()
+  return t === '' || t.includes('@') || /^0+$/.test(t) ? null : t
 }
 
 /** readsb --net-api-port and aircraft.json: { aircraft: [...], now: <seconds, fractional> } */

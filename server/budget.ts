@@ -10,7 +10,7 @@ const DEFAULT_RETRY_AFTER_S = 5
  * Upstream request budget: a token bucket (burst 2 by default) whose rate adapts to what the upstream answers.
  * Call tryTake() before each request and onResult() with its outcome.
  * 429 → rate halves for good and pauses for Retry-After (PLAN.md Global Constraints: never climb back toward a refused rate).
- * 401/403 → blocked forever (never retry a block). 5xx / network error (status 0) → exponential pause.
+ * 401/403 → blocked forever (never retry a block). 5xx, other 4xx (400, 404…) and network errors (status 0) → exponential pause.
  * After any pause exactly one probe request is allowed; then the steady rate applies.
  */
 export class TokenBucket {
@@ -56,14 +56,15 @@ export class TokenBucket {
     } else if (status === 401 || status === 403) {
       this.#counts.r4xx++
       this.#blocked = true
-    } else if (status === 0 || status >= 500) {
+    } else if (status === 0 || status >= 400) {
+      // 5xx, network errors and any other 4xx (400, 404…) back off: adsb.fi restricts IPs that keep sending bad requests.
       if (status === 0) this.#counts.err++
-      else this.#counts.r5xx++
+      else if (status >= 500) this.#counts.r5xx++
+      else this.#counts.r4xx++
       this.#fails++
       this.#pause(now + Math.min(MAX_BACKOFF_MS, 2 ** this.#fails * 1000 + this.#random() * 1000))
     } else {
-      if (status >= 400) this.#counts.r4xx++
-      else this.#counts.ok++
+      this.#counts.ok++
       this.#fails = 0
     }
   }
