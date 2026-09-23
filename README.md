@@ -12,8 +12,8 @@ Personal, non-commercial project. **Entertainment only — not for navigation, A
 npm ci
 cp .env.example .env.local   # set CONTACT; optional VITE_CESIUM_ION_TOKEN
 npm run check                # type-check + tests
-npm run dev                  # client (Vite)
-npm run server               # API server (after work package A1)
+make                         # API (replaying the newest recording) + client; prints the link, Ctrl+C stops both
+make live                    # the same on live adsb.lol (stop the recorder first)
 ```
 
 ## Data sources
