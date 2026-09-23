@@ -11,7 +11,8 @@ export interface StatusBrief {
   upstreamOffsetMs?: number      // server clock − upstream clock, whole ms (the poller's MinOffset); absent until known. Replay: server now − recording time; live: ≈ latency
   viewEveryS?: number            // expected refresh of the newest view's aircraft, s (its zoom-scaled period, stretched by the budget)
   chaseEveryS?: number           // expected refresh of the chased aircraft, s
-  pendingAreas?: number          // areas of the view not yet asked once (a wide view fills centre-out)
+  pendingAreas?: number          // areas of the view not loaded yet: no good answer so far (a wide view fills centre-out)
+  pendingBoxes?: [number, number, number, number][] // those of them that are grid cells, [south, north, west, east] °, in the order they will be asked (the first is loading now); absent when none: the map veils them
 }
 
 export interface ViewResponse {

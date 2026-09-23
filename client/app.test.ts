@@ -54,6 +54,13 @@ test('browse poll circle: antimeridian, whole world, tiny views, and a stable ke
   assert.deepEqual(browseCircle(r), browseCircle({ ...r })) // same view → same key → the server sends only what is new
 })
 
+test('browse poll circle: centred on the screen centre when given (the server fills outwards from it), still covering every corner', () => {
+  const r = { west: 100, south: -60, east: 170, north: 5 } // a globe view over Australia: the rectangle's middle is not the screen's
+  const c = browseCircle(r, { lat: -25.004, lon: 135.001 })
+  assert.deepEqual({ lat: c.lat, lon: c.lon }, { lat: -25, lon: 135 })
+  for (const [lat, lon] of [[r.south, r.west], [r.south, r.east], [r.north, r.west], [r.north, r.east]]) assert.ok(distanceNm(c.lat, c.lon, lat, lon) <= c.nm)
+})
+
 test('on-screen entries: the ones inside the rectangle, written into a reused array', () => {
   const all = [entry('a', 47, 11), entry('b', 50, 11), entry('c', 0, 179.5), entry('d', 0, -179.5), entry('e', 0, 170)]
   const out: FleetEntry[] = [entry('stale', 0, 0)]

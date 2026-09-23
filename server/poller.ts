@@ -4,7 +4,7 @@ import { MinOffset } from '../shared/clock.ts'
 import { isHidden, toSample } from '../shared/sample.ts'
 import type { TokenBucket } from './budget.ts'
 import { distanceNm } from '../shared/geo.ts'
-import { cellsForView, isBusy, type Cell } from './cells.ts'
+import { cellBox, cellsForView, type Cell } from './cells.ts'
 import type { InfoStore } from './infoStore.ts'
 import type { Recorder } from './recorder.ts'
 import type { FetchResult, Source } from './sources/types.ts'
@@ -128,6 +128,7 @@ export class Poller {
   #bytes: { t: number; n: number }[] = [] // last hour of responses
   #requestsTotal = 0
   #busy = false
+  #asking: CellState | null = null // the area whose request is in flight
   #timer: ReturnType<typeof setInterval> | null = null
 
   constructor(source: Source, store: SampleStore, bucket: TokenBucket, opts: PollerOpts) {
@@ -221,7 +222,8 @@ export class Poller {
       const c = this.#next(now)
       if (!c || !this.#bucket.tryTake()) return false
       c.lastReqMs = now
-      const r = await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm)
+      this.#asking = c
+      const r = await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm).finally(() => (this.#asking = null))
       if (this.#ingest(r)) {
         const t = this.#now()
         c.ok.ok(t)
@@ -255,10 +257,19 @@ export class Poller {
     const full = this.#source.caps.fullSnapshot
     let busy = 0 // areas of the view that hold (or may hold) aircraft: each costs one request per round
     let pending = 0
+    const waiting: CellState[] = []
+    const now = this.#now()
+    const chaseInView = this.#chaseInView()
     for (const c of this.#cells.values()) {
       if (c.count !== 0) busy++
-      if (c.lastReqMs === -Infinity) pending++
+      // Not loaded: never asked (or its view circle moved), or no good answer yet (in flight, or failed).
+      if (c.lastReqMs !== -Infinity && c.ok.lastOkMs !== null) continue
+      pending++
+      if (c.cell.id !== 'view') waiting.push(c)
     }
+    // In the order they will be asked: the one in flight first (the map shows a spinner in it).
+    const order = (c: CellState): number => (c === this.#asking ? Infinity : this.#priority(c, now, chaseInView))
+    const boxes = waiting.sort((a, b) => order(b) - order(a)).map((c) => cellBox(c.cell))
     const b: StatusBrief = {
       source: this.#source.caps.kind,
       degraded: this.#bucket.degraded,
@@ -269,6 +280,7 @@ export class Poller {
       chaseEveryS: Math.max(full ? this.#opts.fullSnapshotPeriodMs : this.#opts.chasePeriodMs, tokenMs) / 1000,
       pendingAreas: pending,
     }
+    if (boxes.length > 0) b.pendingBoxes = boxes
     // The offset that stamps every sample (#ingest): lets the client light a replay at its recorded time (sun = tRender − it).
     if (this.#offset.ready) b.upstreamOffsetMs = Math.round(this.#offset.get())
     return b
@@ -376,26 +388,32 @@ export class Poller {
   }
 
   /**
-   * The next area to ask: never-asked ones first (busy airspace before the rest, each nearest the newest view centre
-   * first); then the most overdue for its period.
+   * The next area to ask: never-asked ones first, nearest the newest view centre first; then the most overdue for its
+   * period.
    */
   #next(now: number): CellState | null {
     let best: CellState | null = null
     let bestKey = -Infinity
     const chaseInView = this.#chaseInView()
     for (const c of this.#cells.values()) {
-      const period = this.#periodMs(c, chaseInView)
-      if (now - c.lastReqMs < period) continue
-      // Never asked: 1e9 (2e9 in busy airspace) minus the distance, nearest first. Else: how many periods overdue (≥ 1).
-      const key = c.lastReqMs === -Infinity
-        ? (isBusy(c.cell) ? 2e9 : 1e9) - distanceNm(this.#viewAt.lat, this.#viewAt.lon, c.cell.lat, c.cell.lon)
-        : (now - c.lastReqMs) / period
+      if (now - c.lastReqMs < this.#periodMs(c, chaseInView)) continue
+      const key = this.#priority(c, now, chaseInView)
       if (key > bestKey) {
         best = c
         bestKey = key
       }
     }
     return best
+  }
+
+  /**
+   * Never asked: 1e9 minus the distance from the view centre, so a view fills outwards from where the user looks. Else:
+   * how many periods overdue (≥ 1 when due).
+   */
+  #priority(c: CellState, now: number, chaseInView: boolean): number {
+    return c.lastReqMs === -Infinity
+      ? 1e9 - distanceNm(this.#viewAt.lat, this.#viewAt.lon, c.cell.lat, c.cell.lon)
+      : (now - c.lastReqMs) / this.#periodMs(c, chaseInView)
   }
 
   #pruneBytes(now: number): void {

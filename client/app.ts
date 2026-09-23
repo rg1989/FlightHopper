@@ -26,6 +26,7 @@ import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
+import { makePendingLayer } from './scene/pendingLayer.ts'
 import { ChaseModel } from './scene/model.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
@@ -95,16 +96,16 @@ const round2 = (deg: number): number => Math.round(deg * 100) / 100
 const wrap180 = (lon: number): number => ((((lon + 180) % 360) + 360) % 360) - 180
 
 /**
- * The browse view poll: the circle around the visible rectangle, centred on it (to 0.01°, the ApiClient's key) and
- * reaching its farthest corner (a lat/lon rectangle's farthest point from inside it is a corner), 20–5,400 nm (the
+ * The browse view poll: the circle around the visible rectangle, centred on at (the screen centre: the server fills a
+ * wide view outwards from it), else on the rectangle, to 0.01° (the ApiClient's key), and reaching its farthest corner (a lat/lon rectangle's farthest point from inside it is a corner), 20–5,400 nm (the
  * visible hemisphere). A rectangle with west > east spans the antimeridian.
  * ponytail: every pan moves the centre, so the first poll after it is a new view key and a full (since=0) reply
  * (~200 KB gzipped for 5,000 aircraft). Upgrade: snap the centre to a grid so small pans keep their key.
  */
-export function browseCircle(r: RectDeg): { lat: number; lon: number; nm: number } {
+export function browseCircle(r: RectDeg, at?: { lat: number; lon: number }): { lat: number; lon: number; nm: number } {
   const spanDeg = r.west <= r.east ? r.east - r.west : r.east + 360 - r.west
-  const lat = round2((r.south + r.north) / 2)
-  const lon = round2(wrap180(r.west + spanDeg / 2))
+  const lat = round2(at?.lat ?? (r.south + r.north) / 2)
+  const lon = round2(wrap180(at?.lon ?? r.west + spanDeg / 2))
   const farNm = Math.max(
     distanceNm(lat, lon, r.south, r.west),
     distanceNm(lat, lon, r.south, r.east),
@@ -387,6 +388,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
   const fleetLayer = new FleetLayer(viewer)
+  const pendingLayer = makePendingLayer(viewer) // the view's areas not loaded yet, veiled on the map
   const globe = viewer.scene.globe
   // Clearance above the ground drawn this frame: globe.getHeight answers last frame's while the relief grows or sinks.
   const chaseCam = new ChaseCamera(viewer, { groundAt: (c) => topo.ground(globe.getHeight(c), tf, camGround, c) })
@@ -598,6 +600,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     statusPanel.update(known, api.ready ? api.serverNowMs() : null)
     rail.setDot('status', statusDot(known))
     rail.setBusy('status', known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)) // in trouble no answers come
+    // In trouble too (they are still not loaded), but none shown as loading: no answer is coming.
+    pendingLayer.update(status.pendingBoxes, !chasing, known !== null && known.degraded === null)
     syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
@@ -608,7 +612,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   function viewCircle(): { lat: number; lon: number; nm: number } {
     if (!chasing) {
       const r = viewRectangleDeg(viewer)
-      const c = r === null ? null : browseCircle(r)
+      const under = viewer.camera.positionCartographic // browse looks straight down: the screen centre
+      const c = r === null ? null : browseCircle(r, { lat: CesiumMath.toDegrees(under.latitude), lon: CesiumMath.toDegrees(under.longitude) })
       // A rectangle spanning every longitude (the globe, or a pole in view) says nothing by its centre: then the point
       // under the camera.
       const allLons = r !== null && (r.west <= r.east ? r.east - r.west : r.east + 360 - r.west) >= 359
@@ -774,6 +779,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       exitBrowse(viewer)
       model?.destroy()
       fleetLayer.destroy()
+      pendingLayer.destroy()
       map.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()

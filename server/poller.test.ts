@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { normalizeAdsblol, normalizeReadsb } from '../shared/readsb.ts'
 import { TokenBucket } from './budget.ts'
 import { distanceNm } from '../shared/geo.ts'
-import { cellsForView, isBusy } from './cells.ts'
+import { cellsForView } from './cells.ts'
 import { Poller, viewPeriodMs, type PollerOpts } from './poller.ts'
 import { Recorder } from './recorder.ts'
 import { readRecording } from './recording.ts'
@@ -103,6 +103,37 @@ test('touchView: a view up to 250 nm is one circle of its own; a wider one, the 
   assert.deepEqual(r.cells.map((c) => c.id).sort(), wide.map((c) => c.id).sort())
   assert.ok(r.cells.every((c) => c.lastOkMs === null && c.periodP95S === null))
   assert.equal(r.pendingAreas, wide.length)
+  // Each grid cell's own box, for the map to tint until it loads.
+  assert.equal(r.pendingBoxes?.length, wide.length)
+  assert.ok(r.pendingBoxes!.every(([s, n, w, e]) => wide.some((c) => s < c.lat && c.lat < n && w < c.lon && c.lon < e)))
+})
+
+test('pendingBoxes: in the order they will be asked, the one in flight first', async () => {
+  const s = setup()
+  s.poller.touchView(KSFO[0], KSFO[1], 400)
+  const inside = ([south, north, west, east]: number[], lat: number, lon: number): boolean => south < lat && lat < north && west < lon && lon < east
+  const inFlight = s.poller.tick() // asks synchronously, answers later
+  const [first, second] = s.poller.brief().pendingBoxes!
+  assert.ok(inside(first, ...(s.calls[0].args as [number, number])), 'the one in flight comes first')
+  await inFlight
+  assert.deepEqual(s.poller.brief().pendingBoxes![0], second)
+  await s.poller.tick()
+  assert.ok(inside(second, ...(s.calls[1].args as [number, number])), 'the next asked was next in the list')
+})
+
+test('pendingBoxes: a cell leaves them on its first good answer, not when asked; none left, none sent', async () => {
+  const s = setup()
+  const wide = s.poller.touchView(KSFO[0], KSFO[1], 400)
+  s.replies.push({ status: 503 })
+  await s.poller.tick() // asked, failed: still not loaded
+  assert.equal(s.poller.brief().pendingBoxes?.length, wide.length)
+  assert.equal(s.poller.brief().pendingAreas, wide.length)
+  s.clock.t += 6000 // past the budget's pause after the 503
+  await s.poller.tick() // the next never-asked cell, answered
+  assert.equal(s.poller.brief().pendingBoxes?.length, wide.length - 1)
+  await runUntil(s, 60_000, () => s.poller.touchView(KSFO[0], KSFO[1], 400))
+  assert.equal(s.poller.brief().pendingAreas, 0)
+  assert.equal('pendingBoxes' in s.poller.brief(), false)
 })
 
 test('viewPeriodMs: 0.12 s per nm up to 500 nm, then as r² (so wide views cost alike), 5 s to 30 min', () => {
@@ -175,20 +206,6 @@ test('singleCircle: every view, however wide, is one circle of ≤ 250 nm; a new
   assert.deepEqual(s.poller.report().cells.map((c) => c.id), ['view'])
 })
 
-test('a globe view over the Atlantic asks for busy airspace (Europe, America) before the empty ocean at its centre', async () => {
-  const s = setup()
-  const cells = s.poller.touchView(45, -30, 5400)
-  await runUntil(s, 20_000, () => {
-    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(45, -30, 5400)
-  })
-  const busy = cells.filter(isBusy).length
-  assert.ok(busy > 50 && busy < cells.length - 50, `${busy} of ${cells.length}`)
-  const asked = s.calls.map((c) => ({ lat: c.args[0] as number, lon: c.args[1] as number, id: '', radiusNm: 0 }))
-  assert.ok(asked.length > busy)
-  assert.ok(asked.slice(0, busy).every(isBusy), 'busy airspace first')
-  assert.ok(!asked.slice(busy).some(isBusy), 'then the rest')
-})
-
 test('a wide view: never-asked areas nearest its centre first, then each once per its view period', async () => {
   const s = setup()
   const cells = s.poller.touchView(KSFO[0], KSFO[1], 400)
@@ -197,12 +214,8 @@ test('a wide view: never-asked areas nearest its centre first, then each once pe
     if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(KSFO[0], KSFO[1], 400)
   })
   const firstRound = s.calls.slice(0, cells.length).map((c) => ({ lat: c.args[0] as number, lon: c.args[1] as number, id: '', radiusNm: 0 }))
-  const nBusy = cells.filter(isBusy).length // the US box; the Pacific part comes after it
-  for (const group of [firstRound.slice(0, nBusy), firstRound.slice(nBusy)]) {
-    const d = group.map((c) => distanceNm(KSFO[0], KSFO[1], c.lat, c.lon))
-    assert.deepEqual(d, [...d].sort((a, b) => a - b), 'centre-out within busy, then within the rest')
-  }
-  assert.ok(firstRound.slice(0, nBusy).every(isBusy))
+  const d = firstRound.map((c) => distanceNm(KSFO[0], KSFO[1], c.lat, c.lon))
+  assert.deepEqual(d, [...d].sort((a, b) => a - b), 'centre-out, land or sea alike')
   assert.equal(new Set(s.calls.slice(0, cells.length).map((c) => `${c.args[0]},${c.args[1]}`)).size, cells.length)
   const second = s.calls.slice(cells.length)
   assert.ok(second.length > 0 && second.every((c) => c.t - T0 >= period), 'nothing is asked twice within its period')

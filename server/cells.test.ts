@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { destination, distanceNm } from '../shared/geo.ts'
-import { cellById, cellsForView } from './cells.ts'
+import { cellBox, cellById, cellsForView } from './cells.ts'
 
 /** Deterministic PRNG (mulberry32) so the property test is reproducible. */
 function rng(seed: number): () => number {
@@ -91,6 +91,14 @@ test('coverage: every point of the view lies inside some returned query circle (
       assert.ok(covered, `view (${lat}, ${lon}, ${nm}): point (${p.lat}, ${p.lon}) not covered`)
     }
   }
+})
+
+test('cellBox: 4° tall, as wide as its band\'s step, around the cell; the boxes of a band meet edge to edge at ±180', () => {
+  assert.deepEqual(cellBox(cellById('b0:0')), [-90, -86, -180, -60]) // three columns at the pole
+  const band = cellsForView(0, 0, 13_000).filter((c) => c.id.startsWith('b22:')).sort((a, b) => a.lon - b.lon)
+  const boxes = band.map(cellBox)
+  assert.deepEqual([boxes[0][0], boxes[0][1], boxes[0][2], boxes.at(-1)![3]], [-2, 2, -180, 180])
+  for (let i = 1; i < boxes.length; i++) assert.equal(boxes[i][2], boxes[i - 1][3])
 })
 
 test('cells are shared, read-only objects', () => {

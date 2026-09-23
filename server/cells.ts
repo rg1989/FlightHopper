@@ -51,32 +51,15 @@ export function cellsForView(lat: number, lon: number, radiusNm: number): Cell[]
   return ALL.filter((c) => distanceNm(lat, lon, c.lat, c.lon) <= c.radiusNm + radiusNm)
 }
 
+/** The cell's own lat/lon box, [south, north, west, east] in degrees: the cells tile the globe, each circle covers its box. */
+export function cellBox(c: Cell): [number, number, number, number] {
+  const half = 180 / bandCols(Math.floor((c.lat + 90) / BAND_DEG))
+  const r = (v: number): number => Math.round(v * 1e4) / 1e4 // 4 decimals: ~10 m, and a short JSON number
+  return [c.lat - BAND_DEG / 2, c.lat + BAND_DEG / 2, r(c.lon - half), r(c.lon + half)]
+}
+
 export function cellById(id: string): Cell {
   const c = BY_ID.get(id)
   if (!c) throw new Error(`unknown cell id: ${id}`)
   return c
-}
-
-/**
- * Where most of the world's terrestrial ADS-B traffic is, as [south, north, west, east] boxes: a wide view asks for
- * these areas first, so a zoomed-out globe fills where the aircraft are before the oceans (ground-station coverage
- * ends ~200 nm offshore). ponytail: hand-drawn; upgrade: learn each cell's count and keep it across runs.
- */
-const BUSY: readonly (readonly [number, number, number, number])[] = [
-  [35, 61, -11, 32], // Europe
-  [36, 46, 26, 45], // Türkiye, the Caucasus
-  [12, 38, 32, 60], // Middle East, the Gulf
-  [6, 32, 67, 92], // India
-  [18, 46, 100, 146], // China, Korea, Japan
-  [-10, 18, 95, 126], // South-East Asia
-  [-40, -25, 138, 155], // south-east Australia
-  [24, 50, -125, -66], // United States, southern Canada
-  [14, 25, -106, -86], // Mexico
-  [-30, -5, -55, -34], // south-east Brazil
-  [-35, -22, 16, 33], // South Africa
-]
-
-/** Is the cell's centre inside one of the busy boxes? */
-export function isBusy(c: Cell): boolean {
-  return BUSY.some(([s, n, w, e]) => c.lat >= s && c.lat <= n && c.lon >= w && c.lon <= e)
 }
