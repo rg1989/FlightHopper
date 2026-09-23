@@ -1,0 +1,77 @@
+<!-- harness/flight-frame.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Harness: flight-data frame</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c1016; }
+      /* Stand-ins for what the chase view puts behind the frame: sky over terrain, a bright cloud deck (the worst case
+         for light text), satellite imagery (looking down), and night. */
+      body[data-bg='sky'] {
+        background:
+          linear-gradient(to bottom, #2b5b94 0%, #5e8fc6 30%, #a9c7e6 50%, #d9e5ee 57%, transparent 57.2%) top / 100% 100% no-repeat,
+          repeating-linear-gradient(28deg, #55703f 0 60px, #6f8452 60px 130px, #8a8a5c 130px 160px, #465f33 160px 230px) bottom / 100% 43% no-repeat;
+      }
+      body[data-bg='bright'] {
+        background:
+          radial-gradient(ellipse 60% 40% at 30% 45%, #fff 0 45%, transparent 75%),
+          radial-gradient(ellipse 50% 35% at 75% 60%, #fdfdfd 0 40%, transparent 70%),
+          linear-gradient(170deg, #eef3f8 0%, #dde6ef 45%, #f7f9fb 100%);
+      }
+      body[data-bg='imagery'] {
+        background: repeating-linear-gradient(35deg, #3f5f2a 0 40px, #6b7d4a 40px 90px, #a88b5b 90px 120px, #2f4a24 120px 170px);
+      }
+      body[data-bg='night'] {
+        background:
+          radial-gradient(circle at 30% 70%, #f3c56a 0 1.2px, transparent 2px) 0 55% / 37px 29px,
+          radial-gradient(circle at 60% 20%, #ffd98a 0 1px, transparent 1.6px) 0 55% / 53px 41px,
+          linear-gradient(to bottom, #060a13 0%, #0b1322 54%, #141820 54.2%, #0d1016 100%);
+      }
+      /* The aircraft stand-in (a rear view, as the chase camera sees it) and its drag handle: under the overlay. */
+      /* Clipped like the app's canvas: a stand-in larger than the screen must not widen the page (phones zoom out). */
+      #scene { position: fixed; inset: 0; z-index: 1; overflow: hidden; }
+      #plane { position: absolute; left: 0; top: 0; touch-action: none; cursor: grab; }
+      #plane:active { cursor: grabbing; }
+      #plane svg { display: block; width: 100%; height: 100%; overflow: visible; }
+      /* Stand-ins for the app's chrome the frame must stay clear of (the safe area): the rail, the play bar. */
+      .chrome { position: absolute; z-index: 30; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 12px; background: rgba(13, 17, 25, 0.92); color: #8e9aab; font: 11px system-ui, sans-serif;
+        display: grid; place-items: center; }
+      #safe { position: absolute; z-index: 29; box-sizing: border-box; border: 1px dashed rgba(255, 90, 90, 0.8); pointer-events: none; }
+      body[data-safe='0'] #safe { display: none; }
+      #controls { position: absolute; left: 8px; top: 8px; z-index: 40; display: flex; flex-direction: column; gap: 4px;
+        max-width: 330px; padding: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.92); color: #111;
+        font: 11px/1.3 system-ui, sans-serif; }
+      #controls div { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+      #controls button { font: inherit; padding: 2px 6px; }
+      #controls button[aria-pressed='true'] { background: #1f6fd1; color: #fff; }
+      #stats { font: 10.5px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+      body[data-ui='0'] #controls { display: none; }
+    </style>
+  </head>
+  <body data-bg="sky" data-safe="1" data-ui="1">
+    <!-- A rear view, as the chase camera sees the aircraft: wings with dihedral, four engines, fuselage, fin, tailplane.
+         Its span fills the square as a model's does (the box's side is the span plus 8 %). -->
+    <div id="scene"><div id="plane">
+      <svg viewBox="-100 -50 200 100" aria-hidden="true">
+        <g fill="#dfe4ea" stroke="#5b6572" stroke-width="0.6" stroke-linejoin="round">
+          <path d="M-93 7L-8 -1L8 -1L93 7L93 9.5L8 4L-8 4L-93 9.5Z" />
+          <path d="M-31 -5L-2 -7L2 -7L31 -5L31 -3L2 -3.5L-2 -3.5L-31 -3Z" />
+          <path d="M-1.6 -8L-1.1 -44L1.1 -44L1.6 -8Z" fill="#c8ced6" />
+          <circle cx="0" cy="0" r="9" />
+          <circle cx="-27" cy="8" r="3.6" fill="#b9c0c9" />
+          <circle cx="27" cy="8" r="3.6" fill="#b9c0c9" />
+          <circle cx="-51" cy="10.5" r="3.4" fill="#b9c0c9" />
+          <circle cx="51" cy="10.5" r="3.4" fill="#b9c0c9" />
+        </g>
+      </svg>
+    </div></div>
+    <div class="fh-ui"><div class="fh-frame" id="layer"></div></div>
+    <div id="safe"></div>
+    <div id="chrome"></div>
+    <div id="controls"></div>
+    <script type="module" src="./flight-frame.ts"></script>
+  </body>
+</html>
