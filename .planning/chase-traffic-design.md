@@ -14,7 +14,7 @@ Approved by the user on 2026-09-23. Scope: chase mode only. Browse (the top-down
 - **Corner brackets:** a top-right and a bottom-left corner mark the square around each model on screen. The square is
   the projected bounding sphere of the model (at least the 24 px minimum). It grows as the model gets nearer and
   shrinks as it goes farther. The brackets are thin white lines with a soft shadow. The app hides them when the
-  aircraft is behind the camera or below the horizon.
+  aircraft is behind the camera.
 - **Hitbox:** a click in the square is a click on that aircraft. When squares overlap, the aircraft nearest to the
   camera wins. For now the app catches the click and does nothing. A later feature attaches an action to it.
 
@@ -35,7 +35,8 @@ Approved by the user on 2026-09-23. Scope: chase mode only. Browse (the top-down
 
 ## Known limits (ponytail)
 
-- A mountain does not hide the brackets (only the horizon does). Upgrade: test the depth under the square's centre.
+- Terrain, buildings and the horizon do not hide the brackets (only the camera's back does). Upgrade: test the depth
+  under the square's centre.
 - The 10 nm edge has no hysteresis, so an aircraft on the edge can flip between model and hidden. Upgrade: 10.5 nm to
   leave the range.
 - The app has one model file for all types. Upgrade: more GLBs per icon kind (airliner, bizjet, helicopter).
