@@ -191,8 +191,11 @@
       "paint": {
         "noseMinusZ": true, "bodyHalfWidth": 3.63, "bellyBelowY": -5.99,
         "fin": { "behindZ": -22.89, "aboveY": -0.25, "halfWidth": 0.72 }, "finSplit": [0.55, -35.48, 4.46],
-        "engines": [3.59, 24.52, -9.24, 14.73], "finLogo": [-29.22, 4.66, 4.91], "title": [14.19, -3.18, 15.61]
-      }
+        "engines": [3.59, 24.52, -9.24, 14.73], "finLogo": [-29.22, 4.66, 4.91], "title": [14.19, -3.18, 15.61],
+        "body": [35.5, -35.5, -8.7, -0.5], "wingTipY": -4.35,
+        "cut": { "finKeepY": 2.0, "rudderFrac": 0.3, "tailConeZ": -29.6, "tailHalfWidth": 1.0, "finEdges": [-1.2, -18.78, -32.34, 8.5, -31.08, -35.39] }
+      },
+      "gear": { "uri": "models/b744-gear.glb", "heightM": 11.6 }
     },
     {
       "id": "c550",

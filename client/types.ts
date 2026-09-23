@@ -69,6 +69,7 @@ export interface ModelManifestEntry {
   paint?: Paint                                 // where the livery goes (client/scene/livery.ts); absent: unpainted
   types?: string[]                              // ICAO designators it draws; "B73*" matches a prefix (modelFor.ts)
   box?: { centre: [number, number, number]; half: number } // traffic bracket square: model frame, unscaled (traffic.ts)
+  gear?: { uri: string; heightM: number }       // landing gear drawn with the model (ChaseModel.setGear); heightM: origin → wheel bottom, gear down
 }
 
 /**
@@ -85,6 +86,15 @@ export interface Paint {
   engines: [xMin: number, xMax: number, zMin: number, zMax: number] // nacelles: |x| and z in range, not flat wing skin
   finLogo: [z: number, y: number, side: number]               // centre and side of the square fin decal
   title: [z: number, y: number, width: number]                // centre and width of the 4:1 fuselage title
+  body?: [zNose: number, zTail: number, yBottom: number, yTop: number] // the box a scenario's body-wrap decal covers
+  wingTipY?: number                                           // mesh y of the wing at the tip: ChaseModel.setShape folds the span to it
+  cut?: {                                                     // the damage ChaseModel.setDamage shows (JAL 123: fin and tail cone lost)
+    finKeepY: number                                          // the fin is gone above this height (a jagged line ±0.35 m)…
+    rudderFrac: number                                        // …and in the aft fraction of its local chord below it
+    tailConeZ: number                                         // the fuselage is gone aft of this…
+    tailHalfWidth: number                                     // …within this half-width (the tailplane outside it stays)
+    finEdges: [yRoot: number, leRoot: number, teRoot: number, yTip: number, leTip: number, teTip: number] // fin leading and trailing edge z at two heights
+  }
 }
 
 export interface ModelManifest {

@@ -1,10 +1,12 @@
 // client/scene/model.ts
 // WP-V3 model calibration: place the chase model so that its nose points along RenderState.headingDeg.
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
+// ChaseModel also carries a scenario's look: its livery, a folded span, damage and a separate landing gear.
 import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Quaternion, Transforms } from 'cesium'
-import type { Viewer } from 'cesium'
+import type { CustomShader, Viewer } from 'cesium'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
 import { LiveryShaders } from './livery.ts'
+import type { Livery } from './livery.ts'
 
 // ---------- glTF geometry in Cesium's model frame ----------
 
@@ -24,6 +26,8 @@ export interface GlbAxes {
   spanM: number // extent along right
   belowOriginM: number // origin → lowest vertex (wheel bottom)
   centre: Cartesian3 // bounding-box centre
+  min: Cartesian3 // bounding box
+  max: Cartesian3
 }
 
 /**
@@ -89,7 +93,8 @@ export function measureGlb(glb: Uint8Array): GlbAxes {
     return hi - lo
   }
   const centre = new Cartesian3((xMin + xMax) / 2, (yMin + yMax) / 2, (zMin + zMax) / 2)
-  return { nose, up, right, lengthM: extent(nose), spanM: extent(right), belowOriginM: -zMin, centre }
+  const [min, max] = [new Cartesian3(xMin, yMin, zMin), new Cartesian3(xMax, yMax, zMax)]
+  return { nose, up, right, lengthM: extent(nose), spanM: extent(right), belowOriginM: -zMin, centre, min, max }
 }
 
 // ---------- attitude → Cesium ----------
@@ -116,14 +121,15 @@ const scratchPos = new Cartesian3()
 const scratchHpr = new HeadingPitchRoll()
 
 /**
- * World matrix of the chase model: origin at (lat, lon, hM + gearHeightM), attitude from hprFor, uniform m.scale
- * baked in (so ChaseModel leaves Model.scale at 1).
+ * World matrix of the chase model: origin at (lat, lon, hM + heightM), attitude from hprFor, uniform m.scale
+ * baked in (so ChaseModel leaves Model.scale at 1). heightM is origin → wheel bottom: gearHeightM, or gear.heightM
+ * while ChaseModel draws the separate gear.
  * ponytail: hM is the wheel-bottom height in every phase, not only on the ground, so touchdown has no gear-height
  * step. Airborne, that bias is smaller than ADS-B's 25 ft altitude step. The offset runs along the ellipsoid normal,
  * not body-up, so at 10° pitch the wheels sit 0.06 m high. Upgrade: offset along body-up when M4 adds ground contact.
  */
-export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4): Matrix4 {
-  const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + m.gearHeightM, undefined, scratchPos)
+export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4, heightM = m.gearHeightM): Matrix4 {
+  const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + heightM, undefined, scratchPos)
   const mm = Transforms.headingPitchRollToFixedFrame(pos, hprFor(state, m, scratchHpr), undefined, undefined, result ?? new Matrix4())
   return Matrix4.multiplyByUniformScale(mm, m.scale, mm)
 }
@@ -168,11 +174,18 @@ export class ChaseModel {
   private readonly ready = new Map<string, Model>() // every loaded model by entry id, in the scene (hidden unless drawn)
   private readonly asked = new Set<string>() // entry ids loading or loaded (or failed: not asked again)
   private readonly loader: (m: ModelManifestEntry) => Promise<Model>
+  private readonly gearLoader: (uri: string) => Promise<Model>
+  private readonly gears = new Map<string, Model>() // loaded gear models by uri, in the scene (hidden unless drawn)
+  private readonly gearAsked = new Set<string>()
+  private halfSpanM: number | null = null
+  private damaged = false
+  private gearDown = false
 
   /** Prefer ChaseModel.load. Adds the model to the scene hidden: it appears on the first update(), not at the Earth's centre. */
-  constructor(viewer: Viewer, m: ModelManifestEntry, model: Model, loader = loadChaseModel) {
+  constructor(viewer: Viewer, m: ModelManifestEntry, model: Model, loader = loadChaseModel, gearLoader = loadGearModel) {
     this.viewer = viewer
     this.loader = loader
+    this.gearLoader = gearLoader
     this.m = m
     this.model = model
     model.show = false
@@ -183,6 +196,11 @@ export class ChaseModel {
 
   static async load(viewer: Viewer, m: ModelManifestEntry): Promise<ChaseModel> {
     return new ChaseModel(viewer, m, await loadChaseModel(m))
+  }
+
+  /** The manifest entry drawn now. */
+  get entry(): ModelManifestEntry {
+    return this.m
   }
 
   /**
@@ -205,10 +223,13 @@ export class ChaseModel {
     const next = this.ready.get(entry.id)
     if (next === undefined) return false
     this.model.show = false
+    this.hideGears()
     this.model = next
     this.m = entry
     this.livery = undefined
     this.model.show = this.visible && this.placed
+    this.look()
+    if (this.gearDown) this.askGear()
     return true
   }
 
@@ -216,16 +237,51 @@ export class ChaseModel {
   paint(code: string | null): void {
     if (!this.m.paint || code === this.livery) return
     this.livery = code
-    let l = this.liveries.get(this.m.id)
-    if (l === undefined) this.liveries.set(this.m.id, (l = new LiveryShaders(this.m.paint)))
-    this.model.customShader = l.for(code)
+    this.shade(this.shaders(this.m.paint).for(code))
   }
 
-  /** Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. */
+  /** Paints the model in a livery that is not in the table (a scenario's: liveryFromSpec) until the next paint(code). */
+  paintLivery(livery: Livery): void {
+    if (!this.m.paint) return
+    this.livery = undefined
+    this.shade(this.shaders(this.m.paint).custom(livery))
+  }
+
+  /** Folds the wing tips in to halfSpanM (real metres; null: the model's own span). Only where the paint map has wingTipY. */
+  setShape(halfSpanM: number | null): void {
+    if (halfSpanM === this.halfSpanM) return
+    this.halfSpanM = halfSpanM
+    this.look()
+  }
+
+  /** Shows the paint map's cut (the lost fin and tail cone) and the model's inside through it. Cheap when unchanged. */
+  setDamage(on: boolean): void {
+    if (on === this.damaged) return
+    this.damaged = on
+    this.look()
+  }
+
+  /** Draws the entry's separate landing gear (manifest gear), loaded on first use. Cheap when unchanged. */
+  setGear(on: boolean): void {
+    if (on === this.gearDown) return
+    this.gearDown = on
+    if (on) this.askGear()
+    else this.hideGears()
+  }
+
+  /**
+   * Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. With the gear
+   * drawn, the wheels are gear.heightM below the origin, and the gear takes the same matrix and image-based light.
+   */
   update(state: RenderState): void {
-    modelMatrixFor(state, this.m, this.model.modelMatrix)
+    const gear = this.drawnGear()
+    modelMatrixFor(state, this.m, this.model.modelMatrix, gear === null ? this.m.gearHeightM : gear.heightM)
     this.placed = true
     this.model.show = this.visible
+    if (gear === null) return
+    Matrix4.clone(this.model.modelMatrix, gear.model.modelMatrix)
+    gear.model.imageBasedLighting.imageBasedLightingFactor = this.model.imageBasedLighting.imageBasedLightingFactor // the setter copies it
+    gear.model.show = this.visible
   }
 
   get show(): boolean {
@@ -235,12 +291,65 @@ export class ChaseModel {
   set show(v: boolean) {
     this.visible = v
     this.model.show = v && this.placed
+    if (!v) this.hideGears() // shown again by the next update(), with its matrix
   }
 
-  /** Removes every loaded model from the scene. PrimitiveCollection destroys what it removes by default. */
+  /** Removes every loaded model and gear from the scene. PrimitiveCollection destroys what it removes by default. */
   destroy(): void {
-    for (const model of this.ready.values()) this.viewer.scene.primitives.remove(model)
+    for (const model of [...this.ready.values(), ...this.gears.values()]) this.viewer.scene.primitives.remove(model)
     this.ready.clear()
+    this.gears.clear()
+  }
+
+  private shaders(paint: NonNullable<ModelManifestEntry['paint']>): LiveryShaders {
+    let l = this.liveries.get(this.m.id)
+    if (l === undefined) this.liveries.set(this.m.id, (l = new LiveryShaders(paint)))
+    return l
+  }
+
+  private shade(s: CustomShader): void {
+    if (this.model.customShader === s) return
+    this.model.customShader = s
+    this.look()
+  }
+
+  /**
+   * Writes the shape and the damage onto the drawn model: its shader's u_span (mesh metres) and u_cut, and back faces
+   * drawn only while damaged. Shaders are cached and shared by the models of one entry, so every switch rewrites them.
+   */
+  private look(): void {
+    this.model.backFaceCulling = !this.damaged
+    const s = this.model.customShader
+    if (s === undefined) return
+    s.setUniform('u_span', this.halfSpanM === null ? 0 : this.halfSpanM / this.m.scale)
+    s.setUniform('u_cut', this.damaged ? 1 : 0)
+  }
+
+  /** The gear drawn now: down, the entry has one, and it has loaded. */
+  private drawnGear(): { model: Model; heightM: number } | null {
+    const g = this.m.gear
+    if (!this.gearDown || g === undefined) return null
+    const model = this.gears.get(g.uri)
+    return model === undefined ? null : { model, heightM: g.heightM }
+  }
+
+  private askGear(): void {
+    const g = this.m.gear
+    if (g === undefined || this.gearAsked.has(g.uri)) return
+    this.gearAsked.add(g.uri)
+    this.gearLoader(g.uri).then(
+      (model) => {
+        model.show = false
+        Matrix4.clone(this.model.modelMatrix, model.modelMatrix) // hidden, it still renders its first sky map: here, not at the Earth's centre
+        this.viewer.scene.primitives.add(model)
+        this.gears.set(g.uri, model)
+      },
+      (err: unknown) => console.warn(`FlightHopper: landing gear ${g.uri} not loaded; flying without it:`, err),
+    )
+  }
+
+  private hideGears(): void {
+    for (const g of this.gears.values()) g.show = false
   }
 }
 
@@ -252,4 +361,23 @@ export class ChaseModel {
  */
 export function loadChaseModel(m: ModelManifestEntry): Promise<Model> {
   return Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
+}
+
+/**
+ * Every Model renders its own sky map (DynamicEnvironmentMapManager), hidden or not, again after this much movement.
+ * The gear follows the aircraft, so Cesium's 1 km would re-render the sky every few seconds (several times a second at
+ * fast playback); 20 km is the aircraft's own (sun.ts ENV_MAP_EPSILON_M), so both are lit by the same sky.
+ */
+const GEAR_ENV_MAP_EPSILON_M = 20_000
+
+/**
+ * A landing gear (manifest gear.uri, relative to public/): drawn with the chase model's matrix, true height like it.
+ * ponytail: no minimumPixelSize, since Cesium would enlarge the gear about its own bounding sphere, not the aircraft's.
+ * Below 32 px the aircraft grows and the gear does not (a few pixels off). Upgrade: copy the aircraft's scale when that shows.
+ */
+export function loadGearModel(uri: string): Promise<Model> {
+  return Model.fromGltfAsync({
+    url: `${import.meta.env?.BASE_URL ?? '/'}${uri}`, show: false, enableVerticalExaggeration: false,
+    environmentMapOptions: { maximumPositionEpsilon: GEAR_ENV_MAP_EPSILON_M },
+  })
 }
