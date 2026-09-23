@@ -184,6 +184,7 @@ make live
 
 The full text of each item, with specs, is in the previous handoff: `git show 4a5e1cc:.planning/HANDOFF.md`.
 
+- **`MAX_RPS` default** (`server/config.ts`): the default is 1 req/s, which contradicts `PLAN.md`'s Global Constraints. Make it 0.04, so a plain `npm run server` against adsb.lol is polite without `make live`. Update `server/config.test.ts`.
 - **F2 · Low-budget poll mode** (`server/poller.ts`): one view-centred circle instead of the cell cover when `MAX_RPS` < 0.5.
 - **F6 · adsb.fi** as a second free source: about 12× the live budget, which makes smooth live chase possible. Its envelope must be confirmed with one real request per endpoint.
 - **F3 · MLAT re-join velocity continuity** (`hermite.ts`/`track.ts`). Measure it first with `tools/bench-track.ts`.
