@@ -479,3 +479,19 @@ test('destroy removes and destroys both collections', () => {
   assert.ok(b.isDestroyed())
   assert.ok(l.isDestroyed())
 })
+
+test('chase traffic: only aircraft in range show; model hexes are placed with their icon hidden (positionOf)', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const view = { near: new Set(['aaaaaa', 'bbbbbb']), models: new Set(['aaaaaa']) }
+  const es = [fe('aaaaaa', { lat: 50, lon: 10, hM: 9_000 }), fe('bbbbbb'), fe('cccccc'), fe('dddddd')]
+  layer.update(es, 'dddddd', null, false, view)
+  assert.equal(bb(f, 'aaaaaa').show, false, 'drawn as a model')
+  assert.ok(Cartesian3.equalsEpsilon(layer.positionOf('aaaaaa')!, Cartesian3.fromDegrees(10, 50, 9_000), 0, 1e-6))
+  assert.equal(bb(f, 'bbbbbb').show, true, 'in range, no model: its icon')
+  assert.equal(bb(f, 'cccccc').show, false, 'out of range')
+  assert.equal(layer.positionOf('cccccc'), undefined)
+  assert.equal(bb(f, 'dddddd').show, true, 'the selected one is not ranged')
+  layer.update(es, 'dddddd', null)
+  for (const h of ['aaaaaa', 'bbbbbb', 'cccccc', 'dddddd']) assert.equal(bb(f, h).show, true, `browse: ${h} an icon again`)
+})
