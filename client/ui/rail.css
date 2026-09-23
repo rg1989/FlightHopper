@@ -34,16 +34,29 @@
   animation: none;
 }
 
-/* Busy: a thin spinning arc around the button. */
+/* Busy: a light running round the button's edge, trailing a fading tail, over a faint track. */
+@property --fh-sweep {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
 .fh-ibtn.fh-busy::before {
   content: '';
   position: absolute;
   inset: 3px;
-  border: 1.5px solid transparent;
-  border-top-color: var(--fh-accent);
+  padding: 1.5px; /* the ring's width: the mask cuts the content box out */
   border-radius: 9px;
-  animation: fh-rot 1s linear infinite;
+  background: conic-gradient(from var(--fh-sweep), rgba(90, 169, 255, 0.12) 0 55%, var(--fh-accent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: fh-sweep 1.4s linear infinite;
   pointer-events: none;
+}
+
+@keyframes fh-sweep {
+  to { --fh-sweep: 360deg; }
 }
 
 /* Tooltips to the left of the rail, only while no panel is open (they would cover it). */
