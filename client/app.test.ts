@@ -154,6 +154,16 @@ test('flat plane (design D4): a hero airport within 30 km gives its runway heigh
   assert.equal(relHFor(null, 2950, 56.57, heroes), 56.57) // no aircraft drawn yet
 })
 
+test('attribution: the satellite imagery in use, as plain source lines (Esri keyed also lists its EOX fallback)', () => {
+  const eox = attributionFor(null, null, 'eox').filter((l) => l.startsWith('Satellite imagery'))
+  assert.deepEqual(eox.length, 1)
+  assert.match(eox[0], /EOX IT Services GmbH, CC BY-NC-SA 4\.0/)
+  const esri = attributionFor(null, null, 'esri').filter((l) => l.startsWith('Satellite imagery'))
+  assert.equal(esri.length, 2)
+  assert.match(esri[0], /^Satellite imagery: Esri World Imagery \(Esri, Vantor, .*GIS User Community\)$/)
+  assert.ok(!esri.some((l) => /Powered by/.test(l)), 'no "Powered by" text (the user removed it)')
+})
+
 test('attribution: the night lights credit NASA GIBS (design D13)', () => {
   assert.ok(attributionFor(null).includes('Night lights: NASA GIBS, VIIRS Black Marble'))
 })

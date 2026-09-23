@@ -33,7 +33,7 @@ import { addRunways } from './scene/runways.ts'
 import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
-import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
+import { eoxOnEsriFailure, imageryCredits, imageryStatus } from './scene/imagery.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
@@ -200,14 +200,15 @@ export function readParams(search: string): AppParams {
  * Credit lines for the About panel (a personal-use app: no credit bar or disclaimer on the map, viewer.ts). The flight
  * card credits each photo ("© name", linked to its page on planespotters.net).
  */
-export function attributionFor(model: ModelManifestEntry | null, source: SourceKind | null = 'adsblol'): string[] {
+export function attributionFor(model: ModelManifestEntry | null, source: SourceKind | null = 'adsblol', imagery: ClientConfig['imagery'] = 'eox'): string[] {
   const lines = [
     ...(source === null ? [] : [flightCredit(source)]), // null until the server says which source it is
     'Airports: OurAirports (public domain)',
     AIRLINES_CREDIT,
     'Map: © OpenStreetMap contributors, ODbL',
+    ...imageryCredits(imagery),
     'Photos: planespotters.net, © each photographer',
-    'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the full GIBS acknowledgment is in Cesium's credit list
+    'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the short form of NIGHT_CREDIT (nightLights.ts)
     BUILDINGS_CREDIT,
   ]
   // Manifest licences read "<SPDX id>: <note>"; the id is enough on screen.
@@ -350,7 +351,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos: new PhotoCache(), lookup: lookupFor })
   const banner = mountBanner(ui)
   let creditSource: SourceKind | null = null
-  info.setCredits(attributionFor(entry, null))
+  info.setCredits(attributionFor(entry, null, cfg.imagery))
   let firstData = false
   let lastBadgeMs = -Infinity
   const toggleFullscreen = (): void => {
@@ -679,7 +680,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
-    if (status.source !== creditSource) info.setCredits(attributionFor(entry, (creditSource = status.source)))
+    if (status.source !== creditSource) info.setCredits(attributionFor(entry, (creditSource = status.source), cfg.imagery))
     if (ok) failedPolls = 0
     else if (failedPolls++ === 0) console.warn('FlightHopper: poll failed:', (view as PromiseRejectedResult).reason)
     if (api.ready) {

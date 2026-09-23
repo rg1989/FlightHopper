@@ -23,12 +23,22 @@ export const EOX_ATTRIBUTION = `EOxCloudless https://cloudless.eox.at by EOX IT 
 
 // Esri World Imagery through ArcGIS Location Platform: an API key with the "Basemap styles service" privilege.
 // 2M basemap tiles/month free, then $0.15 per 1,000 (https://location.arcgis.com/pricing/, checked 2026-09-23).
-// Attribution: "Powered by Esri" + the service's copyrightText (…/World_Imagery/MapServer?f=json, same date), on screen.
+// Attribution: the service's copyrightText (…/World_Imagery/MapServer?f=json, same date), listed under About
+// (imageryCredits). Esri asks for "Powered by Esri" too; the user dropped it from the screen (personal use).
 // Where Esri has no deeper tile the keyed endpoint answers 404, and Cesium keeps drawing the parent tile.
 // ponytail: zoom 19 = 0.3 m at LLBG, where z20+ is 404. Some metros go deeper: raise the cap if that matters there.
 export const ESRI_URL = 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 export const ESRI_ATTRIBUTION =
   'Powered by Esri | Source: Esri, Vantor, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, and the GIS User Community'
+
+/**
+ * The imagery's credit lines for the About panel (Cesium's credit bar is not shown: viewer.ts). Plain source lines, as
+ * the user asked (no "Powered by" logo text). Esri keyed: Esri, and EOX, which replaces it when it fails.
+ */
+export function imageryCredits(imagery: ClientConfig['imagery']): string[] {
+  const eox = `Satellite imagery: EOxCloudless by EOX IT Services GmbH, CC BY-NC-SA 4.0 (contains modified Copernicus Sentinel data ${EOX_YEAR})`
+  return imagery === 'esri' ? [`Satellite imagery: Esri World Imagery (${ESRI_ATTRIBUTION.split('Source: ')[1]})`, eox] : [eox]
+}
 
 /** EOX Sentinel-2: the keyless imagery, and Esri's fallback. */
 export function eoxProvider(): UrlTemplateImageryProvider {
