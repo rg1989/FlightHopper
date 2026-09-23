@@ -15,8 +15,9 @@ import {
   VerticalOrigin,
 } from 'cesium'
 import type { Billboard, Label, PerspectiveFrustum, Scene, Viewer } from 'cesium'
-import type { FleetEntry } from '../types.ts'
+import type { FleetEntry, TerrainFrame } from '../types.ts'
 import { ALTITUDE_RGBA, COLOR_COUNT, altitudeIndex } from './altitudeColor.ts'
+import { drawnHeightM, trueHeightM } from './exaggeration.ts'
 import { HALO_ID, HALO_PX, ICON_ID, ICON_PX, haloCanvas, iconCanvas, iconFor } from './icons.ts'
 import type { IconKind } from './icons.ts'
 
@@ -24,13 +25,13 @@ const RAD = Math.PI / 180
 export const MAX_AGE_S = 60 // older entries are hidden (the Fleet prunes them later)
 export const SELECTED_SCALE = 1.4
 export const CHASE_HIDE_M = 5_000 // the selected icon, ring and label give way to the 3-D model inside this range
-export const GROUND_LIFT_M = 2 // above the sampled terrain, so a ground icon never z-fights the surface
+export const GROUND_LIFT_M = 2 // above the drawn terrain, so a ground icon never z-fights the surface
 const AXIS_STEP_DEG = 0.05 // re-aim a billboard's north axis after moving this far (0.05° of arc is invisible)
 const MIN_MOVE_PX = 0.25 // a position change smaller than this on screen is not written (see #draw)
 const M_PER_DEG = 111_320
 const GROUND_STEP_DEG = 0.002 // re-sample the terrain under a ground aircraft after ~200 m
 const GROUND_REFRESH_FRAMES = 600 // … and every ~10 s anyway, as finer terrain tiles load
-const GROUND_RETRY_FRAMES = 30 // tile not loaded yet: try again in ~0.5 s (staggered per aircraft)
+const GROUND_RETRY_FRAMES = 30 // tile not loaded yet, or the terrain flat: try again in ~0.5 s (staggered per aircraft)
 
 /** One shared Color per colour-table entry: frames allocate none. */
 const COLORS: readonly Color[] = Array.from(
@@ -78,7 +79,7 @@ interface Slot {
   type: string | null | undefined
   kind: IconKind | null
   sel: boolean | null
-  groundH: number
+  groundH: number // TRUE terrain height (HAE m) under the aircraft; NaN = none yet
   groundLat: number
   groundLon: number
   groundAt: number
@@ -108,6 +109,9 @@ export class FleetLayer {
   #cam = new Cartesian3()
   #moveK2 = 0 // (MIN_MOVE_PX × radians per pixel)²; 0 = write every change
   #carto = new Cartographic()
+  #fSampled = 1 // terrain exaggeration of this frame (setTerrain); until the first call, the terrain as loaded
+  #fNow = 1
+  #relHM = 0
 
   constructor(viewer: Viewer) {
     this.#scene = viewer.scene
@@ -131,6 +135,18 @@ export class FleetLayer {
       pixelOffsetScaleByDistance: SIZE_BY_DISTANCE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     })
+  }
+
+  /**
+   * This frame's terrain exaggeration (design D7): call it before update(). Ground icons keep the TRUE terrain height and
+   * are drawn where the terrain is drawn this frame. The numbers are copied (Topography reuses the object); a frame with
+   * a non-finite one is ignored (it would reach the billboard positions).
+   */
+  setTerrain(frame: TerrainFrame): void {
+    if (!(Number.isFinite(frame.fSampled) && Number.isFinite(frame.fNow) && Number.isFinite(frame.relHM))) return
+    this.#fSampled = frame.fSampled
+    this.#fNow = frame.fNow
+    this.#relHM = frame.relHM
   }
 
   update(entries: readonly FleetEntry[], selectedHex: string | null, hoverHex: string | null): void {
@@ -233,7 +249,7 @@ export class FleetLayer {
 
   #draw(s: Slot, e: FleetEntry): void {
     const b = s.b
-    const h = e.onGround ? this.#groundHeight(s, e) : e.hM
+    const h = e.onGround ? this.#groundHeight(s, e) : this.#airHeight(e.hM)
     if (e.lat !== s.lat || e.lon !== s.lon || h !== s.h) {
       const dN = (e.lat - s.lat) * M_PER_DEG
       const dE = (e.lon - s.lon) * M_PER_DEG * s.cosLat
@@ -290,8 +306,16 @@ export class FleetLayer {
 
   /**
    * FleetEntry.hM on the ground is the geoid (≈ sea level), which can be under the terrain; the loaded terrain height is
-   * sampled instead, cached per aircraft. ponytail: coarse tiles can sit a little off the true surface until the
-   * ~10 s refresh; upgrade: re-sample on the globe's tileLoadProgressEvent reaching 0.
+   * sampled instead, cached per aircraft. globe.getHeight returns the exaggerated surface of the last render, so the
+   * cache holds it un-exaggerated with that factor (fSampled): the TRUE height. It is drawn at this frame's factor
+   * every frame, which is arithmetic: a grow or sink animation costs no extra sample. A reading that holds no height
+   * keeps the cache, and the terrain is re-sampled ~0.5 s later: undefined (a tile not loaded yet, or Cesium's picker
+   * race, during every grow or sink and until Topography's nudge) or taken below factor 0.5 (flat, or too flat to
+   * invert: trueHeightM is null). Only an aircraft never sampled falls back to hM.
+   * ponytail: coarse tiles can sit a little off the true surface until the ~10 s refresh; upgrade: re-sample on the
+   * globe's tileLoadProgressEvent reaching 0. While flat, every ground aircraft re-samples every ~0.5 s (as for a tile
+   * not loaded yet): N ground icons cost N / 30 globe.getHeight calls per frame; upgrade: skip the sample while
+   * trueHeightM would return null.
    */
   #groundHeight(s: Slot, e: FleetEntry): number {
     const globe = this.#scene.globe
@@ -299,12 +323,28 @@ export class FleetLayer {
     const moved = !(Math.abs(e.lat - s.groundLat) <= GROUND_STEP_DEG && Math.abs(e.lon - s.groundLon) <= GROUND_STEP_DEG)
     if (moved || this.#frame >= s.groundAt) {
       const h = globe.getHeight(Cartographic.fromDegrees(e.lon, e.lat, 0, this.#carto))
-      s.groundH = h === undefined ? NaN : h + GROUND_LIFT_M
+      const t = h === undefined ? null : trueHeightM(h, this.#fSampled, this.#relHM) // null: no height, keep the cache
+      if (t !== null) s.groundH = t
       s.groundLat = e.lat
       s.groundLon = e.lon
-      s.groundAt = this.#frame + (h === undefined ? GROUND_RETRY_FRAMES : GROUND_REFRESH_FRAMES) + (s.n % GROUND_RETRY_FRAMES)
+      s.groundAt = this.#frame + (t === null ? GROUND_RETRY_FRAMES : GROUND_REFRESH_FRAMES) + (s.n % GROUND_RETRY_FRAMES)
     }
-    return Number.isNaN(s.groundH) ? e.hM : s.groundH
+    if (!Number.isNaN(s.groundH)) return drawnHeightM(s.groundH, this.#fNow, this.#relHM) + GROUND_LIFT_M
+    // No terrain height yet: hM at factor 1, as always. As the ground flattens onto relH, so does the icon, and it
+    // takes the lift there, since that plane IS the drawn terrain.
+    return drawnHeightM(e.hM, this.#fNow, this.#relHM) + GROUND_LIFT_M * (1 - this.#fNow)
+  }
+
+  /**
+   * An airborne aircraft keeps its true HAE (D4), except under a flattened relief: below relH while f < 1 it would be
+   * drawn under the drawn terrain and hidden (billboards depth-test against the globe, and the flat plane is global, D9:
+   * in browse and far from the airport relH was picked at too). There it is drawn where its own height is drawn, like a
+   * ground icon with no sample: on the plane, + the lift, when flat. It stays above the drawn ground under it, which is
+   * no higher than the drawn hM (below relH) or than max(ground, relH) ≤ hM (above it).
+   */
+  #airHeight(hM: number): number {
+    const f = this.#fNow
+    return hM < this.#relHM && f < 1 ? drawnHeightM(hM, f, this.#relHM) + GROUND_LIFT_M * (1 - f) : hM
   }
 
   #updateLabel(s: Slot | null, e: FleetEntry | null, selected: boolean): void {

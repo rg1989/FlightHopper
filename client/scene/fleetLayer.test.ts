@@ -6,6 +6,7 @@ import type { Billboard, Viewer } from 'cesium'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry } from '../types.ts'
 import { altitudeColor } from './altitudeColor.ts'
+import { TOPO_ON, drawnHeightM, smoothstep } from './exaggeration.ts'
 import { FleetLayer, GROUND_LIFT_M, MAX_AGE_S, SELECTED_SCALE, northAt } from './fleetLayer.ts'
 import { HALO_ID, ICON_ID } from './icons.ts'
 
@@ -251,6 +252,136 @@ test('on the ground before the terrain tile loads: at hM, retried a little later
   f.groundH = 300
   for (let i = 0; i < 60; i++) layer.update([g], null, null)
   near(Cartographic.fromCartesian(bb(f, 'aaaaaa').position).height, 300 + GROUND_LIFT_M, 1e-3)
+})
+
+// Terrain exaggeration (design D7). LOWI: runway HAE (the relH Topography latches there) and an apron's true HAE.
+const LOWI_RWY = 627.72
+const APRON = 580
+const heightOf = (f: F, hex: string): number => Cartographic.fromCartesian(bb(f, hex).position).height
+
+test('exaggerated terrain: a ground icon keeps the TRUE height and follows a sink and a grow without sampling', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const g = fe('aaaaaa', { onGround: true, altFt: null, hM: 48, lat: 47.26, lon: 11.35 })
+  const frame = (fSampled: number, fNow: number): void => {
+    f.groundH = drawnHeightM(APRON, fSampled, LOWI_RWY) // globe.getHeight: the surface of the last render
+    layer.setTerrain({ fSampled, fNow, relHM: LOWI_RWY })
+    layer.update([g], null, null)
+  }
+  frame(TOPO_ON, TOPO_ON)
+  near(heightOf(f, 'aaaaaa'), APRON + GROUND_LIFT_M, 0.01)
+  const calls = f.heightCalls
+  let fPrev = TOPO_ON
+  for (let i = 1; i <= 150; i++) { // a 2.5 s sink at 60 fps: 1 + 1e-5 → 0
+    const fNow = TOPO_ON * (1 - smoothstep(i / 150))
+    frame(fPrev, fNow)
+    near(heightOf(f, 'aaaaaa'), drawnHeightM(APRON, fNow, LOWI_RWY) + GROUND_LIFT_M, 1e-3, `sink frame ${i}`)
+    fPrev = fNow
+  }
+  assert.equal(f.heightCalls, calls, 'arithmetic only: no terrain sample during the animation')
+  near(heightOf(f, 'aaaaaa'), LOWI_RWY + GROUND_LIFT_M, 1e-3, 'flat: on the plane')
+  for (let i = 0; i < 700; i++) frame(0, 0) // frames 152–851
+  // the ~10 s refresh (frame 601) reads the flat surface, which holds no relief: kept, and retried every 30 frames
+  assert.equal(f.heightCalls - calls, 9, 'frames 601, 631, …, 841')
+  near(heightOf(f, 'aaaaaa'), LOWI_RWY + GROUND_LIFT_M, 1e-3, 'still on the plane')
+  fPrev = 0
+  for (let i = 1; i <= 150; i++) { // grow back: the cached true height is still there
+    const fNow = TOPO_ON * smoothstep(i / 150)
+    frame(fPrev, fNow)
+    near(heightOf(f, 'aaaaaa'), drawnHeightM(APRON, fNow, LOWI_RWY) + GROUND_LIFT_M, 1e-3, `grow frame ${i}`)
+    fPrev = fNow
+  }
+  near(heightOf(f, 'aaaaaa'), APRON + GROUND_LIFT_M, 0.01)
+})
+
+test('exaggerated terrain: a sample is un-exaggerated with the factor the tiles held (fSampled), drawn at fNow', () => {
+  const f = fakeViewer(drawnHeightM(APRON, 0.7, LOWI_RWY))
+  const layer = new FleetLayer(f.viewer)
+  layer.setTerrain({ fSampled: 0.7, fNow: 0.69, relHM: LOWI_RWY }) // mid-sink, first sample
+  layer.update([fe('aaaaaa', { onGround: true, altFt: null, hM: 48, lat: 47.26, lon: 11.35 })], null, null)
+  assert.equal(f.heightCalls, 1)
+  near(heightOf(f, 'aaaaaa'), drawnHeightM(APRON, 0.69, LOWI_RWY) + GROUND_LIFT_M, 1e-3)
+})
+
+test('exaggerated terrain: while flat, a new ground icon sits on the plane, retries ~2 per s, and finds its height as the relief grows', () => {
+  const f = fakeViewer(LOWI_RWY - 0.03) // a flat surface, read a little low (the picker's flat-triangle error)
+  const layer = new FleetLayer(f.viewer)
+  const g = fe('aaaaaa', { onGround: true, altFt: null, hM: 48, lat: 47.26, lon: 11.35 })
+  layer.setTerrain({ fSampled: 1e-7, fNow: 1e-7, relHM: LOWI_RWY }) // flat after Topography's nudge
+  for (let i = 0; i < 90; i++) layer.update([g], null, null)
+  near(heightOf(f, 'aaaaaa'), LOWI_RWY + GROUND_LIFT_M, 1e-3, 'on the plane, like every sampled icon')
+  assert.equal(f.heightCalls, 3, 'frames 1, 31 and 61: not every frame')
+  let fPrev = 1e-7
+  for (let i = 1; i <= 150; i++) {
+    const fNow = TOPO_ON * smoothstep(i / 150)
+    f.groundH = drawnHeightM(APRON, fPrev, LOWI_RWY)
+    layer.setTerrain({ fSampled: fPrev, fNow, relHM: LOWI_RWY })
+    layer.update([g], null, null)
+    fPrev = fNow
+  }
+  near(heightOf(f, 'aaaaaa'), APRON + GROUND_LIFT_M, 0.01, 'sampled once the relief could be recovered')
+})
+
+test('exaggerated terrain: airborne icons stay at hM; a non-finite frame is ignored; factor 1 around 0 is the default', () => {
+  const f = fakeViewer(412)
+  const layer = new FleetLayer(f.viewer)
+  const es = [fe('aaaaaa', { hM: 3_000 }), fe('bbbbbb', { onGround: true, altFt: null, hM: 48, lat: 47.3 })]
+  layer.update(es, null, null)
+  const before = [heightOf(f, 'aaaaaa'), heightOf(f, 'bbbbbb')]
+  layer.setTerrain({ fSampled: 1, fNow: 1, relHM: 0 })
+  layer.update(es, null, null)
+  assert.deepEqual([heightOf(f, 'aaaaaa'), heightOf(f, 'bbbbbb')], before, 'the same as never calling setTerrain')
+  layer.setTerrain({ fSampled: 1, fNow: 0.5, relHM: 100 })
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    layer.setTerrain({ fSampled: bad, fNow: 0.5, relHM: 100 })
+    layer.setTerrain({ fSampled: 1, fNow: bad, relHM: 100 })
+    layer.setTerrain({ fSampled: 1, fNow: 0.5, relHM: bad })
+  }
+  layer.update(es, null, null)
+  near(heightOf(f, 'aaaaaa'), 3_000, 1e-3, 'airborne: true HAE whatever the terrain does')
+  near(heightOf(f, 'bbbbbb'), drawnHeightM(412, 0.5, 100) + GROUND_LIFT_M, 1e-3, 'the last finite frame')
+})
+
+test('exaggerated terrain: an undefined reading (the picker race during a toggle) keeps the cached height and retries ~2 per s', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const g = fe('aaaaaa', { onGround: true, altFt: null, hM: 48, lat: 47.26, lon: 11.35 })
+  const frame = (fSampled: number, fNow: number, reading: number | undefined): void => {
+    f.groundH = reading
+    layer.setTerrain({ fSampled, fNow, relHM: LOWI_RWY })
+    layer.update([g], null, null)
+  }
+  for (let i = 1; i <= 590; i++) frame(TOPO_ON, TOPO_ON, drawnHeightM(APRON, TOPO_ON, LOWI_RWY)) // sampled at frame 1
+  const calls = f.heightCalls
+  let fPrev = TOPO_ON
+  for (let i = 1; i <= 150; i++) { // a sink from frame 591: every reading fails, the ~10 s refresh (frame 601) too
+    const fNow = TOPO_ON * (1 - smoothstep(i / 150))
+    frame(fPrev, fNow, undefined)
+    near(heightOf(f, 'aaaaaa'), drawnHeightM(APRON, fNow, LOWI_RWY) + GROUND_LIFT_M, 1e-3, `sink frame ${i}`)
+    fPrev = fNow
+  }
+  assert.equal(f.heightCalls - calls, 5, 'frames 601, 631, …, 721: retried, not every frame')
+  near(heightOf(f, 'aaaaaa'), LOWI_RWY + GROUND_LIFT_M, 1e-3, 'flat: on the plane')
+})
+
+test('exaggerated terrain: an airborne icon below the flattened relief is drawn on it, not hidden under it; above it, at its true HAE', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  // flattened around LOWI's runway, seen from browse (D9): a KSFO final at 300 m over ground at ≈ −30 m; cruise traffic
+  const es = [fe('aaaaaa', { hM: 300, lat: 37.6, lon: -122.3 }), fe('bbbbbb', { hM: 3_000 })]
+  const cases: [number, number, string][] = [
+    [0, LOWI_RWY + GROUND_LIFT_M, 'flat: on the plane, + the lift, like a ground icon'],
+    [0.5, drawnHeightM(300, 0.5, LOWI_RWY) + GROUND_LIFT_M / 2, 'mid-grow: where 300 m is drawn'],
+    [1, 300, 'the terrain as loaded: true HAE'],
+    [TOPO_ON, 300, 'on: true HAE'],
+  ]
+  for (const [fNow, want, what] of cases) {
+    layer.setTerrain({ fSampled: fNow, fNow, relHM: LOWI_RWY })
+    layer.update(es, null, null)
+    near(heightOf(f, 'aaaaaa'), want, 1e-3, what)
+    assert.ok(heightOf(f, 'aaaaaa') > drawnHeightM(-30, fNow, LOWI_RWY) + 1, `above the drawn ground at f ${fNow}`)
+    near(heightOf(f, 'bbbbbb'), 3_000, 1e-3, `above relH at f ${fNow}: true HAE (D4)`)
+  }
 })
 
 test('an unchanged frame touches no billboard property; a moving aircraft touches only its position', () => {
