@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     VITE_TERRAIN: q.get('terrain') ?? import.meta.env.VITE_TERRAIN,
     VITE_IMAGERY: q.get('imagery') ?? import.meta.env.VITE_IMAGERY,
     VITE_CESIUM_ION_TOKEN: import.meta.env.VITE_CESIUM_ION_TOKEN,
+    VITE_ARCGIS_KEY: import.meta.env.VITE_ARCGIS_KEY,
     VITE_API_BASE: import.meta.env.VITE_API_BASE,
   })
   const [viewer, manifest, heroes] = await Promise.all([

@@ -12,6 +12,15 @@ export const EOX_YEAR = 2025
 export const EOX_URL = `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-${EOX_YEAR}_3857/default/g/{z}/{y}/{x}.jpg`
 export const EOX_ATTRIBUTION = `EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data ${EOX_YEAR})`
 
+// Esri World Imagery through ArcGIS Location Platform: an API key with the "Basemap styles service" privilege.
+// 2M basemap tiles/month free, then $0.15 per 1,000 (https://location.arcgis.com/pricing/, checked 2026-09-23).
+// Attribution: "Powered by Esri" + the service's copyrightText (…/World_Imagery/MapServer?f=json, same date), on screen.
+// Where Esri has no deeper tile the keyed endpoint answers 404, and Cesium keeps drawing the parent tile.
+// ponytail: zoom 19 = 0.3 m at LLBG, where z20+ is 404. Some metros go deeper: raise the cap if that matters there.
+export const ESRI_URL = 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+export const ESRI_ATTRIBUTION =
+  'Powered by Esri | Source: Esri, Vantor, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, and the GIS User Community'
+
 /**
  * Base imagery for the configured source, or null for none.
  * ion = Bing Maps Aerial via ion (Community plan: 1,000 imagery sessions/month).
@@ -20,6 +29,18 @@ export async function makeImagery(cfg: ClientConfig): Promise<ImageryProvider | 
   if (cfg.imagery === 'ion') {
     if (cfg.ionToken) Ion.defaultAccessToken = cfg.ionToken
     return createWorldImageryAsync()
+  }
+  if (cfg.imagery === 'esri') {
+    const p = new UrlTemplateImageryProvider({
+      url: `${ESRI_URL}?token=${cfg.arcgisKey}`,
+      maximumLevel: 19,
+      credit: new Credit(ESRI_ATTRIBUTION.replace('Esri', '<a href="https://www.esri.com" target="_blank">Esri</a>'), true),
+    })
+    // A listener replaces Cesium's console.log of every failed tile: keep the 404s quiet, show the rest (a bad key is 498/499).
+    p.errorEvent.addEventListener((e) => {
+      if ((e.error as { statusCode?: number } | undefined)?.statusCode !== 404) console.warn(e.message)
+    })
+    return p
   }
   if (cfg.imagery === 'eox') {
     return new UrlTemplateImageryProvider({

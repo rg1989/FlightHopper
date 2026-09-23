@@ -26,8 +26,9 @@ export interface RenderState {
 
 export interface ClientConfig {
   terrain: 'ion' | 'reearth' | 'ellipsoid'
-  imagery: 'ion' | 'eox' | 'none'
+  imagery: 'ion' | 'esri' | 'eox' | 'none'
   ionToken: string | null
+  arcgisKey: string | null
   apiBase: string
 }
 

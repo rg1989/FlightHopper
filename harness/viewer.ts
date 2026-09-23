@@ -13,6 +13,7 @@ try {
     VITE_TERRAIN: q.get('terrain') ?? import.meta.env.VITE_TERRAIN,
     VITE_IMAGERY: q.get('imagery') ?? import.meta.env.VITE_IMAGERY,
     VITE_CESIUM_ION_TOKEN: import.meta.env.VITE_CESIUM_ION_TOKEN,
+    VITE_ARCGIS_KEY: import.meta.env.VITE_ARCGIS_KEY,
     VITE_API_BASE: import.meta.env.VITE_API_BASE,
   })
   const viewer = await createViewer('globe', cfg)
@@ -23,7 +24,7 @@ try {
     orientation: { heading: CesiumMath.toRadians(298), pitch: CesiumMath.toRadians(-12), roll: 0 },
     duration: 0,
   })
-  const shown = { terrain: cfg.terrain, imagery: cfg.imagery, ionToken: cfg.ionToken ? 'set' : null, apiBase: cfg.apiBase }
+  const shown = { terrain: cfg.terrain, imagery: cfg.imagery, ionToken: cfg.ionToken ? 'set' : null, arcgisKey: cfg.arcgisKey ? 'set' : null, apiBase: cfg.apiBase }
   viewer.scene.postRender.addEventListener(() => {
     status.textContent = `${JSON.stringify(shown)}\ntilesLoaded: ${viewer.scene.globe.tilesLoaded}`
   })

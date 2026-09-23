@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const [terrainProvider, dayProvider, manifest] = await Promise.all([
     // Normals for slope shading; the query gives normal tiles their own browser-cache key (design D1).
     CesiumTerrainProvider.fromUrl(new Resource({ url: REEARTH_TERRAIN_URL, queryParameters: { extensions: 'octvertexnormals' } }), { requestVertexNormals: true }),
-    makeImagery({ terrain: 'reearth', imagery: 'eox', ionToken: null, apiBase: '/api' }),
+    makeImagery({ terrain: 'reearth', imagery: 'eox', ionToken: null, arcgisKey: null, apiBase: '/api' }),
     fetch('/models/manifest.json').then((r) => r.json() as Promise<ModelManifest>),
   ])
   const day = dayProvider ? new ImageryLayer(dayProvider) : null
