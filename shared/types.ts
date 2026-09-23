@@ -1,4 +1,4 @@
-export type SourceKind = 'adsblol' | 'readsb' | 'replay'
+export type SourceKind = 'adsblol' | 'adsbfi' | 'readsb' | 'replay'
 export type Quality = 'adsb2' | 'adsb01' | 'mlat' | 'other'
 
 /** Subset of one readsb / adsb.lol v2 aircraft object that we read. Field names are readsb's. */

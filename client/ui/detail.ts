@@ -328,7 +328,8 @@ export function mountDetail(root: HTMLElement, opts: DetailOpts): DetailHandle {
   close.addEventListener('click', () => opts.onClose())
   copy.addEventListener('click', () => {
     if (shown === null) return
-    const url = shareLink(location.origin, shown)
+    // The address bar holds the whole view (camera, orbit, toggles: urlState.ts) once it names this aircraft.
+    const url = new URLSearchParams(location.search).get('hex') === shown ? location.href : shareLink(location.origin, shown)
     const done = (): void => {
       copy.textContent = 'Copied'
       setTimeout(() => (copy.textContent = 'Copy link'), 1500)

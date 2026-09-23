@@ -22,7 +22,6 @@ import { HALO_ID, HALO_PX, ICON_ID, ICON_PX, haloCanvas, iconCanvas, iconFor } f
 import type { IconKind } from './icons.ts'
 
 const RAD = Math.PI / 180
-export const MAX_AGE_S = 60 // older entries are hidden (the Fleet prunes them later)
 export const SELECTED_SCALE = 1.4
 export const CHASE_HIDE_M = 5_000 // the selected icon, ring and label give way to the 3-D model inside this range
 export const GROUND_LIFT_M = 2 // above the drawn terrain, so a ground icon never z-fights the surface
@@ -162,7 +161,7 @@ export class FleetLayer {
       const s = this.#byHex.get(e.hex) ?? this.#add(e.hex)
       if (s.frame !== frame) touched++
       s.frame = frame
-      const visible = e.ageS <= MAX_AGE_S
+      const visible = e.ageS <= e.staleS // the Fleet's own limit per aircraft (it prunes them later)
       if (visible !== s.show) {
         s.b.show = visible
         s.show = visible

@@ -11,6 +11,16 @@ export function normalizeAdsblol(body: string): Snapshot {
   return { nowMs: j.now, aircraft: j.ac ?? [] }
 }
 
+/**
+ * The callsign in a readsb `flight` field, or null: readsb writes '@' for characters it could not decode, and an
+ * all-zero callsign is a transponder's placeholder, so both mean "none" (the table then shows the hex).
+ */
+export function callsignOf(flight: unknown): string | null {
+  if (typeof flight !== 'string') return null
+  const t = flight.replaceAll('@', '').trim()
+  return t === '' || /^0+$/.test(t) ? null : t
+}
+
 /** readsb --net-api-port and aircraft.json: { aircraft: [...], now: <seconds, fractional> } */
 export function normalizeReadsb(body: string): Snapshot {
   const j = JSON.parse(body)
@@ -21,5 +31,6 @@ export function normalizeReadsb(body: string): Snapshot {
 
 export const normalizers = {
   adsblol: normalizeAdsblol,
+  adsbfi: normalizeAdsblol, // same envelope
   readsb: normalizeReadsb,
 } as const

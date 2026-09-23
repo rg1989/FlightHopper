@@ -1,0 +1,9 @@
+{"ac":[
+{"hex":"738056","type":"adsb_icao","flight":"ELY393  ","r":"4X-EHH","t":"B739","desc":"BOEING 737-900","alt_baro":12600,"alt_geom":13300,"gs":359.5,"ias":307,"tas":378,"mach":0.580,"wd":239,"ws":27,"oat":7,"tat":25,"track":285.16,"track_rate":0.03,"roll":0.88,"mag_heading":277.03,"true_heading":282.03,"baro_rate":2240,"geom_rate":2208,"squawk":"2234","emergency":"none","category":"A3","nav_qnh":1014.4,"nav_altitude_mcp":26016,"nav_altitude_fms":26000,"nav_heading":277.03,"lat":32.088913,"lon":34.350183,"nic":8,"rc":186,"seen_pos":0.415,"version":2,"nic_baro":1,"nac_p":9,"nac_v":1,"sil":3,"sil_type":"perhour","gva":2,"sda":2,"alert":0,"spi":0,"mlat":[],"tisb":[],"messages":5168,"seen":0.1,"rssi":-8.4}
+]
+,"msg": "No error"
+,"now": 1790135084000
+,"total": 1
+,"ctime": 1790135084000
+,"ptime": 0
+}

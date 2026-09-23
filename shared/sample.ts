@@ -1,4 +1,5 @@
 import { geoidN } from './geoid.ts'
+import { callsignOf } from './readsb.ts'
 import type { Quality, ReadsbAircraft, Sample } from './types.ts'
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -51,7 +52,7 @@ export function toSample(ac: ReadsbAircraft, upstreamNowMs: number, offsetMs: nu
     nic: num(ac.nic),
     quality: classify(ac),
     nM: Math.round(geoidN(lat, lon) * 10) / 10,
-    callsign: str(ac.flight),
+    callsign: callsignOf(ac.flight),
     typeCode: str(ac.t),
     reg: str(ac.r),
   }

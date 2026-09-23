@@ -3,7 +3,8 @@ import type { CellStatus, StatusBrief, StatusReport } from '../shared/api.ts'
 import { MinOffset } from '../shared/clock.ts'
 import { isHidden, toSample } from '../shared/sample.ts'
 import type { TokenBucket } from './budget.ts'
-import { cellsForView, type Cell } from './cells.ts'
+import { distanceNm } from '../shared/geo.ts'
+import { cellsForView, isBusy, type Cell } from './cells.ts'
 import type { InfoStore } from './infoStore.ts'
 import type { Recorder } from './recorder.ts'
 import type { FetchResult, Source } from './sources/types.ts'
@@ -18,9 +19,8 @@ export interface PollerOpts {
   recorder: Recorder | null
   hideFlagged: boolean
   nowMs?: () => number
-  // Low-budget mode (F2): poll only the newest view's own circle, and no chase batch (the chase view is centred on the
-  // chased aircraft, so its circle holds it and the traffic around it). At 0.04 req/s the cell cover of one view
-  // (2–4 cells) refreshes each aircraft only every 50–100 s; one circle refreshes it every 25 s.
+  // Low-budget mode (F2): every view, however wide, is polled as its own circle (≤ 250 nm around its centre). At
+  // 0.04 req/s the cell cover of one view (2–4 cells) refreshed each aircraft only every 50–100 s; one circle, every 25 s.
   singleCircle?: boolean
   info?: InfoStore // gets every non-hidden aircraft object of every good answer (identity, detail panel, routes)
 }
@@ -39,6 +39,26 @@ export const POLLER_DEFAULTS = {
 } as const
 
 const TICK_MS = 100
+/** A view up to this radius is polled as one circle of its own (the upstream's limit); a wider one as grid cells. */
+export const VIEW_CIRCLE_MAX_NM = 250
+const EMPTY_FACTOR = 4 // an area whose last answer was empty (sea, desert) is asked this many times less often…
+const EMPTY_MAX_MS = 3_600_000 // …but at least hourly
+const HEX_RETRY_MS = 30_000 // a chase hex request that found nothing waits this long before the next one
+
+/** A wide view asks only for the areas within this distance of its centre: the middle of the globe, not its rim. */
+export const WIDE_REACH_NM = 2500
+
+/**
+ * How often to refresh the aircraft of a view radiusNm wide. Between answers the client dead-reckons every aircraft
+ * along its track, so what a gap costs is the turn error on screen, which grows with the view's scale: 0.12 s per nm
+ * up to 500 nm (5 s for a city, 16 s for the default regional view, 60 s at 500 nm). Wider, a view covers ~r² areas,
+ * so the period grows as r² too and every zoomed-out view costs about the same (~0.3 req/s): 4 min for a continent
+ * (1,000 nm), 30 min for the globe. The chased aircraft goes faster still (chasePeriodMs).
+ */
+export function viewPeriodMs(radiusNm: number): number {
+  if (radiusNm <= 500) return Math.max(5_000, 120 * radiusNm)
+  return Math.min(1_800_000, 60_000 * (radiusNm / 500) ** 2)
+}
 const MAX_HEXES = 100 // adsb.lol /v2/hex batch limit used by server/sources/adsblol.ts
 const OFFSET_WINDOW_MS = 10 * 60_000
 const HOUR_MS = 3_600_000
@@ -73,13 +93,20 @@ interface CellState {
   expiresMs: number
   lastReqMs: number
   ok: OkIntervals
+  periodMs: number // from the finest view that touched it within interestTtlMs
+  periodSetMs: number
+  count: number | null // aircraft in its last good answer; null before one
 }
 
 /**
  * Decides what to ask the upstream next and feeds the answers into the store.
  * Full-snapshot sources (readsb, replay): one all() per fullSnapshotPeriodMs serves every view and chase.
- * Area sources (adsb.lol): the batched chase first (every chasePeriodMs), else the most overdue cell that someone
- * viewed within interestTtlMs (every cellPeriodMs). Every request needs a bucket token first.
+ * Area sources (adsb.fi, adsb.lol): the newest view up to 250 nm wide is one circle of its own, a wider one the grid
+ * cells covering it. Each area is asked every viewPeriodMs of the finest view that touched it (empty ones less often),
+ * never-asked ones first, nearest the view centre first. While an aircraft is chased the view circle, centred on it,
+ * is asked every chasePeriodMs: it carries the chased aircraft and its traffic in one request. A hex request (the chase
+ * batch) goes out only for a chased aircraft the areas have not delivered lately and that is not inside the view
+ * circle. Every request needs a bucket token first; interest lapses interestTtlMs after the last touch.
  */
 export class Poller {
   #source: Source
@@ -90,8 +117,11 @@ export class Poller {
   #startMs: number
   #offset = new MinOffset(OFFSET_WINDOW_MS)
   #cells = new Map<string, CellState>()
+  #viewAt = { lat: 0, lon: 0 } // centre of the newest view
+  #viewPeriodMs = 0 // its period
   #chased = new Map<string, number>() // hex → expiresMs
   #lastChaseReqMs = -Infinity
+  #hexEmptyMs = -Infinity // when a chase hex request last found nothing
   #lastAllReqMs = -Infinity
   #chaseOk = new OkIntervals()
   #snapOk = new OkIntervals()
@@ -109,23 +139,38 @@ export class Poller {
     this.#startMs = this.#now()
   }
 
-  /** Keeps the cells covering this view polled for interestTtlMs. Full-snapshot sources need no cells: []. */
+  /**
+   * Keeps this view's areas polled for interestTtlMs, each at least every viewPeriodMs(radiusNm). Returns them: one
+   * circle ('view') up to 250 nm (always, with singleCircle), else the grid cells covering the view out to WIDE_REACH_NM
+   * from its centre. Areas of an older
+   * view that were never asked are dropped: the newest view wins (one person's app). Full-snapshot sources: [].
+   */
   touchView(lat: number, lon: number, radiusNm: number): Cell[] {
     if (this.#source.caps.fullSnapshot) return []
-    const expiresMs = this.#now() + this.#opts.interestTtlMs
-    if (this.#opts.singleCircle) {
-      // ponytail: the newest view wins, so two viewers of different areas take turns. Fine for one person's app.
-      const cell: Cell = { id: 'view', lat, lon, radiusNm: Math.ceil(radiusNm) }
-      const c = this.#cells.get('view')
-      if (c) Object.assign(c, { cell, expiresMs })
-      else this.#cells.set('view', { cell, expiresMs, lastReqMs: -Infinity, ok: new OkIntervals() })
-      return [cell]
-    }
-    const cells = cellsForView(lat, lon, radiusNm)
+    const now = this.#now()
+    const expiresMs = now + this.#opts.interestTtlMs
+    const periodMs = Math.max(this.#opts.cellPeriodMs, viewPeriodMs(radiusNm))
+    this.#viewAt = { lat, lon }
+    this.#viewPeriodMs = periodMs
+    const single = this.#opts.singleCircle || radiusNm <= VIEW_CIRCLE_MAX_NM
+    const cells = single
+      ? [{ id: 'view', lat, lon, radiusNm: Math.ceil(Math.min(VIEW_CIRCLE_MAX_NM, radiusNm)) }]
+      : cellsForView(lat, lon, Math.min(WIDE_REACH_NM, radiusNm))
+    const ids = new Set(cells.map((c) => c.id))
+    for (const [id, c] of this.#cells) if (!ids.has(id) && c.lastReqMs === -Infinity) this.#cells.delete(id)
     for (const cell of cells) {
       const c = this.#cells.get(cell.id)
-      if (c) c.expiresMs = Math.max(c.expiresMs, expiresMs)
-      else this.#cells.set(cell.id, { cell, expiresMs, lastReqMs: -Infinity, ok: new OkIntervals() })
+      if (c === undefined) {
+        this.#cells.set(cell.id, { cell, expiresMs, lastReqMs: -Infinity, ok: new OkIntervals(), periodMs, periodSetMs: now, count: null })
+        continue
+      }
+      c.cell = cell
+      c.expiresMs = Math.max(c.expiresMs, expiresMs)
+      // The finest view wins while it is being watched; a coarser one takes over interestTtlMs after it.
+      if (periodMs <= c.periodMs || now - c.periodSetMs > this.#opts.interestTtlMs) {
+        c.periodMs = periodMs
+        c.periodSetMs = now
+      }
     }
     return cells
   }
@@ -153,18 +198,25 @@ export class Poller {
         }
         return true
       }
-      const chasing = this.#chased.size > 0 && !this.#opts.singleCircle
-      if (chasing && now - this.#lastChaseReqMs >= this.#opts.chasePeriodMs) {
-        if (!this.#bucket.tryTake()) return false // a due chase never yields its token to a cell
+      const batch = now - this.#lastChaseReqMs >= this.#opts.chasePeriodMs ? this.#batch(now) : []
+      if (batch.length > 0) {
+        if (!this.#bucket.tryTake()) return false // a due chase never yields its token to an area
         this.#lastChaseReqMs = now
-        if (this.#ingest(await this.#source.hexes(this.#batch()))) this.#chaseOk.ok(this.#now())
+        const r = await this.#source.hexes(batch)
+        if (this.#ingest(r)) {
+          this.#chaseOk.ok(this.#now())
+          if (r.snapshot!.aircraft.length === 0) this.#hexEmptyMs = now
+        }
         return true
       }
-      const c = this.#mostOverdue(now)
-      // While chasing, a cell takes a token only if one is left for the next chase: the chase never waits for a cell.
-      if (!c || (chasing && this.#bucket.state().tokens < 2) || !this.#bucket.tryTake()) return false
+      const c = this.#next(now)
+      if (!c || !this.#bucket.tryTake()) return false
       c.lastReqMs = now
-      if (this.#ingest(await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm))) c.ok.ok(this.#now())
+      const r = await this.#source.circle(c.cell.lat, c.cell.lon, c.cell.radiusNm)
+      if (this.#ingest(r)) {
+        c.ok.ok(this.#now())
+        c.count = r.snapshot!.aircraft.length
+      }
       return true
     } finally {
       this.#busy = false
@@ -187,12 +239,23 @@ export class Poller {
   brief(): StatusBrief {
     this.#expire(this.#now())
     const cellIntervals = this.#source.caps.fullSnapshot ? this.#snapOk.intervals : [...this.#cells.values()].flatMap((c) => c.ok.intervals)
+    const tokenMs = 1000 / this.#bucket.state().rps
+    const full = this.#source.caps.fullSnapshot
+    let busy = 0 // areas of the view that hold (or may hold) aircraft: each costs one request per round
+    let pending = 0
+    for (const c of this.#cells.values()) {
+      if (c.count !== 0) busy++
+      if (c.lastReqMs === -Infinity) pending++
+    }
     const b: StatusBrief = {
       source: this.#source.caps.kind,
       degraded: this.#bucket.degraded,
       cellPeriodP95S: p95S(cellIntervals),
-      // singleCircle: the view circle serves the chase too (the chase view is centred on the chased aircraft).
-      chasePeriodP95S: p95S(this.#opts.singleCircle ? cellIntervals : this.#chaseOk.intervals),
+      chasePeriodP95S: p95S(this.#chaseOk.intervals),
+      // What to expect next, for the client's delay and staleness: the budget stretches both when it cannot keep up.
+      viewEveryS: (full ? Math.max(this.#opts.fullSnapshotPeriodMs, tokenMs) : Math.max(this.#viewPeriodMs, busy * tokenMs)) / 1000,
+      chaseEveryS: Math.max(full ? this.#opts.fullSnapshotPeriodMs : this.#opts.chasePeriodMs, tokenMs) / 1000,
+      pendingAreas: pending,
     }
     // The offset that stamps every sample (#ingest): lets the client light a replay at its recorded time (sun = tRender − it).
     if (this.#offset.ready) b.upstreamOffsetMs = Math.round(this.#offset.get())
@@ -257,20 +320,62 @@ export class Poller {
     if (this.#chased.size === 0) this.#chaseOk.lastOkMs = null // a new chase must not count the idle gap
   }
 
-  /** The ≤ 100 most recently touched chased hexes. ponytail: more than 100 concurrent chases starve the rest. */
-  #batch(): string[] {
+  /**
+   * The chased hexes (≤ 100, most recently touched first) that need a hex request: never stored (a ?hex= link), or last
+   * seen outside the view circle (none while the view is grid cells). After a hex request that found nothing
+   * (landed, out of coverage, a mistyped ?hex=), none for HEX_RETRY_MS.
+   * ponytail: more than 100 concurrent chases starve the rest.
+   */
+  #batch(now: number): string[] {
+    if (this.#chased.size === 0 || now - this.#hexEmptyMs < HEX_RETRY_MS) return []
+    const view = this.#cells.get('view')?.cell
     return [...this.#chased]
       .sort((a, b) => b[1] - a[1])
+      .filter(([hex]) => {
+        const s = this.#store.latest(hex)
+        // Inside the view circle its answers carry the aircraft (or, once it is gone, a hex request would not find it either).
+        return s === null || view === undefined || distanceNm(view.lat, view.lon, s.lat, s.lon) > view.radiusNm
+      })
       .slice(0, MAX_HEXES)
       .map(([hex]) => hex)
   }
 
-  /** The due cell whose last request is oldest (never-polled first, then registration order); null if none is due. */
-  #mostOverdue(now: number): CellState | null {
+  /** Is a chased aircraft (as last stored) inside the view circle? Then that circle is how it is chased. */
+  #chaseInView(): boolean {
+    const view = this.#cells.get('view')?.cell
+    if (view === undefined) return false
+    for (const hex of this.#chased.keys()) {
+      const s = this.#store.latest(hex)
+      if (s !== null && distanceNm(view.lat, view.lon, s.lat, s.lon) <= view.radiusNm) return true
+    }
+    return false
+  }
+
+  /** How often this area is due: its view's period (the chase period for a view circle holding the chase), longer when empty. */
+  #periodMs(c: CellState, chaseInView: boolean): number {
+    const p = c.cell.id === 'view' && chaseInView ? Math.min(c.periodMs, this.#opts.chasePeriodMs) : c.periodMs
+    return c.count === 0 ? Math.max(p, Math.min(EMPTY_MAX_MS, p * EMPTY_FACTOR)) : p
+  }
+
+  /**
+   * The next area to ask: never-asked ones first (busy airspace before the rest, each nearest the newest view centre
+   * first); then the most overdue for its period.
+   */
+  #next(now: number): CellState | null {
     let best: CellState | null = null
+    let bestKey = -Infinity
+    const chaseInView = this.#chaseInView()
     for (const c of this.#cells.values()) {
-      if (now - c.lastReqMs < this.#opts.cellPeriodMs) continue
-      if (best === null || c.lastReqMs < best.lastReqMs) best = c
+      const period = this.#periodMs(c, chaseInView)
+      if (now - c.lastReqMs < period) continue
+      // Never asked: 1e9 (2e9 in busy airspace) minus the distance, nearest first. Else: how many periods overdue (≥ 1).
+      const key = c.lastReqMs === -Infinity
+        ? (isBusy(c.cell) ? 2e9 : 1e9) - distanceNm(this.#viewAt.lat, this.#viewAt.lon, c.cell.lat, c.cell.lon)
+        : (now - c.lastReqMs) / period
+      if (key > bestKey) {
+        best = c
+        bestKey = key
+      }
     }
     return best
   }

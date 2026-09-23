@@ -18,20 +18,20 @@ const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeight
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
-  hex, lat, lon, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, quality: 'adsb2', info: null,
+  hex, lat, lon, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, quality: 'adsb2', info: null,
 })
 
-test('view radius follows the camera height, in 10 nm steps, clamped to 20–250 nm', () => {
+test('view radius follows the camera height, in 10 nm steps, clamped to 20–5,400 nm', () => {
   assert.equal(viewRadiusNm(0), 20)
   assert.equal(viewRadiusNm(150), 20) // chasing on the runway
   assert.equal(viewRadiusNm(37_040), 20) // 20 nm up
   assert.equal(viewRadiusNm(37_041), 30)
   assert.equal(viewRadiusNm(100_000), 60) // 54 nm → next step
-  assert.equal(viewRadiusNm(20_000_000), 250) // whole-Earth view
-  assert.equal(viewRadiusNm(Number.NaN), 250)
+  assert.equal(viewRadiusNm(20_000_000), 5400) // whole-Earth view: the visible hemisphere
+  assert.equal(viewRadiusNm(Number.NaN), 5400)
 })
 
-test('browse poll circle: centred on the visible rectangle, covering all of it, in 10 nm steps within 20–250 nm', () => {
+test('browse poll circle: centred on the visible rectangle, covering all of it, in 10 nm steps within 20–5,400 nm', () => {
   // The rectangle WP-B-V3's harness measured for the 300 km top-down view over LLBG (800×692 px canvas).
   const r = { west: 32.999, south: 30.628, east: 36.774, north: 33.367 }
   const c = browseCircle(r)
@@ -48,7 +48,7 @@ test('browse poll circle: antimeridian, whole world, tiny views, and a stable ke
   const across = browseCircle({ west: 179, south: -1, east: -179, north: 1 })
   assert.deepEqual(across, { lat: 0, lon: -180, nm: 90 }) // 2° wide across 180°: centred on it, not on Greenwich
   assert.ok(distanceNm(0, -180, 1, 179) <= 90)
-  assert.deepEqual(browseCircle({ west: -180, south: -90, east: 180, north: 90 }), { lat: 0, lon: 0, nm: 250 }) // capped
+  assert.deepEqual(browseCircle({ west: -180, south: -90, east: 180, north: 90 }), { lat: 0, lon: 0, nm: 5400 }) // capped (the app centres such a view on the camera)
   assert.equal(browseCircle({ west: 11.33, south: 47.25, east: 11.36, north: 47.27 }).nm, 20) // 2 km up: the floor
   const r = { west: 8.1, south: 46.2, east: 14.6, north: 48.3 }
   assert.deepEqual(browseCircle(r), browseCircle({ ...r })) // same view → same key → the server sends only what is new

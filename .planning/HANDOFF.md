@@ -17,6 +17,22 @@
 - **Looks match `.planning/plans/assets/WP-E-A/gate-GE/`:** LOWI morning, golden hour and night (61 GIBS tiles, all 200, z ≤ 8), the grow from flat (f 1e-7 → 0.24 → 0.70 → 1.00, `relH` 627.72), browse at night (unlit, toggles hidden, no GIBS), keys and persistence, phones 375×667 and 375×812 (no overlap, no sideways scroll), ground objects (HDG 261°, GND through a flatten and a grow), KSFO at its recorded time (clock 2026-09-22T18:00Z).
 - **Harness pages:** WP-E4 toggles and WP-E2 sun pass. WP-E1 topography: `undefinedSettled` 0 and `worstMs` ≤ 45 ms. `avgMs` was 16–29 ms at a load average of 10–20, which is over the 16.7 ms bar; WP-E1's own reference run was also over it (Cesium shader compiles). A first run at a higher load gave `undefinedSettled` 62; the rerun gave 0.
 
+## Live data since 2026-09-23 (adsb.fi, zoom-scaled polling, URL state)
+
+- **`make` is live now** (adsb.fi open data, `server/sources/adsbfi.ts`, MAX_RPS 0.9 with a strict burst of 1: adsb.fi documents 1 req/s for its public endpoints and restricts IPs after 400/404/429). `make replay` replays the newest recording; `make live LIVE_SOURCE=adsblol` is the old adsb.lol path (0.04 req/s, refuses while the recorder runs). The recorder keeps polling adsb.lol and no longer conflicts. adsb.fi terms: personal, non-commercial, cite with a link (the source badge links it; the credit line names it).
+- **Polling follows the zoom** (`server/poller.ts`): a view up to 250 nm is one circle of its own; a wider one is the grid cells within 2,500 nm of its centre (`WIDE_REACH_NM`). Each area is asked every `viewPeriodMs(r)`: 0.12 s/nm up to 500 nm (5 s city, 16 s regional, 60 s), then ∝ r² (4 min continent, 30 min globe), so every zoomed-out view costs ~0.3 req/s once filled. Empty answers → 4× the period (≤ 1 h). Never-asked areas go first: busy airspace boxes (`cells.ts` `BUSY`, hand-drawn) before the rest, centre-out. The newest view wins (one person's app).
+- **Chase**: the chase view circle (≥ 20 nm, centred on the chased aircraft) is asked every `chasePeriodMs` (1.4 s) and carries the aircraft and its traffic in one request. A hex request goes out only for a chased aircraft never stored or last seen outside the view circle (a `?hex=` link), and waits 30 s after one that found nothing. Measured: 0.7 req/s while chasing, 0 hex requests, data 0.6–1.8 s old.
+- **Status** gains `viewEveryS`, `chaseEveryS` and `pendingAreas`. The client: chase delay ≥ `chaseEveryS` + p90 arrival age + 0.5 s (the "Predicting" flicker was the newest position arriving 1–2 s old); each aircraft lives `staleS` = max(60 s, 3 × its own sample gap, 2.5 × `viewEveryS`), dead-reckoned all the way (`browse/fleet.ts`), which also ends the 72 s blink of hero replays; a hidden tab stops polling.
+- **URL = what is on screen** (`client/ui/urlState.ts`): `?at=lat,lon,km` (browse camera, or the chased aircraft), `?hex=`, `?cam=heading,pitch,range` (chase orbit), and non-default toggles; rewritten once a second with `replaceState`. A reload restores the same view; "Copy link" copies it. Without `?at=` the app opens over LLBG.
+- **Also**: a LIVE/REPLAY source badge with "loading N areas"; callsigns of `@`s or zeros read as none; legend ticks `1k … 40k+` (the phone-width overlap); `API_PORT` for the Makefile and vite.config.
+
+### Data-source options (for the world view)
+
+- **Now: adsb.fi public API** at ~1 req/s: a zoomed-in view costs one request per 5–16 s, chase 0.7 req/s, and the globe fills busy airspace first in ~5 min, then ~0.3 req/s. Oceans stay mostly empty (ground stations only).
+- **Best next step: feed a receiver.** Feeders get adsb.fi's `/v2/snapshot` (every aircraft worldwide, one request per 30 s) and adsb.lol's re-api (box and all queries). One request would fill the globe; it slots in as a `fullSnapshot`-style source for wide views (M6).
+- **OpenSky** `/states/all` returns the world in one call (anonymous: 400 credits/day = 100 global calls; a free account: 4,000/day), but its terms need a written agreement for any operational REST use, even non-profit. Ask them before using it.
+- airplanes.live's public API is similar to adsb.fi (point queries, ~1 req/s); adding it to stitch more budget would work around per-provider limits, which is not worth the goodwill.
+
 ## Rules
 
 - **adsb.lol:** only one process polls it at a time. This IP got 429s at 0.14–0.5 req/s, and once at ~0.082 req/s after 1.5 h; it has run clean at 0.04 req/s. `make live` sets 0.04 (`LIVE_RPS`). The server's own `MAX_RPS` default is still 1 req/s (backlog).
@@ -32,8 +48,8 @@ At night, low over a big city, the VIIRS layer (z8, about 500 m per pixel) made 
 
 ## Backlog
 
-- **`MAX_RPS` default** (`server/config.ts`): the default is 1 req/s, which contradicts `PLAN.md`'s Global Constraints. Make it 0.04, so a plain `npm run server` against adsb.lol is polite without `make live`. Update `server/config.test.ts`.
-- **F6 · adsb.fi** as a second free source: about 12× the live budget, which makes smooth live chase possible. Its envelope must be confirmed with one real request per endpoint.
+- **World view follow-ups:** learn each cell's traffic and keep it across runs (replaces the hand-drawn `BUSY` boxes); a feeder snapshot source for wide views (above); the table's "On screen" counts every aircraft when the whole globe is in view (`computeViewRectangle` spans all longitudes); the grey polar cap of the street map at globe zoom (Web Mercator stops at 85°).
+
 - **F3 · MLAT re-join velocity continuity** (`hermite.ts`/`track.ts`). Measure it first with `tools/bench-track.ts`.
 - **F4 · Approach pitch** (`attitude.ts`): descending below 175 kt should use approach AoA.
 - **F5 · Estimator `dedupe` switch** for the bench.

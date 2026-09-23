@@ -31,8 +31,7 @@ import { SampleStore } from './store.ts'
 const HOST = '127.0.0.1'
 // ponytail: an area source (adsb.lol) polls the cells of at most a 250 nm view; a wider view still gets whatever the
 // store holds. Full-snapshot sources have no cells, so the cap costs them nothing.
-const MAX_POLLED_NM = 250
-const LOW_BUDGET_RPS = 0.5 // below this an area source polls one circle per view, not the cell cover (Poller singleCircle)
+const LOW_BUDGET_RPS = 0.5 // below this an area source polls one circle per view, however wide (Poller singleCircle)
 const HEX = /^~?[0-9a-f]{6}$/
 const GZIP_MIN_BYTES = 1024
 // Fastest level: a 5,000-aircraft view (2.7 MB of JSON) → ~430 KB in ~10 ms; level 6 saves 20 % more bytes for 2.4× the time.
@@ -146,7 +145,7 @@ export function createServer(
   const store = new SampleStore()
   const info = new InfoStore({ nowMs })
   const rps = Math.min(cfg.maxRps, source.caps.maxRps)
-  const bucket = new TokenBucket(rps, nowMs)
+  const bucket = new TokenBucket(rps, nowMs, Math.random, source.caps.burst)
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
   // The poller prunes the sample store (180 s horizon) on every 100 ms tick and the info store on every good answer,
   // so no separate prune timer is needed.
@@ -208,7 +207,7 @@ export function createServer(
     check(Math.abs(lon) <= 180, 'lon must be in [-180, 180]')
     check(nm > 0, 'nm must be > 0')
     check(since >= 0, 'since must be ≥ 0')
-    poller.touchView(lat, lon, Math.min(nm, MAX_POLLED_NM))
+    poller.touchView(lat, lon, nm)
     const samples = store.view(lat, lon, nm, since)
     return { serverNowMs: nowMs(), samples, status: poller.brief(), info: viewInfo(samples, lat, lon, nm, since) }
   }

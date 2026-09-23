@@ -169,7 +169,7 @@ interface Slot {
 const NCOL = COLUMNS.length
 
 function blankRow(): Row {
-  return { hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, quality: 'other', info: null, gen: 0 }
+  return { hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, quality: 'other', info: null, gen: 0 }
 }
 
 function copyEntry(d: FleetEntry, s: FleetEntry): void {
@@ -183,6 +183,7 @@ function copyEntry(d: FleetEntry, s: FleetEntry): void {
   d.gsKt = s.gsKt
   d.vsFpm = s.vsFpm
   d.ageS = s.ageS
+  d.staleS = s.staleS
   d.quality = s.quality
   d.info = s.info // AircraftInfo is replaced, never mutated, when it changes
 }

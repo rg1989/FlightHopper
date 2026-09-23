@@ -65,6 +65,7 @@ export interface FleetEntry {
   gsKt: number | null
   vsFpm: number | null
   ageS: number                                  // render time − newest sample tMs, seconds
+  staleS: number                                // past this age it is hidden and forgotten; it is dead-reckoned up to it
   quality: Quality
   info: AircraftInfo | null
 }

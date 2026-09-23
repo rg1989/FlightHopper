@@ -17,11 +17,11 @@ import type { ChaseResponse, StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf, flagEmoji } from '../shared/icaoCountry.ts'
 import type { AircraftInfo } from '../shared/info.ts'
-import type { ReadsbAircraft } from '../shared/types.ts'
+import type { ReadsbAircraft, SourceKind } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
 import { Fleet } from './browse/fleet.ts'
-import { containsDeg, enterBrowse, exitBrowse, viewRectangleDeg } from './scene/browseCamera.ts'
+import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
@@ -34,7 +34,7 @@ import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
 import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
-import { MAX_DELAY_S, MIN_DELAY_S, RenderClock } from './track/delay.ts'
+import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { mountAttribution, mountBanner } from './ui/banner.ts'
@@ -46,6 +46,8 @@ import { PhotoCache } from './ui/photo.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
 import { mountImageryBadge } from './ui/imageryBadge.ts'
+import { flightCredit, mountSourceBadge } from './ui/sourceBadge.ts'
+import { readView, writeUrl } from './ui/urlState.ts'
 import { mountTable } from './ui/table.ts'
 import './ui/layout.css'
 
@@ -54,21 +56,25 @@ const PRUNE_AGE_S = 60 // forget an aircraft one minute after its newest sample 
 const FAILS_DOWN = 3 // failed polls in a row before the banner reports it
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
 const MIN_VIEW_NM = 20
-const MAX_VIEW_NM = 250 // the server's cap: it polls an area source (adsb.lol) out to this radius
+// The visible hemisphere. The server polls a view up to 250 nm as one circle and a wider one as grid cells, each at a
+// period that grows with the view (Poller.viewPeriodMs): the globe view costs about one request per area per 10 min.
+const MAX_VIEW_NM = 5400
+const DEFAULT_AIRPORT = 'LLBG' // the first view without ?at= or ?airport= (the author's home); a reload keeps ?at=
+const URL_EVERY_MS = 1000 // how often the address bar follows the view (history.replaceState)
 const HOVER_PICK_MS = 100 // at most ten hover picks a second while the mouse moves (each pick is a small render pass)
 const HEX = /^~?[0-9a-f]{6}$/
 // Until the first reply. Nothing is drawn before it, so the source named here is never shown.
 const NO_STATUS: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null }
 const NO_ENTRIES: readonly FleetEntry[] = []
 
-/** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–250 nm. */
+/** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–5,400 nm. */
 function viewNm(nm: number): number {
   const r = Math.ceil(nm / 10) * 10
   return Number.isFinite(r) ? Math.min(MAX_VIEW_NM, Math.max(MIN_VIEW_NM, r)) : MAX_VIEW_NM
 }
 
 /**
- * Radius of the chase view poll: the camera height in nm (a top-down view shows about ±0.6 h), in 10 nm steps, 20–250 nm.
+ * Radius of the chase view poll: the camera height in nm (a top-down view shows about ±0.6 h), in 10 nm steps, 20–5,400 nm.
  * ponytail: a tilted camera sees further than its height; the far part of such a view stays empty until the user looks
  * down. Upgrade: size the circle from the frustum's ground footprint (browseCircle does, for the top-down view).
  */
@@ -81,8 +87,8 @@ const wrap180 = (lon: number): number => ((((lon + 180) % 360) + 360) % 360) - 1
 
 /**
  * The browse view poll: the circle around the visible rectangle, centred on it (to 0.01°, the ApiClient's key) and
- * reaching its farthest corner (a lat/lon rectangle's farthest point from inside it is a corner), 20–250 nm.
- * A view wider than 500 nm gets the 250 nm around its centre. A rectangle with west > east spans the antimeridian.
+ * reaching its farthest corner (a lat/lon rectangle's farthest point from inside it is a corner), 20–5,400 nm (the
+ * visible hemisphere). A rectangle with west > east spans the antimeridian.
  * ponytail: every pan moves the centre, so the first poll after it is a new view key and a full (since=0) reply
  * (~200 KB gzipped for 5,000 aircraft). Upgrade: snap the centre to a grid so small pans keep their key.
  */
@@ -180,9 +186,9 @@ export function readParams(search: string): AppParams {
  * street-map credits on the map itself (the OpenStreetMap one linked, as its tile policy asks). The detail panel credits
  * each photo ("Image © name", linked to its page on planespotters.net).
  */
-export function attributionFor(model: ModelManifestEntry | null): string[] {
+export function attributionFor(model: ModelManifestEntry | null, source: SourceKind = 'adsblol'): string[] {
   const lines = [
-    'Flight data © adsb.lol contributors, ODbL 1.0',
+    flightCredit(source),
     'Airports: OurAirports (public domain)',
     AIRLINES_CREDIT,
     'Map: © OpenStreetMap contributors, ODbL',
@@ -302,7 +308,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const banner = mountBanner(ui)
   const detail = mountDetail(ui, { onClose: () => select(null), photos: new PhotoCache(), lookup: lookupFor })
   const table = mountTable(right, { onSelect: (hex) => select(hex), onHover: (hex) => (tableHover = hex), flagOf })
-  mountAttribution(right, attributionFor(entry))
+  const credits = mountAttribution(right, attributionFor(entry))
+  const sourceBadge = mountSourceBadge(right) // prepended: heads the column
+  let creditSource: SourceKind | null = null
   const legend = mountLegend(div('fh-legend-root', ui))
   const runways = addRunways(viewer, airports)
   const buildings = new Buildings(viewer) // chase only: update() gets no focus in browse
@@ -334,8 +342,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   // A new selection is a camera cut: its first chase reply sets the render delay at once. Slewing there at 0.2 s/s would
   // take ~2 min on a sparse live feed (25 s between samples → 26 s delay).
   let snapClock = selected !== null
-  /** The track's target, but at least one server refresh of the chased aircraft + 1 s, known before its sample gaps are. */
-  const delayTargetS = (): number => Math.min(MAX_DELAY_S, Math.max(registry.delayTargetS(selected), (status.chasePeriodP95S ?? 0) + 1))
+  // How old the chased aircraft's newest position already is when it arrives (the upstream's own latency plus the trip),
+  // over the last ARRIVALS replies: the delay must cover it plus a refresh, or the newest sample is behind render time.
+  const ARRIVALS = 30
+  const arrivalAgesS: number[] = []
+  /** The track's target, but at least one server refresh of the chased aircraft + its arrival age (p90) + 0.5 s. */
+  const delayTargetS = (): number =>
+    Math.min(MAX_DELAY_S, Math.max(registry.delayTargetS(selected), (status.chaseEveryS ?? 0) + p90(arrivalAgesS) + 0.5))
   const bench = params.bench ? new BenchRecorder(viewer, { label: params.hex ?? 'browse' }) : null
   bench?.mountOverlay(div('fh-bench', ui))
   // ?bench=1: User Timing measures fh:frame, fh:fleet, fh:table (each frame) and fh:ingest (each poll), and two marks
@@ -345,12 +358,32 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const measure = bench === null ? null : (name: string, startMs: number): void => void performance.measure(name, { start: startMs })
   ;(window as unknown as { viewer?: Viewer }).viewer = viewer // console access for debugging and G3, as in WP-00
 
-  const home = airports.find((a) => a.ident === params.airport) ?? airports[0]
-  const homeCenter = home ? { lat: home.lat, lon: home.lon } : null
-  if (selected === null) enterBrowse(viewer, homeCenter, { flyS: 0 })
+  // The first view: ?at= (a reload or a shared link), else ?airport=, else the default home airport.
+  const urlView = readView(location.search)
+  const home = airports.find((a) => a.ident === (params.airport ?? DEFAULT_AIRPORT)) ?? airports[0]
+  const start = urlView.at ?? (home ? { lat: home.lat, lon: home.lon, heightKm: BROWSE_HEIGHT_M / 1000 } : null)
+  if (selected === null) enterBrowse(viewer, start, { flyS: 0, heightM: start === null ? undefined : start.heightKm * 1000 })
   else {
     map.show = false
-    if (home) viewer.camera.setView({ destination: Cartesian3.fromDegrees(home.lon, home.lat, START_HEIGHT_M) })
+    // Over the chased aircraft's last position (?at=) so the first view poll already holds it and its traffic.
+    if (start) viewer.camera.setView({ destination: Cartesian3.fromDegrees(start.lon, start.lat, urlView.at ? Math.max(START_HEIGHT_M / 6, start.heightKm * 1000) : START_HEIGHT_M) })
+    if (urlView.cam) chaseCam.orbit.set(urlView.cam.headingDeg, urlView.cam.pitchDeg, urlView.cam.rangeM)
+  }
+  let lastUrlMs = -Infinity
+
+  /** The address bar follows what is on screen (see urlState.ts), so a reload shows the same view. */
+  function syncUrl(now: number): void {
+    if (now - lastUrlMs < URL_EVERY_MS) return
+    lastUrlMs = now
+    const cam = viewer.camera.positionCartographic
+    const heightKm = cam.height / 1000
+    const at =
+      selected === null
+        ? isBrowsing(viewer) ? { lat: CesiumMath.toDegrees(cam.latitude), lon: CesiumMath.toDegrees(cam.longitude), heightKm } : null
+        : chased !== null ? { lat: chased.lat, lon: chased.lon, heightKm } : urlView.at
+    const o = chaseCam.orbit
+    const next = writeUrl(location.search, { at, hex: selected, cam: { headingDeg: o.headingOffsetDeg, pitchDeg: o.pitchDeg, rangeM: o.rangeM }, prefs })
+    if (next !== location.search) history.replaceState(history.state, '', `${location.pathname}${next}${location.hash}`)
   }
 
   /** Browse ↔ chase. The camera leaves browse at once and engages behind the aircraft at its first state. */
@@ -368,6 +401,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     snapClock = hex !== null
+    arrivalAgesS.length = 0
     if (hex !== null) {
       const seed = fleet.newest(hex)
       if (seed) registry.ingest([seed])
@@ -452,6 +486,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
     detail.update(s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null))) // ≤ 4 Hz
     banner.update(shown, s)
+    sourceBadge.update(api.ready ? shown : null, api.ready ? api.serverNowMs() : null)
+    syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
   }
@@ -461,7 +497,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   function viewCircle(): { lat: number; lon: number; nm: number } {
     if (selected === null) {
       const r = viewRectangleDeg(viewer)
-      if (r !== null) return browseCircle(r)
+      const c = r === null ? null : browseCircle(r)
+      // A globe-wide rectangle spans every longitude, so its centre says nothing: then the point under the camera.
+      if (c !== null && c.nm < MAX_VIEW_NM) return c
     }
     const cam = viewer.camera.positionCartographic
     const nm = viewRadiusNm(cam.height)
@@ -493,6 +531,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       const r = chase.value
       fleet.ingest(r.samples, r.info ? [r.info] : undefined)
       if (current) {
+        let newest = -Infinity
+        for (const x of r.samples) if (x.tMs > newest) newest = x.tMs
+        if (newest > -Infinity) {
+          arrivalAgesS.push(Math.max(0, (r.serverNowMs - newest) / 1000))
+          if (arrivalAgesS.length > ARRIVALS) arrivalAgesS.shift()
+        }
         registry.ingest(r.samples)
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
@@ -505,6 +549,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       ok = true
     }
     measure?.('fh:ingest', t0)
+    // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
+    fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
+    if (status.source !== creditSource) credits.set(attributionFor(entry, (creditSource = status.source)))
     if (ok) failedPolls = 0
     else if (failedPolls++ === 0) console.warn('FlightHopper: poll failed:', (view as PromiseRejectedResult).reason)
     if (api.ready) {
@@ -517,6 +564,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   void (async () => {
     while (!stopped) {
       const t0 = performance.now()
+      // A hidden tab asks for nothing: the server's interest in its view lapses 15 s later and it stops polling upstream.
+      if (document.hidden) {
+        await sleep(POLL_MS)
+        continue
+      }
       await poll().catch((e: unknown) => console.error('FlightHopper: poll crashed:', e))
       await sleep(Math.max(0, POLL_MS - (performance.now() - t0)))
     }

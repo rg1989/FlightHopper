@@ -7,7 +7,7 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry } from '../types.ts'
 import { altitudeColor } from './altitudeColor.ts'
 import { TOPO_ON, drawnHeightM, smoothstep } from './exaggeration.ts'
-import { FleetLayer, GROUND_LIFT_M, MAX_AGE_S, SELECTED_SCALE, northAt } from './fleetLayer.ts'
+import { FleetLayer, GROUND_LIFT_M, SELECTED_SCALE, northAt } from './fleetLayer.ts'
 import { HALO_ID, ICON_ID } from './icons.ts'
 
 // Node has no DOM. Label measures its CSS font through the DOM once per font (Label.js parseFont); the icons draw on a
@@ -69,7 +69,7 @@ const info = (hex: string, o: Partial<AircraftInfo> = {}): AircraftInfo => ({
   hex, callsign: 'DLH4AB', reg: null, typeCode: 'A320', category: 'A3', squawk: null, emergency: null, military: false, route: null, ...o,
 })
 const fe = (hex: string, o: Partial<FleetEntry> = {}): FleetEntry => ({
-  hex, lat: 50, lon: 10, hM: 10_000, altFt: 33_000, onGround: false, trackDeg: 90, gsKt: 450, vsFpm: 0, ageS: 1, quality: 'adsb2',
+  hex, lat: 50, lon: 10, hM: 10_000, altFt: 33_000, onGround: false, trackDeg: 90, gsKt: 450, vsFpm: 0, ageS: 1, staleS: 60, quality: 'adsb2',
   info: info(hex), ...o,
 })
 
@@ -171,10 +171,10 @@ test('selected: 1.4× with the ring on it and hidden inside chase range; deselec
   assert.equal(halo(f).show, false)
 })
 
-test(`entries older than ${MAX_AGE_S} s are hidden, and shown again when fresh`, () => {
+test('entries older than their staleS are hidden, and shown again when fresh', () => {
   const f = fakeViewer()
   const layer = new FleetLayer(f.viewer)
-  layer.update([fe('aaaaaa', { ageS: 5 }), fe('bbbbbb', { ageS: MAX_AGE_S + 1 })], 'bbbbbb', 'bbbbbb')
+  layer.update([fe('aaaaaa', { ageS: 5 }), fe('bbbbbb', { ageS: 61 })], 'bbbbbb', 'bbbbbb')
   assert.equal(bb(f, 'aaaaaa').show, true)
   assert.equal(bb(f, 'bbbbbb').show, false)
   assert.equal(halo(f).show, false, 'no ring on a hidden aircraft')

@@ -8,7 +8,7 @@ import type { Sample } from '../shared/types.ts'
 /** One upstream poll, recorded verbatim. Written by server/recorder.ts and tools/record-cells.ts. */
 export interface RecordLine {
   v: 1
-  source: 'adsblol' | 'readsb'
+  source: 'adsblol' | 'adsbfi' | 'readsb'
   url: string
   status: number
   tSendMs: number
@@ -19,7 +19,7 @@ export interface RecordLine {
 
 export function parseRecordLine(line: string): RecordLine {
   const r = JSON.parse(line)
-  if (r?.v !== 1 || (r.source !== 'adsblol' && r.source !== 'readsb')) throw new Error('not a v1 record line')
+  if (r?.v !== 1 || !(r.source in normalizers)) throw new Error('not a v1 record line')
   return r as RecordLine
 }
 

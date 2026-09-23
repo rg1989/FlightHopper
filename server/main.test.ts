@@ -114,7 +114,10 @@ async function assertApi(base: string, kind: SourceKind, advance: () => void): P
   const st = await get<StatusReport>(`${base}/api/status`)
   assert.equal(st.status, 200)
   assert.equal(st.type, 'application/json')
-  const keys = ['budget', 'bytesPerHourEstimate', 'cellPeriodP95S', 'cells', 'chasePeriodP95S', 'chasedHexes', 'degraded', 'requestsTotal', 'source', 'upstreamOffsetMs']
+  const keys = [
+    'budget', 'bytesPerHourEstimate', 'cellPeriodP95S', 'cells', 'chaseEveryS', 'chasePeriodP95S', 'chasedHexes', 'degraded', 'pendingAreas',
+    'requestsTotal', 'source', 'upstreamOffsetMs', 'viewEveryS',
+  ]
   assert.deepEqual(Object.keys(st.body).sort(), keys)
   assert.equal(st.body.source, kind)
   assert.equal(st.body.degraded, null)

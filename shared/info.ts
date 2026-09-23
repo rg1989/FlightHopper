@@ -1,3 +1,4 @@
+import { callsignOf } from './readsb.ts'
 import type { ReadsbAircraft } from './types.ts'
 
 /**
@@ -33,7 +34,7 @@ export function toInfo(ac: ReadsbAircraft, route: string | null = null): Aircraf
   const emergency = s(ac.emergency)
   return {
     hex: ac.hex.toLowerCase(),
-    callsign: s(ac.flight),
+    callsign: callsignOf(ac.flight),
     reg: s(ac.r),
     typeCode: s(ac.t),
     category: s(ac.category),

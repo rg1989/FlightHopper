@@ -4,6 +4,7 @@ export interface SourceCaps {
   kind: SourceKind
   fullSnapshot: boolean                    // true: all() returns everything the source knows
   maxRps: number                           // polite ceiling for this source
+  burst?: number                           // token-bucket burst (default 2); 1 = strictly paced
   coverage: { lat: number; lon: number; radiusNm: number } | null   // null = global
   attribution: string
 }

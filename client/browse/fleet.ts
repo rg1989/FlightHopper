@@ -10,9 +10,11 @@ const FT = 0.3048
 const R_NM = 3440.065 // the sphere of shared/geo.ts destination(), so both agree
 const RAD = Math.PI / 180
 const DEG = 180 / Math.PI
-// Dead-reckon at most this far past the newest sample, then hold: FleetLayer's MAX_AGE_S, when the icon hides anyway.
-// Live at 0.04 req/s an aircraft's samples come 25–50 s apart, so a shorter horizon froze most of the map.
-const MAX_AHEAD_S = 60
+// How long an aircraft outlives its newest sample (dead-reckoned all the way, then hidden and forgotten): 3 of its own
+// usual gaps between samples, at least MIN_STALE_S and at least the server's hint (setHintS). A 1 Hz aircraft goes 60 s
+// after its signal ends; one refreshed every 72 s (a hero replay) or every 10 min (the globe view) keeps flying between.
+const MIN_STALE_S = 60
+const GAP_GAIN = 0.3 // exponential average of the gaps
 const PARKED_KT = 3 // on the ground and slower than this: not moving
 // The server sends an aircraft's info only when it changes, so a hex that drops out of the view and comes back must
 // find its info here. ponytail: fixed 1 h after its newest sample; enough for panning away and back, and it bounds
@@ -26,6 +28,7 @@ interface Slot {
   lat: number // newest sample position, degrees
   lon: number
   moving: boolean // track and speed known, and not parked
+  gapS: number // average gap between its samples, s; 0 before a second one
   // Great-circle destination terms that do not depend on the distance (see shared/geo.ts destination()).
   sinLat: number
   cosLat: number
@@ -50,6 +53,10 @@ function heightM(s: Sample): number {
 
 function load(slot: Slot, s: Sample): void {
   const e = slot.e
+  if (slot.s !== null) {
+    const gap = (s.tMs - slot.tMs) / 1000
+    slot.gapS = slot.gapS === 0 ? gap : slot.gapS + GAP_GAIN * (gap - slot.gapS)
+  }
   slot.s = s
   slot.tMs = s.tMs
   slot.lat = s.lat
@@ -75,17 +82,19 @@ function load(slot: Slot, s: Sample): void {
   slot.radPerS = gs! / 3600 / R_NM
 }
 
-/** Moves the entry to tMs: along the track at ground speed for (tMs − sample) seconds, clamped to 0…MAX_AHEAD_S. */
-function reckon(slot: Slot, tMs: number): void {
+/** Moves the entry to tMs: along the track at ground speed for (tMs − sample) seconds, clamped to 0…staleS. */
+function reckon(slot: Slot, tMs: number, floorS: number): void {
   const e = slot.e
   const ageS = (tMs - slot.tMs) / 1000
   e.ageS = ageS > 0 ? ageS : 0
+  const g3 = 3 * slot.gapS
+  e.staleS = g3 > floorS ? g3 : floorS
   if (!slot.moving || ageS <= 0) {
     e.lat = slot.lat
     e.lon = slot.lon
     return
   }
-  const d = (ageS < MAX_AHEAD_S ? ageS : MAX_AHEAD_S) * slot.radPerS
+  const d = (ageS < e.staleS ? ageS : e.staleS) * slot.radPerS
   const sinD = Math.sin(d)
   const cosD = Math.cos(d)
   const sinLat2 = slot.sinLat * cosD + slot.cosLat * sinD * slot.cosTrk
@@ -100,6 +109,7 @@ export class Fleet {
   readonly #out: FleetEntry[] = [] // what entries() returns, always the same array
   readonly #info = new Map<string, InfoRec>()
   #lastTMs: number | null = null // time of the last entries() call
+  #floorS = MIN_STALE_S
 
   /** Keeps the newest sample per hex (older and same-tMs samples are ignored) and the latest info per hex. */
   ingest(samples: Sample[], info?: AircraftInfo[]): void {
@@ -108,7 +118,7 @@ export class Fleet {
       if (slot === undefined) slot = this.#add(s.hex)
       else if (s.tMs <= slot.tMs) continue
       load(slot, s)
-      reckon(slot, this.#lastTMs ?? s.tMs)
+      reckon(slot, this.#lastTMs ?? s.tMs, this.#floorS)
     }
     if (info === undefined) return
     for (const i of info) {
@@ -127,8 +137,14 @@ export class Fleet {
   entries(tServerMs: number): readonly FleetEntry[] {
     this.#lastTMs = tServerMs
     const slots = this.#slots
-    for (let i = 0; i < slots.length; i++) reckon(slots[i], tServerMs)
+    const floorS = this.#floorS
+    for (let i = 0; i < slots.length; i++) reckon(slots[i], tServerMs, floorS)
     return this.#out
+  }
+
+  /** The server's expected refresh of this view says how long an aircraft may go without a sample: at least 60 s. */
+  setHintS(s: number): void {
+    this.#floorS = Number.isFinite(s) && s > MIN_STALE_S ? s : MIN_STALE_S
   }
 
   /** The hex's entry as of the last entries() call (or its newest sample, if that is newer). */
@@ -141,14 +157,13 @@ export class Fleet {
     return this.#byHex.get(hex)?.s ?? undefined
   }
 
-  /** Forgets hexes whose newest sample is more than maxAgeS older than tServerMs. */
-  prune(tServerMs: number, maxAgeS: number): void {
-    const cutoff = tServerMs - maxAgeS * 1000
+  /** Forgets hexes whose newest sample is older than max(minAgeS, their staleS) at tServerMs. */
+  prune(tServerMs: number, minAgeS: number): void {
     const slots = this.#slots
     const out = this.#out
     for (let i = slots.length - 1; i >= 0; i--) {
       const slot = slots[i]
-      if (slot.tMs >= cutoff) continue
+      if (slot.tMs >= tServerMs - Math.max(minAgeS, slot.e.staleS) * 1000) continue
       const last = slots.pop()!
       const lastE = out.pop()!
       if (last !== slot) {
@@ -171,10 +186,10 @@ export class Fleet {
   #add(hex: string): Slot {
     const e: FleetEntry = {
       hex, lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0,
-      quality: 'other', info: this.#info.get(hex)?.info ?? null,
+      staleS: this.#floorS, quality: 'other', info: this.#info.get(hex)?.info ?? null,
     }
     const slot: Slot = {
-      e, s: null, tMs: -Infinity, lat: 0, lon: 0, moving: false,
+      e, s: null, tMs: -Infinity, lat: 0, lon: 0, moving: false, gapS: 0,
       sinLat: 0, cosLat: 1, sinTrk: 0, cosTrk: 1, lonRad: 0, radPerS: 0,
     }
     this.#byHex.set(hex, slot)

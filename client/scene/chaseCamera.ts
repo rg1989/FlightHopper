@@ -52,6 +52,13 @@ export class OrbitControl {
     this.rangeM = clamp(this.rangeM * Math.exp(-delta * ZOOM_PER_WHEEL), RANGE_MIN_M, RANGE_MAX_M)
   }
 
+  /** A given orbit (a reload's ?cam=), clamped like the mouse's. */
+  set(headingOffsetDeg: number, pitchDeg: number, rangeM: number): void {
+    this.headingOffsetDeg = wrap360(headingOffsetDeg)
+    this.pitchDeg = clamp(pitchDeg, STEEPEST_DEG, PITCH_MAX_DEG)
+    this.rangeM = clamp(rangeM, RANGE_MIN_M, RANGE_MAX_M)
+  }
+
   /** Back behind the aircraft at the starting pitch and distance. */
   reset(): void {
     this.headingOffsetDeg = 0

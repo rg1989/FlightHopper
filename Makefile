@@ -1,23 +1,26 @@
 # Quick start: API server in the background, Vite in the foreground; Ctrl+C stops both.
-#   make            replay the most recently modified recording (REC=data/recordings/<file>.jsonl to pick one)
-#   make live       live adsb.lol (refuses while the recorder polls it: only one process may)
+#   make / make live   live traffic from adsb.fi (paced below its 1 req/s public limit)
+#   make replay        replay the most recently modified recording (REC=data/recordings/<file>.jsonl to pick one)
+#   make live LIVE_SOURCE=adsblol   live from adsb.lol at 0.04 req/s (refuses while the recorder polls it)
 REC ?= $(shell ls -t data/recordings/*.jsonl 2>/dev/null | head -1)
 FE_PORT ?= 5173
-# adsb.lol from this IP: 429s at 0.14–0.5 req/s and once at ~0.082 after 1.5 h; clean at 0.041 since (2026-09-22).
-LIVE_RPS ?= 0.04
+API_PORT ?= 8787
+LIVE_SOURCE ?= adsbfi
 
-.PHONY: start live run
-
-start:
-	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=replay REPLAY_FILES=$(REC) RECORD_DIR="
+.PHONY: live start replay run
 
 live:
-	@if pgrep -f record-cells >/dev/null; then echo "The recorder is polling adsb.lol (one poller at a time): pkill -f record-cells first."; exit 1; fi
-	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=adsblol MAX_RPS=$(LIVE_RPS)"
+	@if [ "$(LIVE_SOURCE)" = adsblol ] && pgrep -f record-cells >/dev/null; then echo "The recorder is polling adsb.lol (one poller at a time): pkill -f record-cells first, or use adsb.fi (make live)."; exit 1; fi
+	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=$(LIVE_SOURCE)"
 
-# ponytail: the API port is fixed at 8787 because vite.config.ts proxies /api there.
+start: live
+
+replay:
+	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=replay REPLAY_FILES=$(REC) RECORD_DIR="
+
+# vite.config.ts proxies /api to API_PORT.
 run:
-	@if lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then echo "Port 8787 is busy: stop the other API server first."; exit 1; fi
-	@env $(SRC) npm run --silent server & trap 'kill $$! 2>/dev/null' EXIT INT TERM; \
+	@if lsof -nP -iTCP:$(API_PORT) -sTCP:LISTEN >/dev/null 2>&1; then echo "Port $(API_PORT) is busy: stop the other API server first (or API_PORT=…)."; exit 1; fi
+	@env $(SRC) PORT=$(API_PORT) npm run --silent server & trap 'kill $$! 2>/dev/null' EXIT INT TERM; \
 	echo ""; echo "  FlightHopper → http://localhost:$(FE_PORT)/"; echo ""; \
-	npx vite --port $(FE_PORT) --strictPort --clearScreen false
+	API_PORT=$(API_PORT) npx vite --port $(FE_PORT) --strictPort --clearScreen false

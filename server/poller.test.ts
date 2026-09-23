@@ -7,8 +7,9 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { normalizeAdsblol, normalizeReadsb } from '../shared/readsb.ts'
 import { TokenBucket } from './budget.ts'
-import { cellsForView } from './cells.ts'
-import { Poller, type PollerOpts } from './poller.ts'
+import { distanceNm } from '../shared/geo.ts'
+import { cellsForView, isBusy } from './cells.ts'
+import { Poller, viewPeriodMs, type PollerOpts } from './poller.ts'
 import { Recorder } from './recorder.ts'
 import { readRecording } from './recording.ts'
 import { SampleStore } from './store.ts'
@@ -88,16 +89,33 @@ async function runUntil(s: ReturnType<typeof setup>, untilMs: number, each?: () 
 
 const rel = (calls: Call[], m?: Method): number[] => calls.filter((c) => m === undefined || c.m === m).map((c) => c.t - T0)
 
-test('touchView registers the cells of cellsForView and returns them', () => {
+test('touchView: a view up to 250 nm is one circle of its own; a wider one, the grid cells covering it', () => {
   const s = setup()
-  const cells = s.poller.touchView(KSFO[0], KSFO[1], 40)
-  assert.deepEqual(cells, cellsForView(KSFO[0], KSFO[1], 40))
-  assert.equal(cells.length, 3)
-  assert.deepEqual(s.poller.report().cells.map((c) => c.id), cells.map((c) => c.id))
-  assert.ok(s.poller.report().cells.every((c) => c.lastOkMs === null && c.periodP95S === null))
+  assert.deepEqual(s.poller.touchView(KSFO[0], KSFO[1], 40), [{ id: 'view', lat: KSFO[0], lon: KSFO[1], radiusNm: 40 }])
+  const wide = s.poller.touchView(KSFO[0], KSFO[1], 400)
+  assert.deepEqual(wide, cellsForView(KSFO[0], KSFO[1], 400))
+  assert.ok(wide.length > 10)
+  const r = s.poller.report()
+  // The newest view wins: the older view's circle, never asked, is gone.
+  assert.deepEqual(r.cells.map((c) => c.id).sort(), wide.map((c) => c.id).sort())
+  assert.ok(r.cells.every((c) => c.lastOkMs === null && c.periodP95S === null))
+  assert.equal(r.pendingAreas, wide.length)
 })
 
-test('chase batch goes before a due cell; the cell gets the next token', async () => {
+test('viewPeriodMs: 0.12 s per nm up to 500 nm, then as r² (so wide views cost alike), 5 s to 30 min', () => {
+  assert.equal(viewPeriodMs(20), 5000)
+  assert.equal(viewPeriodMs(130), 15_600)
+  assert.equal(viewPeriodMs(500), 60_000)
+  assert.equal(viewPeriodMs(1000), 240_000)
+  assert.equal(viewPeriodMs(5400), 1_800_000)
+})
+
+test('a globe-wide view asks only for the areas within 2,500 nm of its centre', () => {
+  const s = setup()
+  assert.deepEqual(s.poller.touchView(48, 10, 5400), cellsForView(48, 10, 2500))
+})
+
+test('chase batch goes before a due area; the area gets the next token', async () => {
   const s = setup()
   s.poller.touchView(LLBG[0], LLBG[1], 5)
   s.poller.touchChase('A1C7E4')
@@ -108,75 +126,110 @@ test('chase batch goes before a due cell; the cell gets the next token', async (
   assert.equal(s.calls[1].m, 'circle')
 })
 
-test('while chasing, a cell only gets a token when one is left for the next chase', async () => {
-  // 1 req/s with a 1 s chase: the chase uses every token; the cell never makes the chase wait
-  const s = setup({ maxRps: 1 })
-  s.poller.touchView(LLBG[0], LLBG[1], 5)
-  s.poller.touchChase('a1c7e4')
-  await runUntil(s, 6000)
-  // (The bucket accrues 0.1 token per 100 ms tick in floating point, so a token can show up one tick late.)
-  const chase = rel(s.calls, 'hexes')
-  assert.equal(chase[0], 0)
-  assert.ok(chase.length >= 5)
-  for (let i = 1; i < chase.length; i++) assert.ok(chase[i] - chase[i - 1] <= 1100, `${chase}`)
-  assert.deepEqual(rel(s.calls, 'circle'), [])
-
-  // 1 req/s with a 1.4 s chase: the cell gets the spare 0.29 token/s and the chase keeps its period
-  const t = setup({ maxRps: 1, opts: { chasePeriodMs: 1400 } })
-  await runUntil(t, 60_000, () => {
-    if ((t.clock.t - T0) % 5000 !== 0) return
-    t.poller.touchView(LLBG[0], LLBG[1], 5)
-    t.poller.touchChase('a1c7e4')
+test('while chasing, the view circle is asked every chasePeriodMs and carries the chased aircraft: no hex requests', async () => {
+  const hex = normalizeAdsblol(BODIES.circle).aircraft.find((a) => a.hex !== '000001' && distanceNm(KSFO[0], KSFO[1], a.lat!, a.lon!) < 15)!.hex
+  const s = setup({ maxRps: 1, opts: { chasePeriodMs: 1400 } })
+  await runUntil(s, 20_000, () => {
+    if ((s.clock.t - T0) % 1000 !== 0) return // the client polls every second
+    s.poller.touchView(KSFO[0], KSFO[1], 20)
+    s.poller.touchChase(hex)
   })
-  const r = t.poller.report()
-  assert.equal(r.chasePeriodP95S, 1.4)
-  assert.ok(r.cellPeriodP95S !== null && r.cellPeriodP95S >= 3 && r.cellPeriodP95S <= 4.5, `cell p95 ${r.cellPeriodP95S}`)
-  assert.ok(r.requestsTotal <= 62, `${r.requestsTotal} requests in 60 s at 1 req/s`)
+  assert.deepEqual(rel(s.calls, 'hexes'), [0], 'only before the circle has delivered it')
+  const circles = rel(s.calls, 'circle')
+  assert.ok(circles.length >= 13, `${circles}`)
+  for (let i = 1; i < circles.length; i++) assert.ok(circles[i] - circles[i - 1] <= 1500, `${circles}`)
+  assert.equal(s.poller.brief().chaseEveryS, 1.4)
 })
 
-test('singleCircle: only the newest view circle is polled, never the cell cover or a chase batch', async () => {
+test('a chased aircraft outside the view circle gets a hex request every chasePeriodMs; one that is not found, every 30 s', async () => {
+  const s = setup({ opts: { chasePeriodMs: 1400 } })
+  await runUntil(s, 5000, () => {
+    if ((s.clock.t - T0) % 1000 !== 0) return
+    s.poller.touchView(LLBG[0], LLBG[1], 5) // a1c7e4 (in the golden hex body) flies elsewhere
+    s.poller.touchChase('a1c7e4')
+  })
+  assert.deepEqual(rel(s.calls, 'hexes'), [0, 1400, 2800, 4200])
+
+  const t = setup({ opts: { chasePeriodMs: 1400 } })
+  t.replies.push({ status: 200 }) // the golden hex body…
+  t.poller.touchChase('abcdef')
+  await t.poller.tick()
+  assert.equal(t.calls.length, 1)
+})
+
+test('singleCircle: every view, however wide, is one circle of ≤ 250 nm; a new view replaces the old one', async () => {
   const s = setup({ opts: { singleCircle: true } })
-  s.poller.touchView(KSFO[0], KSFO[1], 60.2) // 2+ cells in the cell cover
-  s.poller.touchChase('a1c7e4')
+  assert.deepEqual(s.poller.touchView(KSFO[0], KSFO[1], 60.2), [{ id: 'view', lat: KSFO[0], lon: KSFO[1], radiusNm: 61 }])
   assert.equal(await s.poller.tick(), true)
   assert.deepEqual(s.calls[0], { t: T0, m: 'circle', args: [KSFO[0], KSFO[1], 61] })
   s.clock.t += 100
-  assert.equal(await s.poller.tick(), false, 'the circle is not due again before cellPeriodMs')
-  s.poller.touchView(LLBG[0], LLBG[1], 20) // a new view replaces the old one and keeps its period
-  s.clock.t += 3000
+  assert.equal(await s.poller.tick(), false, 'not due again before its period')
+  s.clock.t += viewPeriodMs(3000)
+  s.poller.touchView(LLBG[0], LLBG[1], 3000) // the globe: still one circle, at the upstream's 250 nm limit
   assert.equal(await s.poller.tick(), true)
-  assert.deepEqual(s.calls[1].args, [LLBG[0], LLBG[1], 20])
-  const r = s.poller.report()
-  assert.deepEqual(r.cells.map((c) => c.id), ['view'])
-  assert.equal(r.chasePeriodP95S, 3.1, 'the circle serves the chase, so its period is the chase period')
-  assert.equal(s.calls.filter((c) => c.m !== 'circle').length, 0)
+  assert.deepEqual(s.calls[1].args, [LLBG[0], LLBG[1], 250])
+  assert.deepEqual(s.poller.report().cells.map((c) => c.id), ['view'])
 })
 
-test('each cell is polled once per cellPeriodMs, most overdue first', async () => {
+test('a globe view over the Atlantic asks for busy airspace (Europe, America) before the empty ocean at its centre', async () => {
   const s = setup()
-  const cells = s.poller.touchView(KSFO[0], KSFO[1], 40)
-  await runUntil(s, 6500)
-  const at = (i: number): number[] => s.calls.filter((c) => c.args[0] === cells[i].lat && c.args[1] === cells[i].lon).map((c) => c.t - T0)
-  assert.deepEqual(at(0), [0, 3000, 6000])
-  assert.deepEqual(at(1), [100, 3100, 6100])
-  assert.deepEqual(at(2), [200, 3200, 6200])
-  assert.deepEqual(s.calls[0].args, [cells[0].lat, cells[0].lon, cells[0].radiusNm])
-  assert.equal(s.calls.length, 9)
+  const cells = s.poller.touchView(45, -30, 5400)
+  await runUntil(s, 20_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(45, -30, 5400)
+  })
+  const busy = cells.filter(isBusy).length
+  assert.ok(busy > 50 && busy < cells.length - 50, `${busy} of ${cells.length}`)
+  const asked = s.calls.map((c) => ({ lat: c.args[0] as number, lon: c.args[1] as number, id: '', radiusNm: 0 }))
+  assert.ok(asked.length > busy)
+  assert.ok(asked.slice(0, busy).every(isBusy), 'busy airspace first')
+  assert.ok(!asked.slice(busy).some(isBusy), 'then the rest')
+})
+
+test('a wide view: never-asked areas nearest its centre first, then each once per its view period', async () => {
+  const s = setup()
+  const cells = s.poller.touchView(KSFO[0], KSFO[1], 400)
+  const period = viewPeriodMs(400) // 48 s
+  await runUntil(s, period + 5000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(KSFO[0], KSFO[1], 400)
+  })
+  const firstRound = s.calls.slice(0, cells.length).map((c) => ({ lat: c.args[0] as number, lon: c.args[1] as number, id: '', radiusNm: 0 }))
+  const nBusy = cells.filter(isBusy).length // the US box; the Pacific part comes after it
+  for (const group of [firstRound.slice(0, nBusy), firstRound.slice(nBusy)]) {
+    const d = group.map((c) => distanceNm(KSFO[0], KSFO[1], c.lat, c.lon))
+    assert.deepEqual(d, [...d].sort((a, b) => a - b), 'centre-out within busy, then within the rest')
+  }
+  assert.ok(firstRound.slice(0, nBusy).every(isBusy))
+  assert.equal(new Set(s.calls.slice(0, cells.length).map((c) => `${c.args[0]},${c.args[1]}`)).size, cells.length)
+  const second = s.calls.slice(cells.length)
+  assert.ok(second.length > 0 && second.every((c) => c.t - T0 >= period), 'nothing is asked twice within its period')
+})
+
+test('an area whose last answer was empty is asked 4× less often', async () => {
+  const s = setup()
+  const empty = JSON.stringify({ ac: [], msg: 'No error', now: 1_790_000_000_000, total: 0 })
+  s.source.circle = (lat, lon, radiusNm) => {
+    s.calls.push({ t: s.clock.t, m: 'circle', args: [lat, lon, radiusNm] })
+    return Promise.resolve({ url: 'fake', status: 200, tSendMs: s.clock.t, tRecvMs: s.clock.t, bytes: empty.length, body: empty, retryAfterS: null, snapshot: normalizeAdsblol(empty) })
+  }
+  await runUntil(s, 25_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(LLBG[0], LLBG[1], 20) // period 5 s → 20 s when empty
+  })
+  assert.deepEqual(rel(s.calls), [0, 20_000])
 })
 
 test('interest expires after interestTtlMs; touching again extends it', async () => {
   const s = setup()
   s.poller.touchView(LLBG[0], LLBG[1], 5)
   await runUntil(s, 20_000)
-  assert.deepEqual(rel(s.calls), [0, 3000, 6000, 9000, 12_000])
+  assert.deepEqual(rel(s.calls), [0, 5000, 10_000])
   assert.deepEqual(s.poller.report().cells, [])
 
   const s2 = setup()
   s2.poller.touchView(LLBG[0], LLBG[1], 5)
-  await runUntil(s2, 25_000, () => {
+  await runUntil(s2, 30_000, () => {
     if (s2.clock.t === T0 + 10_000) s2.poller.touchView(LLBG[0], LLBG[1], 5)
   })
-  assert.deepEqual(rel(s2.calls), [0, 3000, 6000, 9000, 12_000, 15_000, 18_000, 21_000, 24_000])
+  assert.deepEqual(rel(s2.calls), [0, 5000, 10_000, 15_000, 20_000])
 })
 
 test('a chase expires after chaseTtlMs', async () => {
@@ -240,7 +293,9 @@ test('fullSnapshot source: all() once per fullSnapshotPeriodMs, never circle or 
   assert.deepEqual(rel(s.calls), [0, 1000, 2000, 3000])
   assert.equal(s.store.latest('a1c7e4')?.lat, 39.788635)
   const b = s.poller.brief()
-  assert.deepEqual(b, { source: 'readsb', degraded: null, cellPeriodP95S: 1, chasePeriodP95S: 1, upstreamOffsetMs: T0 - ALL_NOW_MS })
+  assert.deepEqual(b, {
+    source: 'readsb', degraded: null, cellPeriodP95S: 1, chasePeriodP95S: 1, viewEveryS: 1, chaseEveryS: 1, pendingAreas: 0, upstreamOffsetMs: T0 - ALL_NOW_MS,
+  })
 })
 
 test('samples land in the store in server clock: upstream now − seen_pos + (tRecv − now)', async () => {
@@ -304,16 +359,19 @@ test('report: periods, counters and bytes per hour', async () => {
   assert.equal(r.source, 'adsblol')
   assert.equal(r.degraded, null)
   assert.equal(r.requestsTotal, s.calls.length)
-  assert.equal(r.requestsTotal, 10 + 4) // chase at 0..9000, cell at 100, 3100, 6100, 9100
+  // a1c7e4 flies outside the 5 nm view circle: hex requests at 0..9000; the circle at its own 5 s period, 100 and 5100
+  assert.equal(r.requestsTotal, 10 + 2)
   assert.equal(r.chasePeriodP95S, 1)
-  assert.equal(r.cellPeriodP95S, 3)
+  assert.equal(r.cellPeriodP95S, 5)
   assert.equal(r.cells.length, 1)
-  assert.equal(r.cells[0].lastOkMs, T0 + 9100)
-  assert.equal(r.cells[0].periodP95S, 3)
+  assert.equal(r.cells[0].lastOkMs, T0 + 5100)
+  assert.equal(r.cells[0].periodP95S, 5)
   assert.deepEqual(r.chasedHexes, ['a1c7e4'])
-  assert.equal(r.budget.counts.ok, 14)
+  assert.equal(r.budget.counts.ok, 12)
+  assert.equal(r.viewEveryS, 5)
+  assert.equal(r.pendingAreas, 0)
   // under a minute of data is scaled up from a one-minute floor
-  const bytes = 10 * BODIES.hexes.length + 4 * BODIES.circle.length
+  const bytes = 10 * BODIES.hexes.length + 2 * BODIES.circle.length
   assert.equal(r.bytesPerHourEstimate, bytes * 60)
 
   // bytes older than an hour no longer count
@@ -323,7 +381,9 @@ test('report: periods, counters and bytes per hour', async () => {
 
 test('brief before any response: nulls, not zeros', () => {
   const s = setup()
-  assert.deepEqual(s.poller.brief(), { source: 'adsblol', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null })
+  assert.deepEqual(s.poller.brief(), {
+    source: 'adsblol', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null, viewEveryS: 0, chaseEveryS: 1, pendingAreas: 0,
+  })
 })
 
 test('upstreamOffsetMs: a recording served 3 days later reports 3 days; tMs − upstreamOffsetMs is the recorded time', async () => {

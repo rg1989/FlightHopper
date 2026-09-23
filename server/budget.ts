@@ -7,7 +7,7 @@ const MAX_BACKOFF_MS = 60_000
 const DEFAULT_RETRY_AFTER_S = 5
 
 /**
- * Upstream request budget: a token bucket (burst 2) whose rate adapts to what the upstream answers.
+ * Upstream request budget: a token bucket (burst 2 by default) whose rate adapts to what the upstream answers.
  * Call tryTake() before each request and onResult() with its outcome.
  * 429 → rate halves for good and pauses for Retry-After (PLAN.md Global Constraints: never climb back toward a refused rate).
  * 401/403 → blocked forever (never retry a block). 5xx / network error (status 0) → exponential pause.
@@ -18,7 +18,8 @@ export class TokenBucket {
   #now: () => number
   #random: () => number
   #rps: number
-  #tokens = BURST
+  #burst: number
+  #tokens: number
   #lastMs: number // tokens are accrued up to this time
   #last429Ms = -Infinity
   #pausedUntilMs = 0
@@ -26,8 +27,10 @@ export class TokenBucket {
   #fails = 0 // consecutive 5xx / network errors
   #counts = { ok: 0, r429: 0, r4xx: 0, r5xx: 0, err: 0 }
 
-  /** random is the jitter source (tests inject a constant). */
-  constructor(maxRps: number, nowMs: () => number = Date.now, random: () => number = Math.random) {
+  /** random is the jitter source (tests inject a constant). burst 1 paces strictly (adsb.fi: 1 request/s). */
+  constructor(maxRps: number, nowMs: () => number = Date.now, random: () => number = Math.random, burst: number = BURST) {
+    this.#burst = burst
+    this.#tokens = burst
     this.#maxRps = maxRps
     this.#rps = maxRps
     this.#now = nowMs
@@ -93,7 +96,7 @@ export class TokenBucket {
 
   #accrue(t: number): void {
     if (t <= this.#lastMs) return
-    this.#tokens = Math.min(BURST, this.#tokens + ((t - this.#lastMs) * this.#rps) / 1000)
+    this.#tokens = Math.min(this.#burst, this.#tokens + ((t - this.#lastMs) * this.#rps) / 1000)
     this.#lastMs = t
   }
 

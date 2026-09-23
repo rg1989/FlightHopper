@@ -102,6 +102,7 @@ async function main(): Promise<void> {
       gsKt: onGround ? rnd() * 20 : 120 + rnd() * 370,
       vsFpm: !onGround && rnd() < 0.2 ? (rnd() < 0.5 ? -1500 : 1500) : 0,
       ageS: rnd() < 0.01 ? 90 : 1 + rnd() * 4,
+      staleS: 60,
       quality: 'adsb2',
       info: makeInfo(hex, category, typeCode, callsign),
     }
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
         gsKt: 0,
         vsFpm: 0,
         ageS: 1,
+        staleS: 60,
         quality: 'adsb2',
         info: makeInfo(hex, category, typeCode, `BRG${String(brg).padStart(3, '0')}`),
       } satisfies FleetEntry

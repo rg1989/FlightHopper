@@ -9,6 +9,9 @@ export interface StatusBrief {
   cellPeriodP95S: number | null
   chasePeriodP95S: number | null
   upstreamOffsetMs?: number      // server clock − upstream clock, whole ms (the poller's MinOffset); absent until known. Replay: server now − recording time; live: ≈ latency
+  viewEveryS?: number            // expected refresh of the newest view's aircraft, s (its zoom-scaled period, stretched by the budget)
+  chaseEveryS?: number           // expected refresh of the chased aircraft, s
+  pendingAreas?: number          // areas of the view not yet asked once (a wide view fills centre-out)
 }
 
 export interface ViewResponse {

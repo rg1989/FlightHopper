@@ -12,5 +12,5 @@ export default defineConfig({
       targets: ['ThirdParty', 'Workers', 'Assets', 'Widgets'].map((d) => ({ src: `${cesiumSource}/${d}`, dest: cesiumBaseUrl, rename: { stripBase: 4 } })),
     }),
   ],
-  server: { proxy: { '/api': 'http://127.0.0.1:8787' } },
+  server: { proxy: { '/api': `http://127.0.0.1:${process.env.API_PORT ?? 8787}` } }, // the Makefile's API_PORT
 })

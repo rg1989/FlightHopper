@@ -1,0 +1,40 @@
+/* client/ui/sourceBadge.css */
+/* The data-source chip on top of the right column (sourceBadge.ts): a link to the source when it has a site. */
+.fh-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: rgba(8, 12, 18, 0.72);
+  color: #c9d3dd;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-decoration: none;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.fh-source[hidden] {
+  display: none;
+}
+
+.fh-source::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+}
+
+.fh-source[data-state='replay']::before {
+  background: #f0b429;
+}
+
+.fh-source[data-state='trouble'] {
+  color: #f0b429;
+}
+
+.fh-source[data-state='trouble']::before {
+  background: #f85149;
+}

@@ -5,9 +5,9 @@ import { altitudeColor } from '../scene/altitudeColor.ts'
 export const LEGEND_TICKS_FT: readonly number[] = [0, 1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 20_000, 30_000, 40_000]
 const SAMPLES_PER_GAP = 8 // CSS interpolates in RGB; sampling the HSL path keeps the bar true to the icons
 
-/** '0', '1 000', …, '40 000+' (narrow no-break space between thousands). */
+/** '0', '1k', …, '40k+': short enough for ten ticks on a phone-wide bar (~30 px each at 375 px). */
 export function tickLabel(ft: number): string {
-  const s = ft >= 1_000 ? `${Math.floor(ft / 1_000)} ${String(ft % 1_000).padStart(3, '0')}` : String(ft)
+  const s = ft >= 1_000 ? `${ft / 1_000}k` : String(ft)
   return ft === LEGEND_TICKS_FT[LEGEND_TICKS_FT.length - 1] ? `${s}+` : s
 }
 

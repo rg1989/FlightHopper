@@ -79,7 +79,7 @@ test('the InfoStore is pruned on each good answer with the sample horizon', asyn
   s.clock.t = T0 + INFO_HORIZON_MS
   await s.poller.tick()
   assert.equal(s.info.size, 6, 'exactly at the horizon is kept')
-  s.clock.t += 3000
+  s.clock.t += 20_000 // the area answered empty: next asked after 4 × its 5 s period
   await s.poller.tick()
   assert.equal(s.info.size, 0)
 })

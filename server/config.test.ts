@@ -54,15 +54,23 @@ test('adsblol without CONTACT throws: adsb.lol asks for a contact in the User-Ag
   assert.throws(() => readServerConfig({ ADSB_SOURCE: 'adsblol', CONTACT: '   ' }), /CONTACT is required/)
 })
 
-test('adsblol: MAX_RPS is clamped to 1 and replay files are not looked at', () => {
+test('adsblol: MAX_RPS defaults to 0.04, is clamped to 1, and replay files are not looked at', () => {
   const env = { ADSB_SOURCE: 'adsblol', CONTACT: ' me@example.invalid ', REPLAY_FILES: '/nonexistent/*.jsonl' }
   const cfg = readServerConfig(env)
   assert.equal(cfg.source, 'adsblol')
   assert.equal(cfg.contact, 'me@example.invalid')
-  assert.equal(cfg.maxRps, 1)
+  assert.equal(cfg.maxRps, 0.04)
   assert.deepEqual(cfg.replayFiles, [])
   assert.equal(readServerConfig({ ...env, MAX_RPS: '5' }).maxRps, 1)
   assert.equal(readServerConfig({ ...env, MAX_RPS: '0.5' }).maxRps, 0.5)
+})
+
+test('adsbfi: no CONTACT needed, MAX_RPS defaults to 0.9 and is clamped to 1', () => {
+  const cfg = readServerConfig({ ADSB_SOURCE: 'adsbfi' })
+  assert.equal(cfg.source, 'adsbfi')
+  assert.equal(cfg.contact, null)
+  assert.equal(cfg.maxRps, 0.9)
+  assert.equal(readServerConfig({ ADSB_SOURCE: 'adsbfi', MAX_RPS: '3' }).maxRps, 1)
 })
 
 test('readsb: READSB_URL and READSB_COVERAGE "lat,lon,nm"; MAX_RPS is not clamped', () => {
@@ -106,7 +114,7 @@ test('ROUTES: 1 turns route lookups on, 0 or unset leaves them off', () => {
 
 test('invalid values throw a message that names the variable', () => {
   const cases: [Record<string, string>, RegExp][] = [
-    [{ ADSB_SOURCE: 'opensky' }, /^Error: ADSB_SOURCE must be one of adsblol, readsb, replay, got "opensky"$/],
+    [{ ADSB_SOURCE: 'opensky' }, /^Error: ADSB_SOURCE must be one of adsblol, adsbfi, readsb, replay, got "opensky"$/],
     [{ MAX_RPS: 'fast' }, /^Error: MAX_RPS must be a number > 0, got "fast"$/],
     [{ MAX_RPS: '0' }, /MAX_RPS must be a number > 0/],
     [{ MAX_RPS: '-1' }, /MAX_RPS must be a number > 0/],

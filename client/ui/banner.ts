@@ -25,13 +25,19 @@ export function mountBanner(root: HTMLElement): { update(status: StatusBrief, s:
 }
 
 /** Credit lines, bottom right. Always carries the "Not for navigation" line (added when the caller's lines lack it). */
-export function mountAttribution(root: HTMLElement, lines: string[]): void {
+export function mountAttribution(root: HTMLElement, lines: string[]): { set(lines: string[]): void } {
   const el = document.createElement('div')
   el.className = 'fh-attribution'
-  for (const line of attributionLines(lines)) {
-    const row = document.createElement('div')
-    row.textContent = line
-    el.append(row)
-  }
   root.append(el)
+  const set = (next: string[]): void => {
+    el.replaceChildren(
+      ...attributionLines(next).map((line) => {
+        const row = document.createElement('div')
+        row.textContent = line
+        return row
+      }),
+    )
+  }
+  set(lines)
+  return { set }
 }
