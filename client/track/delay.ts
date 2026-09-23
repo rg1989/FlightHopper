@@ -42,16 +42,19 @@ export function p90(xs: number[]): number {
 export class RenderClock {
   #delayS: number
   readonly maxSlewSPerS: number
+  readonly maxShrinkSPerS: number
 
-  constructor(delayS: number, maxSlewSPerS = 0.2) {
+  /** maxShrinkSPerS: how fast the delay may shrink (playback faster than real time), if not maxSlewSPerS. */
+  constructor(delayS: number, maxSlewSPerS = 0.2, maxShrinkSPerS = maxSlewSPerS) {
     this.#delayS = delayS
     this.maxSlewSPerS = maxSlewSPerS
+    this.maxShrinkSPerS = maxShrinkSPerS
   }
 
   /** Returns tRenderMs. dtS ≤ 0 or NaN (first frame, clock hiccup) leaves the delay unchanged. */
   tick(serverNowMs: number, targetDelayS: number, dtS: number): number {
-    const step = this.maxSlewSPerS * (dtS > 0 ? dtS : 0)
     const diff = targetDelayS - this.#delayS
+    const step = (diff > 0 ? this.maxSlewSPerS : this.maxShrinkSPerS) * (dtS > 0 ? dtS : 0)
     this.#delayS = Math.abs(diff) <= step ? targetDelayS : this.#delayS + Math.sign(diff) * step
     return serverNowMs - this.#delayS * 1000
   }

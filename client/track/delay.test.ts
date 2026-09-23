@@ -124,3 +124,11 @@ test('RenderClock: a long frame (tab hidden 10 s) moves the delay at most 2 s; z
     near(c.delayS, 5, 1e-12)
   }
 })
+
+test('RenderClock: an asymmetric slew grows at one rate and shrinks at another', () => {
+  const c = new RenderClock(3, 0.2, 0.05)
+  c.tick(0, 30, 10) // grows 0.2 s/s
+  assert.equal(c.delayS, 5)
+  c.tick(0, 0, 10) // shrinks 0.05 s/s
+  assert.equal(c.delayS, 4.5)
+})
