@@ -601,8 +601,11 @@ export function parseCard(manifest: unknown): ScenarioCard {
   return { id: m.id, title: m.title, subtitle: m.subtitle, date: m.date, clockLabel: m.clockLabel, note: m.note, summary: m.summary, crew: m.crew, aircraft: m.aircraft, start: m.start, end: m.end }
 }
 
+/** Vite's dev server answers any unknown path with index.html (200, text/html): no package file is HTML, so that is a miss. */
+const isHtml = (res: Response): boolean => (res.headers.get('content-type') ?? '').startsWith('text/html')
+
 async function readTextOrNull(res: Response): Promise<string | null> {
-  if (res.status === 404) return null
+  if (res.status === 404 || (res.ok && isHtml(res))) return null
   if (!res.ok) throw new ScenarioError([`${res.url}:-: -: fetch failed: ${res.status}`])
   return res.text()
 }
@@ -628,7 +631,7 @@ export async function loadScenario(base: string, id: string, fetcher: typeof fet
   const probe = async (path: string): Promise<boolean> => {
     try {
       const r = await fetcher(`${folder}${path}`, { method: 'HEAD' })
-      return r.ok
+      return r.ok && !isHtml(r)
     } catch {
       return false
     }

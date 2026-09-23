@@ -503,6 +503,26 @@ test('loadScenario: a non-empty livery.body path is probed and present reflects 
   assert.equal(scn.present.body, true)
 })
 
+test('loadScenario: a dev server answering a missing file with its HTML page counts as absent', async () => {
+  // Vite serves index.html (200, text/html) for any unknown path, HEAD included.
+  const html = (): Response => new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } })
+  const manifest = validManifest({
+    aircraft: { registration: 'JA8119', type: 'Boeing 747SR-46', callsign: 'JAL123', operator: 'Japan Air Lines', model: 'b744', livery: { body: 'livery/body.png', finLogo: 'local/fin.png' } },
+    audio: { file: 'local/cvr.m4a', source: 'AAIC', clips: [] },
+  })
+  const fetcher = (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url)
+    if (init?.method === 'HEAD') return u.endsWith('livery/body.png') ? new Response(null, { status: 200, headers: { 'content-type': 'image/png' } }) : html()
+    if (u.endsWith('scenario.json')) return new Response(JSON.stringify(manifest), { status: 200 })
+    if (u.endsWith('track.csv')) return new Response(VALID_TRACK, { status: 200 })
+    return html() // no events.csv, no transcript.csv
+  }) as typeof fetch
+  const scn = await loadScenario('https://example.test/', 'jal123', fetcher)
+  assert.deepEqual(scn.present, { body: true, finLogo: false, audio: false })
+  assert.deepEqual(scn.events, [])
+  assert.deepEqual(scn.lines, [])
+})
+
 // ---- every real package (npm test fails if a shipped package is broken) ------------------------
 
 test('parseScenario: every real package under public/scenarios parses without throwing', async (t) => {
