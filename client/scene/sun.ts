@@ -195,6 +195,12 @@ export class Sun {
     this.#aimOff()
   }
 
+  /** A new base imagery layer (Esri → EOX fallback): dim this one from now on. */
+  setDay(day: ImageryLayer | null): void {
+    this.#day = day
+    if (day && !this.#enabled) day.brightness = DAY_BRIGHTNESS
+  }
+
   /** The chased model (null: none). Sun dims its image-based light at night and slows its environment-map rebuilds. */
   attachModel(model: Model | null): void {
     this.#model = model

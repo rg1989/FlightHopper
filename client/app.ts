@@ -32,6 +32,7 @@ import { addRunways } from './scene/runways.ts'
 import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
+import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
 import { MIN_DELAY_S, RenderClock } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
@@ -43,6 +44,7 @@ import { mountLegend } from './ui/legend.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
+import { mountImageryBadge } from './ui/imageryBadge.ts'
 import { mountTable } from './ui/table.ts'
 import './ui/layout.css'
 
@@ -293,6 +295,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   ui.dataset.mode = selected === null ? 'browse' : 'chase'
   const right = div('fh-right', ui) // the scene toggles, then the table above the credits
   const toggles = mountSceneToggles(right, { prefs, onChange: (next) => setPrefs(next) })
+  const imageryBadge = mountImageryBadge(toggles.el, imageryStatus(cfg))
   const hud = mountHud(ui)
   const banner = mountBanner(ui)
   const detail = mountDetail(ui, { onClose: () => select(null), photos: new PhotoCache(), lookup: lookupFor })
@@ -305,6 +308,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const night = makeNightLayer()
   viewer.imageryLayers.add(night)
   const sun = new Sun(viewer, { day, night })
+  if (cfg.imagery === 'esri' && day) {
+    eoxOnEsriFailure(viewer.imageryLayers, day, (eox, why) => {
+      sun.setDay(eox)
+      imageryBadge.set({ source: 'eox', fallback: why })
+    })
+  }
   sun.attachModel(model?.model ?? null)
   sun.setEnabled(selected !== null && prefs.light)
   // VITE_MAP_URL: another tile server ({z}/{x}/{y}.png is appended), as the OpenStreetMap tile policy asks to allow.

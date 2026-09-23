@@ -1,9 +1,9 @@
 // client/config.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CesiumTerrainProvider, EllipsoidTerrainProvider, Ion, Resource, UrlTemplateImageryProvider } from 'cesium'
+import { CesiumTerrainProvider, EllipsoidTerrainProvider, ImageryLayer, ImageryLayerCollection, Ion, Resource, UrlTemplateImageryProvider } from 'cesium'
 import { readConfig } from './config.ts'
-import { ESRI_URL, EOX_ATTRIBUTION, makeImagery } from './scene/imagery.ts'
+import { ESRI_URL, EOX_ATTRIBUTION, EOX_URL, eoxOnEsriFailure, imageryStatus, makeImagery } from './scene/imagery.ts'
 import { REEARTH_TERRAIN_URL, makeTerrain } from './scene/terrain.ts'
 
 test('no env at all → keyless defaults (Re:Earth terrain, EOX imagery, /api)', () => {
@@ -86,11 +86,62 @@ test('Esri imagery: keyed World Imagery tiles, zoom 19 cap (0.3 m at LLBG), "Pow
 test('Esri imagery: 404s (no deeper imagery there; Cesium keeps the parent tile) stay quiet, other tile errors are logged', async (t) => {
   const p = (await makeImagery(readConfig({ VITE_ARCGIS_KEY: 'key' })))!
   const warn = t.mock.method(console, 'warn', () => {})
-  p.errorEvent.raiseEvent({ message: 'Failed to obtain image tile X: 1 Y: 2 Level: 19.', error: { statusCode: 404 } })
+  p.errorEvent.raiseEvent({ message: 'Failed to obtain image tile X: 1 Y: 2 Level: 19.', level: 19, error: { statusCode: 404 } })
   assert.equal(warn.mock.callCount(), 0)
-  p.errorEvent.raiseEvent({ message: 'Failed to obtain image tile X: 1 Y: 2 Level: 12.', error: { statusCode: 498 } })
+  p.errorEvent.raiseEvent({ message: 'Failed to obtain image tile X: 1 Y: 2 Level: 12.', level: 12, error: { statusCode: 498 } })
   assert.equal(warn.mock.callCount(), 1)
   assert.match(String(warn.mock.calls[0].arguments[0]), /Level: 12/)
+})
+
+test('imageryStatus: EOX without a key is a fallback; Esri, or EOX chosen with a key, is not', () => {
+  assert.deepEqual(imageryStatus(readConfig({ VITE_ARCGIS_KEY: 'key' })), { source: 'esri', fallback: null })
+  assert.deepEqual(imageryStatus(readConfig({})), { source: 'eox', fallback: 'no key' })
+  assert.deepEqual(imageryStatus(readConfig({ VITE_ARCGIS_KEY: 'key', VITE_IMAGERY: 'eox' })), { source: 'eox', fallback: null })
+  assert.deepEqual(imageryStatus(readConfig({ VITE_IMAGERY: 'none' })), { source: 'none', fallback: null })
+})
+
+test('eoxOnEsriFailure: a 404 changes nothing; any other tile error puts EOX in Esri\'s place, once', async () => {
+  const layers = new ImageryLayerCollection()
+  const esri = layers.addImageryProvider((await makeImagery(readConfig({ VITE_ARCGIS_KEY: 'key' })))!)
+  const street = layers.addImageryProvider(new UrlTemplateImageryProvider({ url: 'https://street.invalid/{z}/{x}/{y}.png' }))
+  const swaps: [ImageryLayer, string][] = []
+  eoxOnEsriFailure(layers, esri, (eox, why) => swaps.push([eox, why]))
+  const provider = esri.imageryProvider
+  const console_ = { warn: console.warn }
+  console.warn = () => {} // makeImagery logs the non-404s
+  try {
+    provider.errorEvent.raiseEvent({ message: 'no tile', level: 19, error: { statusCode: 404 } })
+    assert.equal(swaps.length, 0)
+    assert.equal(layers.get(0), esri)
+    provider.errorEvent.raiseEvent({ message: '5xx', level: 15, error: { statusCode: 503 } })
+    provider.errorEvent.raiseEvent({ message: 'again', level: 15, error: { statusCode: 503 } })
+  } finally {
+    console.warn = console_.warn
+  }
+  assert.equal(swaps.length, 1)
+  assert.equal(swaps[0][1], 'Esri HTTP 503')
+  assert.equal(layers.length, 2)
+  assert.equal(layers.get(0), swaps[0][0])
+  assert.equal((layers.get(0).imageryProvider as UrlTemplateImageryProvider).url, EOX_URL)
+  assert.equal(layers.get(1), street)
+  assert.equal(layers.contains(esri), false)
+})
+
+test('eoxOnEsriFailure: no status (network down, or a JSON error where an image should be) reads "Esri unreachable"', async () => {
+  for (const [error, level, want] of [[undefined, 5, 'Esri unreachable'], [{ statusCode: 500 }, 3, 'Esri HTTP 500']] as const) {
+    const layers = new ImageryLayerCollection()
+    const esri = layers.addImageryProvider((await makeImagery(readConfig({ VITE_ARCGIS_KEY: 'key' })))!)
+    let why = ''
+    eoxOnEsriFailure(layers, esri, (_eox, w) => (why = w))
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      esri.imageryProvider.errorEvent.raiseEvent({ message: 'x', level, error })
+    } finally {
+      console.warn = warn
+    }
+    assert.equal(why, want)
+  }
 })
 
 test('Re:Earth terrain: vertex normals, also in the URL query (their own browser-cache key), no water mask', async (t) => {

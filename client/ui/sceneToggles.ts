@@ -11,6 +11,7 @@ export interface SceneTogglesOpts {
 }
 
 export interface SceneTogglesHandle {
+  el: HTMLElement // the group: the imagery badge sits at its end
   update(prefs: ScenePrefs): void
   destroy(): void
 }
@@ -41,6 +42,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   root.append(el)
 
   return {
+    el,
     update(prefs) {
       if (prefs.topo !== topo) topoBtn.setAttribute('aria-pressed', String((topo = prefs.topo)))
       if (prefs.light !== light) lightBtn.setAttribute('aria-pressed', String((light = prefs.light)))

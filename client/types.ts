@@ -28,7 +28,7 @@ export interface ClientConfig {
   terrain: 'ion' | 'reearth' | 'ellipsoid'
   imagery: 'ion' | 'esri' | 'eox' | 'none'
   ionToken: string | null
-  arcgisKey: string | null
+  arcgisKey?: string | null // optional so ClientConfig literals written before it keep compiling
   apiBase: string
 }
 

@@ -1,0 +1,28 @@
+/* client/ui/imageryBadge.css */
+/* The imagery badge: a status chip in the scene toggles' box (sceneToggles.css), not a button, so no border or pointer. */
+.fh-imagery {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+  color: #9aa6b2;
+  white-space: nowrap;
+}
+
+.fh-imagery::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.fh-imagery[data-state='ok']::before {
+  background: #3fb950;
+}
+
+.fh-imagery[data-state='fallback'] {
+  color: #f0b429;
+}
