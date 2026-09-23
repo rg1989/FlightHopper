@@ -4,7 +4,7 @@
 
 ## Where things stand
 
-- **`main` has the MVP plus terrain & sun plus F1.** `npm run check`: `tsc` clean, 681/681. `vite build` works (the only warning is the usual one about a chunk over 500 kB).
+- **`main` has the MVP plus terrain & sun, F1, Esri imagery (`f2c2a35`, `15280e7`: Esri World Imagery when `VITE_ARCGIS_KEY` is set, EOX when it fails) and the night-lights fade.** `npm run check`: `tsc` clean, 691/691. `vite build` works (the only warning is the usual one about a chunk over 500 kB).
 - **Terrain & sun** (`5ff0b0e`): chase mode has 3-D relief with sun shading, a **3-D terrain** toggle (T) and a **Sun** toggle (L). The sun follows real time, and replays are lit at their recorded time. Design and decisions: `.planning/terrain-sun-design.md`. `apply_plans.py` gave 611 → 613 → 633 → 654 → 663 → 677 → 680, as planned.
 - **F1** (`85a7577`): after a 429, `server/budget.ts` halves the upstream rate for good. The handoff's ceiling rule (`ceiling = min(ceiling, rps/2)`, `rps = min(ceiling, max(maxRps/8, rps/2))`) reduces to `rps /= 2`, because `rps ≤ ceiling` always holds. So the ×1.1 recovery and the `maxRps/8` floor were deleted, and no `ceilingRps` field was needed. This is the same rule as `tools/record-cells.ts` `nextBase()`.
 - **`make`** replays the newest recording and prints the link. **`make live`** was checked against adsb.lol: 10.8 min with a 40 nm view over LLBG, 27 requests (0.04 req/s plus the burst of 2), all 200, `r429` = `r4xx` = `r5xx` = `err` = 0. At this rate live is browse quality: 2 cells, each refreshed about once a minute, and a chased aircraft is dead-reckoned between sparse samples (backlog F2/F6).
@@ -25,13 +25,9 @@
 - **Git:** commit identity `rg1989 <roman.grinevic@gmail.com>` (set repo-locally). Push to `git@github.com:rg1989/FlightHopper.git`. `git add` explicit paths only. Never commit other sessions' untracked files.
 - **Decisions in `terrain-sun-design.md` stand:** no cast shadows; night keeps the mountains faintly visible; lighting applies in chase only; replays are lit at their recorded time.
 
-## Open: decide first
+## Night lights over big cities (resolved 2026-09-23, `dcce84a`)
 
-**Night lights wash out big cities.** At night over a large metro area, the chase view's ground becomes one flat blob. Reproduce: `make REC=data/recordings/2026-09-22.jsonl`, then at once open `/?hex=3c64a8&sun=2026-09-22T17:40:00Z` (DLH681 climbing out over Tel Aviv at ~2,700 ft).
-- At brightness 1.6 (as shipped), the land and the sea near the coast are flat white-beige: `.planning/reports/night-washout/tlv-1740Z-night-brightness-1.6.jpg`.
-- At brightness 0.6 it is flat grey: `…-0.6.jpg`. So the cause is resolution, not brightness. The layer is VIIRS Black Marble at z8 max (about 500 m per pixel) at alpha 0.9999. From a low chase camera over a dense city, a few dozen of those pixels fill the view.
-- Innsbruck (gate GE) is too small to show it. The "3-D structures" session found it first (its `.planning/reports/buildings-poc/C-limits.jpg`, untracked).
-- Options: fade the night layer's alpha with the camera's height above ground (the land then shows the dark lit globe close up, and lights from higher up); cap the brightness over bright pixels; or find a sharper night source (GIBS has no Black Marble above z8). The owner is WP-E2 (`client/scene/sun.ts`, `client/scene/nightLights.ts`).
+At night, low over a big city, the VIIRS layer (z8, about 500 m per pixel) made the whole ground one flat white-beige blob. The night layer now fades with camera height: 12% at 1.5 km or lower (the user's pick from 0/12/20/30%), full from 5 km. Its brightness went from 1.6 to 1. The height is above the ellipsoid, so a valley city seen from a ridge keeps some glow (Innsbruck from the Nordkette: 44%). Evidence and the comparison sheets: `.planning/reports/night-washout/`. Decision: `terrain-sun-design.md` §7 item 4. Limit: a city high above sea level (Mexico City) fades less (ponytail note in `client/scene/sun.ts`).
 
 ## Backlog
 
