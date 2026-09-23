@@ -64,7 +64,7 @@ So "topography" = vertex normals + sun lighting + a way to switch the relief off
 | light colour | white → (1.0, 0.8, 0.62) by `golden01·(1 − night)` | warm low sun |
 | `globe.vertexShadowDarkness` | 0.3 + 0.2·golden·(1 − night) | ambient floor |
 | day layer brightness | min(0.9999, 1 − 0.7·night) | darker land at night |
-| night layer alpha / brightness | night / 1.6 | city lights |
+| night layer alpha / brightness | night × lightsFactor (0.12 at ≤ 1.5 km camera height above the ellipsoid, 1 at ≥ 5 km) / 1 | city lights (§7 item 4) |
 | model image-based lighting factor | 1 − 0.85·night | no glowing aircraft at night |
 | `environmentMapManager.maximumPositionEpsilon` | 20,000 m | no env-map rebuild every ~4 s at airliner speed |
 
@@ -94,3 +94,4 @@ On the MacBook Air M2, synthetic LOWI replay (valley arrival + Nordkette pass), 
 1. **Night look** (decided 2026-09-22): mountains stay faintly visible under a dim light from overhead, so peak clearance stays readable.
 2. **Replay lighting** (decided 2026-09-22): the recorded time (D12, WP-E5).
 3. **Upstream note.** The TerrainPicker race (D3) is a Cesium bug worth reporting with a Sandcastle repro. Our nudge works around it; a report is the user's call.
+4. **City lights near the ground** (decided 2026-09-23): VIIRS at z8 (≈ 500 m/px) made a big city one flat white-beige blob from a low chase camera (Tel Aviv, `.planning/reports/night-washout/`). Below 1.5 km camera height (above the ellipsoid, so a valley city still glows seen from a ridge) the lights fade to a faint 12 % glow and the day imagery shows through; from 5 km they are full. Brightness 1.6 → 1 (from 34,000 ft, 1.6 was a smooth white-orange glow; 1 shows orange patches with dark gaps).

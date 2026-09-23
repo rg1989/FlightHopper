@@ -17,11 +17,11 @@ test('NIGHT_CREDIT carries the GIBS acknowledgment and names the layer', () => {
   assert.match(NIGHT_CREDIT, /VIIRS Black Marble 2016/)
 })
 
-test('makeNightLayer: hidden, transparent, bright; the provider stops at level 8 and credits GIBS', () => {
+test('makeNightLayer: hidden and transparent at brightness 1; the provider stops at level 8 and credits GIBS', () => {
   const layer = makeNightLayer()
   assert.equal(layer.show, false) // no tile requests until Sun shows it at dusk
   assert.equal(layer.alpha, 0)
-  assert.equal(layer.brightness, 1.6)
+  assert.equal(layer.brightness, 1) // 1.6 turned big cities into a flat white blob up close
   const p = layer.imageryProvider as UrlTemplateImageryProvider
   assert.ok(p instanceof UrlTemplateImageryProvider)
   assert.equal(p.url, NIGHT_URL)

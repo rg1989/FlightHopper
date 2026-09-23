@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Cartesian3, Clock, Color, DirectionalLight, DynamicAtmosphereLightingType, ImageBasedLighting, JulianDate } from 'cesium'
 import type { ImageryLayer, Model, Viewer } from 'cesium'
 import { makeNightLayer } from './nightLights.ts'
-import { Sun, aimLight, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
+import { Sun, aimLight, lightsFactor, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
 
 // Cesium asks for its IAU 2006 XYS table the first time the ICRF frame is needed. Without CESIUM_BASE_URL (Node) that is
 // a file: URL next to the engine, so the TEME fallback is used. Record every request and refuse it: no network here.
@@ -172,7 +172,7 @@ function fakeViewer() {
   const globe = { enableLighting: true, dynamicAtmosphereLightingFromSun: false, vertexShadowDarkness: 0.3 }
   const scene = { globe, atmosphere: { dynamicLighting: DynamicAtmosphereLightingType.NONE }, light: null as unknown }
   const clock = new Clock({ shouldAnimate: true })
-  const viewer = { scene, clock, camera: { positionWC: at(LOWI, 300_000) }, shadows: false }
+  const viewer = { scene, clock, camera: { positionWC: at(LOWI, 300_000), positionCartographic: { height: 300_000 } }, shadows: false }
   const day = { brightness: 1, alpha: 1, show: true }
   const night = makeNightLayer()
   const model = { environmentMapManager: { maximumPositionEpsilon: 1000 }, imageBasedLighting: new ImageBasedLighting() }
@@ -251,11 +251,34 @@ test('lit at LOWI 21:00 local: a dim light from straight overhead, city lights, 
   near(s.day.brightness, 0.3, 1e-12)
   assert.equal(s.night.show, true)
   assert.equal(s.night.alpha, 0.9999) // never 1: APPLY_ALPHA stays on at full night
-  assert.equal(s.night.brightness, 1.6)
+  assert.equal(s.night.brightness, 1)
   near(s.ibl()[0], 0.15, 1e-12)
   near(s.ibl()[1], 0.15, 1e-12)
   assert.equal(s.globe.vertexShadowDarkness, 0.3)
   assert.equal(s.viewer.shadows, false) // D10
+})
+
+test('lightsFactor: 12 % of the city lights at or below 1.5 km camera height, all of them from 5 km, smooth between', () => {
+  for (const h of [-50, 0, 700, 1500]) assert.equal(lightsFactor(h), 0.12, `${h} m`)
+  for (const h of [5000, 10_000, 300_000]) assert.equal(lightsFactor(h), 1, `${h} m`)
+  near(lightsFactor(3250), 0.56, 1e-12) // the midpoint: 0.12 + 0.88 × smoothstep(0.5)
+  let last = 0
+  for (let h = 0; h <= 6000; h += 50) {
+    assert.ok(lightsFactor(h) >= last, `${h} m`)
+    last = lightsFactor(h)
+  }
+})
+
+test('night, camera low: the city lights fade to 12 % below 1.5 km camera height, come back from 5 km', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  s.viewer.camera.positionCartographic.height = 500
+  s.sun.update(T19, AIRCRAFT)
+  near(s.night.alpha, 0.9999 * 0.12, 1e-12)
+  assert.equal(s.night.show, true)
+  s.viewer.camera.positionCartographic.height = 8000
+  s.sun.update(T19, AIRCRAFT)
+  assert.equal(s.night.alpha, 0.9999)
 })
 
 test('dusk at LOWI: the night layer shows only above 1 % alpha; the light warms and never comes from below 2°', () => {

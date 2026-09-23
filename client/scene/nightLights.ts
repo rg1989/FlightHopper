@@ -14,10 +14,11 @@ export const NIGHT_CREDIT =
 
 /**
  * The city-lights layer, hidden and transparent: Sun fades it in at dusk (alpha = night) and shows it only while it is
- * visible, so daytime makes no GIBS requests. Brightness 1.6 lifts the lights over the darkened day layer.
+ * visible, so daytime makes no GIBS requests. Brightness 1: at 1.6 a big city was a flat white blob. Sun also fades the
+ * layer to a faint glow with the camera low (lightsFactor).
  * Add it right above the day layer. Constructing it requests nothing.
  */
 export function makeNightLayer(): ImageryLayer {
   const provider = new UrlTemplateImageryProvider({ url: NIGHT_URL, maximumLevel: NIGHT_MAX_LEVEL, credit: new Credit(NIGHT_CREDIT) })
-  return new ImageryLayer(provider, { alpha: 0, show: false, brightness: 1.6 })
+  return new ImageryLayer(provider, { alpha: 0, show: false })
 }
