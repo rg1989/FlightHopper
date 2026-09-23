@@ -18,6 +18,8 @@ test('live: source name linked, loading areas counted', () => {
   assert.equal(sourceView(st({ pendingAreas: 1 }), 0).text, 'LIVE · adsb.fi · loading 1 area')
   assert.equal(sourceView(st({ source: 'readsb' }), 0).href, null)
   assert.equal(sourceView(st({ degraded: 'rate-limited' }), 0).state, 'trouble')
+  assert.equal(sourceView(st({ degraded: 'rate-limited', pendingAreas: 5 }), 0).text, 'SLOWED · adsb.fi', 'no frozen loading count')
+  assert.equal(sourceView(st({ degraded: 'upstream-down', pendingAreas: 5 }), 0).text, 'NO DATA · adsb.fi', 'not LIVE when nothing comes')
 })
 
 test('replay: says REPLAY with the recording time, never LIVE', () => {

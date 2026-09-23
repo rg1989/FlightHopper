@@ -12,7 +12,7 @@ const RAD = Math.PI / 180
 const DEG = 180 / Math.PI
 // How long an aircraft outlives its newest sample (dead-reckoned all the way, then hidden and forgotten): 3 of its own
 // usual gaps between samples, at least MIN_STALE_S and at least the server's hint (setHintS). A 1 Hz aircraft goes 60 s
-// after its signal ends; one refreshed every 72 s (a hero replay) or every 10 min (the globe view) keeps flying between.
+// after its signal ends; one refreshed every 72 s (a hero replay) or every 30 min (the globe view) keeps flying between.
 const MIN_STALE_S = 60
 const GAP_GAIN = 0.3 // exponential average of the gaps
 const PARKED_KT = 3 // on the ground and slower than this: not moving
@@ -110,6 +110,7 @@ export class Fleet {
   readonly #info = new Map<string, InfoRec>()
   #lastTMs: number | null = null // time of the last entries() call
   #floorS = MIN_STALE_S
+  #hintS = 0 // the last setHintS value
 
   /** Keeps the newest sample per hex (older and same-tMs samples are ignored) and the latest info per hex. */
   ingest(samples: Sample[], info?: AircraftInfo[]): void {
@@ -142,9 +143,20 @@ export class Fleet {
     return this.#out
   }
 
-  /** The server's expected refresh of this view says how long an aircraft may go without a sample: at least 60 s. */
+  /**
+   * The server's expected refresh of this view says how long an aircraft may go without a sample: at least 60 s. When
+   * it drops (zooming in), each aircraft's average gap is capped at the new refresh interval (s / 2.5): gaps measured
+   * in a coarser view no longer describe what to expect, and would keep a lost aircraft flying for minutes.
+   */
   setHintS(s: number): void {
-    this.#floorS = Number.isFinite(s) && s > MIN_STALE_S ? s : MIN_STALE_S
+    const floor = Number.isFinite(s) && s > MIN_STALE_S ? s : MIN_STALE_S
+    const hint = Number.isFinite(s) && s > 0 ? s : 0
+    if (hint < this.#hintS) {
+      const cap = Math.max(hint / 2.5, 1)
+      for (const slot of this.#slots) if (slot.gapS > cap) slot.gapS = cap
+    }
+    this.#hintS = hint
+    this.#floorS = floor
   }
 
   /** The hex's entry as of the last entries() call (or its newest sample, if that is newer). */

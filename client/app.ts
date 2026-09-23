@@ -17,7 +17,7 @@ import type { ChaseResponse, StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf, flagEmoji } from '../shared/icaoCountry.ts'
 import type { AircraftInfo } from '../shared/info.ts'
-import type { ReadsbAircraft, SourceKind } from '../shared/types.ts'
+import type { ReadsbAircraft, Sample, SourceKind } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
 import { Fleet } from './browse/fleet.ts'
@@ -57,7 +57,7 @@ const FAILS_DOWN = 3 // failed polls in a row before the banner reports it
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
 const MIN_VIEW_NM = 20
 // The visible hemisphere. The server polls a view up to 250 nm as one circle and a wider one as grid cells, each at a
-// period that grows with the view (Poller.viewPeriodMs): the globe view costs about one request per area per 10 min.
+// period that grows with the view (Poller.viewPeriodMs): the globe view asks each area about every 30 min.
 const MAX_VIEW_NM = 5400
 const DEFAULT_AIRPORT = 'LLBG' // the first view without ?at= or ?airport= (the author's home); a reload keeps ?at=
 const URL_EVERY_MS = 1000 // how often the address bar follows the view (history.replaceState)
@@ -348,6 +348,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   // A new selection is a camera cut: its first chase reply sets the render delay at once. Slewing there at 0.2 s/s would
   // take ~2 min on a sparse live feed (25 s between samples → 26 s delay).
   let snapClock = selected !== null
+  let seedSample: Sample | null = null // the fleet's newest sample of the selection, drawn until the first chase reply
   // How old the chased aircraft's newest position already is when it arrives (the upstream's own latency plus the trip),
   // over the last ARRIVALS replies: the delay must cover it plus a refresh, or the newest sample is behind render time.
   const ARRIVALS = 30
@@ -383,10 +384,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     lastUrlMs = now
     const cam = viewer.camera.positionCartographic
     const heightKm = cam.height / 1000
-    const at =
-      selected === null
-        ? isBrowsing(viewer) ? { lat: CesiumMath.toDegrees(cam.latitude), lon: CesiumMath.toDegrees(cam.longitude), heightKm } : null
-        : chased !== null ? { lat: chased.lat, lon: chased.lon, heightKm } : urlView.at
+    // Browse: the point under the (top-down) camera. Chase: the chased aircraft; before its first state, the camera.
+    const here = { lat: CesiumMath.toDegrees(cam.latitude), lon: CesiumMath.toDegrees(cam.longitude), heightKm }
+    const at = selected === null ? (isBrowsing(viewer) ? here : null) : chased !== null ? { lat: chased.lat, lon: chased.lon, heightKm } : here
     const o = chaseCam.orbit
     const next = writeUrl(location.search, { at, hex: selected, cam: { headingDeg: o.headingOffsetDeg, pitchDeg: o.pitchDeg, rangeM: o.rangeM }, prefs })
     if (next !== location.search) history.replaceState(history.state, '', `${location.pathname}${next}${location.hash}`)
@@ -410,6 +410,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     arrivalAgesS.length = 0
     if (hex !== null) {
       const seed = fleet.newest(hex)
+      seedSample = seed ?? null
       if (seed) registry.ingest([seed])
       exitBrowse(viewer) // restores tilt and zoom limits; nothing when already chasing
       map.show = false
@@ -448,7 +449,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       // traffic around it runs a few seconds ahead of it. Upgrade: draw the fleet at tRenderMs, which needs Fleet to
       // interpolate between samples instead of only dead-reckoning past the newest.
       all = fleet.entries(tServerMs)
-      if (selected !== null) s = registry.get(selected)?.stateAt(tRenderMs) ?? null
+      if (selected !== null) {
+        const track = registry.get(selected)
+        s = track?.stateAt(tRenderMs) ?? null
+        // A large delay (a sparse feed: ~26 s) can put render time before the first sample known: hold the aircraft
+        // at that sample until render time reaches it, rather than show nothing.
+        const first = track?.oldestTMs ?? null
+        if (s === null && track !== undefined && first !== null && tRenderMs < first) s = track.stateAt(first)
+      }
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
     fleetLayer.update(all, selected, tableHover ?? mapHover, s !== null && model !== null)
@@ -492,7 +500,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
     detail.update(s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null))) // ≤ 4 Hz
     banner.update(shown, s, selected !== null && api.ready)
-    sourceBadge.update(api.ready ? shown : null, api.ready ? api.serverNowMs() : null)
+    sourceBadge.update(status === NO_STATUS ? null : shown, api.ready ? api.serverNowMs() : null)
     syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
@@ -504,8 +512,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     if (selected === null) {
       const r = viewRectangleDeg(viewer)
       const c = r === null ? null : browseCircle(r)
-      // A globe-wide rectangle spans every longitude, so its centre says nothing: then the point under the camera.
-      if (c !== null && c.nm < MAX_VIEW_NM) return c
+      // A rectangle spanning every longitude (the globe, or a pole in view) says nothing by its centre: then the point
+      // under the camera.
+      const allLons = r !== null && (r.west <= r.east ? r.east - r.west : r.east + 360 - r.west) >= 359
+      if (c !== null && c.nm < MAX_VIEW_NM && !allLons) return c
     }
     const cam = viewer.camera.positionCartographic
     const nm = viewRadiusNm(cam.height)
@@ -526,34 +536,45 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     const t0 = measure === null ? 0 : performance.now()
     const current = hex !== null && hex === selected // a reply for an earlier selection only feeds the fleet
     let ok = false
+    const mine: Sample[] = [] // this poll's samples of the selected aircraft, from both replies
     if (view.status === 'fulfilled') {
       const r = view.value
       fleet.ingest(r.samples, r.info)
-      if (current) registry.ingest(r.samples.filter((x) => x.hex === hex))
+      if (current) for (const x of r.samples) if (x.hex === hex) mine.push(x)
       status = r.status
       ok = true
     }
+    let chased0 = false // this is the selection's first chase reply
     if (chase.status === 'fulfilled' && chase.value !== null) {
       const r = chase.value
       fleet.ingest(r.samples, r.info ? [r.info] : undefined)
       if (current) {
-        let newest = -Infinity
-        for (const x of r.samples) if (x.tMs > newest) newest = x.tMs
-        if (newest > -Infinity) {
-          arrivalAgesS.push(Math.max(0, (r.serverNowMs - newest) / 1000))
-          if (arrivalAgesS.length > ARRIVALS) arrivalAgesS.shift()
-        }
-        registry.ingest(r.samples)
+        mine.push(...r.samples)
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
-        if (snapClock && registry.get(hex) !== undefined) {
-          clock = new RenderClock(delayTargetS(), CHASE_SLEW_S_PER_S)
-          snapClock = false
+        chased0 = snapClock
+        // How old its newest position is on arrival. Not from the first reply: that one is the stored history, whose
+        // newest came from the browse view's slower refresh, not from the chase path.
+        let newest = -Infinity
+        for (const x of r.samples) if (x.tMs > newest) newest = x.tMs
+        if (!chased0 && newest > -Infinity) {
+          arrivalAgesS.push(Math.max(0, (r.serverNowMs - newest) / 1000))
+          if (arrivalAgesS.length > ARRIVALS) arrivalAgesS.shift()
         }
       }
       status = r.status
       ok = true
     }
+    if (chased0) {
+      // The first chase reply carries the stored history (since=0). A track takes samples in time order only, so the
+      // seed and the view's sample, newer than that history, would make it drop it: rebuild the track from all of them.
+      registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
+      registry.ingest(seedSample === null ? mine : [seedSample, ...mine])
+      if (registry.get(hex!) !== undefined) {
+        clock = new RenderClock(delayTargetS(), CHASE_SLEW_S_PER_S)
+        snapClock = false
+      }
+    } else if (mine.length > 0) registry.ingest(mine)
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))

@@ -194,6 +194,10 @@ export class Track {
     return this.#samples[this.#samples.length - 1]?.tMs ?? null
   }
 
+  get oldestTMs(): number | null {
+    return this.#samples[0]?.tMs ?? null
+  }
+
   get delayTargetS(): number {
     return targetDelayS(this.quality, this.#pollPeriodS, this.gapP90S())
   }

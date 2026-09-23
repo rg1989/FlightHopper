@@ -9,7 +9,8 @@ const SOURCES: Record<SourceKind, { name: string; href: string | null; credit: s
   adsbfi: { name: 'adsb.fi', href: 'https://adsb.fi', credit: 'Flight data: adsb.fi, non-commercial use' }, // one line on a phone
   adsblol: { name: 'adsb.lol', href: 'https://adsb.lol', credit: 'Flight data © adsb.lol contributors, ODbL 1.0' },
   readsb: { name: 'own receiver', href: null, credit: 'Flight data: own receiver (readsb)' },
-  replay: { name: 'recording', href: null, credit: 'Flight data © adsb.lol contributors, ODbL 1.0' }, // the recorder polls adsb.lol
+  // A recording holds what its source answered: the recorder polls adsb.lol; a live server with RECORD_DIR records its own.
+  replay: { name: 'recording', href: null, credit: 'Flight data: a recording (adsb.lol contributors, ODbL 1.0, or adsb.fi)' },
 }
 
 /** The flight-data line of the credit box for this source. */
@@ -27,15 +28,17 @@ export interface SourceView {
 /** Badge text for a status; serverNowMs dates a replay (server now − upstreamOffsetMs = the recording's own time). */
 export function sourceView(status: StatusBrief, serverNowMs: number | null): SourceView {
   const src = SOURCES[status.source]
-  const loading = (status.pendingAreas ?? 0) > 0 ? ` · loading ${status.pendingAreas} area${status.pendingAreas === 1 ? '' : 's'}` : ''
   const trouble = status.degraded !== null
+  // In trouble the pending count means nothing (no answers are coming): the badge says what is wrong instead.
+  const loading = !trouble && (status.pendingAreas ?? 0) > 0 ? ` · loading ${status.pendingAreas} area${status.pendingAreas === 1 ? '' : 's'}` : ''
   if (status.source === 'replay') {
     const at = serverNowMs !== null && status.upstreamOffsetMs !== undefined ? new Date(serverNowMs - status.upstreamOffsetMs) : null
     const when = at === null ? '' : ` · ${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`
     return { text: `REPLAY${when}`, title: 'A recorded session played back, not live traffic (make live for live)', state: 'replay', href: null }
   }
+  const word = status.degraded === 'rate-limited' ? 'SLOWED' : trouble ? 'NO DATA' : 'LIVE'
   return {
-    text: `LIVE · ${src.name}${loading}`,
+    text: `${word} · ${src.name}${loading}`,
     title: trouble ? `The flight-data source is ${status.degraded}` : `Live flight data from ${src.name}`,
     state: trouble ? 'trouble' : 'live',
     href: src.href,

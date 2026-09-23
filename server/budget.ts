@@ -52,7 +52,8 @@ export class TokenBucket {
       this.#fails = 0
       this.#rps /= 2
       this.#last429Ms = now
-      this.#pause(now + (retryAfterS ?? DEFAULT_RETRY_AFTER_S) * 1000)
+      // Never sooner than one request interval at the halved rate, even when Retry-After says 0.
+      this.#pause(now + Math.max((retryAfterS ?? DEFAULT_RETRY_AFTER_S) * 1000, 1000 / this.#rps))
     } else if (status === 401 || status === 403) {
       this.#counts.r4xx++
       this.#blocked = true

@@ -240,3 +240,14 @@ test('burst 1: never two requests less than 1/rps apart, even after idling', () 
   }
   for (let i = 1; i < sent.length; i++) assert.ok(sent[i] - sent[i - 1] >= 1100, `${sent[i - 1]} → ${sent[i]}`)
 })
+
+test('a 429 with Retry-After 0 still waits one interval at the halved rate before the probe', () => {
+  const c = { t: 0 }
+  const b = new TokenBucket(0.9, () => c.t, () => 0, 1)
+  assert.equal(b.tryTake(), true)
+  b.onResult(429, 0)
+  c.t = 100
+  assert.equal(b.tryTake(), false)
+  c.t = Math.ceil(1000 / 0.45)
+  assert.equal(b.tryTake(), true)
+})

@@ -278,3 +278,15 @@ test('staleS: 3 of the aircraft\'s own gaps (a 72 s replay cadence keeps it 216 
   g.setHintS(Number.NaN)
   assert.equal(g.entries(T0 + 1000)[0].staleS, 60)
 })
+
+test('zooming in caps the gaps measured in a coarser view, so a lost aircraft does not keep flying for minutes', () => {
+  const f = new Fleet()
+  f.setHintS(2.5 * 240) // a continent view: each area every 4 min
+  f.ingest([smp({ tMs: T0 })])
+  f.ingest([smp({ tMs: T0 + 240_000 })])
+  assert.equal(f.entries(T0 + 240_000)[0].staleS, 720, '3 × its 240 s gap')
+  f.setHintS(2.5 * 5) // a city view: every 5 s
+  assert.equal(f.entries(T0 + 240_000)[0].staleS, 60, 'its gap capped at 5 s: the 60 s floor')
+  f.setHintS(2.5 * 240) // zooming out again does not raise a measured gap
+  assert.equal(f.entries(T0 + 240_000)[0].staleS, 600)
+})
