@@ -18,9 +18,15 @@ export const AIRLINES_CREDIT = 'Airline names: OpenFlights (ODbL)'
  */
 const FLIGHT_ID = /^[A-Z]{3}\d[A-Z0-9]{0,4}$/
 
-/** Airline name for a callsign such as 'ELY5450' (→ 'El Al Israel Airlines'); null when it is not an airline flight id. */
-export function airlineOf(callsign: string | null): string | null {
+/** The ICAO operator designator of an airline flight id ('ELY5450' → 'ELY'); null when it is not one. */
+export function operatorOf(callsign: string | null): string | null {
   if (callsign === null) return null
   const cs = callsign.trim().toUpperCase()
-  return FLIGHT_ID.test(cs) ? (NAMES[cs.slice(0, 3)] ?? null) : null
+  return FLIGHT_ID.test(cs) ? cs.slice(0, 3) : null
+}
+
+/** Airline name for a callsign such as 'ELY5450' (→ 'El Al Israel Airlines'); null when it is not an airline flight id. */
+export function airlineOf(callsign: string | null): string | null {
+  const op = operatorOf(callsign)
+  return op === null ? null : (NAMES[op] ?? null)
 }

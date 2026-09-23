@@ -4,6 +4,7 @@
 import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix4, Model, Quaternion, Transforms } from 'cesium'
 import type { Viewer } from 'cesium'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
+import { LiveryShaders } from './livery.ts'
 
 // ---------- glTF geometry in Cesium's model frame ----------
 
@@ -161,12 +162,15 @@ export class ChaseModel {
   private readonly m: ModelManifestEntry
   private visible = true
   private placed = false
+  private readonly liveries: LiveryShaders | null
+  private livery: string | null | undefined
 
   /** Prefer ChaseModel.load. Adds the model to the scene hidden: it appears on the first update(), not at the Earth's centre. */
   constructor(viewer: Viewer, m: ModelManifestEntry, model: Model) {
     this.viewer = viewer
     this.m = m
     this.model = model
+    this.liveries = m.paint ? new LiveryShaders(m.paint) : null
     model.show = false
     viewer.scene.primitives.add(model)
   }
@@ -178,6 +182,13 @@ export class ChaseModel {
     // height while the topography toggle flattens or grows the ground.
     const model = await Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
     return new ChaseModel(viewer, m, model)
+  }
+
+  /** Paints the model in a livery (livery.ts liveryCode; null: plain white). Cheap when unchanged. */
+  paint(code: string | null): void {
+    if (this.liveries === null || code === this.livery) return
+    this.livery = code
+    this.model.customShader = this.liveries.for(code)
   }
 
   /** Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. */

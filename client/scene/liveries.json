@@ -1,0 +1,293 @@
+{
+ "_about": "Airline liveries for the 3-D models, by ICAO operator designator (client/scene/livery.ts). Colours are FlightHopper's own picks. Decals in public/liveries/: Wikimedia Commons files marked Public domain (logos are still trademarks), trimmed, fitted onto 1024x256 (title) or 512x512 (fin) and, where the livery shows them white, recoloured white.",
+ "aliases": {
+  "EJU": "EZY",
+  "EZS": "EZY",
+  "WMT": "WZZ",
+  "WUK": "WZZ",
+  "WAZ": "WZZ",
+  "RUK": "RYR",
+  "MAY": "RYR",
+  "RYS": "RYR",
+  "EWE": "EWG",
+  "ENY": "AAL",
+  "JIA": "AAL",
+  "PDT": "AAL",
+  "EDV": "DAL",
+  "QXE": "ASA",
+  "ASH": "UAL",
+  "UCA": "UAL",
+  "GJS": "UAL",
+  "KLC": "KLM",
+  "CLH": "DLH",
+  "CFE": "BAW",
+  "HOP": "AFR",
+  "JZA": "ACA",
+  "ANE": "IBE"
+ },
+ "liveries": {
+  "UAL": {
+   "base": "#f3f5f8",
+   "belly": "#2a4a8f",
+   "fin": "#0b2a6f",
+   "engine": "#0b2a6f"
+  },
+  "SWA": {
+   "base": "#304cb2",
+   "fin": "#304cb2",
+   "fin2": "#e21e26",
+   "title": true
+  },
+  "RYR": {
+   "base": "#f7f7f7",
+   "belly": "#073590",
+   "fin": "#073590",
+   "engine": "#073590",
+   "title": true
+  },
+  "ASA": {
+   "base": "#f7f7f7",
+   "fin": "#0a2d5e",
+   "fin2": "#48b5c4",
+   "engine": "#0a2d5e",
+   "title": true
+  },
+  "ELY": {
+   "base": "#f7f7f7",
+   "fin": "#f7f7f7",
+   "fin2": "#0b2e6b",
+   "title": true
+  },
+  "DAL": {
+   "base": "#f7f7f7",
+   "belly": "#0b1f41",
+   "fin": "#c8102e",
+   "fin2": "#8c0c22",
+   "engine": "#0b1f41"
+  },
+  "DLH": {
+   "base": "#f7f7f7",
+   "fin": "#05164d",
+   "engine": "#05164d",
+   "title": true,
+   "finLogo": true
+  },
+  "EZY": {
+   "base": "#f7f7f7",
+   "fin": "#ff6600",
+   "engine": "#ff6600",
+   "title": true,
+   "finLogo": true
+  },
+  "AAL": {
+   "base": "#c9ced4",
+   "fin": "#0f3a8c",
+   "fin2": "#c8102e"
+  },
+  "EXS": {
+   "base": "#f7f7f7",
+   "fin": "#e4032e",
+   "fin2": "#f5a31a",
+   "engine": "#23408e",
+   "title": true
+  },
+  "FDX": {
+   "base": "#f7f7f7",
+   "belly": "#a7abb0",
+   "fin": "#4d148c"
+  },
+  "EWG": {
+   "base": "#f7f7f7",
+   "fin": "#a4005b",
+   "engine": "#a4005b",
+   "title": true
+  },
+  "SWR": {
+   "base": "#f7f7f7",
+   "fin": "#e30613",
+   "title": true,
+   "finLogo": true
+  },
+  "WZZ": {
+   "base": "#f7f7f7",
+   "fin": "#c6007e",
+   "fin2": "#3a1e6e",
+   "engine": "#c6007e",
+   "title": true
+  },
+  "THY": {
+   "base": "#f7f7f7",
+   "fin": "#c8102e"
+  },
+  "ISR": {
+   "base": "#f7f7f7",
+   "fin": "#1f5fae",
+   "engine": "#1f5fae",
+   "title": true
+  },
+  "UAE": {
+   "base": "#f7f7f7",
+   "fin": "#d71a21",
+   "fin2": "#00843d",
+   "title": true
+  },
+  "AUA": {
+   "base": "#f7f7f7",
+   "fin": "#e30613",
+   "title": true
+  },
+  "AFR": {
+   "base": "#f7f7f7",
+   "fin": "#f7f7f7",
+   "fin2": "#002157",
+   "title": true
+  },
+  "ETD": {
+   "base": "#efe7da",
+   "fin": "#b58d4a",
+   "engine": "#efe7da",
+   "title": true
+  },
+  "JBU": {
+   "base": "#f7f7f7",
+   "belly": "#003876",
+   "fin": "#003876",
+   "engine": "#003876",
+   "title": true
+  },
+  "KLM": {
+   "base": "#00a1de",
+   "belly": "#f7f7f7",
+   "fin": "#00a1de",
+   "engine": "#d0d5da",
+   "title": true,
+   "finLogo": true
+  },
+  "TVF": {
+   "base": "#f7f7f7",
+   "fin": "#00d66c",
+   "fin2": "#1a3a6b",
+   "title": true
+  },
+  "BAW": {
+   "base": "#f7f7f7",
+   "belly": "#1c2c5a",
+   "fin": "#eb2226",
+   "fin2": "#1c2c5a",
+   "engine": "#d0d5da",
+   "title": true
+  },
+  "FFT": {
+   "base": "#f7f7f7",
+   "fin": "#00754a",
+   "engine": "#00754a",
+   "title": true
+  },
+  "QTR": {
+   "base": "#f7f7f7",
+   "fin": "#5c0632",
+   "engine": "#d0d5da",
+   "title": true
+  },
+  "SIA": {
+   "base": "#f7f7f7",
+   "fin": "#1d2a5b",
+   "fin2": "#f0ab00",
+   "title": true
+  },
+  "CPA": {
+   "base": "#f7f7f7",
+   "belly": "#b8bdc2",
+   "fin": "#006564"
+  },
+  "ANA": {
+   "base": "#f7f7f7",
+   "fin": "#13448f",
+   "engine": "#13448f",
+   "title": true
+  },
+  "IGO": {
+   "base": "#f7f7f7",
+   "belly": "#001b94",
+   "fin": "#001b94",
+   "engine": "#001b94",
+   "title": true
+  },
+  "CSN": {
+   "base": "#f7f7f7",
+   "fin": "#0c6db3"
+  },
+  "QFA": {
+   "base": "#f7f7f7",
+   "fin": "#e40000"
+  },
+  "LAN": {
+   "base": "#f7f7f7",
+   "belly": "#1b0088",
+   "fin": "#1b0088",
+   "fin2": "#ed1650",
+   "engine": "#1b0088"
+  },
+  "AIC": {
+   "base": "#f7f7f7",
+   "fin": "#b31329",
+   "fin2": "#6d2077"
+  },
+  "KAL": {
+   "base": "#9cc9ea",
+   "belly": "#c9ced4",
+   "fin": "#f7f7f7"
+  },
+  "IBE": {
+   "base": "#f7f7f7",
+   "fin": "#d7192d",
+   "fin2": "#fbc600"
+  },
+  "VLG": {
+   "base": "#f7f7f7",
+   "fin": "#fdc300",
+   "engine": "#fdc300"
+  },
+  "ACA": {
+   "base": "#f7f7f7",
+   "belly": "#231f20",
+   "fin": "#231f20",
+   "engine": "#231f20"
+  },
+  "NKS": {
+   "base": "#ffe600",
+   "fin": "#ffe600",
+   "engine": "#1a1a1a"
+  }
+ },
+ "logos": {
+  "AFR-title.png": "https://commons.wikimedia.org/wiki/File:Air-France-Logo_Skyteam.svg",
+  "ANA-title.png": "https://commons.wikimedia.org/wiki/File:All_Nippon_Airways_Logo.svg",
+  "ASA-title.png": "https://commons.wikimedia.org/wiki/File:Alaska_Airlines_logo.svg",
+  "AUA-title.png": "https://commons.wikimedia.org/wiki/File:Austrian_Airlines_Logo_neu.svg",
+  "BAW-title.png": "https://commons.wikimedia.org/wiki/File:BRITISH_AIRWAYS_logo.svg",
+  "DLH-title.png": "https://commons.wikimedia.org/wiki/File:Lufthansa_Logo_2018.svg",
+  "DLH-fin.png": "https://commons.wikimedia.org/wiki/File:Lufthansa_Logo_2018_crane.svg",
+  "ELY-title.png": "https://commons.wikimedia.org/wiki/File:El_Al_logo_wordmark.svg",
+  "ETD-title.png": "https://commons.wikimedia.org/wiki/File:Etihad-airways-logo.svg",
+  "EWG-title.png": "https://commons.wikimedia.org/wiki/File:Eurowings_Logo_2026.svg",
+  "EXS-title.png": "https://commons.wikimedia.org/wiki/File:Jet2Logo.svg",
+  "EZY-title.png": "https://commons.wikimedia.org/wiki/File:EasyJet_logo.svg",
+  "EZY-fin.png": "https://commons.wikimedia.org/wiki/File:EasyJet_logo.svg",
+  "FFT-title.png": "https://commons.wikimedia.org/wiki/File:Frontier_Airlines_logo.svg",
+  "IGO-title.png": "https://commons.wikimedia.org/wiki/File:IndiGo_Airlines_logo.svg",
+  "ISR-title.png": "https://commons.wikimedia.org/wiki/File:Israir_Airlines_Logo.svg",
+  "JBU-title.png": "https://commons.wikimedia.org/wiki/File:JetBlue_Airways_Logo.svg",
+  "KLM-title.png": "https://commons.wikimedia.org/wiki/File:KLM_logo.svg",
+  "KLM-fin.png": "https://commons.wikimedia.org/wiki/File:KLM_logo.svg",
+  "QTR-title.png": "https://commons.wikimedia.org/wiki/File:Qatar_Airways_logo.svg",
+  "RYR-title.png": "https://commons.wikimedia.org/wiki/File:Ryanair_logo.svg",
+  "SIA-title.png": "https://commons.wikimedia.org/wiki/File:Singapore_Airlines_wordmark.svg",
+  "SWA-title.png": "https://commons.wikimedia.org/wiki/File:Southwest_Airlines_logo_2014.svg",
+  "SWR-title.png": "https://commons.wikimedia.org/wiki/File:Swiss_new.svg",
+  "SWR-fin.png": "FlightHopper drawing of the Swiss flag cross (national flag)",
+  "TVF-title.png": "https://commons.wikimedia.org/wiki/File:Transavia_2025_logo.svg",
+  "UAE-title.png": "https://commons.wikimedia.org/wiki/File:Emirates_logo.svg",
+  "WZZ-title.png": "https://commons.wikimedia.org/wiki/File:Wizz_Air_logo.svg"
+ }
+}

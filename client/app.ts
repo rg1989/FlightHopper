@@ -28,6 +28,7 @@ import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
+import { liveryCode } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
 import { Traffic } from './scene/traffic.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
@@ -589,6 +590,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       groundM = topo.ground(sampled, tf, acGround, carto)
       if (groundM === null && bench !== null) performance.mark('fh:ground-unknown')
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
+      model?.paint(liveryCode((chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info))?.callsign ?? null))
       model?.update(placed)
       clearanceM = chaseCam.update(placed, dtS).clearanceM
       traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame

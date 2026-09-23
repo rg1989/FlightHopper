@@ -7,6 +7,7 @@ import type { PerspectiveFrustum, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { targetAttitude } from '../track/attitude.ts'
 import type { FleetEntry, ModelManifestEntry } from '../types.ts'
+import { LiveryShaders, liveryCode } from './livery.ts'
 import { modelUrl } from './model.ts'
 
 export const RANGE_NM = 10
@@ -109,7 +110,7 @@ export function loadTrafficModel(m: ModelManifestEntry): Promise<Model> {
   })
 }
 
-interface Slot { model: Model; hex: string | null; e: FleetEntry | null; headingDeg: number }
+interface Slot { model: Model; hex: string | null; e: FleetEntry | null; headingDeg: number; livery?: string | null }
 
 /**
  * The chase traffic. Models come from a pool that grows to the most ever needed (≤ MAX_MODELS), and Cesium shares
@@ -123,6 +124,7 @@ export class Traffic {
   readonly #m: ModelManifestEntry
   readonly #layer: HTMLElement
   readonly #load: () => Promise<Model>
+  readonly #paint: LiveryShaders | null
   readonly #slots: Slot[] = []
   readonly #byHex = new Map<string, Slot>()
   readonly #models = new Set<string>()
@@ -143,6 +145,7 @@ export class Traffic {
     this.#m = m
     this.#layer = layer
     this.#load = load
+    this.#paint = m.paint ? new LiveryShaders(m.paint) : null
   }
 
   /**
@@ -193,6 +196,11 @@ export class Traffic {
       }
       const e = s.e
       if (e.trackDeg !== null) s.headingDeg = e.trackDeg
+      const livery = liveryCode(e.info?.callsign ?? null) // the callsign can arrive after the aircraft does
+      if (this.#paint !== null && s.livery !== livery) {
+        s.livery = livery
+        s.model.customShader = this.#paint.for(livery)
+      }
       // The square's radius at true size; a far model and its square are enlarged together to MIN_PX (depth taken at
       // the wheels: the centre is a few metres off).
       const k = scaleFor(e.info?.category)

@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { AIRLINES_CREDIT, airlineOf } from './airlines.ts'
+import { AIRLINES_CREDIT, airlineOf, operatorOf } from './airlines.ts'
 
 test('airlineOf: ICAO designator + flight number → airline name', () => {
   assert.equal(airlineOf('ELY5450'), 'El Al Israel Airlines')
@@ -47,4 +47,12 @@ test('airlines.json: sorted 3-letter keys, trimmed non-empty names, about a thou
     assert.match(k, /^[A-Z]{3}$/)
     assert.ok(names[k] !== '' && names[k] === names[k].trim(), `${k}: ${JSON.stringify(names[k])}`)
   }
+})
+
+test('operatorOf: the ICAO designator of an airline flight id, else null', () => {
+
+  assert.equal(operatorOf('DLH681'), 'DLH')
+  assert.equal(operatorOf(' ezy62bu '), 'EZY')
+  assert.equal(operatorOf('N12345'), null) // a registration flown as the callsign
+  assert.equal(operatorOf(null), null)
 })

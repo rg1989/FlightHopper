@@ -43,6 +43,22 @@ export interface ModelManifestEntry {
   gearHeightM: number                           // model origin → wheel bottom, metres (after scale)
   lengthM: number                               // real-world length the scale targets
   scale: number
+  paint?: Paint                                 // where the livery goes (client/scene/livery.ts); absent: unpainted
+}
+
+/**
+ * Where a model's livery regions are, in its glTF mesh frame (x lateral, y up, z nose-forward; unscaled), measured
+ * from its vertices. The fuselage (|x| < bodyHalfWidth) takes the base colour and, below bellyBelowY, the belly
+ * colour; everything wider (wings, tailplane) is light grey on every airline.
+ */
+export interface Paint {
+  bodyHalfWidth: number
+  bellyBelowY: number
+  fin: { behindZ: number; aboveY: number; halfWidth: number } // the vertical fin: z < behindZ, y > aboveY, |x| < halfWidth
+  finSplit: [slope: number, zRef: number, below: number]      // fin2 where (y − fin.aboveY) + slope·(z − zRef) < below
+  engines: [xMin: number, xMax: number, zMin: number, zMax: number] // nacelles: |x| and z in range, not flat wing skin
+  finLogo: [z: number, y: number, side: number]               // centre and side of the square fin decal
+  title: [z: number, y: number, width: number]                // centre and width of the 4:1 fuselage title
 }
 
 export interface ModelManifest {
