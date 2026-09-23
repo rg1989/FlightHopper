@@ -25,6 +25,10 @@ const BODIES: Record<Method, string> = {
 
 const KSFO = [37.6188, -122.3758] as const
 const LLBG = [32.0114, 34.8867] as const // a 5 nm view here is exactly one cell
+const DAY_MS = 86_400_000
+// When the golden bodies were recorded: their own upstream `now`, in ms (2026-09-22).
+const ALL_NOW_MS = normalizeReadsb(BODIES.all).nowMs // 1_790_081_633_500
+const HEXES_NOW_MS = normalizeAdsblol(BODIES.hexes).nowMs // 1_790_081_641_500
 
 interface Call {
   t: number
@@ -218,7 +222,7 @@ test('fullSnapshot source: all() once per fullSnapshotPeriodMs, never circle or 
   assert.deepEqual(rel(s.calls), [0, 1000, 2000, 3000])
   assert.equal(s.store.latest('a1c7e4')?.lat, 39.788635)
   const b = s.poller.brief()
-  assert.deepEqual(b, { source: 'readsb', degraded: null, cellPeriodP95S: 1, chasePeriodP95S: 1 })
+  assert.deepEqual(b, { source: 'readsb', degraded: null, cellPeriodP95S: 1, chasePeriodP95S: 1, upstreamOffsetMs: T0 - ALL_NOW_MS })
 })
 
 test('samples land in the store in server clock: upstream now − seen_pos + (tRecv − now)', async () => {
@@ -302,6 +306,32 @@ test('report: periods, counters and bytes per hour', async () => {
 test('brief before any response: nulls, not zeros', () => {
   const s = setup()
   assert.deepEqual(s.poller.brief(), { source: 'adsblol', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null })
+})
+
+test('upstreamOffsetMs: a recording served 3 days later reports 3 days; tMs − upstreamOffsetMs is the recorded time', async () => {
+  const s = setup({ fullSnapshot: true }) // a replay-like upstream: its answers say "now" = when they were recorded
+  s.clock.t = ALL_NOW_MS + 3 * DAY_MS
+  assert.equal(await s.poller.tick(), true)
+  const b = s.poller.brief()
+  assert.equal(b.upstreamOffsetMs, 3 * DAY_MS)
+  const ac = normalizeReadsb(BODIES.all).aircraft.find((a) => a.hex === 'a1c7e4')!
+  assert.equal(s.store.latest('a1c7e4')!.tMs - b.upstreamOffsetMs!, ALL_NOW_MS - Math.round(ac.seen_pos! * 1000))
+  // a later, slower answer does not move it (windowed minimum); report() extends brief() and carries it too
+  s.clock.t += 1000
+  assert.equal(await s.poller.tick(), true)
+  assert.equal(s.poller.report().upstreamOffsetMs, 3 * DAY_MS)
+})
+
+test('upstreamOffsetMs: live, about the latency, in whole ms; absent until a good answer', async () => {
+  const s = setup()
+  s.poller.touchChase('71bd79')
+  s.replies.push({ status: 503 })
+  assert.equal(await s.poller.tick(), true)
+  assert.equal('upstreamOffsetMs' in s.poller.brief(), false, 'a failed answer gives no offset')
+  s.clock.t = HEXES_NOW_MS + 180.6 // this answer arrives 180.6 ms after the upstream's now
+  s.poller.touchChase('71bd79')
+  assert.equal(await s.poller.tick(), true)
+  assert.equal(s.poller.brief().upstreamOffsetMs, 181)
 })
 
 test('start() ticks every 100 ms without overlapping ticks; stop() ends it', async () => {

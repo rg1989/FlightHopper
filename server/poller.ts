@@ -174,12 +174,15 @@ export class Poller {
   brief(): StatusBrief {
     this.#expire(this.#now())
     const cellIntervals = this.#source.caps.fullSnapshot ? this.#snapOk.intervals : [...this.#cells.values()].flatMap((c) => c.ok.intervals)
-    return {
+    const b: StatusBrief = {
       source: this.#source.caps.kind,
       degraded: this.#bucket.degraded,
       cellPeriodP95S: p95S(cellIntervals),
       chasePeriodP95S: p95S(this.#chaseOk.intervals),
     }
+    // The offset that stamps every sample (#ingest): lets the client light a replay at its recorded time (sun = tRender − it).
+    if (this.#offset.ready) b.upstreamOffsetMs = Math.round(this.#offset.get())
+    return b
   }
 
   report(): StatusReport {

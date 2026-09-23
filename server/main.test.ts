@@ -114,7 +114,7 @@ async function assertApi(base: string, kind: SourceKind, advance: () => void): P
   const st = await get<StatusReport>(`${base}/api/status`)
   assert.equal(st.status, 200)
   assert.equal(st.type, 'application/json')
-  const keys = ['budget', 'bytesPerHourEstimate', 'cellPeriodP95S', 'cells', 'chasePeriodP95S', 'chasedHexes', 'degraded', 'requestsTotal', 'source']
+  const keys = ['budget', 'bytesPerHourEstimate', 'cellPeriodP95S', 'cells', 'chasePeriodP95S', 'chasedHexes', 'degraded', 'requestsTotal', 'source', 'upstreamOffsetMs']
   assert.deepEqual(Object.keys(st.body).sort(), keys)
   assert.equal(st.body.source, kind)
   assert.equal(st.body.degraded, null)
@@ -166,6 +166,8 @@ test('replay on an injected server clock: view, since, chase, status, 400s; repl
   // Every sample was received at one of the two injected instants, and serverNowMs is the injected clock.
   const v = await get<ViewResponse>(viewUrl(base, 0))
   assert.equal(v.body.serverNowMs, T0 + 2500)
+  // The replay tells the client how long ago it was recorded: server clock − the recording's clock (sun time, D12).
+  assert.equal(v.body.status.upstreamOffsetMs, T0 - readRecording(FILE)[0].tRecvMs)
   const chase = await get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}&since=0`)
   assert.deepEqual([...new Set(chase.body.samples.map((s) => s.rxMs))], [T0, T0 + 2500])
   assert.equal(existsSync(recordDir), false, 'RECORD_DIR is ignored for replay')
