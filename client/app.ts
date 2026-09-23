@@ -330,7 +330,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
-  const traffic = entry ? new Traffic(viewer, entry, div('fh-traffic', root)) : null
+  // Its popup's Chase button chases that aircraft instead (select: a chase stays a chase, on the new aircraft).
+  const traffic = entry ? new Traffic(viewer, entry, div('fh-traffic', root), { flagOf, onChase: (hex) => select(hex) }) : null
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
   // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
@@ -591,9 +592,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
       model?.update(placed)
       clearanceM = chaseCam.update(placed, dtS).clearanceM
-      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame
       chased = placed
       sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt)
+      // After the camera, so the brackets match this frame; sunWC is the chased aircraft, for the distances.
+      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, sunWC)
     }
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
     // time (D12): the server reports how far its clock is ahead of the upstream's.
@@ -730,9 +732,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
-    // A traffic model's bracket square (chase) takes the click first. ponytail: caught with no action yet; the
-    // aircraft's own menu comes later.
-    if (traffic !== null && traffic.hitAt(e.position.x, e.position.y) !== null) return
+    // Chase traffic first: a click in a model's bracket square opens its popup (closing another: one at most); a click
+    // anywhere else closes an open one, and does nothing more.
+    if (traffic !== null) {
+      const hit = traffic.hitAt(e.position.x, e.position.y)
+      if (hit !== null) return void traffic.open(hit)
+      if (traffic.close()) return
+    }
     const hex = fleetLayer.pick(e.position, tapPx)
     if (hex !== null) select(hex)
     else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
@@ -760,6 +766,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
+  // A press outside the canvas and the popup (the rail, the card, a panel) closes the traffic popup too. The canvas's own
+  // clicks go through LEFT_CLICK above, so a drag to orbit the camera keeps it open.
+  const onPressOutside = (e: PointerEvent): void => {
+    if (e.target !== viewer.canvas && !traffic?.popupContains(e.target as Node)) traffic?.close()
+  }
+  document.addEventListener('pointerdown', onPressOutside, true)
   const onKey = (e: KeyboardEvent): void => {
     // Esc steps back one level: an open panel, then the chase (to the map), then the focus.
     if (e.key === 'Escape') {
@@ -781,6 +793,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       stopped = true
       removeFrame()
       window.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPressOutside, true)
       viewer.canvas.removeEventListener('pointerleave', onLeave)
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
