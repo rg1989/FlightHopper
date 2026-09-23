@@ -70,6 +70,7 @@ async function main(): Promise<void> {
     last = now
     tf = topo.update(now)
     const st = sun.update(timeMs, viewer.camera.positionWC)
+    buildings.setNight(st?.night ?? 0)
     if (q.get('buildings') !== '0') buildings.update(focus, tf)
     if (now - infoAt < 300) return
     infoAt = now

@@ -434,6 +434,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
     // time (D12): the server reports how far its clock is ahead of the upstream's.
     const st = sun.update(sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
+    buildings.setNight(selected !== null && prefs.light && st !== null ? st.night : 0) // the Sun's night, not the moon's
     runways.update(tf)
     buildings.update(selected === null ? null : chased, tf) // around the chased aircraft; hidden in browse
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three

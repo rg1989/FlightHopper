@@ -4,6 +4,7 @@
 // with the terrain exaggeration like the runways. One "clay" colour, lit by the app's sun; the see-through toggle swaps
 // every tile to a translucent twin of the same shader (no geometry rebuild).
 import {
+  Appearance,
   Cartesian3,
   Cartographic,
   Color,
@@ -12,6 +13,7 @@ import {
   Ellipsoid,
   GeometryInstance,
   GeometryInstanceAttribute,
+  Material,
   Matrix4,
   PerInstanceColorAppearance,
   PolygonGeometry,
@@ -187,9 +189,11 @@ void main() {
   gl_Position = czm_modelViewProjectionRelativeToEye * p;
 }`
 
-// Walls take the sun (Lambert: the stock czm_phong lights from the camera) plus a sky term favouring up-facing surfaces;
-// roofs are a touch darker and greyer. The streets darken the walls' feet (contact shadow). Night = the app's light
-// dimming (intensity 2 → 0.45, WP-E2): a faint warm glow on half the buildings (v_color.a is a per-building random).
+// Walls take the scene light (Lambert: the stock czm_phong lights from the camera) plus a sky term favouring up-facing
+// surfaces; roofs are a touch darker and greyer. The streets darken the walls' feet (contact shadow). night (0–1) comes
+// from the app (setNight: the Sun's own night, never the moon's), through the one uniform a Material can carry here:
+// czm_getMaterial(...).alpha. At night the ambient drops, the light (moonlight) keeps a quarter of its effect, and half
+// the buildings glow faintly warm (v_color.a is a per-building random).
 // Haze towards the terrain's. Within NEAR_M of the camera nothing is drawn: the chase camera clears the terrain, not the
 // buildings, and must not end up boxed in by walls.
 // ponytail: flat roofs, no windows; OpenMapTiles has no roof shape. Upgrade: roof:shape from OSM (another source).
@@ -208,11 +212,11 @@ void main() {
   float up = dot(n, upEC);
   float roof = smoothstep(0.6, 0.8, up);
   vec3 base = mix(v_color.rgb, v_color.rgb * vec3(0.80, 0.79, 0.78), roof);
-  float I = length(czm_lightColorHdr) / 1.7320508;
-  float night = clamp((1.3 - I) / 0.8, 0.0, 1.0);
+  czm_materialInput mi;
+  float night = czm_getMaterial(mi).alpha;
   float sun = max(dot(n, czm_lightDirectionEC), 0.0);
   float sky = 0.40 + 0.15 * up;
-  vec3 c = base * (sky * mix(1.0, 0.30, night) + 0.55 * sun * czm_lightColor * (1.0 - night));
+  vec3 c = base * (sky * mix(1.0, 0.30, night) + 0.55 * sun * czm_lightColor * mix(1.0, 0.25, night));
   float contact = mix(0.62, 1.0, smoothstep(0.0, 9.0, v_h)) * mix(0.94, 1.06, smoothstep(10.0, 160.0, v_h));
   c *= mix(1.0, contact, v_exact);
   float lit = step(0.5, fract(v_color.a * 7.13)) * (1.0 - roof);
@@ -227,9 +231,28 @@ void main() {
 #endif
 }`
 
-// closed: false, so no back-face culling: the bottoms are left open (buried) and see-through shows the far walls.
-const SOLID = new PerInstanceColorAppearance({ flat: false, translucent: false, closed: false, vertexShaderSource: VS, fragmentShaderSource: FS })
-const GLASS = new PerInstanceColorAppearance({ flat: false, translucent: true, closed: false, vertexShaderSource: VS, fragmentShaderSource: `#define GLASS\n${FS}` })
+const NIGHT_SOURCE = `czm_material czm_getMaterial(czm_materialInput materialInput) {
+  czm_material m = czm_getDefaultMaterial(materialInput);
+  m.alpha = clamp(night, 0.0, 1.0);
+  return m;
+}`
+/**
+ * The solid and see-through looks, each with a Material whose uniform `night` setNight writes (with a material, Cesium
+ * takes translucency from it, not from the Appearance). closed: false, so no back-face culling: the bottoms are left
+ * open (buried) and see-through shows the far walls.
+ */
+function looks(): { solid: Appearance; glass: Appearance } {
+  const make = (translucent: boolean): Appearance =>
+    new Appearance({
+      material: new Material({ translucent, fabric: { type: 'FhBuildingsNight', uniforms: { night: 0 }, source: NIGHT_SOURCE } }),
+      translucent,
+      closed: false,
+      vertexShaderSource: VS,
+      fragmentShaderSource: translucent ? `#define GLASS\n${FS}` : FS,
+      renderState: { depthTest: { enabled: true } }, // Appearance adds depthMask and blending from translucent
+    })
+  return { solid: make(false), glass: make(true) }
+}
 const CLAY = new Color(0.9, 0.88, 0.84)
 
 interface Tile {
@@ -261,6 +284,7 @@ export class Buildings {
   readonly #load: (x: number, y: number) => Promise<Layer | null>
   readonly #ground: (at: Cartographic[]) => Promise<(number | undefined)[]>
   readonly #tiles = new Map<string, Tile>()
+  readonly #looks = looks()
   #inFlight = 0
   #glass = false
   #shown = false
@@ -319,7 +343,14 @@ export class Buildings {
   setGlass(on: boolean): void {
     if (on === this.#glass) return
     this.#glass = on
-    for (const t of this.#tiles.values()) if (t.prim) t.prim.appearance = on ? GLASS : SOLID
+    for (const t of this.#tiles.values()) if (t.prim) t.prim.appearance = on ? this.#looks.glass : this.#looks.solid
+  }
+
+  /** 0 day … 1 night, every frame: the Sun's night while it lights the chase view, else 0. One uniform write. */
+  setNight(n: number): void {
+    const v = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0
+    this.#looks.solid.material.uniforms.night = v
+    this.#looks.glass.material.uniforms.night = v
   }
 
   destroy(): void {
@@ -395,7 +426,7 @@ export class Buildings {
             height: baseM,
             extrudedHeight: topM,
             closeBottom: false,
-            vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT,
+            vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT, // position + normal
           }),
           attributes: {
             // ponytail: alpha carries the per-building random for the night glow (the solid pass ignores alpha)
@@ -414,7 +445,7 @@ export class Buildings {
     this.#place(t)
     return new Primitive({
       geometryInstances: instances,
-      appearance: this.#glass ? GLASS : SOLID,
+      appearance: this.#glass ? this.#looks.glass : this.#looks.solid,
       modelMatrix: t.model,
       show: this.#shown,
       asynchronous: true,

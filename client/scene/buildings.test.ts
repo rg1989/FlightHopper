@@ -1,7 +1,7 @@
 // client/scene/buildings.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Cartesian3, Cartographic, Ellipsoid, Matrix4, PerInstanceColorAppearance, Primitive, type Viewer } from 'cesium'
+import { Appearance, Cartesian3, Cartographic, Ellipsoid, Matrix4, Primitive, type Viewer } from 'cesium'
 import type { TerrainFrame } from '../types.ts'
 import { TOPO_ON, drawnHeightM } from './exaggeration.ts'
 import type { Layer } from './mvt.ts'
@@ -104,6 +104,9 @@ test('followExaggeration: any height in the tile lands where the terrain is draw
 
 // ---- the layer itself, with a fake viewer and loader (no WebGL, no network) ----
 
+// A Material types its uniforms with instanceof checks against these DOM classes (Material.js getUniformType); Node has none.
+Object.assign(globalThis, { HTMLCanvasElement: class {}, HTMLImageElement: class {}, ImageBitmap: class {}, OffscreenCanvas: class {} })
+
 function fakeViewer(): { viewer: Viewer; added: Primitive[]; removed: Primitive[] } {
   const added: Primitive[] = []
   const removed: Primitive[] = []
@@ -149,7 +152,7 @@ test('Buildings: nothing loads or shows without a focus (browse); a focus loads 
   for (const p of added) {
     assert.ok(p instanceof Primitive)
     assert.equal(p.allowPicking, false)
-    assert.ok(p.appearance instanceof PerInstanceColorAppearance)
+    assert.ok(p.appearance instanceof Appearance)
     assert.equal(p.appearance.translucent, false)
     assert.equal(p.show, true)
   }
@@ -192,4 +195,25 @@ test('Buildings: tiles follow the exaggeration, hide when flat, and far tiles ar
   b.update({ lat: LLBG.lat + 1, lon: LLBG.lon }, tf(TOPO_ON)) // 111 km north
   assert.equal(removed.length, added.length, 'every old tile went')
   b.destroy()
+})
+
+test('Buildings: setNight feeds one night value to every tile, solid and see-through, clamped to 0–1', async () => {
+  const { b, added, release } = rig()
+  b.update(LLBG, tf(TOPO_ON))
+  await flush()
+  release()
+  await flush()
+  const night = (p: Primitive): unknown => (p.appearance as Appearance).material.uniforms.night
+  assert.equal(night(added[0]), 0, 'day until told otherwise')
+  b.setNight(0.7)
+  for (const p of added) assert.equal(night(p), 0.7)
+  b.setGlass(true)
+  for (const p of added) {
+    assert.equal(night(p), 0.7, 'the see-through look reads the same value')
+    assert.equal((p.appearance as Appearance).isTranslucent(), true, 'and Cesium draws it translucent')
+  }
+  b.setNight(3)
+  assert.equal(night(added[0]), 1)
+  b.setNight(Number.NaN)
+  assert.equal(night(added[0]), 0)
 })
