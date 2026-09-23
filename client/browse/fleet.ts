@@ -87,6 +87,7 @@ function reckon(slot: Slot, tMs: number, floorS: number): void {
   const e = slot.e
   const ageS = (tMs - slot.tMs) / 1000
   e.ageS = ageS > 0 ? ageS : 0
+  e.gapS = slot.gapS
   const g3 = 3 * slot.gapS
   e.staleS = g3 > floorS ? g3 : floorS
   if (!slot.moving || ageS <= 0) {
@@ -198,7 +199,7 @@ export class Fleet {
   #add(hex: string): Slot {
     const e: FleetEntry = {
       hex, lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0,
-      staleS: this.#floorS, quality: 'other', info: this.#info.get(hex)?.info ?? null,
+      staleS: this.#floorS, gapS: 0, quality: 'other', info: this.#info.get(hex)?.info ?? null,
     }
     const slot: Slot = {
       e, s: null, tMs: -Infinity, lat: 0, lon: 0, moving: false, gapS: 0,

@@ -2,14 +2,14 @@
 /* Design tokens and the shared pieces every overlay uses: glass surface, square icon button, panel, switch, spinner,
    skeleton, badge. One accent (blue) marks what is on; green/amber/red mark state. */
 :root {
-  --fh-glass: rgba(13, 17, 25, 0.8);
+  --fh-glass: rgba(13, 17, 25, 0.88); /* blurred surfaces over the light street map: text must still read */
   --fh-glass-strong: rgba(13, 17, 25, 0.92);
   --fh-hairline: rgba(255, 255, 255, 0.09);
   --fh-hover: rgba(255, 255, 255, 0.07);
   --fh-press: rgba(255, 255, 255, 0.12);
   --fh-text: #e9eef4;
   --fh-muted: #8e9aab;
-  --fh-faint: #5d6878;
+  --fh-faint: #7d889a; /* ≥ 4.5:1 on the glass, for 10-11 px labels */
   --fh-accent: #5aa9ff;
   --fh-accent-soft: rgba(90, 169, 255, 0.16);
   --fh-ok: #3ccf6e;
@@ -22,8 +22,20 @@
   --fh-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fh-fast: 150ms;
   --fh-tabbar-h: 0px; /* the phone tab bar (rail.css): overlays that sit at the bottom stay above it */
+  /* index.html has viewport-fit=cover: the page runs under a notch, the status bar and the home indicator. */
+  --fh-top: calc(12px + env(safe-area-inset-top, 0px));
+  --fh-left: calc(12px + env(safe-area-inset-left, 0px));
+  --fh-right: env(safe-area-inset-right, 0px);
+  --fh-insets-v: calc(env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
 }
 
+.fh-ui {
+  font: 13px/1.4 var(--fh-font);
+  color: var(--fh-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* After the base rule: its font shorthand would reset the size. */
 @media (max-width: 640px) {
   :root {
     --fh-tabbar-h: calc(61px + env(safe-area-inset-bottom, 0px));
@@ -32,12 +44,6 @@
   .fh-ui {
     font-size: 14px;
   }
-}
-
-.fh-ui {
-  font: 13px/1.4 var(--fh-font);
-  color: var(--fh-text);
-  -webkit-font-smoothing: antialiased;
 }
 
 .fh-ui *,
@@ -288,8 +294,8 @@
    anything smaller when it takes focus). */
 @media (pointer: coarse) {
   .fh-ibtn.fh-sm {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     border-radius: 10px;
   }
 
@@ -321,9 +327,15 @@
   }
 }
 
+/* Reduced motion: no decorative movement (pseudo-elements too: spinner arcs, the progress band). The list's countdown
+   ring is exempt: it is a slow linear indicator, and cut short it would always read "refresh due". */
 @media (prefers-reduced-motion: reduce) {
-  .fh-ui *,
-  .fh-splash * {
+  .fh-ui *:not(.fh-ring),
+  .fh-ui *::before,
+  .fh-ui *::after,
+  .fh-splash *,
+  .fh-splash *::before,
+  .fh-splash *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

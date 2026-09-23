@@ -93,9 +93,10 @@ export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
     update(status, serverNowMs) {
       const v = status === null ? null : sourceView(status, serverNowMs)
       const src = status === null ? null : SOURCES[status.source]
-      const pending = status?.pendingAreas ?? 0
+      // In trouble the pending count means nothing (no answers are coming): no "Loading" spinner then.
+      const pending = status !== null && status.degraded === null ? (status.pendingAreas ?? 0) : 0
       const every = status?.viewEveryS
-      const key = `${v?.text}|${v?.state}|${pending}|${every}|${statusDot(status)}`
+      const key = `${v?.text}|${v?.state}|${v?.title}|${pending}|${every}|${statusDot(status)}`
       if (key === shown) return
       shown = key
       dot.dataset.state = statusDot(status)
@@ -113,7 +114,7 @@ export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
       coverageV.replaceChildren()
       if (pending > 0) {
         coverageV.append(h('span', 'fh-spin'), document.createTextNode(` Loading ${pending} area${pending === 1 ? '' : 's'}`))
-      } else coverageV.textContent = status === null ? '—' : 'Up to date'
+      } else coverageV.textContent = status === null ? '—' : status.degraded !== null ? 'Waiting for the source' : 'Up to date'
     },
     setImagery(text, state) {
       imageryV.textContent = text.replace(/^Imagery: /, '')

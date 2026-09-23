@@ -59,6 +59,18 @@ test('cardView: status follows the track: predicting, signal lost (numbers fade)
   assert.deepEqual([none.state, none.status], ['none', 'No recent position'])
 })
 
+test('cardView: only focused, Live until 2.5 view refreshes pass without a position; no "Predicting" on the map', () => {
+  const wide: StatusBrief = { ...LIVE, viewEveryS: 13 } // a zoomed-out view: its aircraft come every 13 s
+  const between = { ...S, mode: 'stale' as const, ageS: 12 } // the registry calls 12 s stale; the map expects 13 s gaps
+  assert.equal(cardView('4691c4', between, RAW, INFO, wide, GR, 30, false).state, 'live')
+  assert.equal(cardView('4691c4', between, RAW, INFO, wide, GR, 30, true).state, 'lost', 'the chase keeps its own rule')
+  assert.equal(cardView('4691c4', { ...S, mode: 'extrap', ageS: 3 }, RAW, INFO, wide, GR, 30, false).state, 'live')
+  const gone = cardView('4691c4', { ...S, mode: 'stale', ageS: 33 }, RAW, INFO, wide, GR, 60, false)
+  assert.deepEqual([gone.state, gone.status], ['lost', 'Signal lost 33 s ago'])
+  assert.ok(gone.stats.every((st) => st.dim))
+  assert.equal(cardView('4691c4', { ...S, ageS: 11 }, RAW, INFO, LIVE, GR, 30, false).state, 'lost', 'never under 10 s')
+})
+
 test('cardView: on the ground reads GND with no unit', () => {
   assert.deepEqual(cardView('4691c4', { ...S, onGround: true }, RAW, INFO, LIVE, GR, 1).stats[0], { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: false })
 })

@@ -18,7 +18,7 @@ const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeight
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
-  hex, lat, lon, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, quality: 'adsb2', info: null,
+  hex, lat, lon, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, gapS: 1, quality: 'adsb2', info: null,
 })
 
 test('view radius follows the camera height, in 10 nm steps, clamped to 20–5,400 nm', () => {

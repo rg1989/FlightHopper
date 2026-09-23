@@ -15,7 +15,7 @@ const info = (hex: string, o: Partial<AircraftInfo> = {}): AircraftInfo => ({
   hex, callsign: null, reg: null, typeCode: null, category: null, squawk: null, emergency: null, military: false, route: null, ...o,
 })
 const entry = (hex: string, o: Partial<FleetEntry> = {}, i: Partial<AircraftInfo> | null = {}): FleetEntry => ({
-  hex, lat: 32, lon: 34.8, hM: 1000, altFt: 3000, onGround: false, trackDeg: 90, gsKt: 250, vsFpm: 0, ageS: 1, staleS: 60, quality: 'adsb2',
+  hex, lat: 32, lon: 34.8, hM: 1000, altFt: 3000, onGround: false, trackDeg: 90, gsKt: 250, vsFpm: 0, ageS: 1, staleS: 60, gapS: 1, quality: 'adsb2',
   info: i === null ? null : info(hex, i), ...o,
 })
 const hexes = (rows: readonly FleetEntry[]): string[] => rows.map((e) => e.hex)

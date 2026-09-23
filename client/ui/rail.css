@@ -3,8 +3,8 @@
 .fh-rail {
   position: absolute;
   z-index: 20;
-  top: 12px;
-  right: 12px;
+  top: var(--fh-top);
+  right: calc(12px + var(--fh-right));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -71,12 +71,12 @@
 .fh-panel {
   position: absolute;
   z-index: 19;
-  top: 12px;
-  right: 64px;
+  top: var(--fh-top);
+  right: calc(64px + var(--fh-right));
   display: flex;
   flex-direction: column;
   width: 320px;
-  max-height: calc(100% - 24px);
+  max-height: calc(100% - 24px - var(--fh-insets-v));
   overflow: hidden;
   pointer-events: auto;
   animation: fh-panel-in var(--fh-fast) var(--fh-ease);
@@ -175,7 +175,18 @@
   }
 
   .fh-panel {
-    right: 72px;
+    right: calc(72px + var(--fh-right));
+  }
+}
+
+/* A phone on its side in a browser (280-340 px left under the toolbars): the 44 px rail would run off the bottom. */
+@media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
+  .fh-rail .fh-ibtn {
+    height: 38px;
+  }
+
+  .fh-rail-sep {
+    margin: 1px 0;
   }
 }
 

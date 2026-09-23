@@ -1,11 +1,11 @@
 // client/app.ts
 // The client app: one Cesium viewer in two modes, fed by 1 Hz polls of the server.
-// - Browse (nothing selected): a north-up, top-down street map. Every aircraft is an icon turned to its track and
-//   coloured by altitude, with the table of the aircraft on screen on the right and the altitude legend at the bottom.
-// - Chase (an aircraft selected by a table row, a click on its icon or ?hex=): the 3-D model and the chase camera over
-//   the satellite imagery, the detail panel on the left and the HUD. The other aircraft stay on screen as icons. The
-//   sun lights the chase view, and the relief can sink into the map and grow back (toggles "3-D terrain" and "Sun",
-//   keys T and L).
+// - Browse: a north-up, top-down street map. Every aircraft is an icon turned to its track and coloured by altitude.
+//   Clicking one (or a list row) focuses it: its flight card shows and the map stays as it is.
+// - Chase (the card's "Chase in 3-D", ?chase=1, or a bare ?hex= link): the 3-D model and the chase camera over the
+//   satellite imagery, with the card. The other aircraft stay on screen as icons. The sun lights the chase view, and
+//   the relief can sink into the map and grow back (the Scene panel's switches, keys T and L).
+// The tools (status, aircraft list, scene, altitude colours, about) sit behind a rail of icon buttons (ui/rail.ts).
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
@@ -69,6 +69,7 @@ const URL_EVERY_MS = 1000 // how often the address bar follows the view (history
 // arrival age's p90 moving by tenths of a second) showed as a 20 % speed-up lurch. It grows at the default 0.2 s/s, so an
 // aircraft reporting only every ~40 s (thin coverage) reaches a delay that covers its gaps within ~2 min, not ~9.
 const CHASE_SHRINK_S_PER_S = 0.05
+const FOCUS_ASK_MS = 10_000 // a focused (not chased) aircraft: how often its chase reply (raw fields, info) is asked
 const HOVER_PICK_MS = 100 // at most ten hover picks a second while the mouse moves (each pick is a small render pass)
 const HEX = /^~?[0-9a-f]{6}$/
 // Until the first reply. Nothing is drawn before it, so the source named here is never shown.
@@ -183,7 +184,7 @@ export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; a
 }
 
 export interface AppParams {
-  hex: string | null // ?hex=a1b2c3: chase this aircraft from the start (G3; the detail panel's "Copy link")
+  hex: string | null // ?hex=a1b2c3: this aircraft from the start: focused (with ?at=, a reload) or chased (a bare link, G3)
   bench: boolean // ?bench=1: bench overlay and User Timing measures, 'b' downloads the report
   airport: string | null // ?airport=LLBG: first view over this hero (default: the first in heroes.json)
 }
@@ -196,9 +197,8 @@ export function readParams(search: string): AppParams {
 }
 
 /**
- * Credit lines for the attribution box. mountAttribution adds "Not for navigation"; Cesium shows the terrain, imagery and
- * street-map credits on the map itself (the OpenStreetMap one linked, as its tile policy asks). The detail panel credits
- * each photo ("Image © name", linked to its page on planespotters.net).
+ * Credit lines for the About panel (a personal-use app: no credit bar or disclaimer on the map, viewer.ts). The flight
+ * card credits each photo ("© name", linked to its page on planespotters.net).
  */
 export function attributionFor(model: ModelManifestEntry | null, source: SourceKind | null = 'adsblol'): string[] {
   const lines = [
@@ -294,7 +294,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Selected = focused: its flight card shows, the map stays top-down. Chasing = the 3-D chase view of the selected
   // aircraft (the card's Chase button; ?chase=1). The chase camera engages at its first state.
   let selected: string | null = params.hex
-  let chasing = selected !== null && readView(location.search).chase
+  // A reload keeps what was on screen (?at= with ?chase=1 or not); a bare ?hex= link (G3, shared links) chases.
+  const view0 = readView(location.search)
+  let chasing = selected !== null && (view0.chase || view0.at === null)
   let chased: RenderState | null = null // the selected aircraft as drawn in the last frame that had it
   let groundM: number | null = null // the ground drawn under it (lag-corrected), null while unknown
   // The last terrain readings under the aircraft and under the chase camera, with the points they were read at.
@@ -399,6 +401,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // over the last ARRIVALS replies: the delay must cover it plus a refresh, or the newest sample is behind render time.
   const ARRIVALS = 30
   const arrivalAgesS: number[] = []
+  let lastFocusAskMs = -Infinity // select() resets it: a new focus asks at once
+  let browseHeightM: number | null = null // the map's camera height when the chase began
   /** The track's target, but at least one server refresh of the chased aircraft + its arrival age (p90) + 0.5 s. */
   const delayTargetS = (): number =>
     Math.min(MAX_DELAY_S, Math.max(registry.delayTargetS(selected), (status.chaseEveryS ?? 0) + p90(arrivalAgesS) + 0.5))
@@ -458,6 +462,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     snapClock = hex !== null
     arrivalAgesS.length = 0
+    lastFocusAskMs = -Infinity
     seedSample = null
     if (hex !== null) {
       const seed = fleet.newest(hex)
@@ -483,14 +488,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     chasing = on
     chaseCam.release() // hands the mouse back to Cesium's controls; a chase starts behind its aircraft
     if (on) {
+      browseHeightM = viewer.camera.positionCartographic.height // the map's zoom, for coming back
       exitBrowse(viewer) // restores tilt and zoom limits
       map.show = false
       relatchPending = true
       acGround.ok = camGround.ok = false
+      arrivalAgesS.length = 0 // a focus asked rarely: its arrival ages say nothing about the chase's
     } else {
       map.show = true
       const e = selected === null ? undefined : fleet.get(selected)
-      enterBrowse(viewer, chased ?? (e === undefined ? null : e)) // over the aircraft, else where the camera is
+      // Over the aircraft (else where the camera is), at the zoom the map had before the chase (a chased reload: the default).
+      enterBrowse(viewer, chased ?? (e === undefined ? null : e), { heightM: browseHeightM ?? undefined })
     }
     sun.setEnabled(on && prefs.light) // chase only (D9): browse stays the unlit street map
     ui.dataset.mode = on ? 'chase' : 'browse'
@@ -588,7 +596,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const known = status === NO_STATUS ? null : shown
     statusPanel.update(known, api.ready ? api.serverNowMs() : null)
     rail.setDot('status', statusDot(known))
-    rail.setBusy('status', known === null || (known.pendingAreas ?? 0) > 0)
+    rail.setBusy('status', known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)) // in trouble no answers come
     syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
@@ -608,7 +616,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const cam = viewer.camera.positionCartographic
     const nm = viewRadiusNm(cam.height)
     const round = (deg: number): number => Math.round(deg * 1e4) / 1e4
-    if (chased !== null) return { lat: round(chased.lat), lon: round(chased.lon), nm }
+    if (chasing && chased !== null) return { lat: round(chased.lat), lon: round(chased.lon), nm } // a focus alone keeps the view
     const c = viewer.canvas
     const hit = viewer.camera.pickEllipsoid(new Cartesian2(c.clientWidth / 2, c.clientHeight / 2))
     const g = (hit && Cartographic.fromCartesian(hit)) ?? cam
@@ -619,7 +627,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const hex = selected
     const v = viewCircle()
     const noChase: Promise<ChaseResponse | null> = Promise.resolve(null)
-    const [view, chase] = await Promise.allSettled([api.view(v.lat, v.lon, v.nm), hex === null ? noChase : api.chase(hex)])
+    // Chased: every poll (the server then refreshes it at its chase period). Only focused: every FOCUS_ASK_MS, for the
+    // card's details; its position comes with the view, at the view's own zoom-scaled period like everything on screen.
+    const nowMs = performance.now()
+    const ask = hex !== null && (chasing || nowMs - lastFocusAskMs >= FOCUS_ASK_MS)
+    if (ask && !chasing) lastFocusAskMs = nowMs
+    const [view, chase] = await Promise.allSettled([api.view(v.lat, v.lon, v.nm), ask ? api.chase(hex) : noChase])
     if (stopped) return
     const t0 = measure === null ? 0 : performance.now()
     const current = hex !== null && hex === selected // a reply for an earlier selection only feeds the fleet

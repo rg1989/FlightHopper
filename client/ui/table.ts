@@ -179,7 +179,7 @@ const RING_R = 12.5
 const RING_C = 2 * Math.PI * RING_R
 
 function blankRow(): Row {
-  return { hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, quality: 'other', info: null, gen: 0 }
+  return { hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60, gapS: 0, quality: 'other', info: null, gen: 0 }
 }
 
 function copyEntry(d: FleetEntry, s: FleetEntry): void {
@@ -194,6 +194,7 @@ function copyEntry(d: FleetEntry, s: FleetEntry): void {
   d.vsFpm = s.vsFpm
   d.ageS = s.ageS
   d.staleS = s.staleS
+  d.gapS = s.gapS
   d.quality = s.quality
   d.info = s.info // AircraftInfo is replaced, never mutated, when it changes
 }
@@ -379,8 +380,8 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
     if (sel !== s.sel) s.el.classList.toggle('fh-sel', (s.sel = sel))
     const emerg = isEmergencySquawk(e.info?.squawk ?? null)
     if (emerg !== s.emerg) s.el.classList.toggle('fh-emerg', (s.emerg = emerg))
-    // Signal lost: two of its usual update gaps without a position (staleS is three), never under the card's threshold.
-    const stale = e.ageS > Math.max(STALE_AGE_S, (2 / 3) * e.staleS)
+    // Signal lost: two of its usual update gaps without a position, never under the card's 10 s.
+    const stale = e.ageS > Math.max(STALE_AGE_S, 2 * e.gapS)
     if (stale !== s.stale) s.el.classList.toggle('fh-stale', (s.stale = stale))
   }
 
@@ -500,18 +501,24 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
     const s = slotOf(ev.target)
     if (s !== null) opts.onSelect(s.hex)
   })
-  scroll.addEventListener('mouseover', (ev) => {
+  // Hover is a mouse thing: a tap would leave it stuck on a row whose aircraft changes at the next refresh.
+  scroll.addEventListener('pointerover', (ev) => {
+    if (ev.pointerType !== 'mouse') return
     const s = slotOf(ev.target)
     hoverSlot = s === null ? -1 : slots.indexOf(s)
     emitHover()
   })
-  scroll.addEventListener('mouseleave', () => {
+  scroll.addEventListener('pointerleave', () => {
     hoverSlot = -1
     emitHover()
   })
   // The viewport height changes with the window and when the panel opens; reading it here keeps layout reads out of render().
   const resize = new ResizeObserver(() => {
     viewH = scroll.clientHeight
+    if (viewH === 0 && hoverSlot !== -1) {
+      hoverSlot = -1 // a closed panel drives no map label
+      emitHover()
+    }
     render()
   })
   resize.observe(scroll)

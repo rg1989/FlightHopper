@@ -1,9 +1,10 @@
 /* client/ui/ui.css */
-/* The toast (top centre, provider trouble only). */
+/* The toast (provider trouble only). Bottom centre, where nothing else sits (card top-left, rail and panels on the
+   right); on phones, where the card and the tab bar take the bottom, top centre under the status bar. */
 .fh-toast {
   position: absolute;
   z-index: 21;
-  top: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   display: flex;
   align-items: center;
@@ -22,12 +23,19 @@
 }
 
 @keyframes fh-toast-in {
-  from { opacity: 0; transform: translate(-50%, -6px); }
+  from { opacity: 0; transform: translate(-50%, 6px); }
 }
 
 @media (max-width: 640px) {
   .fh-toast {
-    top: auto;
-    bottom: 12px;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    max-width: calc(100% - 24px);
+    font-size: 13px;
+    animation-name: fh-toast-down;
   }
+}
+
+@keyframes fh-toast-down {
+  from { opacity: 0; transform: translate(-50%, -6px); }
 }

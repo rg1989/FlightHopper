@@ -69,7 +69,7 @@ const info = (hex: string, o: Partial<AircraftInfo> = {}): AircraftInfo => ({
   hex, callsign: 'DLH4AB', reg: null, typeCode: 'A320', category: 'A3', squawk: null, emergency: null, military: false, route: null, ...o,
 })
 const fe = (hex: string, o: Partial<FleetEntry> = {}): FleetEntry => ({
-  hex, lat: 50, lon: 10, hM: 10_000, altFt: 33_000, onGround: false, trackDeg: 90, gsKt: 450, vsFpm: 0, ageS: 1, staleS: 60, quality: 'adsb2',
+  hex, lat: 50, lon: 10, hM: 10_000, altFt: 33_000, onGround: false, trackDeg: 90, gsKt: 450, vsFpm: 0, ageS: 1, staleS: 60, gapS: 1, quality: 'adsb2',
   info: info(hex), ...o,
 })
 

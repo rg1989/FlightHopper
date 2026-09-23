@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { StatusBrief } from '../../shared/api.ts'
 import type { RenderState } from '../types.ts'
-import { NOT_FOR_NAVIGATION, attributionLines, bannerText, hudFields, hudTitle } from './format.ts'
+import { bannerText, hudFields, hudTitle } from './format.ts'
 
 const live: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP95S: 2, chasePeriodP95S: 1 }
 
@@ -106,12 +106,4 @@ test('banner: extrapolating → predicting; otherwise nothing', () => {
   assert.equal(bannerText(live, state()), null)
   assert.equal(bannerText(live, null), null)
   assert.equal(bannerText(live, null, true), 'No recent position for this aircraft', 'chasing with no state: say so')
-})
-
-test('attribution always ends up with the not-for-navigation line, once', () => {
-  const given = ['Aircraft data © adsb.lol contributors (ODbL)', 'Airports: OurAirports']
-  assert.deepEqual(attributionLines(given), [...given, NOT_FOR_NAVIGATION])
-  assert.equal(given.length, 2)
-  assert.deepEqual(attributionLines(['x', 'Toy only, NOT FOR NAVIGATION']), ['x', 'Toy only, NOT FOR NAVIGATION'])
-  assert.match(NOT_FOR_NAVIGATION, /Not for navigation/)
 })

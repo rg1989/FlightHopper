@@ -79,7 +79,7 @@ function newEntry(): FleetEntry {
     hex, lat: 20 + rand() * 45, lon: -30 + rand() * 90, hM: 0,
     altFt: onGround ? null : Math.round(rand() * 45000), onGround,
     trackDeg: rand() * 360, gsKt: onGround ? rand() * 25 : 120 + rand() * 400,
-    vsFpm: onGround ? 0 : pick([0, 0, 0, 1500, -1200, 2400, -800]), ageS: 0, staleS: 60, quality: 'adsb2', info: newInfo(hex),
+    vsFpm: onGround ? 0 : pick([0, 0, 0, 1500, -1200, 2400, -800]), ageS: 0, staleS: 60, gapS: 1, quality: 'adsb2', info: newInfo(hex),
   }
 }
 

@@ -55,6 +55,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     sw.setAttribute('aria-checked', String(prefs[r.key]))
     sw.setAttribute('aria-label', r.label)
     sw.addEventListener('click', () => opts.onChange({ ...prefs, [r.key]: !prefs[r.key] }))
+    row.addEventListener('click', (e) => e.target !== sw && sw.click()) // the whole row is the target (a finger's too)
     if (r.key === 'topo') {
       spinner = h('span', 'fh-spin')
       spinner.hidden = true

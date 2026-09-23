@@ -104,7 +104,7 @@ test('altitude fields: altFt = baro ?? geom; hM = geom (v2 HAE) else baro + N; v
   assert.deepEqual([1, 4, 5].map((i) => g(`b0000${i}`).vsFpm), [-500, -480, null])
   assert.deepEqual({ ...g('b00001'), hM: 0 }, {
     hex: 'b00001', lat: 32, lon: 34.8, hM: 0, altFt: 35000, onGround: false, trackDeg: 90, gsKt: 360,
-    vsFpm: -500, ageS: 0, staleS: 60, quality: 'adsb2', info: null,
+    vsFpm: -500, ageS: 0, staleS: 60, gapS: 0, quality: 'adsb2', info: null,
   })
 })
 

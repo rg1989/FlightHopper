@@ -24,6 +24,13 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.fh-scene-row:hover {
+  background: var(--fh-hover);
 }
 
 .fh-scene-row + .fh-scene-row {

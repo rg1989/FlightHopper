@@ -8,7 +8,7 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { RenderState } from '../types.ts'
 import { UPDATE_MS, detailRows, shareLink, sourceLabel, type Lookup } from './detail.ts'
-import { hudFields, isStale } from './format.ts'
+import { STALE_AGE_S, hudFields, isStale } from './format.ts'
 import { icon } from './icons.ts'
 import type { PhotoCache } from './photo.ts'
 import './flightCard.css'
@@ -40,10 +40,10 @@ export interface CardView {
 const DASH = '—'
 const NO_LOOKUP: Lookup = { country: null, airline: null }
 
-function stat(fields: ReturnType<typeof hudFields>, label: string): { value: string; dim: boolean } {
+function stat(fields: ReturnType<typeof hudFields>, label: string, lost: boolean): { value: string; dim: boolean } {
   const f = fields.find((x) => x.label === label)
   if (f === undefined || f.tag === 'unknown') return { value: DASH, dim: true }
-  return { value: f.value, dim: f.tag === 'stale' } // computed values (VS, HDG) are fine; only stale ones fade
+  return { value: f.value, dim: lost } // computed values (VS) are fine; only a lost signal fades them
 }
 
 /** Splits "12,925 ft baro" → ["12,925", "ft"], "+1,020 fpm" → ["+1,020", "fpm"], "270°" → ["270", "°"]. */
@@ -55,11 +55,13 @@ function split(v: string): [string, string] {
 
 /**
  * What the card shows. sinceSelectS: seconds since this aircraft was selected (for "Locating…" before its first
- * position). The status line follows the track: interpolating → Live; extrapolating → Predicting; stale → Signal lost.
+ * position). Chasing, the status line follows the track: interpolating → Live; extrapolating → Predicting; stale →
+ * Signal lost. Only focused, the aircraft is refreshed with the view (every status.viewEveryS, zoom-scaled), so it is
+ * Live until 2.5 of those refreshes go by without a position (the map hides an aircraft on the same rule).
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
-  sinceSelectS: number,
+  sinceSelectS: number, chasing = true,
 ): CardView {
   const sections = detailRows(s, raw, info, lookup)
   const get = (key: string): string | null => {
@@ -68,11 +70,13 @@ export function cardView(
   }
   const hex = get('hex')?.toLowerCase() ?? selHex
   const fields = hudFields(s, status)
-  const alt = s?.onGround ? { value: 'GND', dim: false } : stat(fields, 'ALT')
+  const lostAfterS = Math.max(STALE_AGE_S, 2.5 * (status.viewEveryS ?? 0))
+  const lost = s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfterS)
+  const alt = s?.onGround ? { value: 'GND', dim: lost } : stat(fields, 'ALT', lost)
   const [altV] = split(alt.value)
-  const gs = stat(fields, 'GS')
-  const vs = stat(fields, 'VS')
-  const hdg = stat(fields, 'TRK') // the reported direction of travel (HDG is a computed nose heading)
+  const gs = stat(fields, 'GS', lost)
+  const vs = stat(fields, 'VS', lost)
+  const hdg = stat(fields, 'TRK', lost) // the reported direction of travel (HDG is a computed nose heading)
   const type = get('type') ?? ''
   const sub = [lookup.airline, get('reg')].filter((x): x is string => x !== null && x !== '').join(' · ')
 
@@ -81,10 +85,10 @@ export function cardView(
   if (s === null) {
     state = sinceSelectS < LOCATING_S ? 'locating' : 'none'
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
-  } else if (isStale(s)) {
+  } else if (lost) {
     state = 'lost'
     text = Number.isFinite(s.ageS) ? `Signal lost ${Math.round(Math.max(0, s.ageS))} s ago` : 'Signal lost'
-  } else if (s.mode === 'extrap') {
+  } else if (chasing && s.mode === 'extrap') {
     state = 'predict'
     text = 'Predicting · waiting for data'
   } else {
@@ -148,7 +152,7 @@ function iconButton(name: Parameters<typeof icon>[0], label: string): HTMLButton
 export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): FlightCardHandle {
   const card = h('aside', 'fh-card fh-glass fh-blur')
   card.hidden = true
-  card.setAttribute('aria-label', 'Chased aircraft')
+  card.setAttribute('aria-label', 'Selected aircraft')
 
   const head = h('header', 'fh-card-head')
   const ident = h('div', 'fh-card-ident')
@@ -318,7 +322,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       lk = opts.lookup(hex, cs)
       lkKey = key
     }
-    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000)
+    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing)
     paintChase(curChasing)
     set(flag, v.flag)
     set(callsign, v.callsign)

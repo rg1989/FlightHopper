@@ -14,7 +14,8 @@ has a loader or an indicator. Requested by the user after the live/world-view wo
   3. **Scene**: layers icon. Panel: switches for 3-D terrain (T), Sun (L), See-through buildings (X), each with its icon;
      a spinner on the terrain switch while the relief animates. The switches work in both modes (they apply in chase).
   4. **Altitude colours**: the legend.
-  5. **Info**: credits (ours and Cesium's credit list, moved here with `creditContainer`) and keyboard shortcuts.
+  5. **Info**: the data and map sources, and the controls (touch gestures on touch screens). Cesium's own credits and
+     "Powered by" logo are not shown anywhere (personal use; the user's call): its creditContainer is a detached element.
   6. **Fullscreen**.
 - Removed: the credit box, the bottom legend, the HUD, Cesium's credit bar and fullscreen widget, the chase banner.
 

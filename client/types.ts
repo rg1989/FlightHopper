@@ -66,6 +66,7 @@ export interface FleetEntry {
   vsFpm: number | null
   ageS: number                                  // render time − newest sample tMs, seconds
   staleS: number                                // past this age it is hidden and forgotten; it is dead-reckoned up to it
+  gapS: number                                  // its usual gap between samples, s (a running average; 0 before a second one)
   quality: Quality
   info: AircraftInfo | null
 }

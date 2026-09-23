@@ -16,8 +16,6 @@ export interface HudField {
 /** Past this age a value is stale even if the track has not switched to mode 'stale' yet. */
 export const STALE_AGE_S = 10
 
-export const NOT_FOR_NAVIGATION = 'Entertainment only. Not for navigation.'
-
 const QUALITY_LABEL: Record<Quality, string> = { adsb2: 'ADS-B v2', adsb01: 'ADS-B v0-1', mlat: 'MLAT', other: 'other' }
 
 const DEGRADED_TEXT: Record<Exclude<Degraded, null>, string> = {
@@ -83,9 +81,4 @@ export function bannerText(status: StatusBrief, s: RenderState | null, chasing =
   if (isStale(s)) return Number.isFinite(s.ageS) ? `Signal lost ${Math.round(Math.max(0, s.ageS))}s ago` : 'Signal lost'
   if (s.mode === 'extrap') return 'Predicting (no fresh data)'
   return null
-}
-
-/** The given credit lines plus the safety line, unless one of them already says "not for navigation". */
-export function attributionLines(lines: string[]): string[] {
-  return lines.some((l) => /not for navigation/i.test(l)) ? [...lines] : [...lines, NOT_FOR_NAVIGATION]
 }

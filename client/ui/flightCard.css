@@ -3,12 +3,12 @@
 .fh-card {
   position: absolute;
   z-index: 18;
-  top: 12px;
-  left: 12px;
+  top: var(--fh-top);
+  left: var(--fh-left);
   display: flex;
   flex-direction: column;
   width: 300px;
-  max-height: calc(100% - 24px);
+  max-height: calc(100% - 24px - var(--fh-insets-v));
   overflow: hidden;
   pointer-events: auto;
   animation: fh-card-in 180ms var(--fh-ease);
@@ -342,7 +342,7 @@
 }
 
 /* Phones: the card sits above the tab bar, full width, where the thumb reaches Chase; the map above stays clear.
-   Expanded, it grows upwards and scrolls. Larger type, and a 44 px Chase button. */
+   Expanded, it grows upwards and scrolls. Larger type. */
 @media (max-width: 640px) {
   .fh-card {
     top: auto;
@@ -383,6 +383,11 @@
     font-size: 14px;
   }
 
+}
+
+/* Touch screens and phones: a 44 px Chase button. Beside the side rail (a tablet, a phone on its side) the card is wider,
+   so its 44 px action buttons leave the callsign room (336 px still clears a wide panel at 861 px: 12 + 336 < 861 - 512). */
+@media (pointer: coarse), (max-width: 640px) {
   .fh-pill {
     height: 44px;
     padding: 0 16px 0 14px;
@@ -391,7 +396,13 @@
   }
 }
 
-/* Narrow screens: the card (312 px) and an open panel (up to 512 px with the rail) do not fit side by side, and on a
+@media (pointer: coarse) and (min-width: 641px) {
+  .fh-card {
+    width: 336px;
+  }
+}
+
+/* Narrow screens: the card (up to 348 px) and an open panel (up to 512 px with the rail) do not fit side by side, and on a
    phone a sheet takes the bottom where the card is: the card waits, hidden, until the panel closes. */
 @media (max-width: 860px) {
   .fh-ui:has(.fh-panel:not([hidden])) .fh-card {
