@@ -1,159 +1,196 @@
-# FlightHopper — Handoff: remaining code work
+# FlightHopper — Handoff: terrain & sun into the app, tested, and running
 
-**Written:** 2026-09-23, at `main` = `4af8be8` (code from `307245e`, plus the terrain & sun plans). **Scope:** code fixes and code changes only.
+**Written:** 2026-09-23. The commit that adds this file also adds the `make live` guard and rate, and the gate driver's host setting; branch from `main` at or after it. **One goal, three steps:**
+1. Put the terrain & sun feature into the app.
+2. Test it.
+3. Run the full app for real.
+
+Everything else is in the backlog at the end.
 
 ## Where things stand
 
-**In `main`, and working:**
-- **Everything in `.planning/PLAN.md` up to and including the browse & detail feature.** That's 35 work packages applied from `.planning/plans/WP-*.md`, one commit per task.
-- **Checks:** `npm run check` gives 604/604 tests with tsc clean, and `vite build` succeeds.
+- **The app works on `main`.** The server (adsb.lol / readsb / replay) serves `/api/view`, `/api/chase` and `/api/status`. The client has browse mode (top-down street map, altitude-coloured icons, table, legend) and chase mode (3-D model, chase camera, detail panel, HUD). `npm run check` passes 604/604 and `vite build` works. `make` starts it (see Step 3).
+- **Terrain & sun is ready code, not yet applied.** The seven plans hold the finished, tested and reviewed code in complete-file blocks (the PoC was only the prototype). Applying them is mechanical.
+  - What they do: chase mode gets visible 3-D relief with sun shading, a **3-D terrain** toggle (T) that sinks the mountains into the flat map and grows them back, and a **Sun** toggle (L). The sun follows real time (morning, golden hour, night with city lights, mountains still faintly visible). Replays are lit at their recorded time.
+  - Plans: `.planning/plans/WP-E0…E5`, `WP-E-A`. Design and decisions: `.planning/terrain-sun-design.md`. `PLAN.md` §5.4.
+  - Already proven:
+    - a rebuild from the plans alone gave 680/680 tests and `vite build` ok;
+    - a dry run of `apply_plans.py` on `64d2b96` was green;
+    - gate GE in headless Chrome on the M2 gave FPS p50 137 / p5 103, no long task in 10 toggles, and camera clearance ≥ 326 m.
+- **Processes that may be running:** the adsb.lol recorder (`node tools/record-cells.ts` under `nohup caffeinate`, from the main checkout). It polls at ~0.04 req/s: three 429s on 2026-09-22 doubled its interval each time. Replays don't touch adsb.lol, but `make live` refuses to start while the recorder runs (Step 3.3). The old preview servers on 8787/5174 were stopped on 2026-09-23.
 
-**What the app does:**
-- **Server** (`node:http`): polls one source, `ADSB_SOURCE=adsblol|readsb|replay`. It stamps and dedupes samples in server clock and serves `/api/view`, `/api/chase` and `/api/status`, with gzip, aircraft info, and adsb.lol routes behind `ROUTES=1`.
-- **Client** (Vite + CesiumJS), two modes:
-  - **Browse** (nothing selected): top-down street map, altitude-coloured icons, visible-aircraft table, legend.
-  - **Chase** (aircraft selected): satellite imagery, glTF model, chase camera with drag-orbit, wheel-zoom and double-click reset, the detail panel (planespotters photo, country, airline, spatial, signal, FMS and wind data), and the HUD.
+## Rules for this work
 
-**Run it on recorded data:**
-```bash
-ADSB_SOURCE=replay REPLAY_FILES=data/recordings/2026-09-22.jsonl RECORD_DIR= npm run server
-```
-```bash
-npm run dev
-```
-The dev server's `/api` proxy is fixed to port 8787 (`vite.config.ts`). Give the API server another port only if you run vite with a matching proxy.
-
-**Must-read before changing code:**
-- `.planning/PLAN.md`: Global Constraints (politeness, time base, heights, file ownership), §4 and §5.3 locked signatures, §6 gates.
-- The WP plan of the module you touch.
-
-**Hard rules that apply to every item below:**
-- Only one process polls adsb.lol at a time. The budget is `MAX_RPS=0.08`: this IP got 429s at 0.14–0.5 req/s. Stop the recorder before any live server run (`pkill -f record-cells`).
-- Tests never touch the network.
-- Commit identity is `rg1989 <roman.grinevic@gmail.com>` (set repo-locally). Push to `git@github.com:rg1989/FlightHopper.git`.
-
-**Terrain & sun (user feedback #3): planned, not applied.** The plans are committed in `4af8be8`: `.planning/terrain-sun-design.md`, `.planning/plans/WP-E0…E5` and `WP-E-A`, and `PLAN.md` §5.4. They were validated by rebuilding from the plans alone: 680/680 tests, `vite build` ok, gate GE at FPS p50 137 in headless Chrome.
-- **Files they edit when applied:** `client/scene/terrain.ts`, `model.ts`, `chaseCamera.ts`, `runways.ts`, `fleetLayer.ts`, `shared/api.ts`, `server/poller.ts`, `client/app.ts`, `client/ui/layout.css`.
-- **Order:** apply them before the items below that touch the same files (F2: `server/poller.ts`; item 7: `client/app.ts`).
-
-**How work is done here.** The pattern:
-1. A contract WP (shared types/signatures).
-2. Parallel WPs, each implemented and tested in a scratch tree, with its plan generated from the tested files.
-3. An assembler that rebuilds from plans.
-4. `python3 .planning/tools/apply_plans.py <worktree> <WP stems…>`, run in a worktree on a branch, then a fast-forward merge.
+- **adsb.lol:** only one process polls it at a time. This IP got 429s at 0.14–0.5 req/s, and once at ~0.082 req/s after 1.5 h; it has run clean at 0.041 req/s since. The server's `MAX_RPS` default is 1 req/s, so a live run must always set it. `make live` sets 0.04 (`LIVE_RPS`). Stop the recorder before any live run.
+- **Tests never touch the network.**
+- **Keep the machine's load low:** no parallel full-suite runs and no stray servers. Stop what you start.
+- **Git:** commit identity `rg1989 <roman.grinevic@gmail.com>` (set repo-locally). Push to `git@github.com:rg1989/FlightHopper.git`. `git add` explicit paths only.
+- **Decisions in `terrain-sun-design.md` stand:**
+  - no cast shadows (the user rejected them);
+  - night keeps the mountains faintly visible;
+  - lighting applies in chase only (browse stays the unlit street map);
+  - replays are lit at their recorded time.
 
 ---
 
-## Work items (priority order)
+## Step 1 — Apply the terrain & sun plans (≈ 15 min, mechanical)
 
-### 0. Apply the terrain & sun plans · WP-E0, E1–E5, E-A · S (mechanical)
-1. Branch into a worktree: `git worktree add ../FlightHopper-e -b build/terrain-sun main`, then `npm ci`.
-2. Apply, in this order: `python3 .planning/tools/apply_plans.py ../FlightHopper-e WP-E0-terrain-sun-contract WP-E5-recorded-sun-time WP-E1-topography WP-E2-sun WP-E3-ground-objects WP-E4-scene-toggles WP-E-A-integration`. Each WP's full check must stay green; expect 680 tests at the end.
-   - **Dry run on `64d2b96` (2026-09-23):** all seven applied green, in that order: 611 → 613 → 633 → 654 → 663 → 677 → **680** tests; `vite build` ok.
-   - Two timing tests can flake under full-suite load ("sortRows and filterRows stay cheap at 12,000 rows", "/api/view of a 250 nm circle with 5,000 aircraft"). Re-run those files alone before treating them as failures.
-3. Run gate GE on your Mac, following WP-E-A Task 5.
-4. Fast-forward `main`.
+1. Make a worktree on a branch:
+   ```bash
+   git worktree add ../FlightHopper-e -b build/terrain-sun main
+   ```
+   ```bash
+   cd ../FlightHopper-e && npm ci
+   ```
+2. Apply the seven plans **in this order**. The tool commits once per task and runs the full check after each WP:
+   ```bash
+   python3 .planning/tools/apply_plans.py ../FlightHopper-e WP-E0-terrain-sun-contract WP-E5-recorded-sun-time WP-E1-topography WP-E2-sun WP-E3-ground-objects WP-E4-scene-toggles WP-E-A-integration
+   ```
+   Run it from the worktree you are in. It also works from the main checkout: it reads the plans from, and commits in, `../FlightHopper-e`.
+   - **Expected test counts after each WP:** 611 → 613 → 633 → 654 → 663 → 677 → **680**. `tsc` stays clean.
+   - **Two timing tests can flake** when the whole suite runs under load: "sortRows and filterRows stay cheap at 12,000 rows" (`client/ui/table.test.ts`) and "/api/view of a 250 nm circle with 5,000 aircraft" (`server/main.browse.test.ts`). The tool stops at the first WP whose check fails, and it prints only counts:
+     - To see what failed, run `npm test 2>&1 | grep '^✖'` in the worktree.
+     - If only those two failed, confirm with `node --test client/ui/table.test.ts server/main.browse.test.ts`.
+     - Then resume with only the WPs **after** the one that stopped (its commits are already in), e.g. `python3 .planning/tools/apply_plans.py ../FlightHopper-e WP-E2-sun WP-E3-ground-objects WP-E4-scene-toggles WP-E-A-integration`.
+     - Re-running the full command also works (applied WPs give no diff), but it repeats every full check.
+3. In the worktree:
+   ```bash
+   npm run build
+   ```
+   Expected: the build succeeds. The only warning is the usual one about a chunk over 500 kB.
 
-Decisions in `terrain-sun-design.md` stand. In particular, **no cast shadows** (you rejected them).
+## Step 2 — Test it (≈ 30 min)
 
-### 1. F1 — Token bucket never climbs back above a refused rate · `server/budget.ts` · S
-- **Now:** a 429 halves the rate (floor `maxRps/8`), then it recovers ×1.1 per quiet minute, **all the way back to `maxRps`** (`RECOVERY_STEP_MS`). That re-probes the limit that just refused us.
-- **Change:** on each 429, set a run-long ceiling of `min(ceiling, rateAtThe429 / 2)`. Recovery may climb only up to that ceiling. This is the same rule as `tools/record-cells.ts` `nextBase()`.
+All of this runs in the worktree `../FlightHopper-e`, with nothing else on ports 8787/5173 (see Step 3.1).
+
+### 2.1 Automated
+
+```bash
+npm run check
+```
+Expected: `tsc` clean, 680/680.
+
+### 2.2 Gate GE in the browser
+
+Full steps and pass criteria: `.planning/plans/WP-E-A-integration.md`, Task 5. Reference values from the validated run: `.planning/plans/assets/WP-E-A/gate-GE/` (screenshots + `results-*.json`).
+
+1. Make the Innsbruck test replay. It is deterministic; the output goes to `data/recordings/`, which is gitignored:
+   ```bash
+   node .planning/plans/assets/WP-E-A/gen-synthetic-lowi.ts
+   ```
+2. Start the app on it. The replay plays once from server start: SYN601 crosses the Nordkette at about 74 s, lands at about 510 s and stops at about 560 s. Restart `make` to replay it again.
+   ```bash
+   make REC=data/recordings/synthetic-lowi.jsonl
+   ```
+3. **By hand in Chrome**, within ~20 s of the start: open `http://localhost:5173/?hex=000e01&bench=1` and check:
+   - **Toggles:** top right, "3-D terrain" and "Sun", both on.
+   - **Relief:** the Karwendel slopes are shaded by the sun.
+   - **Press T:** the relief sinks into the flat satellite map over 2.5 s. Press T again: it grows back. The aircraft keeps its height and the camera never goes into a slope.
+   - **Press L:** the sun lighting goes off (flat daytime imagery); press again to turn it back on.
+   - **Night:** add `&sun=2026-09-22T20:30:00Z` to the URL. You get dark land, the Innsbruck lights, and mountains that are faint but readable.
+   - **Golden hour:** `&sun=2026-09-22T16:45:00Z` gives warm light from the west.
+   - **Esc:** back to browse, an unlit street map, and the toggles hidden.
+4. **Or automated.** The driver runs headless Chrome over CDP and writes screenshots + `results.json` into the output directory you give it. Use a new directory per run: each run rewrites that directory's `results.json`. It does not need the app's tab in front.
+   - **Ridge run.** Start it as soon as `make` prints the link (within ~20 s of the server start), so its 10 terrain presses cover the ridge crossing at ~74 s:
+     ```bash
+     node .planning/plans/assets/WP-E-A/gate.mjs /tmp/gate-ridge app-ridge
+     ```
+     - **Pass:** `fpsP50` ≥ 60, `fpsP5` ≥ 30, `longTasks` [], `worstAnimFrameMs` all < 50, `noGroundSettled` 0, `groundUnknownSettled` 0, `groundUnknown` below `noGroundInAnimOrNudge` (equal would mean the memo is inert), `shadows` false, and bench `clearance min` ≥ 15 m with `violations 0`.
+     - **Validated run:** 137 / 103 / [] / ≤ 45 ms / 0 / 0 / 0 of 347, clearance 326 m.
+   - **One LOWI scenario per fresh `make REC=data/recordings/synthetic-lowi.jsonl`**, each with its own directory: `ge-8-lowi-morning`, `ge-9-lowi-golden`, `ge-10-lowi-night` and `app-grow` (screenshots). `app-browse-night` and `app-keys` (keys, persistence, phone layout) can share one start.
+   - **Ground objects** (Task 5 Step 4): start `REPLAY_SPEED=5 make REC=data/recordings/synthetic-lowi.jsonl`, then at once:
+     ```bash
+     node .planning/plans/assets/WP-E-A/gate.mjs /tmp/gate-ground app-ground
+     ```
+     If you start the driver late, set `SERVER_AGE_MS` to the milliseconds since `make` started.
+   - **Harness checks** (Task 5 Step 1; the harness pages need no replay):
+     ```bash
+     node .planning/plans/assets/WP-E-A/gate.mjs /tmp/gate-harness topo toggles sun
+     ```
+   - **KSFO at its recorded time** (the clock should read 2026-09-22T18:00Z): `make REC=.planning/plans/assets/WP-A2/synthetic-ksfo.jsonl`, then scenario `app-ksfo`.
+5. Stop `make` (Ctrl+C) when done.
+
+### 2.3 Merge
+
+If 2.1 and 2.2 pass, from the main checkout:
+```bash
+git merge --ff-only build/terrain-sun
+```
+```bash
+npm run check
+```
+```bash
+git push origin main
+```
+```bash
+git worktree remove ../FlightHopper-e
+```
+If a gate item fails, fix it in the worktree first (the plan and its WP own the file).
+
+## Step 3 — Run the full app (≈ 10 min)
+
+### 3.1 Free the ports
+`make` needs 8787 (API) and 5173 (client), and it stops with a message if 8787 is taken. To clear stray servers:
+```bash
+lsof -ti tcp:8787,5173,5174 -sTCP:LISTEN | xargs kill
+```
+
+### 3.2 On recorded data (no upstream traffic)
+```bash
+make
+```
+- It replays the most recently modified `.jsonl` in `data/recordings/` (normally today's recording) and prints `FlightHopper → http://localhost:5173/`. Ctrl+C stops both the API and the client.
+- **Pick a recording:** `make REC=data/recordings/2026-09-22.jsonl`.
+- **Chase a specific aircraft:** `?hex=<hex>`. Otherwise click an icon or a table row. Esc goes back to browse.
+
+### 3.3 Live on adsb.lol
+**Before the first live run, fix F1.** `PLAN.md` Global Constraints require it: after a 429, the rate must never climb back above half the rate that was refused.
+- **Now:** in `server/budget.ts`, a 429 halves the rate (floor `maxRps/8`). It then recovers ×1.1 per quiet minute all the way back to `maxRps` (`RECOVERY_STEP_MS`), which re-probes the limit that just refused us.
+- **Change:** on each 429, `ceiling = min(ceiling, rps / 2)`, then `rps = min(ceiling, max(maxRps / 8, rps / 2))`. Recovery climbs only up to `ceiling`. It's the same rule as `tools/record-cells.ts` `nextBase()`. `state().maxRps` keeps reporting the configured maximum. If you add `ceilingRps`, add it to `BudgetState` in `shared/api.ts` and update the `deepEqual` in `server/budget.test.ts`.
 - **Tests (fake clock):**
   - after a 429 at rate r, the rate never exceeds r/2, even after hours without a 429;
-  - two 429s give r/4;
-  - `state().maxRps` still reports the configured ceiling (add `ceilingRps` if needed).
-- **Needed before:** any live adsb.lol run, including gate G1.
+  - two 429s give r/4.
+- Size S. Do it on a branch with TDD, then `npm run check`, merge and push.
 
-### 2. F2 — Low-budget poll mode · `server/poller.ts` (+ test) · M
-- **Now:** a 40 nm view maps to 2–3 of the 4° cells (`cellsForView`), plus a separate `/v2/hex` chase batch. At 0.08 req/s every cell refreshes only every ~30–40 s.
-- **Change:** when `bucket.state().maxRps < 0.5`, poll **one view-centred circle** (radius = view radius + 10 nm, ≤ 250, rounded to reduce distinct URLs) instead of the cell cover. Serve the chased hex from that same poll: no hex batch, and the chased aircraft is always inside its own view circle. Keep the cell mode for budgets ≥ 0.5 req/s and for multi-user use.
-- **Tests (fake source + clock):**
-  - low budget → exactly one request per period, centred on the latest view, and no `hexes()` calls;
-  - high budget → current behaviour unchanged.
-- **Coordinate:** WP-E also edits `server/poller.ts`.
+Then stop the recorder, because only one process may poll adsb.lol, and `make live` refuses to start while it runs:
+```bash
+pkill -f record-cells
+```
+```bash
+make live
+```
+- **What to expect:** at 0.04 req/s, live adsb.lol is browse quality. A 40 nm view covers 2–3 cells, each refreshed about once a minute. Chase works, but the aircraft is dead-reckoned between sparse samples. Smooth live chase needs more budget: backlog F2/F6, or your own receiver.
+- **Check it's clean:** after ~10 min,
+  ```bash
+  curl -s http://localhost:8787/api/status
+  ```
+  should show `budget.maxRps` 0.04, with `budget.counts.r429` and `budget.counts.r4xx` both 0. The server log does not show upstream statuses.
+- **Afterwards,** restart the recorder from the main checkout, at the interval it has run clean at. `>>` appends, so the log's 429 history is kept. Never go below 12500 ms:
+  ```bash
+  nohup caffeinate -i npm run record:cells -- --interval-ms 24000 >> data/recordings/record-cells.log 2>&1 &
+  ```
 
-### 3. F6 — Second free source: adsb.fi open data · new adapter · M
-**What it gives you:**
-- **About 12× the live budget.** adsb.fi publishes 1 req/s for its public endpoints; adsb.lol tolerates about 0.08 req/s from this IP. Browse areas would refresh every few seconds instead of every ~37 s, and a chased aircraft could update at ~1 Hz. **That makes smooth live chase possible before your own receiver arrives.**
-- **An independent feeder network.** It covers some places adsb.lol misses and vice versa, and it's a fallback if adsb.lol throttles or blocks.
-- **The same readsb per-aircraft JSON**, so it's a small adapter; the estimator, UI and switch are unchanged.
-- **Later, as a feeder** (after the receiver feeds adsb.fi): the feeder-only `/api/v2/snapshot`, which gives **all aircraft worldwide**, refreshed twice a minute, 1 request per 30 s, from the feeder's IP.
+## Done when
 
-**Its rules** (README verified 2026-09-22, https://github.com/adsbfi/opendata):
-- personal, non-commercial use only;
-- you must cite adsb.fi and link to its home page;
-- 1 req/s;
-- responses 400/401/403/404/429 **count toward the limit**, and excessive invalid requests trigger a temporary IP restriction.
+- [ ] Terrain & sun is merged on `main` and pushed. `npm run check` gives 680/680 and `vite build` passes.
+- [ ] Gate GE passes on your Mac (2.2), and the look checks match `.planning/plans/assets/WP-E-A/gate-GE/`.
+- [ ] `make` starts the app on a recording and prints the link. Chase over Innsbruck shows relief, both toggles work, and night works.
+- [ ] F1 is merged, and `make live` runs clean: after 10 min, `/api/status` shows `budget.counts.r429` = `r4xx` = 0.
+- [ ] The recorder is running again, and no stray servers are left.
 
-**Endpoints** (base `https://opendata.adsb.fi/api`):
-- `/v3/lat/{lat}/lon/{lon}/dist/{nm ≤ 250}` for areas. Don't use v2 lat/lon: it's deprecated and returns a different format.
-- `/v2/hex/{h1,h2,…}` or `/v2/icao/{…}` for batched hexes.
-- Also `/v2/callsign/…`, `/v2/registration/…`, `/v2/sqk/…`, `/v2/mil`.
+---
 
-**Change:**
-1. **Contract** (WP-00 files, as a small contract WP):
-   - add `'adsbfi'` to `SourceKind` and to `RecordLine.source`;
-   - add `normalizeAdsbfi(body)` to `shared/readsb.ts` and to the `normalizers` map.
-   - **The response envelope isn't documented.** Confirm it with **one** real request per endpoint at build time (list key? `now` in s or ms?) and save each as a golden fixture in `data/fixtures/golden/`.
-2. **`server/sources/adsbfi.ts`:** `makeAdsbfi({ userAgent, baseUrl?, timeoutMs? }): Source` with caps `{ kind:'adsbfi', fullSnapshot:false, maxRps:1, coverage:null, attribution:'Data: adsb.fi (https://adsb.fi)' }`. Model it on `server/sources/adsblol.ts`. Validate lat/lon/radius/hexes client-side so no 4xx is ever sent.
-3. **Wiring and UI:**
-   - `server/sources/index.ts` (`case 'adsbfi'`);
-   - `server/config.ts`: accept `adsbfi`, require `CONTACT`, clamp `MAX_RPS` ≤ 0.9;
-   - `.env.example`: document it;
-   - `client/app.ts` `attributionFor`: show "Data: adsb.fi" with a link when the source is adsbfi (the source kind is in `StatusBrief`).
-4. **Replay and recorder:** accept `source:'adsbfi'` lines (normalizer map). Optionally, a recorder mode that collects 1 Hz arrival fixtures from adsb.fi. That's the missing input for gate G2's motion metrics.
+## Backlog (not part of this handoff)
 
-**Tests:** normalizer on the golden bodies, adapter URLs and caps against a mock server (as in `server/sources/adsblol.test.ts`), config validation.
+The full text of each item, with specs, is in the previous handoff: `git show 4a5e1cc:.planning/HANDOFF.md`.
 
-### 4. F3 — MLAT re-join velocity continuity · `client/track/hermite.ts`, `client/track/track.ts` · S–M
-- **Now:** when a fresh MLAT sample re-smooths recent knots, positions blend over 1.5 s but velocity steps (I2 measured a lateral-acceleration p99 of 61 m/s² in causal MLAT replay). `track.ts` already carries a `#vBlend` for the vertical and a "velocity bump".
-- **First:** measure with `node tools/bench-track.ts --recordings <file> --hex <an MLAT hex>`.
-- **Then, if still over the bar:** blend velocity as well as position in `RejoinBlend` (cubic Hermite from the old state to the new one).
-- **Gate:** G2 MLAT bar, lateral accel p99 ≤ 0.5 g.
-
-### 5. F4 — Approach pitch · `client/track/attitude.ts` · S
-- **Now:** with `phase === null`, descending means `'descent'` (AoA 2°), so a 3° glide renders nose-down (−1°).
-- **Change:** descending and `gsMs < 90` (≈ 175 kt) → `'approach'` (AoA 4°).
-- **Test:** 3° glide at 140 kt gives pitch ≈ +1°.
-- **Later:** M4's phase detector replaces this rule.
-
-### 6. F5 — Estimator dedupe switch for the bench · `client/track/track.ts`, `registry.ts`, `tools/bench-track.ts` · S
-Add a `dedupe?: boolean` option (default `true`) to `Track`/`TrackRegistry`. Make `--no-dedupe` in `bench-track` pass `false`, so G2 can report jerk with and without dedupe (now both numbers are identical).
-
-### 7. Detail panel gaps · `client/ui/detail.ts`, `client/app.ts` · S
-- **Distance row:** add an optional reference position (`VITE_HOME=lat,lon`, later the receiver site) and show the great-circle distance (nm) in SPATIAL.
-- **Signal ages** (Last position, Last seen): count them up between polls from the raw object's receive time instead of freezing at the reported value.
-
-### 8. F7 — Real airliner model · `public/models/`, `public/models/manifest.json` · S
-- **Now:** a placeholder (Cesium Air, a prop plane).
-- **Change:** add a free (CC0/CC-BY/Apache) airliner glTF ≤ 5 MB, with source and licence in the manifest, and optionally pick the model by `typeCode`/category.
-- **Calibration:** re-run the WP-V3 calibration test with the new model's nose axis (≤ 1° azimuth at KSFO 28L/1R and synthetic headings; pitch/roll signs).
-
-### 9. Run the gates on the real repo · reports in `.planning/reports/`
-- **G1** (after F1 + F2): stop the recorder, then run `ADSB_SOURCE=adsblol MAX_RPS=0.08 npm run server` with one view and one selection for 60 min, plus `node tools/gate-g1.ts --minutes 60`. Pass: 0 × 4xx. The flip test already passes in CI.
-- **G2:**
-  - motion: `node tools/bench-track.ts` on recordings (1 Hz fixtures need F6);
-  - datum: `node tools/datum-check.ts --airport KSFO` and `--airport LLBG` (|median| ≤ 10 m);
-  - census: `node tools/census.ts` (per hero, ≥ 80 % tracked below 200 ft AGL).
-- **G3 and GB:** in the browser with `?bench=1` (download the report with `b`). G3 is a KSFO arrival: FPS, clearance and calibration. GB is `data/recordings/synthetic-heavy.jsonl` (generate it with `.planning/plans/assets/WP-B-A/gen-synthetic-heavy.ts`): 5,000 aircraft, FPS p50 ≥ 50 and table ≤ 5 ms.
-- **Then:** write `.planning/reports/VERDICT.md` using the PLAN §6 rules.
-
-### 10. Remaining milestones (code) · detailed plans to be written per PLAN §7
-- **M4 Ground realism:** runway surfaces (planar vs `globe.clippingPolygons`, p95 gap ≤ 1 m), geometric touchdown + clamp blend, phase detector, likely-runway inference + centreline flag, KSFO/LLBG thresholds hand-verified.
-- **M5 Product loop:**
-  - Hop: nearest, phase-ranked within 15 nm of heroes;
-  - a Tower camera preset;
-  - HUD honesty tags;
-  - "no data below X ft" and degraded UX;
-  - perf flags and phone FPS.
-- **M6 Receiver switch** (when the hardware arrives):
-  - readsb with `--net-api-port`, `ADSB_SOURCE=readsb`;
-  - dual-source merge: one Poller per source into one `SampleStore`, local preferred while fresh;
-  - GNSS-interference quality gate at LLBG (`nic < 6`, jumps);
-  - Cloudflare Tunnel, with the server serving `dist/`;
-  - a 24 h replay soak.
-
-### Notes
-- `tools/record-cells.ts` is the running recorder (3 heroes, 40 nm, ~0.08 req/s). `tools/record-arrivals.ts` (1 Hz arrival fixtures) needs more budget than adsb.lol gives, so use it with F6 or the receiver.
-- Photos: planespotters sometimes refuses a browser request from `localhost` (CORS); reselecting retries. Their terms forbid proxying photos through our server.
+- **F2 · Low-budget poll mode** (`server/poller.ts`): one view-centred circle instead of the cell cover when `MAX_RPS` < 0.5.
+- **F6 · adsb.fi** as a second free source: about 12× the live budget, which makes smooth live chase possible. Its envelope must be confirmed with one real request per endpoint.
+- **F3 · MLAT re-join velocity continuity** (`hermite.ts`/`track.ts`). Measure it first with `tools/bench-track.ts`.
+- **F4 · Approach pitch** (`attitude.ts`): descending below 175 kt should use approach AoA.
+- **F5 · Estimator `dedupe` switch** for the bench.
+- **Detail panel:** a distance-from-home row, and signal ages that count up between polls.
+- **F7 · Real airliner glTF model**, with a re-run of the V3 calibration.
+- **Gates G1/G2/G3/GB** on the real repo, then `.planning/reports/VERDICT.md`.
+- **Milestones M4** (ground realism), **M5** (product loop), **M6** (receiver switch, when the hardware arrives).
+- **Terrain & sun follow-ups:** they are listed in each WP-E plan's "Notes for later work". Examples: a `sampleTerrainMostDetailed` fallback for camera ground while the relief grows from flat, and an upstream report of Cesium's TerrainPicker race.
