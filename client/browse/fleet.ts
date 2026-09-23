@@ -82,7 +82,10 @@ function load(slot: Slot, s: Sample): void {
   slot.radPerS = gs! / 3600 / R_NM
 }
 
-/** Moves the entry to tMs: along the track at ground speed for (tMs − sample) seconds, clamped to 0…staleS. */
+/**
+ * Moves the entry to tMs: along the track at ground speed for (tMs − sample) seconds, clamped to ±staleS. A tMs before
+ * the sample (the chase draws the fleet at its delayed render time) moves it back along the track; its age stays 0.
+ */
 function reckon(slot: Slot, tMs: number, floorS: number): void {
   const e = slot.e
   const ageS = (tMs - slot.tMs) / 1000
@@ -90,12 +93,13 @@ function reckon(slot: Slot, tMs: number, floorS: number): void {
   e.gapS = slot.gapS
   const g3 = 3 * slot.gapS
   e.staleS = g3 > floorS ? g3 : floorS
-  if (!slot.moving || ageS <= 0) {
+  if (!slot.moving || ageS === 0) {
     e.lat = slot.lat
     e.lon = slot.lon
     return
   }
-  const d = (ageS < e.staleS ? ageS : e.staleS) * slot.radPerS
+  const t = ageS < e.staleS ? (ageS > -e.staleS ? ageS : -e.staleS) : e.staleS
+  const d = t * slot.radPerS
   const sinD = Math.sin(d)
   const cosD = Math.cos(d)
   const sinLat2 = slot.sinLat * cosD + slot.cosLat * sinD * slot.cosTrk

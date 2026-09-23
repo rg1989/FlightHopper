@@ -43,7 +43,7 @@ test('direction follows the track in every quadrant, across the antimeridian and
   }
 })
 
-test('dead-reckoning stops 60 s after the newest sample; before the sample the sample position is used', () => {
+test('dead-reckoning stops 60 s after the newest sample', () => {
   const f = new Fleet()
   f.ingest([smp()])
   const at60 = { ...f.entries(T0 + 60_000)[0] }
@@ -52,10 +52,22 @@ test('dead-reckoning stops 60 s after the newest sample; before the sample the s
   assert.equal(at90.lon, at60.lon)
   near(distanceNm(32, 34.8, at90.lat, at90.lon), 6, 1e-9)
   assert.equal(at90.ageS, 90) // the age keeps counting
-  const early = f.entries(T0 - 5_000)[0]
-  assert.equal(early.lat, 32)
-  assert.equal(early.lon, 34.8)
+})
+
+test('before the newest sample (the chase draws the fleet at its delayed time): back along the track, age 0', () => {
+  const f = new Fleet()
+  f.ingest([smp()])
+  const early = f.entries(T0 - 5_000)[0] // 360 kt × 5 s = 0.5 nm back
+  const want = destination(32, 34.8, 270, 0.5)
+  near(early.lat, want.lat, 1e-9)
+  near(early.lon, want.lon, 1e-9)
   assert.equal(early.ageS, 0)
+  const far = f.entries(T0 - 90_000)[0] // clamped to staleS (60 s) = 6 nm
+  near(distanceNm(32, 34.8, far.lat, far.lon), 6, 1e-9)
+  f.ingest([smp({ hex: 'parked', onGround: true, gsKt: 0 })])
+  const p = f.get('parked')!
+  f.entries(T0 - 5_000)
+  assert.equal(p.lat, 32, 'not moving: stays')
 })
 
 test('no motion when parked on the ground (< 3 kt) or when track or speed is unknown; taxiing moves', () => {
