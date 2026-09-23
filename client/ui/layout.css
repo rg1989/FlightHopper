@@ -48,3 +48,23 @@
 }
 .fh-bracket::before { top: 0; right: 0; border-left: 0; border-bottom: 0; }
 .fh-bracket::after { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+/* The flight ID, centred under the square: the brackets' white and soft shadow, small spaced capitals. */
+.fh-bracket > span {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  font: 600 10.5px/1 var(--fh-font);
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: rgb(255 255 255 / 0.9);
+  text-shadow: 0 0 1.5px rgb(0 0 0 / 0.85), 0 0 3px rgb(0 0 0 / 0.5);
+  -webkit-font-smoothing: antialiased;
+}
+@media (max-width: 640px) {
+  .fh-bracket > span {
+    font-size: 11.5px; /* one step up on phones, as theme.css does for the overlays */
+  }
+}

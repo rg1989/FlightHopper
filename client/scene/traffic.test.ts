@@ -6,7 +6,7 @@ import { Cartesian3, Cartographic, HeadingPitchRoll, Matrix4 } from 'cesium'
 import { destination } from '../../shared/geo.ts'
 import type { FleetEntry, ModelManifest } from '../types.ts'
 import { measureGlb, noseAzimuthDeg } from './model.ts'
-import { BOX_CENTRE, BOX_HALF, MIN_PX, hitAt, minScale, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
+import { BOX_CENTRE, BOX_HALF, MIN_PX, flightId, hitAt, minScale, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
 import type { Box } from './traffic.ts'
 
 const root = new URL('../../', import.meta.url)
@@ -30,6 +30,13 @@ test('scale by ADS-B emitter category; unknown is 1', () => {
   assert.equal(scaleFor('A7'), 0.4)
   assert.equal(scaleFor('B2'), 1)
   assert.equal(scaleFor(null), 1)
+})
+
+test('flightId: the callsign, else the ICAO hex in capitals (as the map label)', () => {
+  const info = { hex: 'a1b2c3', callsign: 'UAL2478', reg: 'N12345', typeCode: 'B738', category: 'A3', squawk: null, emergency: null, military: false, route: null }
+  assert.equal(flightId(fe('a1b2c3', { info })), 'UAL2478')
+  assert.equal(flightId(fe('a1b2c3', { info: { ...info, callsign: null } })), 'A1B2C3')
+  assert.equal(flightId(fe('a1b2c3')), 'A1B2C3')
 })
 
 test('nearestInRange: within the range, airborne first (parked ones at a hub must not take every model), then nearest', () => {
@@ -67,9 +74,9 @@ test('the bracket square is centred on the model and spans its wingspan (constan
 
 test('hitAt: inside a square hits; overlapping squares → the nearest to the camera; outside → null', () => {
   const boxes: Box[] = [
-    { hex: 'back', x: 100, y: 100, side: 80, depthM: 900 },
-    { hex: 'front', x: 120, y: 110, side: 40, depthM: 300 },
-    { hex: 'unused', x: 500, y: 500, side: 80, depthM: 1 },
+    { hex: 'back', x: 100, y: 100, side: 80, depthM: 900, label: '' },
+    { hex: 'front', x: 120, y: 110, side: 40, depthM: 300, label: '' },
+    { hex: 'unused', x: 500, y: 500, side: 80, depthM: 1, label: '' },
   ]
   assert.equal(hitAt(boxes, 2, 125, 115), 'front')
   assert.equal(hitAt(boxes, 2, 70, 70), 'back')

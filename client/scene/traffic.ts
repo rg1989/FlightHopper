@@ -25,6 +25,9 @@ const SCALE: Record<string, number> = { A1: 0.35, A2: 0.6, A3: 1, A4: 1.2, A5: 1
 
 export const scaleFor = (category: string | null | undefined): number => (category ? SCALE[category] : undefined) ?? 1
 
+/** The flight ID under a traffic model's brackets: its callsign, else its ICAO hex (as FleetLayer's label). */
+export const flightId = (e: FleetEntry): string => e.info?.callsign ?? e.hex.toUpperCase()
+
 export interface Near { e: FleetEntry; nm: number }
 
 /**
@@ -58,8 +61,8 @@ export function squarePx(rM: number, depthM: number, fovyRad: number, viewHeight
   return Math.min(Math.max(px, MIN_PX), 4 * viewHeightPx)
 }
 
-/** A bracket square: centre (CSS px from the canvas's top-left), side, and depth along the view (m). */
-export interface Box { hex: string; x: number; y: number; side: number; depthM: number }
+/** A bracket square: centre (CSS px from the canvas's top-left), side, depth along the view (m), and the flight ID under it. */
+export interface Box { hex: string; x: number; y: number; side: number; depthM: number; label: string }
 
 /** The hex whose square (of the first n boxes) holds (x, y); the nearest to the camera when squares overlap; else null. */
 export function hitAt(boxes: readonly Box[], n: number, x: number, y: number): string | null {
@@ -207,8 +210,9 @@ export class Traffic {
       if (!(depthM > 1)) continue // behind the camera
       const w = SceneTransforms.worldToWindowCoordinates(scene, c, this.#w)
       if (w === undefined) continue
-      const b = this.#boxes[n] ?? (this.#boxes[n] = { hex: '', x: 0, y: 0, side: 0, depthM: 0 })
+      const b = this.#boxes[n] ?? (this.#boxes[n] = { hex: '', x: 0, y: 0, side: 0, depthM: 0, label: '' })
       b.hex = s.hex
+      b.label = flightId(e)
       b.x = w.x
       b.y = w.y
       b.side = squarePx(rM * g, depthM, fovy, hPx)
@@ -265,8 +269,11 @@ export class Traffic {
     if (el === undefined) {
       el = this.#els[i] = document.createElement('div')
       el.className = 'fh-bracket'
+      el.append(document.createElement('span')) // the flight ID, under the square
       this.#layer.append(el)
     }
+    const id = el.firstChild as HTMLSpanElement
+    if (id.textContent !== b.label) id.textContent = b.label
     const side = Math.round(b.side)
     el.style.width = el.style.height = `${side}px`
     el.style.transform = `translate(${(b.x - side / 2).toFixed(1)}px, ${(b.y - side / 2).toFixed(1)}px)`
