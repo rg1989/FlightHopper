@@ -268,6 +268,77 @@ test('static: dist/ files with content types, index.html for client routes, 404 
   }
 })
 
+test('static: new MIME types for scenario audio/captions/data files', async (t) => {
+  const dist = join(tmp(), 'dist')
+  mkdirSync(dist, { recursive: true })
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>FlightHopper</title>')
+  const files: [string, string][] = [
+    ['track.csv', 'text/csv; charset=utf-8'],
+    ['cvr.m4a', 'audio/mp4'],
+    ['clip.mp3', 'audio/mpeg'],
+    ['clip.ogg', 'audio/ogg'],
+    ['clip.opus', 'audio/ogg'],
+    ['clip.wav', 'audio/wav'],
+    ['captions.vtt', 'text/vtt; charset=utf-8'],
+  ]
+  for (const [name] of files) writeFileSync(join(dist, name), 'x')
+  const app = createServer({ ...readServerConfig({ REPLAY_FILES: FILE }), staticDir: dist })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+
+  for (const [name, type] of files) {
+    const r = await getText(`${base}/${name}`)
+    assert.equal(r.status, 200, name)
+    assert.equal(r.type, type, name)
+  }
+})
+
+test('static: HTTP Range on a 1000-byte file — 206 slices (a-b, a-, -n), 416 unsatisfiable, 200 always advertises accept-ranges', async (t) => {
+  const dist = join(tmp(), 'dist')
+  mkdirSync(dist, { recursive: true })
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>FlightHopper</title>')
+  const bytes = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256))
+  writeFileSync(join(dist, 'data.bin'), bytes)
+  const app = createServer({ ...readServerConfig({ REPLAY_FILES: FILE }), staticDir: dist })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+
+  const whole = await fetch(`${base}/data.bin`)
+  assert.equal(whole.status, 200)
+  assert.equal(whole.headers.get('accept-ranges'), 'bytes')
+  assert.equal(Buffer.from(await whole.arrayBuffer()).length, 1000)
+
+  // bytes=a-b
+  const r1 = await fetch(`${base}/data.bin`, { headers: { range: 'bytes=0-99' } })
+  assert.equal(r1.status, 206)
+  assert.equal(r1.headers.get('content-range'), 'bytes 0-99/1000')
+  assert.equal(r1.headers.get('accept-ranges'), 'bytes')
+  assert.equal(r1.headers.get('content-length'), '100')
+  assert.deepEqual(Buffer.from(await r1.arrayBuffer()), bytes.subarray(0, 100))
+
+  // bytes=a-
+  const r2 = await fetch(`${base}/data.bin`, { headers: { range: 'bytes=900-' } })
+  assert.equal(r2.status, 206)
+  assert.equal(r2.headers.get('content-range'), 'bytes 900-999/1000')
+  assert.deepEqual(Buffer.from(await r2.arrayBuffer()), bytes.subarray(900, 1000))
+
+  // bytes=-n (last n bytes)
+  const r3 = await fetch(`${base}/data.bin`, { headers: { range: 'bytes=-100' } })
+  assert.equal(r3.status, 206)
+  assert.equal(r3.headers.get('content-range'), 'bytes 900-999/1000')
+  assert.deepEqual(Buffer.from(await r3.arrayBuffer()), bytes.subarray(900, 1000))
+
+  // unsatisfiable: start beyond the end of the file
+  const r4 = await fetch(`${base}/data.bin`, { headers: { range: 'bytes=2000-3000' } })
+  assert.equal(r4.status, 416)
+  assert.equal(r4.headers.get('content-range'), 'bytes */1000')
+
+  // multiple ranges → whole file 200 (multipart is not implemented)
+  const r5 = await fetch(`${base}/data.bin`, { headers: { range: 'bytes=0-9,20-29' } })
+  assert.equal(r5.status, 200)
+  assert.equal(Buffer.from(await r5.arrayBuffer()).length, 1000)
+})
+
 test('CLI: `node server/main.ts` reads the environment and serves', async (t) => {
   const child = spawn(process.execPath, [MAIN], {
     env: { ADSB_SOURCE: 'replay', REPLAY_FILES: FILE, PORT: '0' },

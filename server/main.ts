@@ -56,6 +56,13 @@ const TYPES: Record<string, string> = {
   '.xml': 'application/xml',
   '.txt': 'text/plain; charset=utf-8',
   '.woff2': 'font/woff2',
+  '.csv': 'text/csv; charset=utf-8',
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.vtt': 'text/vtt; charset=utf-8',
 }
 
 class BadRequest extends Error {}
@@ -104,12 +111,38 @@ function sendText(res: ServerResponse, status: number, text: string): void {
 const isFile = (p: string): Promise<boolean> => stat(p).then((s) => s.isFile(), () => false)
 
 /**
- * A file under root: the path itself, index.html for client routes (no extension), else 404.
- * Anything that decodes to a path outside root (%2e%2e, %2f, %5c, NUL) is a 404 before the disk is touched.
- * ponytail: no caching headers, ETags or compression. Every page load re-sends Cesium's assets; put the Cloudflare
- * cache in front, or add `cache-control: immutable` for Vite's hashed /assets/, when that matters.
+ * A single `Range: bytes=a-b | a- | -n` header resolved against a `size`-byte file.
+ * null: no Range header, or one this parser doesn't handle as a single range (including a comma-separated list of
+ * several ranges) — served as the whole file. 'unsatisfiable': the range fits nowhere in the file (→ 416).
  */
-async function serveStatic(root: string, pathname: string, res: ServerResponse): Promise<void> {
+function parseRange(header: string | undefined, size: number): { start: number; end: number } | 'unsatisfiable' | null {
+  if (header === undefined) return null
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (!m || (m[1] === '' && m[2] === '')) return null
+  let start: number
+  let end: number
+  if (m[1] === '') {
+    const n = Number(m[2]) // suffix range: the last n bytes
+    if (!(n > 0)) return 'unsatisfiable'
+    start = Math.max(0, size - n)
+    end = size - 1
+  } else {
+    start = Number(m[1])
+    end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1)
+  }
+  if (start < 0 || start >= size || start > end) return 'unsatisfiable'
+  return { start, end }
+}
+
+/**
+ * A file under root: the path itself, index.html for client routes (no extension), else 404. Honours a `Range`
+ * request (206, one range only — a list of several serves the whole file, matching how few clients ask for one and
+ * how rarely servers bother splitting the reply). Every response, ranged or not, advertises `accept-ranges: bytes`.
+ * Anything that decodes to a path outside root (%2e%2e, %2f, %5c, NUL) is a 404 before the disk is touched.
+ * ponytail: no caching headers, ETags or compression, and a ranged read still loads the whole file into memory
+ * first — fine for scenario audio clips (tens of MB); swap for a streamed partial read if that grows much further.
+ */
+async function serveStatic(root: string, pathname: string, range: string | undefined, res: ServerResponse): Promise<void> {
   let path: string
   try {
     path = decodeURIComponent(pathname)
@@ -125,7 +158,25 @@ async function serveStatic(root: string, pathname: string, res: ServerResponse):
     if (!(await isFile(file))) return sendText(res, 404, 'the client is not built: run npm run build\n')
   }
   const body = await readFile(file)
-  res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'content-length': body.length }).end(body)
+  const type = TYPES[extname(file)] ?? 'application/octet-stream'
+  const r = parseRange(range, body.length)
+  if (r === 'unsatisfiable') {
+    res.writeHead(416, { 'content-range': `bytes */${body.length}`, 'accept-ranges': 'bytes' }).end()
+    return
+  }
+  if (r === null) {
+    res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'accept-ranges': 'bytes' }).end(body)
+    return
+  }
+  const slice = body.subarray(r.start, r.end + 1)
+  res
+    .writeHead(206, {
+      'content-type': type,
+      'content-length': slice.length,
+      'content-range': `bytes ${r.start}-${r.end}/${body.length}`,
+      'accept-ranges': 'bytes',
+    })
+    .end(slice)
 }
 
 /**
@@ -227,7 +278,7 @@ export function createServer(
       if (isApi) return sendJson(req, res, 405, { error: 'only GET' })
       return sendText(res, 405, 'only GET\n')
     }
-    if (!isApi) return serveStatic(root, url.pathname, res)
+    if (!isApi) return serveStatic(root, url.pathname, req.headers.range, res)
     let status = 200
     let body: unknown
     try {

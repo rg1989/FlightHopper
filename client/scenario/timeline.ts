@@ -1,0 +1,67 @@
+// client/scenario/timeline.ts
+// Pure lookups over a loaded scenario's events.csv and transcript.csv at a given clock time t: the event state
+// (phase/gear/flaps/damage), the timeline's tick marks, the captions on screen, and the ending fade/card. No DOM,
+// no Cesium: ScenarioRun and the UI mounters call these once a frame with the clock's current t.
+import type { EndingSpec, EventRow, Line } from './types.ts'
+
+export interface EventState {
+  phase: string | null
+  gear: boolean
+  flaps: number | null
+  damage: ReadonlySet<string>
+}
+
+/** The state implied by every event at or before t: gear/flaps/phase take the latest row's value; damage accumulates. */
+export function eventStateAt(events: readonly EventRow[], t: number): EventState {
+  let phase: string | null = null
+  let gear = false
+  let flaps: number | null = null
+  const damage = new Set<string>()
+  for (const e of events) {
+    if (e.t > t) continue
+    switch (e.type) {
+      case 'phase':
+        phase = e.label
+        break
+      case 'gear':
+        gear = e.value === '1'
+        break
+      case 'flaps':
+        flaps = Number(e.value)
+        break
+      case 'damage':
+        damage.add(e.value)
+        break
+    }
+  }
+  return { phase, gear, flaps, damage }
+}
+
+/** The timeline's tick marks: every `mark` event, in file order. */
+export function marks(events: readonly EventRow[]): { t: number; label: string }[] {
+  return events.filter((e) => e.type === 'mark').map((e) => ({ t: e.t, label: e.label }))
+}
+
+/**
+ * The lines on screen at t: l.t ≤ t < l.t + l.dur, newest `max` of them, oldest first. Assumes `lines` is already
+ * in non-decreasing `t` order (transcript.csv, §3.1), so the active ones are already oldest-first: keep the tail.
+ */
+export function captionsAt(lines: readonly Line[], t: number, max = 3): Line[] {
+  const active = lines.filter((l) => l.t <= t && t < l.t + l.dur)
+  return active.slice(-max)
+}
+
+/**
+ * fade: 0 before `fadeFrom`, a smoothstep over [fadeFrom, darkAt], 1 from `darkAt` on.
+ * card: true once t reaches darkAt + cardAfterS. A null ending never fades or shows a card.
+ */
+export function endingAt(e: EndingSpec | null, t: number): { fade: number; card: boolean } {
+  if (e === null) return { fade: 0, card: false }
+  const fade = t <= e.fadeFrom ? 0 : t >= e.darkAt ? 1 : smoothstep(e.fadeFrom, e.darkAt, t)
+  return { fade, card: t >= e.darkAt + e.cardAfterS }
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const u = (x - edge0) / (edge1 - edge0)
+  return u * u * (3 - 2 * u)
+}
