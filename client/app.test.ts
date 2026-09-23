@@ -1,7 +1,9 @@
 // client/app.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
+import type { Airport } from '../shared/airports.ts'
 import type { StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf } from '../shared/icaoCountry.ts'
@@ -12,7 +14,8 @@ import type { FleetEntry, ModelManifestEntry } from './types.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, statusShown, viewRadiusNm } = await import('./app.ts')
+const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, sceneKey, statusShown, viewRadiusNm } =
+  await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
   hex, lat, lon, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, quality: 'adsb2', info: null,
@@ -120,4 +123,34 @@ test('status shown: 3 failed polls in a row read as "upstream-down"; fewer chang
   assert.equal(statusShown(ok, 2), ok)
   assert.deepEqual(statusShown(ok, 3), { ...ok, degraded: 'upstream-down' })
   assert.deepEqual(statusShown({ ...ok, degraded: 'blocked' }, 0), { ...ok, degraded: 'blocked' })
+})
+
+const press = (key: string, more: object = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, repeat: false, target: null, ...more })
+
+test('scene keys: T topography and L sun, either case; not with a modifier, on auto-repeat or while typing in a field', () => {
+  assert.equal(sceneKey(press('t')), 'topo')
+  assert.equal(sceneKey(press('T')), 'topo') // Shift or Caps Lock
+  assert.equal(sceneKey(press('l')), 'light')
+  assert.equal(sceneKey(press('L')), 'light')
+  assert.equal(sceneKey(press('b')), null)
+  assert.equal(sceneKey(press('Escape')), null)
+  for (const m of ['metaKey', 'ctrlKey', 'altKey', 'repeat']) assert.equal(sceneKey(press('l', { [m]: true })), null, m) // Cmd+L, Ctrl+T: the browser's
+  for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) assert.equal(sceneKey(press('t', { target: { tagName } })), null, tagName) // the table's search box
+  assert.equal(sceneKey(press('t', { target: { tagName: 'DIV', isContentEditable: true } })), null)
+  assert.equal(sceneKey(press('t', { target: { tagName: 'BUTTON', isContentEditable: false } })), 'topo') // a focused toggle
+})
+
+test('flat plane (design D4): a hero airport within 30 km gives its runway height, else the ground under the aircraft, else the plane stays', () => {
+  const heroes: Airport[] = JSON.parse(readFileSync(new URL('../public/airports/heroes.json', import.meta.url), 'utf8'))
+  const hafelekar = { lat: 47.3125, lon: 11.3864 } // on the Nordkette, 6.6 km from LOWI
+  assert.equal(relHFor(hafelekar, 2345, 0, heroes), 627.72) // LOWI: the mean of its threshold heights 629.72 and 625.72
+  assert.equal(relHFor(hafelekar, null, 0, heroes), 627.72)
+  const zugspitze = { lat: 47.4211, lon: 10.9853 } // 32.4 km from LOWI
+  assert.equal(relHFor(zugspitze, 2950, 627.72, heroes), 2950) // flatten from rest: the drawn ground is the true one
+  assert.equal(relHFor(zugspitze, null, 627.72, heroes), 627.72) // ground unknown, or a new selection while flat: keep the plane
+  assert.equal(relHFor(null, 2950, 56.57, heroes), 56.57) // no aircraft drawn yet
+})
+
+test('attribution: the night lights credit NASA GIBS (design D13)', () => {
+  assert.ok(attributionFor(null).includes('Night lights: NASA GIBS, VIIRS Black Marble'))
 })

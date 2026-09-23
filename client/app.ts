@@ -3,11 +3,13 @@
 // - Browse (nothing selected): a north-up, top-down street map. Every aircraft is an icon turned to its track and
 //   coloured by altitude, with the table of the aircraft on screen on the right and the altitude legend at the bottom.
 // - Chase (an aircraft selected by a table row, a click on its icon or ?hex=): the 3-D model and the chase camera over
-//   the satellite imagery, the detail panel on the left and the HUD. The other aircraft stay on screen as icons.
+//   the satellite imagery, the detail panel on the left and the HUD. The other aircraft stay on screen as icons. The
+//   sun lights the chase view, and the relief can sink into the map and grow back (toggles "3-D terrain" and "Sun",
+//   keys T and L).
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
-import { Cartesian2, Cartesian3, Cartographic, Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
+import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import type { Viewer } from 'cesium'
 import { AIRLINES_CREDIT, airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
@@ -25,17 +27,22 @@ import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { ChaseModel } from './scene/model.ts'
+import { makeNightLayer } from './scene/nightLights.ts'
 import { addRunways } from './scene/runways.ts'
+import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
+import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
 import { MIN_DELAY_S, RenderClock } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
-import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState } from './types.ts'
+import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { mountAttribution, mountBanner } from './ui/banner.ts'
 import { mountDetail } from './ui/detail.ts'
 import type { Lookup } from './ui/detail.ts'
 import { mountHud } from './ui/hud.ts'
 import { mountLegend } from './ui/legend.ts'
 import { PhotoCache } from './ui/photo.ts'
+import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
+import { mountSceneToggles } from './ui/sceneToggles.ts'
 import { mountTable } from './ui/table.ts'
 import './ui/layout.css'
 
@@ -126,6 +133,32 @@ export function placedHeightM(hM: number, onGround: boolean, terrainM: number | 
   return onGround ? terrainM : Math.max(hM, terrainM)
 }
 
+/**
+ * The flat plane's height (design D4) for a flatten, or for a new selection while flat: the runway height of a hero airport
+ * within 30 km of the aircraft, else the ground under it (groundM: the drawn ground, true at rest), else the plane as it is
+ * (relHM). While flat the drawn ground is the old plane everywhere, so a new selection passes groundM null.
+ * ponytail: away from the heroes a selection while flat keeps the old plane. Upgrade: sampleTerrainMostDetailed (true
+ * heights, async) under the new aircraft, then relatch when it resolves.
+ */
+export function relHFor(at: { lat: number; lon: number } | null, groundM: number | null, relHM: number, airports: readonly Airport[]): number {
+  return at === null ? relHM : pickRelHM(at.lat, at.lon, groundM ?? relHM, airports)
+}
+
+/** Where a typed T or L is text, not a toggle (the table's search box). */
+const TYPING = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
+
+/**
+ * The scene toggle a keydown asks for (design D11): T topography, L sun. null with a modifier (Cmd/Ctrl+L and Ctrl+T are
+ * the browser's), on auto-repeat and while typing in a field.
+ */
+export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; repeat: boolean; target: unknown }): keyof ScenePrefs | null {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return null
+  const t = e.target as { tagName?: string; isContentEditable?: boolean } | null
+  if (t?.isContentEditable || TYPING.has(t?.tagName ?? '')) return null
+  const k = e.key.toLowerCase()
+  return k === 't' ? 'topo' : k === 'l' ? 'light' : null
+}
+
 export interface AppParams {
   hex: string | null // ?hex=a1b2c3: chase this aircraft from the start (G3; the detail panel's "Copy link")
   bench: boolean // ?bench=1: bench overlay and User Timing measures, 'b' downloads the report
@@ -151,6 +184,7 @@ export function attributionFor(model: ModelManifestEntry | null): string[] {
     AIRLINES_CREDIT,
     'Map: © OpenStreetMap contributors, ODbL',
     'Photos: planespotters.net, © each photographer',
+    'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the full GIBS acknowledgment is in Cesium's credit list
   ]
   // Manifest licences read "<SPDX id>: <note>"; the id is enough on screen.
   if (model) lines.push(`3D model: ${model.author}, ${model.license.split(':')[0].trim()}`)
@@ -183,17 +217,36 @@ function div(className: string, parent: HTMLElement): HTMLDivElement {
  *   aircraft is selected, chase(hex). Every sample goes into the Fleet; the selected aircraft's samples also go into the
  *   TrackRegistry, between frames, so re-join blends stay continuous.
  * - every frame (scene.preUpdate: after Cesium applies mouse input to the camera, before it updates primitives and
- *   renders, so camera and model move in the same frame): Fleet → FleetLayer and table (all aircraft, dead-reckoned
- *   to server now); RenderClock → the selected aircraft's state → model, chase camera, HUD, detail panel, banner, bench.
+ *   renders, so camera and model move in the same frame): Topography first (the relief's factor and flat plane for this
+ *   frame); Fleet → FleetLayer and table (all aircraft, dead-reckoned to server now); RenderClock → the selected
+ *   aircraft's state → model, chase camera; the Sun (clock and light) and the runways; HUD, detail panel, banner, bench.
  * A table row or a click on an icon selects; Esc or the panel's × goes back to browse over the last chased position.
+ * The scene toggles (buttons, keys T and L) apply in chase and persist: URL > localStorage > defaults (both on).
  * Runways and the model are optional: if their files fail to load, the app runs without them. createViewer failing
  * (terrain unreachable) rejects.
  */
 export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ stop(): void }> {
   const params = readParams(location.search)
+  const sunParam = parseSunParam(location.search) // ?sun=<ISO> fixes the sun's time, ?sun=+6h shifts it (demos)
+  // The localStorage getter and getItem both throw where storage is blocked: then only the URL and the defaults count.
+  let store: Storage | null = null
+  let stored: string | null = null
+  try {
+    store = window.localStorage
+    stored = store.getItem(PREFS_KEY)
+  } catch {
+    // blocked: nothing stored, nothing kept
+  }
+  let prefs = readScenePrefs(location.search, stored)
   const base = import.meta.env.BASE_URL
-  const [viewer, airports, manifest] = await Promise.all([
-    createViewer(root, cfg),
+  // Topography takes the scene in the task that builds the viewer, before its first frame: moving the factor off 1
+  // with tiles loaded rebuilds every tile (PoC: up to 2 s).
+  const viewerWithTopography = async (): Promise<[Viewer, Topography]> => {
+    const v = await createViewer(root, cfg)
+    return [v, new Topography(v.scene, prefs.topo)]
+  }
+  const [[viewer, topo], airports, manifest] = await Promise.all([
+    viewerWithTopography(),
     getJson<Airport[]>(`${base}airports/heroes.json`).catch((e: unknown): Airport[] => {
       console.warn('FlightHopper: no runways:', e)
       return []
@@ -213,6 +266,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
 
   let selected: string | null = params.hex // ?hex= is chased from the start; the camera engages at its first state
   let chased: RenderState | null = null // the selected aircraft as drawn in the last frame that had it
+  let groundM: number | null = null // the ground drawn under it (lag-corrected), null while unknown
+  // The last terrain readings under the aircraft and under the chase camera, with the points they were read at.
+  // Topography.ground rescales them for an undefined reading (Cesium's picker race, in runs during an animation) within
+  // 50 m of that point: about the first 0.5 s of a run at 180 kt. Reset on each selection.
+  const acGround = groundMemo()
+  const camGround = groundMemo()
+  let relatchPending = selected !== null // a new selection moves a flat map's plane at its first state (D4)
+  let tf: TerrainFrame // this frame's exaggeration: topo.update() writes it first in every frame
   let chaseRaw: ReadsbAircraft | null = null // newest full upstream object and info of the selected aircraft
   let chaseInfo: AircraftInfo | null = null
   let tableHover: string | null = null
@@ -222,13 +283,16 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   let stopped = false
   let lastFrameMs: number | null = null
   const carto = new Cartographic()
+  const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
+  const runwayLook = sunLook(90) // the runways' light, rewritten every frame
   const onScreen: FleetEntry[] = [] // reused every frame
 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   const ui = div('fh-ui', root)
   ui.dataset.mode = selected === null ? 'browse' : 'chase'
-  const right = div('fh-right', ui) // the table above the credits
+  const right = div('fh-right', ui) // the scene toggles, then the table above the credits
+  const toggles = mountSceneToggles(right, { prefs, onChange: (next) => setPrefs(next) })
   const hud = mountHud(ui)
   const banner = mountBanner(ui)
   const detail = mountDetail(ui, { onClose: () => select(null), photos: new PhotoCache(), lookup: lookupFor })
@@ -236,20 +300,30 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   mountAttribution(right, attributionFor(entry))
   const legend = mountLegend(div('fh-legend-root', ui))
   const runways = addRunways(viewer, airports)
+  // The city lights go right above the satellite base layer, under the street map added next (browse shows it on top).
+  const day = viewer.imageryLayers.length > 0 ? viewer.imageryLayers.get(0) : null
+  const night = makeNightLayer()
+  viewer.imageryLayers.add(night)
+  const sun = new Sun(viewer, { day, night })
+  sun.attachModel(model?.model ?? null)
+  sun.setEnabled(selected !== null && prefs.light)
   // VITE_MAP_URL: another tile server ({z}/{x}/{y}.png is appended), as the OpenStreetMap tile policy asks to allow.
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
   const fleetLayer = new FleetLayer(viewer)
-  const chaseCam = new ChaseCamera(viewer)
+  const globe = viewer.scene.globe
+  // Clearance above the ground drawn this frame: globe.getHeight answers last frame's while the relief grows or sinks.
+  const chaseCam = new ChaseCamera(viewer, { groundAt: (c) => topo.ground(globe.getHeight(c), tf, camGround, c) })
   const api = new ApiClient(cfg.apiBase)
   const fleet = new Fleet()
   let registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
   const clock = new RenderClock(MIN_DELAY_S)
   const bench = params.bench ? new BenchRecorder(viewer, { label: params.hex ?? 'browse' }) : null
   bench?.mountOverlay(div('fh-bench', ui))
-  // ?bench=1: User Timing measures fh:frame, fh:fleet, fh:table (each frame) and fh:ingest (each poll), read with
-  // performance.getEntriesByName(name) or in DevTools. ponytail: entries pile up (~200 per second) until
-  // performance.clearMeasures(); fine for bench runs of minutes.
+  // ?bench=1: User Timing measures fh:frame, fh:fleet, fh:table (each frame) and fh:ingest (each poll), and two marks
+  // under the chased aircraft for gate GE: fh:no-ground for each undefined terrain reading, and fh:ground-unknown for
+  // each frame whose ground is still unknown after the memo. Read them with performance.getEntriesByName(name) or in
+  // DevTools. ponytail: entries pile up (~200 per second) until performance.clearMeasures(); fine for runs of minutes.
   const measure = bench === null ? null : (name: string, startMs: number): void => void performance.measure(name, { start: startMs })
   ;(window as unknown as { viewer?: Viewer }).viewer = viewer // console access for debugging and G3, as in WP-00
 
@@ -268,6 +342,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
     chaseCam.release() // hands the mouse back to Cesium's controls; the next chase starts behind its aircraft
     selected = hex
     chased = null
+    groundM = null
+    acGround.ok = camGround.ok = false // the next readings are under another aircraft
+    relatchPending = hex !== null
     chaseRaw = null
     chaseInfo = null
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
@@ -281,38 +358,72 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       map.show = true
       enterBrowse(viewer, last) // over the last chased position, else where the camera is
     }
+    sun.setEnabled(hex !== null && prefs.light) // chase only (D9): browse stays the unlit street map
     ui.dataset.mode = hex === null ? 'browse' : 'chase'
+  }
+
+  /** Every scene-toggle change, from a button or a key: apply it, store it, show it. */
+  function setPrefs(next: ScenePrefs): void {
+    if (next.topo !== prefs.topo) topo.set(next.topo, performance.now(), relHFor(chased, groundM, topo.relHM, airports))
+    prefs = next
+    sun.setEnabled(selected !== null && next.light)
+    writeScenePrefs(next, store)
+    toggles.update(next)
   }
 
   function frame(): void {
     const now = performance.now()
+    tf = topo.update(now) // first: the factor and plane drawn this frame, before any terrain reading
     const dtS = lastFrameMs === null ? 0 : Math.min(1, (now - lastFrameMs) / 1000)
     lastFrameMs = now
     const shown = statusShown(status, failedPolls)
     let all = NO_ENTRIES
     let s: RenderState | null = null
+    let tSunMs = Date.now() // until the first reply; then the render time (server clock)
     if (api.ready) {
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, registry.delayTargetS(selected), dtS)
+      tSunMs = tRenderMs
       // ponytail: the fleet is drawn at server now, the chased aircraft at the delayed render time (≥ 3 s earlier), so
       // traffic around it runs a few seconds ahead of it. Upgrade: draw the fleet at tRenderMs, which needs Fleet to
       // interpolate between samples instead of only dead-reckoning past the newest.
       all = fleet.entries(tServerMs)
       if (selected !== null) s = registry.get(selected)?.stateAt(tRenderMs) ?? null
     }
+    fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
     fleetLayer.update(all, selected, tableHover ?? mapHover)
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
     table.update(all, entriesIn(all, viewRectangleDeg(viewer), onScreen, selected), selected) // re-sorts ≤ 1 Hz itself
     measure?.('fh:table', tTable)
     let clearanceM: number | null = null
+    let sunWC = viewer.camera.positionWC // browse, or no state yet: the sun where the camera is
     if (s !== null) {
-      const terrainM = viewer.scene.globe.getHeight(Cartographic.fromDegrees(s.lon, s.lat, 0, carto)) ?? null
-      const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, terrainM) }
+      if (relatchPending && !topo.animating) {
+        relatchPending = false
+        topo.relatch(relHFor(s, null, topo.relHM, airports)) // takes effect only while the map is flat
+      }
+      const sampled = globe.getHeight(Cartographic.fromDegrees(s.lon, s.lat, 0, carto))
+      if (sampled === undefined && bench !== null) performance.mark('fh:no-ground')
+      // undefined (Cesium's picker race, during an animation and before the nudge): the last reading, rescaled to this
+      // frame's factor, while the aircraft is within 50 m of where it was read. null before the first reading (tiles
+      // not loaded), after a new plane, farther than 50 m, and in a grow while the last reading is a flat one (it holds
+      // no relief): the estimate stays.
+      groundM = topo.ground(sampled, tf, acGround, carto)
+      if (groundM === null && bench !== null) performance.mark('fh:ground-unknown')
+      const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
       model?.update(placed)
       clearanceM = chaseCam.update(placed, dtS).clearanceM
       chased = placed
+      sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt)
     }
+    // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
+    // time (D12): the server reports how far its clock is ahead of the upstream's.
+    const st = sun.update(sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
+    runways.update(tf)
+    // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
+    // numbers written in place, so it runs every frame.
+    runways.setLight(selected !== null && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
     // No state (before the first samples, pruned, or a gap > 2 min): the model goes; the camera stays put.
     if (model) model.show = s !== null
     hud.update(s, shown)
@@ -418,6 +529,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') select(null)
     else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
+    else if (selected !== null) {
+      const k = sceneKey(e) // the toggles belong to chase, like their buttons (D9, D11)
+      if (k !== null) setPrefs({ ...prefs, [k]: !prefs[k] })
+    }
   }
   window.addEventListener('keydown', onKey)
 
@@ -431,6 +546,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
       bench?.destroy()
+      toggles.destroy()
       hud.destroy()
       banner.destroy()
       detail.destroy()
@@ -442,6 +558,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
       model?.destroy()
       fleetLayer.destroy()
       map.destroy()
+      viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()
       viewer.destroy()
       delete (window as unknown as { viewer?: Viewer }).viewer
