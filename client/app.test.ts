@@ -115,6 +115,7 @@ test('attribution: adsb.lol ODbL, OurAirports, OpenFlights ODbL, OpenStreetMap, 
   assert.ok(lines.some((l) => /planespotters\.net/.test(l)), lines.join(' | '))
   assert.ok(lines.includes('3D model: CesiumJS Contributors (Cesium GS, Inc.), Apache-2.0'), lines.join(' | '))
   assert.equal(attributionFor(null).length, lines.length - 1)
+  assert.equal(attributionFor(m, null).length, lines.length - 1, 'no flight-data credit before the source is known')
 })
 
 test('status shown: 3 failed polls in a row read as "upstream-down"; fewer change nothing', () => {

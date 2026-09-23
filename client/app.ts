@@ -189,9 +189,9 @@ export function readParams(search: string): AppParams {
  * street-map credits on the map itself (the OpenStreetMap one linked, as its tile policy asks). The detail panel credits
  * each photo ("Image © name", linked to its page on planespotters.net).
  */
-export function attributionFor(model: ModelManifestEntry | null, source: SourceKind = 'adsblol'): string[] {
+export function attributionFor(model: ModelManifestEntry | null, source: SourceKind | null = 'adsblol'): string[] {
   const lines = [
-    flightCredit(source),
+    ...(source === null ? [] : [flightCredit(source)]), // null until the server says which source it is
     'Airports: OurAirports (public domain)',
     AIRLINES_CREDIT,
     'Map: © OpenStreetMap contributors, ODbL',
@@ -314,7 +314,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig): Promise<{ 
   const banner = mountBanner(ui)
   const detail = mountDetail(ui, { onClose: () => select(null), photos: new PhotoCache(), lookup: lookupFor })
   const table = mountTable(right, { onSelect: (hex) => select(hex), onHover: (hex) => (tableHover = hex), flagOf })
-  const credits = mountAttribution(right, attributionFor(entry))
+  const credits = mountAttribution(right, attributionFor(entry, null))
   const sourceBadge = mountSourceBadge(right) // prepended: heads the column
   let creditSource: SourceKind | null = null
   const legend = mountLegend(div('fh-legend-root', ui))
