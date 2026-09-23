@@ -149,7 +149,7 @@ export function noseAzimuthDeg(modelMatrix: Matrix4, noseAxis: Cartesian3 = Cart
 // ---------- the chased model in the scene ----------
 
 /** Manifest uris are relative to public/, so they resolve against Vite's base URL ('/' in Node tests). */
-function modelUrl(m: ModelManifestEntry): string {
+export function modelUrl(m: ModelManifestEntry): string {
   return `${import.meta.env?.BASE_URL ?? '/'}${m.uri}`
 }
 
