@@ -1,6 +1,15 @@
 // client/ui/info.ts
-// The Info panel: keyboard and mouse shortcuts, then the data and map sources.
+// The Info panel: mouse and keyboard controls (touch gestures on a touch screen), then the data and map sources.
 import './info.css'
+
+// On a touch screen (no keys, no hover): gestures instead.
+const TOUCH: [string, string][] = [
+  ['Tap an aircraft', 'Its card: details and Chase'],
+  ['Tap the map', 'Clear the selection'],
+  ['Drag, pinch', 'Move and zoom; in chase, orbit it'],
+  ['Double-tap', 'In chase: back behind it'],
+  ['Swipe a sheet down', 'Close it'],
+]
 
 const SHORTCUTS: [string, string][] = [
   ['Click an aircraft', 'Its card: details and Chase'],
@@ -27,7 +36,7 @@ export function mountInfoPanel(root: HTMLElement): InfoPanelHandle {
   const keys = h('section', 'fh-info-sec')
   keys.append(h('h3', 'fh-info-t', 'Controls'))
   const dl = h('dl', 'fh-info-keys')
-  for (const [k, what] of SHORTCUTS) {
+  for (const [k, what] of globalThis.matchMedia?.('(pointer: coarse)').matches ? TOUCH : SHORTCUTS) {
     const dt = h('dt')
     dt.append(k.length <= 3 ? h('kbd', 'fh-kbd', k) : h('span', '', k)) // single keys as key caps
     dl.append(dt, h('dd', '', what))

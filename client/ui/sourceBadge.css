@@ -63,3 +63,11 @@
 .fh-status-rows dd[data-state='fallback'] {
   color: var(--fh-warn);
 }
+
+/* Phones: larger type. */
+@media (max-width: 640px) {
+  .fh-status-link,
+  .fh-status-rows {
+    font-size: 14px;
+  }
+}

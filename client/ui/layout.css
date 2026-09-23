@@ -1,7 +1,8 @@
 /* client/ui/layout.css */
 /* Where the overlays sit. client/app.ts builds .fh-ui[data-mode=browse|chase] over the globe with:
-     the rail and its panel (rail.css, right edge), the flight card (flightCard.css, top-left, when an aircraft is
-     focused), the toast (ui.css, top centre), the ?bench=1 overlay.
+     the rail and its panel (rail.css, right edge; on phones a bottom tab bar and sheets), the flight card
+     (flightCard.css, top-left when an aircraft is focused; on phones above the tab bar), the toast (ui.css, top
+     centre), the ?bench=1 overlay.
    The overlay layer itself never takes the pointer: the map stays draggable everywhere between the boxes. */
 .fh-ui {
   position: absolute;
@@ -11,7 +12,7 @@
   pointer-events: none;
 }
 
-/* Cesium's own bottom bar held its credits (now in the Info panel) and nothing else. */
+/* Cesium's own bottom bar held its credits (not shown: viewer.ts) and nothing else. */
 .cesium-viewer-bottom {
   display: none;
 }
@@ -19,11 +20,4 @@
 /* The bench overlay places itself top-left with inline styles, where the flight card is: move it right of the card. */
 .fh-bench > pre {
   left: 324px !important;
-}
-
-/* The list panel on a phone: a sheet of a fixed share of the screen. */
-@media (max-width: 640px) {
-  .fh-panel[data-id='aircraft'] {
-    height: 62%;
-  }
 }

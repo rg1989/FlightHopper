@@ -328,17 +328,18 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let info!: InfoPanelHandle
   let legend!: { destroy(): void }
   const rail = mountRail(ui, [
-    { id: 'status', icon: 'status', label: 'Live status', panel: { title: 'Status', mount: (b) => (statusPanel = mountStatusPanel(b)) } },
-    { id: 'aircraft', icon: 'list', label: 'Aircraft in view', group: 1, panel: {
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: (b) => (statusPanel = mountStatusPanel(b)) } },
+    { id: 'aircraft', icon: 'list', label: 'Aircraft in view', short: 'Aircraft', group: 1, panel: {
       title: 'Aircraft', wide: true,
       mount: (b, head) => (table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })),
     } },
-    { id: 'scene', icon: 'layers', label: 'Scene: terrain, sun, buildings', group: 1, panel: {
+    { id: 'scene', icon: 'layers', label: 'Scene: terrain, sun, buildings', short: 'Scene', group: 1, panel: {
       title: 'Scene', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
     } },
-    { id: 'legend', icon: 'altitude', label: 'Altitude colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
-    { id: 'info', icon: 'info', label: 'Controls and credits', group: 2, panel: { title: 'About', mount: (b) => (info = mountInfoPanel(b)) } },
-    { id: 'fullscreen', icon: 'maximize', label: 'Full screen', group: 2, action: () => toggleFullscreen() },
+    { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
+    { id: 'info', icon: 'info', label: 'Controls and credits', short: 'About', group: 2, panel: { title: 'About', mount: (b) => (info = mountInfoPanel(b)) } },
+    // Not where the page cannot go full screen (iPhone Safari).
+    ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', group: 2, action: () => toggleFullscreen() } as const] : []),
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
   })
@@ -357,7 +358,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const onFullscreen = (): void => {
     const b = rail.button('fullscreen')
     const full = document.fullscreenElement !== null
-    b.replaceChildren(icon(full ? 'minimize' : 'maximize'))
+    b.querySelector('svg')?.replaceWith(icon(full ? 'minimize' : 'maximize'))
     b.dataset.tip = full ? 'Exit full screen' : 'Full screen'
     b.setAttribute('aria-label', b.dataset.tip)
   }
@@ -465,9 +466,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
   }
 
-  /** A row of the list: focus that aircraft and, on the map, fly over it at the same zoom (it may be off-screen). */
+  /**
+   * A row of the list: focus that aircraft and, on the map, fly over it at the same zoom (it may be off-screen). Where
+   * the card and the panel do not fit side by side (flightCard.css), the list closes so the card shows.
+   */
   function pickFromList(hex: string): void {
     select(hex)
+    if (matchMedia('(max-width: 860px)').matches) rail.close()
     const e = fleet.get(hex)
     if (!chasing && e !== undefined) enterBrowse(viewer, e, { heightM: viewer.camera.positionCartographic.height })
   }
@@ -689,8 +694,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Cesium's default double-click tracks an entity (the runway markers are entities), which would fight the chase camera.
   viewer.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
+  const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
-    const hex = fleetLayer.pick(e.position)
+    const hex = fleetLayer.pick(e.position, tapPx)
     if (hex !== null) select(hex)
     else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
   }, ScreenSpaceEventType.LEFT_CLICK)

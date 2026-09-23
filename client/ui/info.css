@@ -44,3 +44,18 @@
   font-size: 11px;
   line-height: 1.6;
 }
+
+/* Phones: larger type. */
+@media (max-width: 640px) {
+  .fh-info-t {
+    font-size: 11px;
+  }
+
+  .fh-info-keys {
+    font-size: 14px;
+  }
+
+  .fh-info-credits {
+    font-size: 13px;
+  }
+}

@@ -1,6 +1,6 @@
 // client/scene/chaseCamera.ts
 import { Cartesian3, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
-import type { Camera, Cartographic, Scene, Viewer } from 'cesium'
+import type { Camera, Cartesian2, Cartographic, Scene, Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
 
 const RAD = Math.PI / 180
@@ -30,6 +30,9 @@ export function chaseOffsetEnu(headingDeg: number, pitchDeg: number, rangeM: num
  * User-controlled orbit around the chased aircraft: horizontal angle relative to its nose, look pitch and distance.
  * Drag convention as in three.js OrbitControls: the aircraft follows the mouse (drag right → camera swings to its left).
  */
+const DOUBLE_TAP_MS = 350
+const DOUBLE_TAP_PX = 40
+
 export class OrbitControl {
   headingOffsetDeg = 0
   pitchDeg: number
@@ -50,6 +53,11 @@ export class OrbitControl {
   /** Cesium wheel delta: positive = wheel up = closer. */
   wheel(delta: number): void {
     this.rangeM = clamp(this.rangeM * Math.exp(-delta * ZOOM_PER_WHEEL), RANGE_MIN_M, RANGE_MAX_M)
+  }
+
+  /** Two-finger pinch: the fingers spread by `ratio` (new / old distance), the camera comes that much closer. */
+  pinch(ratio: number): void {
+    if (ratio > 0 && Number.isFinite(ratio)) this.rangeM = clamp(this.rangeM / ratio, RANGE_MIN_M, RANGE_MAX_M)
   }
 
   /** A given orbit (a reload's ?cam=), clamped like the mouse's. */
@@ -137,7 +145,10 @@ export class ChaseCamera {
     this.#scene.screenSpaceCameraController.enableInputs = true
   }
 
-  /** First chased frame: route the mouse to the orbit instead of Cesium's globe controls. No-op without a DOM canvas. */
+  /**
+   * First chased frame: route the mouse and touch to the orbit instead of Cesium's globe controls: drag (one finger)
+   * orbits, wheel or pinch zooms, a double click or double tap goes back behind the aircraft. No-op without a DOM canvas.
+   */
   #attachInput(): void {
     if (this.#input || typeof (this.#scene.canvas as { addEventListener?: unknown }).addEventListener !== 'function') return
     this.#scene.screenSpaceCameraController.enableInputs = false
@@ -149,7 +160,21 @@ export class ChaseCamera {
       if (dragging) this.orbit.drag(m.endPosition.x - m.startPosition.x, m.endPosition.y - m.startPosition.y)
     }, ScreenSpaceEventType.MOUSE_MOVE)
     h.setInputAction((delta: number) => this.orbit.wheel(delta), ScreenSpaceEventType.WHEEL)
-    h.setInputAction(() => this.orbit.reset(), ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
+    // Cesium passes the finger spread as distance.{start,end}Position.y (a quarter of the pixel distance; its .d.ts
+    // TwoPointMotionEvent names other fields that are not there): only the ratio matters.
+    type Pinch = { distance: { startPosition: Cartesian2; endPosition: Cartesian2 } }
+    const onPinch = (m: Pinch): void => this.orbit.pinch(m.distance.endPosition.y / m.distance.startPosition.y)
+    h.setInputAction(onPinch as unknown as ScreenSpaceEventHandler.TwoPointMotionEventCallback, ScreenSpaceEventType.PINCH_MOVE)
+    // Two clicks close in time and place: Cesium sends no double click for a double tap, so both come this way.
+    let lastClick: { ms: number; x: number; y: number } | null = null
+    h.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
+      const now = performance.now()
+      const p = e.position
+      if (lastClick !== null && now - lastClick.ms < DOUBLE_TAP_MS && Math.hypot(p.x - lastClick.x, p.y - lastClick.y) < DOUBLE_TAP_PX) {
+        this.orbit.reset()
+        lastClick = null
+      } else lastClick = { ms: now, x: p.x, y: p.y }
+    }, ScreenSpaceEventType.LEFT_CLICK)
   }
 
   /** Exponential smoothing towards the aircraft heading along the shorter way round; the first frame snaps. */

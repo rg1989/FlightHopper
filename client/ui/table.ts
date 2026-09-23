@@ -35,7 +35,8 @@ export const COLUMNS: readonly TableColumn[] = [
   { key: 'speed', label: 'Kt', title: 'Ground speed in knots', num: true },
 ]
 
-export const ROW_H = 30 // px; fixed, the virtual scroll depends on it (table.css .fh-row height)
+export const ROW_H = 30 // px; fixed, the virtual scroll depends on it (table.css .fh-row height, via --fh-row-h)
+export const TOUCH_ROW_H = 44 // on touch screens: a finger-sized row
 export const OVERSCAN = 8 // rows kept above and below the viewport so a fast scroll never shows a gap
 export const REFRESH_MS = 10_000 // the list's own rhythm: stable rows between refreshes
 export const REFRESHING_MS = 380 // how long a refresh shows (dimmed, clicks ignored) before the new rows land
@@ -251,6 +252,8 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
 
   const el = h('div', 'fh-table')
   el.setAttribute('aria-label', 'Aircraft in view')
+  const rowH = globalThis.matchMedia?.('(pointer: coarse)').matches ? TOUCH_ROW_H : ROW_H
+  el.style.setProperty('--fh-row-h', `${rowH}px`)
   const counts = h('span', 'fh-table-counts fh-num')
   const { btn: refreshBtn, ring } = refreshButton()
   head.append(counts, refreshBtn)
@@ -365,7 +368,7 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
     if (s.row !== i) {
       if (s.row === -1) s.el.hidden = false
       s.row = i
-      s.el.style.transform = `translateY(${i * ROW_H}px)`
+      s.el.style.transform = `translateY(${i * rowH}px)`
     }
     if (s.hex !== e.hex) {
       s.hex = e.hex
@@ -382,7 +385,7 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
   }
 
   function render(): void {
-    const { first, end } = windowRange(scroll.scrollTop, viewH, ROW_H, count, OVERSCAN)
+    const { first, end } = windowRange(scroll.scrollTop, viewH, rowH, count, OVERSCAN)
     if (end - first > slots.length) {
       // More rows fit than there are elements: grow, and forget the old row → element mapping (it was i % old size).
       for (const s of slots) hide(s)
@@ -407,7 +410,7 @@ export function mountTable(body: HTMLElement, head: HTMLElement, opts: TableOpts
     if (query.trim() === '') snap = list as Row[] // same rows, now in display order
     if (list.length !== count) {
       count = list.length
-      spacer.style.height = `${count * ROW_H}px`
+      spacer.style.height = `${count * rowH}px`
     }
     skeleton.hidden = isReady
     const none = isReady && count === 0

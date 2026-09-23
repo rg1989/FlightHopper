@@ -167,29 +167,142 @@
   z-index: 1;
 }
 
-/* Phones: the panel is a sheet across the bottom, the rail stays on the right. */
-@media (max-width: 640px) {
-  .fh-rail {
-    top: 8px;
-    right: 8px;
+/* Touch screens (a phone on its side, a tablet): finger-sized rail buttons, the panel beside them. */
+@media (pointer: coarse) {
+  .fh-rail .fh-ibtn {
+    width: 44px;
+    height: 44px;
   }
 
-  .fh-panel,
-  .fh-panel.fh-wide {
+  .fh-panel {
+    right: 72px;
+  }
+}
+
+/* Touch: a tap leaves :hover stuck on the button, which would pin its tooltip open. */
+@media (hover: none) {
+  .fh-ibtn[data-tip]:hover::after {
+    display: none;
+  }
+}
+
+/* The tab-bar label under each icon: phones only. */
+.fh-ibtn-label {
+  display: none;
+}
+
+/* Phones: the rail is a tab bar along the bottom (icon over a short label, full-width touch targets), and a panel is a
+   sheet rising from it, closed by its X, the same tab, Esc or a swipe down on its header. */
+@media (max-width: 640px) {
+  .fh-rail {
     top: auto;
-    right: 8px;
-    bottom: 8px;
-    left: 8px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    height: var(--fh-tabbar-h);
+    padding: 4px 4px env(safe-area-inset-bottom, 0px);
+    border-width: 1px 0 0;
+    border-radius: 0;
+  }
+
+  .fh-rail-sep {
+    display: none;
+  }
+
+  .fh-rail .fh-ibtn {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
     width: auto;
-    max-height: 62%;
-    animation-name: fh-sheet-in;
+    height: 52px;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .fh-rail .fh-ibtn .fh-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .fh-ibtn-label {
+    display: block;
+    font: 600 11px/1 var(--fh-font);
+    letter-spacing: 0.01em;
+  }
+
+  .fh-rail .fh-ibtn[aria-expanded='true'] {
+    background: transparent;
+  }
+
+  /* Badge and state dot ride on the icon's top-right corner. */
+  .fh-rail .fh-badge {
+    top: 3px;
+    right: auto;
+    left: calc(50% + 5px);
+  }
+
+  .fh-rail .fh-ibtn-dot {
+    top: 9px;
+    right: auto;
+    bottom: auto;
+    left: calc(50% + 6px);
+  }
+
+  .fh-rail .fh-ibtn.fh-busy::before {
+    inset: 4px calc(50% - 20px) auto;
+    height: 40px;
+    border-radius: 12px;
   }
 
   .fh-rail .fh-ibtn[data-tip]:hover::after {
     display: none;
   }
+
+  .fh-panel,
+  .fh-panel.fh-wide {
+    top: auto;
+    right: 0;
+    bottom: var(--fh-tabbar-h);
+    left: 0;
+    width: auto;
+    max-height: calc(100% - var(--fh-tabbar-h) - 64px);
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    background: #0d1119; /* opaque: the card and icons under a sheet would read through it */
+    transition: transform 200ms var(--fh-ease);
+    animation-name: fh-sheet-in;
+  }
+
+  /* A grab handle: the header is the drag area. */
+  .fh-panel-head {
+    position: relative;
+    height: 56px;
+    padding: 6px 8px 0 18px;
+    touch-action: none;
+  }
+
+  .fh-panel-head::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  .fh-panel-title {
+    font-size: 16px;
+  }
 }
 
 @keyframes fh-sheet-in {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(24px); }
 }

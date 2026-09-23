@@ -154,7 +154,7 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 30px;
+  height: var(--fh-row-h, 30px);
   border-left: 2px solid transparent;
   color: var(--fh-text);
   cursor: pointer;
@@ -229,7 +229,7 @@
   grid-template-columns: 24px 1fr 84px;
   gap: 10px;
   align-items: center;
-  height: 30px;
+  height: var(--fh-row-h, 30px);
 }
 
 .fh-skel-row .fh-skel {
@@ -238,4 +238,31 @@
 
 .fh-skel-row .fh-skel:nth-child(2) {
   width: 55%;
+}
+
+/* Phones: larger type in the list; the sheet is a fixed share of the screen so it does not jump as rows come and go. */
+@media (max-width: 640px) {
+  .fh-panel[data-id='aircraft'] {
+    height: calc(100% - var(--fh-tabbar-h) - 64px);
+  }
+
+  .fh-row {
+    font-size: 14px;
+  }
+
+  .fh-table-cols button {
+    font-size: 12px;
+  }
+
+  .fh-grid {
+    grid-template-columns: 22px minmax(0, 1fr) 50px 84px 38px;
+    padding: 0 16px 0 14px;
+  }
+}
+
+@media (pointer: coarse) {
+  .fh-table-cols,
+  .fh-table-cols button {
+    height: 40px;
+  }
 }

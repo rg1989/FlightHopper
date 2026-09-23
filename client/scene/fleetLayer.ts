@@ -195,8 +195,9 @@ export class FleetLayer {
     this.#updateLabel(hover ?? sel, hoverE ?? selE, sel !== null && (hover ?? sel) === sel)
   }
 
-  pick(windowPos: Cartesian2): string | null {
-    const id: unknown = this.#scene.pick(windowPos)?.id
+  /** The aircraft under windowPos; sizePx widens the search (Cesium spirals out from the centre: the nearest wins). */
+  pick(windowPos: Cartesian2, sizePx = 3): string | null {
+    const id: unknown = this.#scene.pick(windowPos, sizePx, sizePx)?.id
     return typeof id === 'string' && this.#byHex.has(id) ? id : null
   }
 

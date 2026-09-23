@@ -76,3 +76,18 @@
   color: var(--fh-muted);
   font: 600 10px/1 var(--fh-font);
 }
+
+/* Touch screens have no keys to name. */
+@media (pointer: coarse) {
+  .fh-scene .fh-kbd {
+    display: none;
+  }
+}
+
+/* Phones: larger type. */
+@media (max-width: 640px) {
+  .fh-scene-note,
+  .fh-scene-hint {
+    font-size: 13px;
+  }
+}

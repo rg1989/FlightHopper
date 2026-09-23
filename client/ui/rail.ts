@@ -1,7 +1,9 @@
 // client/ui/rail.ts
 // The tool rail: small square icon buttons down the right edge. A button opens its panel beside the rail (one panel at a
 // time; all start closed) or runs an action. Panel bodies are mounted once, at start, so their owners can update them
-// while they are closed. The app routes Esc here first (close()), then to leaving chase.
+// while they are closed. The app routes Esc here first (close()), then to leaving chase. On phones (rail.css) the rail
+// is a tab bar along the bottom with a short label under each icon, and a panel is a sheet above it that a downward
+// swipe on its header closes.
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -9,6 +11,7 @@ export interface RailItem {
   id: string
   icon: IconName
   label: string // tooltip and aria-label, e.g. 'Aircraft list'
+  short: string // the label under the icon in the phone tab bar, e.g. 'Aircraft'
   group?: number // a thin divider goes between groups
   /** Opens a panel titled `title`; mount() fills its body (and may add controls to its header) once, at start. */
   panel?: { title: string; wide?: boolean; mount(body: HTMLElement, head: HTMLElement): void }
@@ -25,6 +28,9 @@ export interface RailHandle {
   setDot(id: string, state: 'live' | 'replay' | 'trouble' | 'wait' | null): void
   destroy(): void
 }
+
+/** Where rail.css turns the rail into a bottom tab bar and panels into sheets. */
+export const SHEET_MEDIA = '(max-width: 640px)'
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag)
@@ -67,7 +73,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     b.setAttribute('aria-label', item.label)
     b.dataset.tip = item.label
     b.dataset.id = item.id
-    b.append(icon(item.icon))
+    b.append(icon(item.icon), el('span', 'fh-ibtn-label', item.short))
     if (item.panel) b.setAttribute('aria-expanded', 'false')
     b.addEventListener('click', () => (item.panel ? api.open(openId === item.id ? null : item.id) : item.action?.()))
     rail.append(b)
@@ -85,6 +91,31 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   }
   close.addEventListener('click', () => api.open(null))
   root.append(rail, panel)
+
+  // Phone sheet: drag the header down to close (past SWIPE_PX), else it springs back. Clicks on its buttons stay clicks.
+  const SWIPE_PX = 70
+  let drag: { id: number; y0: number; dy: number } | null = null
+  head.addEventListener('pointerdown', (e) => {
+    if (!matchMedia(SHEET_MEDIA).matches || (e.target as Element).closest('button, input')) return
+    drag = { id: e.pointerId, y0: e.clientY, dy: 0 }
+    head.setPointerCapture(e.pointerId)
+    panel.style.transition = 'none'
+  })
+  head.addEventListener('pointermove', (e) => {
+    if (drag === null || e.pointerId !== drag.id) return
+    drag.dy = Math.max(0, e.clientY - drag.y0)
+    panel.style.transform = `translateY(${drag.dy}px)`
+  })
+  const endDrag = (e: PointerEvent): void => {
+    if (drag === null || e.pointerId !== drag.id) return
+    const done = drag.dy > SWIPE_PX
+    drag = null
+    panel.style.transition = ''
+    panel.style.transform = ''
+    if (done) api.open(null)
+  }
+  head.addEventListener('pointerup', endDrag)
+  head.addEventListener('pointercancel', endDrag)
 
   const api: RailHandle = {
     get openId() {

@@ -21,6 +21,17 @@
   --fh-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
   --fh-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fh-fast: 150ms;
+  --fh-tabbar-h: 0px; /* the phone tab bar (rail.css): overlays that sit at the bottom stay above it */
+}
+
+@media (max-width: 640px) {
+  :root {
+    --fh-tabbar-h: calc(61px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .fh-ui {
+    font-size: 14px;
+  }
 }
 
 .fh-ui {
@@ -271,6 +282,43 @@
 /* A tooltip-like hint line under a heading. */
 .fh-muted {
   color: var(--fh-muted);
+}
+
+/* Touch screens: every control a finger target (44 px, Apple HIG), and 16 px in text fields (iOS zooms the page into
+   anything smaller when it takes focus). */
+@media (pointer: coarse) {
+  .fh-ibtn.fh-sm {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+
+  .fh-ibtn,
+  .fh-switch,
+  .fh-pill {
+    touch-action: manipulation; /* no double-tap zoom delay */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .fh-switch {
+    width: 46px;
+    height: 28px;
+    border-radius: 14px;
+  }
+
+  .fh-switch::after {
+    width: 24px;
+    height: 24px;
+  }
+
+  .fh-switch[aria-checked='true']::after {
+    transform: translateX(18px);
+  }
+
+  .fh-field {
+    height: 42px;
+    font-size: 16px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

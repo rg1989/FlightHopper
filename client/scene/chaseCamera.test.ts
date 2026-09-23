@@ -221,6 +221,20 @@ test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 3 km;
   assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [0, -12, 150])
 })
 
+test('OrbitControl: a pinch spreading the fingers 2× halves the distance, closing them doubles it; clamped; junk ignored', () => {
+  const o = new OrbitControl(-12, 400)
+  o.pinch(2)
+  near(o.rangeM, 200, 1e-9)
+  o.pinch(0.25)
+  near(o.rangeM, 800, 1e-9)
+  for (const bad of [0, -1, Infinity, NaN]) o.pinch(bad) // a zero start distance divides to Infinity or NaN
+  near(o.rangeM, 800, 1e-9)
+  o.pinch(1e6)
+  near(o.rangeM, 25, 1e-9)
+  o.pinch(1e-6)
+  near(o.rangeM, 3000, 1e-9)
+})
+
 test('ChaseCamera follows the orbit: 90° offset looks east from the west side; zoom sets the distance', () => {
   const { camera, viewer } = fakeViewer(() => 0)
   const cc = new ChaseCamera(viewer)

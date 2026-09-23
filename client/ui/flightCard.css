@@ -281,15 +281,6 @@
   font-weight: 600;
 }
 
-@media (max-width: 640px) {
-  .fh-card {
-    top: 8px;
-    left: 8px;
-    right: 60px;
-    width: auto;
-    max-height: 55%;
-  }
-}
 
 /* Status line and the primary action (Chase / Map) side by side. */
 .fh-card-foot {
@@ -348,4 +339,73 @@
 .fh-pill-secondary:hover {
   background: rgba(255, 255, 255, 0.16);
   filter: none;
+}
+
+/* Phones: the card sits above the tab bar, full width, where the thumb reaches Chase; the map above stays clear.
+   Expanded, it grows upwards and scrolls. Larger type, and a 44 px Chase button. */
+@media (max-width: 640px) {
+  .fh-card {
+    top: auto;
+    right: 8px;
+    bottom: calc(var(--fh-tabbar-h) + 8px);
+    left: 8px;
+    width: auto;
+    max-height: calc(100% - var(--fh-tabbar-h) - 72px);
+    animation-name: fh-card-up;
+  }
+
+  .fh-card-head {
+    padding: 12px 6px 4px 14px;
+  }
+
+  .fh-card-callsign {
+    font-size: 20px;
+  }
+
+  .fh-card-sub {
+    font-size: 13px;
+  }
+
+  .fh-card-stat-v {
+    font-size: 17px;
+  }
+
+  .fh-card-stat-l {
+    font-size: 11px;
+  }
+
+  .fh-card-status {
+    font-size: 13px;
+  }
+
+  .fh-card-row {
+    padding: 6px 0;
+    font-size: 14px;
+  }
+
+  .fh-pill {
+    height: 44px;
+    padding: 0 16px 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+}
+
+/* Narrow screens: the card (312 px) and an open panel (up to 512 px with the rail) do not fit side by side, and on a
+   phone a sheet takes the bottom where the card is: the card waits, hidden, until the panel closes. */
+@media (max-width: 860px) {
+  .fh-ui:has(.fh-panel:not([hidden])) .fh-card {
+    visibility: hidden;
+  }
+}
+
+/* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both). */
+@media (max-width: 640px) {
+  .fh-ui[data-mode='chase'] .fh-card-sub {
+    display: none;
+  }
+}
+
+@keyframes fh-card-up {
+  from { opacity: 0; transform: translateY(8px); }
 }
