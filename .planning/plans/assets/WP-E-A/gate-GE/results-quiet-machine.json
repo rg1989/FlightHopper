@@ -1,0 +1,21 @@
+{
+  "ground.load": {
+    "loadS": 55.6
+  },
+  "ground.before": {
+    "f": 1.00001,
+    "relH": 0,
+    "hud": "SYN601 · A320 · 000e01GS8 ktALTGNDVS0 fpmTRK265°HDG264°AGE1.5 sSRCADS-B v2 (replay)observedderivedstale"
+  },
+  "ground.flat": {
+    "f": 1e-7,
+    "relH": 627.72,
+    "hud": "SYN601 · A320 · 000e01GS0 ktALTGNDVS0 fpmTRK—HDG000°AGE1.7 sSRCADS-B v2 (replay)observedderivedstale"
+  },
+  "ground.grown": {
+    "f": 1.0000101000000001,
+    "relH": 627.72,
+    "hud": "SYN601 · A320 · 000e01GS0 ktALTGNDVS0 fpmTRK—HDG000°AGE8.3 sSRCADS-B v2 (replay)observedderivedstale"
+  },
+  "ground.errors": []
+}

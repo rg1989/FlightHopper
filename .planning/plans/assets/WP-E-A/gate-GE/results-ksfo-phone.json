@@ -1,0 +1,39 @@
+{
+  "ksfo.load": {
+    "loadS": 17.3
+  },
+  "ksfo": {
+    "dayNumber": 2461306,
+    "secondsOfDay": 21661,
+    "iso": "2026-09-22T18:00:23.757Z",
+    "lighting": true
+  },
+  "phone.load": {
+    "loadS": 6.6
+  },
+  "phone.375x812": {
+    "toggles": [
+      205,
+      8,
+      367,
+      46,
+      "flex"
+    ],
+    "detail": [
+      8,
+      52,
+      367,
+      428,
+      "block"
+    ],
+    "hud": [
+      8,
+      436,
+      187,
+      608,
+      "block"
+    ],
+    "scrollW": 375,
+    "innerW": 375
+  }
+}

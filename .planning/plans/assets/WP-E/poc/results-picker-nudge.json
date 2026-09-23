@@ -1,0 +1,26 @@
+{
+  "picker0.load": {
+    "loadS": 18.964
+  },
+  "picker0.tally": {
+    "nullAfter": 40,
+    "samplesAfter": 80,
+    "nullDuringAnim": 5,
+    "animFrames": 1233
+  },
+  "picker1.load": {
+    "loadS": 8.495
+  },
+  "picker1.tally": {
+    "nullAfter": 0,
+    "samplesAfter": 80,
+    "nullDuringAnim": 0,
+    "animFrames": 1203
+  },
+  "golden2.load": {
+    "loadS": 8.428
+  },
+  "night2.load": {
+    "loadS": 8.332
+  }
+}

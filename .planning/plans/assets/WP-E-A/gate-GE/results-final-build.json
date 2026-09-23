@@ -1,0 +1,50 @@
+{
+  "app.load": {
+    "loadS": 8
+  },
+  "app.first": {
+    "f": 1.00001,
+    "lighting": true,
+    "shadows": false,
+    "toggles": [
+      [
+        "3-D terrain",
+        "true"
+      ],
+      [
+        "Sun",
+        "true"
+      ]
+    ],
+    "clock": "2461305:79256"
+  },
+  "app.toggles": {
+    "fpsP50": 137,
+    "fpsP5": 103.1,
+    "longTasks": [],
+    "worstAnimFrameMs": [
+      17.8,
+      15.6,
+      11.4,
+      44.9,
+      12.3,
+      13.3,
+      13.7,
+      15.6,
+      13.7,
+      16.6
+    ],
+    "noGround": 347,
+    "groundUnknown": 0,
+    "groundUnknownSettled": 0,
+    "noGroundInAnimOrNudge": 347,
+    "noGroundSettled": 0,
+    "noGroundMaxConsecutive": 84,
+    "frames": 5480,
+    "f": 1.0000101000000001,
+    "relH": 627.72,
+    "shadows": false,
+    "bench": "bench 000e01 · 6548 frames · 1440×813 px\nfps p50 141.8 · p5 125.0 · frame p95 8.0 ms\nlong tasks 7 · max 544 ms\nclearance min 326 m · violations 0\nheap 173 MB\n000e01 interp 8800 ft"
+  },
+  "app.errors": []
+}

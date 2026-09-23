@@ -1,0 +1,26 @@
+<!-- harness/terrain-sun.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness: terrain and sun PoC</title>
+    <style>
+      html, body, #globe { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+      #info { position: absolute; top: 8px; left: 8px; padding: 6px 10px; font: 12px/1.45 ui-monospace, monospace; color: #fff; background: rgba(0, 0, 0, 0.65); border-radius: 4px; white-space: pre; pointer-events: none; }
+      #bar { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; }
+      #bar button { font: 12px ui-monospace, monospace; padding: 5px 9px; border-radius: 4px; border: 1px solid #555; background: rgba(0, 0, 0, 0.7); color: #fff; cursor: pointer; }
+      #bar button[aria-pressed='true'] { background: #1f5fa8; border-color: #6aa6ec; }
+    </style>
+  </head>
+  <body>
+    <div id="globe"></div>
+    <div id="info"></div>
+    <div id="bar">
+      <button id="topo" aria-pressed="true" title="T">3-D terrain</button>
+      <button id="light" aria-pressed="true" title="L">Sun lighting</button>
+      <button id="shadow" aria-pressed="true" title="S">Shadows</button>
+    </div>
+    <script type="module" src="/harness/terrain-sun.ts"></script>
+  </body>
+</html>

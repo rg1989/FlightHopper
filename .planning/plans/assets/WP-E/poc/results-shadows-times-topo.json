@@ -1,0 +1,128 @@
+{
+  "shadow.load": {
+    "loadS": 93.162
+  },
+  "shadow.fps": {
+    "fps": 117.9,
+    "p50": 8.3,
+    "p95": 13.3,
+    "max": 29.9
+  },
+  "shadow.stats": {
+    "fps": 115.09135376221312,
+    "groundM": null,
+    "trueGroundM": 625.3791720273903,
+    "clearanceM": null,
+    "f": 1,
+    "relH": 0,
+    "tilesLoaded": false
+  },
+  "shadow.receiveOnly.fps": {
+    "fps": 106.4,
+    "p50": 9.2,
+    "p95": 14,
+    "max": 16.1
+  },
+  "golden.load": {
+    "loadS": 33.062
+  },
+  "golden.fps": {
+    "fps": 62.7,
+    "p50": 15.2,
+    "p95": 33.4,
+    "max": 35.2
+  },
+  "night.load": {
+    "loadS": 34.354
+  },
+  "night.fps": {
+    "fps": 63.6,
+    "p50": 14.8,
+    "p95": 32.4,
+    "max": 35
+  },
+  "topo.load": {
+    "loadS": 11.973
+  },
+  "topo.mid": {
+    "fps": 38.938914577756144,
+    "groundM": 625.4280723623026,
+    "trueGroundM": 625.3791720273903,
+    "clearanceM": 2105.76338179282,
+    "f": 0,
+    "relH": 625.4290178540862,
+    "tilesLoaded": true
+  },
+  "topo.sinkAnim": {
+    "from": 1,
+    "to": 0,
+    "t0": 13024.19999999553,
+    "running": false,
+    "maxFrameMs": 2008.8999999985099,
+    "frames": 25,
+    "sumMs": 2532.89999999851
+  },
+  "topo.flat": {
+    "fps": 65.29190924429909,
+    "groundM": 625.4280723623026,
+    "trueGroundM": 625.3791720273903,
+    "clearanceM": 2105.76338179282,
+    "f": 0,
+    "relH": 625.4290178540862,
+    "tilesLoaded": true
+  },
+  "topo.flat.fps": {
+    "fps": 56.9,
+    "p50": 17.8,
+    "p95": 33.4,
+    "max": 39.7
+  },
+  "topo.growMid": {
+    "fps": 54.398331784418446,
+    "groundM": 625.4289342647481,
+    "trueGroundM": 625.3791720273903,
+    "clearanceM": 2105.5041250407735,
+    "f": 0.524351433803645,
+    "relH": 625.4290178540862,
+    "tilesLoaded": false
+  },
+  "topo.growAnim": {
+    "from": 0,
+    "to": 1,
+    "t0": 29601.39999999851,
+    "running": false,
+    "maxFrameMs": 166.89999999850988,
+    "frames": 121,
+    "sumMs": 2527.7999999970198
+  },
+  "topo.regrown": {
+    "fps": 68.55967548431944,
+    "groundM": null,
+    "trueGroundM": 625.3791720273903,
+    "clearanceM": null,
+    "f": 1,
+    "relH": 625.4290178540862,
+    "tilesLoaded": true
+  },
+  "low.load": {
+    "loadS": 15.955
+  },
+  "low.stats": {
+    "fps": 64.51439477430819,
+    "groundM": 752.0739866776806,
+    "trueGroundM": 751.9368168939664,
+    "clearanceM": 56.84389492904438,
+    "f": 1,
+    "relH": 0,
+    "tilesLoaded": true
+  },
+  "fly.load": {
+    "loadS": 7.141
+  },
+  "fly.fps": {
+    "fps": 60.3,
+    "p50": 13,
+    "p95": 32.7,
+    "max": 391.6
+  }
+}
