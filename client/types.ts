@@ -24,6 +24,29 @@ export interface RenderState {
   typeCode: string | null
 }
 
+/**
+ * What the flight-data frame around the chased aircraft shows (client/scene/flightFrame.ts), in a scenario or a live
+ * chase. null: unknown, not shown. Fields in `derived` are estimates and are drawn dimmer.
+ */
+export interface FlightData {
+  altFt: number | null // above mean sea level (a scenario: true altitude; live: barometric)
+  aglFt: number | null // above the ground drawn under the aircraft
+  vsFpm: number | null
+  iasKt: number | null
+  gsKt: number | null
+  hdgDeg: number | null // true heading of the nose
+  trackDeg: number | null // true course over the ground
+  pitchDeg: number | null // nose-up +
+  rollDeg: number | null // right-wing-down +
+  g: number | null // vertical load factor
+  windFromDeg: number | null // true, where the wind blows from
+  windKt: number | null
+  gear: 'up' | 'down' | null
+  flaps: number | null // units
+  epr: readonly number[] | null // thrust, one per engine
+  derived: ReadonlySet<keyof FlightData>
+}
+
 export interface ClientConfig {
   terrain: 'ion' | 'reearth' | 'ellipsoid'
   imagery: 'ion' | 'esri' | 'eox' | 'none'
