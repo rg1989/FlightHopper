@@ -201,7 +201,7 @@ test('mountFlightCard: hidden until an aircraft (and a status) is given, filled 
   c.update('4691c4', S, RAW, INFO, LIVE, false)
   assert.equal(card.hidden, false)
   assert.equal(byClass(card, 'fh-card-callsign').textContent, 'AEE4266')
-  assert.equal(byClass(card, 'fh-card-sub').textContent, 'Aegean Airlines · SX-DND')
+  assert.equal(byClass(card, 'fh-card-sub-t').textContent, 'Aegean Airlines · SX-DND')
   assert.equal(statValue(card, 1), '337')
   assert.equal(byClass(card, 'fh-card-status-t').textContent, 'Live · ADS-B v2')
   c.update(null, null, null, null, LIVE, false)
@@ -227,14 +227,14 @@ test('mountFlightCard: text updates at most every 250 ms, and the newest state a
   c.destroy()
 }))
 
-test('mountFlightCard: the pill says Chase on the map and Top-down map in the chase, at once, and asks for the other', () => withClock(() => {
+test('mountFlightCard: the pill says Chase on the map and Map in the chase, at once, and asks for the other', () => withClock(() => {
   const { card, c, chases } = setup()
   c.update('4691c4', S, RAW, INFO, LIVE, false)
   assert.equal(pillText(card), 'Chase in 3-D')
   byClass(card, 'fh-pill').fire('click')
   assert.deepEqual(chases, [true])
   c.update('4691c4', S, RAW, INFO, LIVE, true) // no throttle wait for a mode change
-  assert.equal(pillText(card), 'Top-down map')
+  assert.equal(pillText(card), 'Map')
   assert.equal(byClass(card, 'fh-pill').classList.contains('fh-pill-secondary'), true)
   byClass(card, 'fh-pill').fire('click')
   assert.deepEqual(chases, [true, false])
@@ -249,7 +249,9 @@ test('mountFlightCard: the photo sits above the stats, collapsed or not, asked f
   assert.equal(photo.classList.contains('fh-skel'), true, 'skeleton (and spinner) while it loads')
   await flush()
   assert.deepEqual(fetches, ['https://api.planespotters.net/pub/photos/hex/4691C4'])
-  button(card, /Show details/).fire('click') // expanding does not ask again
+  const expand = button(card, /Show details/)
+  assert.equal(expand.parent, byClass(card, 'fh-card-foot'), 'the toggle sits by the status line, not in the header')
+  expand.fire('click') // expanding does not ask again
   assert.equal(byClass(card, 'fh-card-more').hidden, false)
   await flush()
   assert.equal(fetches.length, 1)
@@ -261,9 +263,10 @@ test('mountFlightCard: the photo sits above the stats, collapsed or not, asked f
   assert.equal(img.hidden, true, 'shown once it loads')
   img.fire('load')
   assert.deepEqual([img.hidden, credit.hidden, byClass(card, 'fh-card-photo').classList.contains('fh-skel')], [false, false, false])
-  img.fire('error') // the CDN image fails: no orphan credit
-  assert.deepEqual([img.hidden, credit.hidden], [true, true])
-  assert.equal(byClass(card, 'fh-card-note').textContent, 'Photo unavailable')
+  assert.equal(byClass(card, 'fh-card-nophoto').hidden, true)
+  img.fire('error') // the CDN image fails: no orphan credit, no empty box; the camera mark says so
+  assert.deepEqual([img.hidden, credit.hidden, photo.hidden], [true, true, true])
+  assert.equal(byClass(card, 'fh-card-nophoto').title, 'Photo unavailable (could not load it)')
   c.destroy()
 })
 
@@ -278,7 +281,9 @@ test('mountFlightCard: a photo that arrives after the selection moved on is drop
   assert.equal(fetches.length, 2)
   const img = all(card).find((e) => e.tag === 'img')!
   assert.equal(img.src, undefined)
-  assert.equal(byClass(card, 'fh-card-note').textContent, 'No photo')
+  assert.equal(byClass(card, 'fh-card-photo').hidden, true, 'no photo: no box')
+  assert.equal(byClass(card, 'fh-card-nophoto').hidden, false)
+  assert.equal(byClass(card, 'fh-card-nophoto').title, 'No photo available')
   assert.equal(byClass(card, 'fh-card-credit').hidden, true)
   c.destroy()
 })
@@ -287,7 +292,8 @@ test('mountFlightCard: a failed photo lookup says so, rather than "No photo"', a
   const { card, c } = setup(undefined, 503)
   c.update('4691c4', S, RAW, INFO, LIVE, false)
   await flush()
-  assert.equal(byClass(card, 'fh-card-note').textContent, 'Photo unavailable')
+  assert.equal(byClass(card, 'fh-card-nophoto').title, 'Photo unavailable (could not load it)')
+  assert.equal(byClass(card, 'fh-card-photo').hidden, true)
   assert.equal(byClass(card, 'fh-card-credit').hidden, true)
   c.destroy()
 })

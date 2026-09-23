@@ -1,7 +1,8 @@
 // client/ui/flightCard.ts
 // The focused aircraft's card, top-left: who it is (flag, callsign, type, airline), four live numbers (altitude, speed,
-// vertical rate, track) under its photo, and a status line (Live · Predicting · Signal lost · Locating). Collapsed by
-// default; expand shows every detail section (detail.ts detailRows). It replaces the old detail panel, HUD and chase
+// vertical rate, track) under its photo (none: a struck-through camera by the registration), and a status line (Live ·
+// Predicting · Signal lost · Locating) with the expand toggle beside it, which shows every detail section below
+// (detail.ts detailRows). It replaces the old detail panel, HUD and chase
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
 import type { StatusBrief } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
@@ -162,13 +163,22 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const type = h('span', 'fh-card-type')
   top.append(flag, callsign, type)
   const sub = h('div', 'fh-card-sub')
+  const subText = h('span', 'fh-card-sub-t')
+  // No photo of this aircraft: a small mark by the registration instead of an empty box.
+  const noPhoto = h('span', 'fh-card-nophoto')
+  noPhoto.setAttribute('role', 'img')
+  noPhoto.append(icon('cameraOff', 14))
+  noPhoto.hidden = true
+  sub.append(subText, noPhoto)
   ident.append(top, sub)
   const actions = h('div', 'fh-card-actions')
-  const expandBtn = iconButton('chevronDown', 'Show details')
-  expandBtn.setAttribute('aria-expanded', 'false')
   const linkBtn = iconButton('link', 'Copy a link to this view')
   const closeBtn = iconButton('x', 'Close (Esc)')
-  actions.append(expandBtn, linkBtn, closeBtn)
+  actions.append(linkBtn, closeBtn)
+  // Beside the status line, above what it opens.
+  const expandBtn = iconButton('chevronDown', 'Show details')
+  expandBtn.classList.add('fh-card-expand')
+  expandBtn.setAttribute('aria-expanded', 'false')
   head.append(ident, actions)
 
   // The primary action: Chase (into the 3-D view) while focused; Map (back to top-down) while chasing, in the same place.
@@ -182,7 +192,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (chaseShown === chasing) return
     chaseShown = chasing
     chaseIcon.replaceChildren(icon(chasing ? 'map' : 'plane', 16))
-    chaseText.textContent = chasing ? 'Top-down map' : 'Chase in 3-D'
+    chaseText.textContent = chasing ? 'Map' : 'Chase in 3-D' // short: the status line and the toggle share the row
     chaseBtn.title = chasing ? 'Back to the top-down map (Esc)' : 'Fly behind this aircraft in 3-D'
     chaseBtn.classList.toggle('fh-pill-secondary', chasing)
   }
@@ -209,21 +219,20 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const statusText = h('span', 'fh-card-status-t')
   statusRow.append(dot, spin, statusText)
 
-  // The photo, above the stats, collapsed or not: a 3:2 skeleton with a spinner until it arrives, so nothing jumps.
+  // The photo, above the stats, collapsed or not: a 3:2 skeleton with a spinner until it arrives; none, and it goes.
   const figure = h('figure', 'fh-card-photo fh-skel')
   const imgLink = h('a', 'fh-card-imglink')
   const img = h('img', 'fh-card-img')
   img.alt = 'Aircraft photo'
   img.hidden = true
   imgLink.append(img)
-  const note = h('span', 'fh-card-note')
   const credit = h('a', 'fh-card-credit')
   credit.hidden = true
   for (const a of [imgLink, credit]) {
     a.target = '_blank'
     a.rel = 'noopener'
   }
-  figure.append(imgLink, h('span', 'fh-spin'), note, credit)
+  figure.append(imgLink, h('span', 'fh-spin'), credit)
   figure.hidden = opts.photos === undefined
 
   // Expanded: the detail sections.
@@ -245,7 +254,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   }
 
   const foot = h('div', 'fh-card-foot')
-  foot.append(statusRow, chaseBtn)
+  foot.append(statusRow, expandBtn, chaseBtn)
   card.append(head, figure, stats, foot, more)
   root.append(card)
 
@@ -269,19 +278,30 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (node.textContent !== text) node.textContent = text
   }
 
+  const syncSub = (): void => {
+    sub.hidden = subText.textContent === '' && noPhoto.hidden
+  }
+  /** The photo box goes; the struck-through camera says why on hover. */
+  function noPhotoFor(why: string): void {
+    figure.hidden = true
+    noPhoto.hidden = false
+    noPhoto.title = why
+    noPhoto.setAttribute('aria-label', why)
+    syncSub()
+  }
+
   function showPhoto(hex: string): void {
+    if (opts.photos === undefined) return
     img.hidden = true
     img.removeAttribute('src')
     credit.hidden = true
-    note.textContent = ''
+    figure.hidden = false
+    noPhoto.hidden = true
+    syncSub()
     figure.classList.add('fh-skel')
-    opts.photos?.get(hex).then((p) => {
+    opts.photos.get(hex).then((p) => {
       if (destroyed || shown !== hex) return // the selection moved on
-      if (p === null) {
-        figure.classList.remove('fh-skel')
-        note.textContent = opts.photos?.failed(hex) ? 'Photo unavailable' : 'No photo'
-        return
-      }
+      if (p === null) return noPhotoFor(opts.photos?.failed(hex) ? 'Photo unavailable (could not load it)' : 'No photo available')
       img.src = p.thumbUrl
       imgLink.href = p.link
       credit.href = p.link
@@ -294,10 +314,9 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     credit.hidden = false
   })
   img.addEventListener('error', () => {
-    figure.classList.remove('fh-skel')
     img.hidden = true
     credit.hidden = true
-    note.textContent = 'Photo unavailable'
+    noPhotoFor('Photo unavailable (could not load it)')
   })
 
   function render(): void {
@@ -328,8 +347,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     set(callsign, v.callsign)
     set(type, v.type)
     type.hidden = v.type === ''
-    set(sub, v.sub)
-    sub.hidden = v.sub === ''
+    set(subText, v.sub)
+    syncSub()
     for (const st of v.stats) {
       const e = statEls.get(st.key)!
       set(e.value, st.value)
@@ -343,6 +362,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     spin.hidden = v.state !== 'locating'
     dot.hidden = v.state === 'locating'
     set(statusText, v.status)
+    if (statusRow.title !== v.status) statusRow.title = v.status // the whole line, should it not fit
     if (!expanded) return
     for (const sec of detailRows(curS, curRaw, curInfo, lk)) {
       for (const r of sec.rows) {

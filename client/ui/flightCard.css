@@ -7,7 +7,7 @@
   left: var(--fh-left);
   display: flex;
   flex-direction: column;
-  width: 300px;
+  width: 320px;
   max-height: calc(100% - 24px - var(--fh-insets-v));
   overflow: hidden;
   pointer-events: auto;
@@ -71,12 +71,29 @@
 }
 
 .fh-card-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 3px;
-  overflow: hidden;
   color: var(--fh-muted);
   font-size: 12px;
+}
+
+.fh-card-sub-t {
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.fh-card-nophoto {
+  display: grid;
+  flex: none;
+  color: var(--fh-faint);
+  cursor: help;
+}
+
+.fh-card-nophoto[hidden] {
+  display: none;
 }
 
 .fh-card-actions {
@@ -221,15 +238,6 @@
   from { opacity: 0; }
 }
 
-.fh-card-note {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--fh-faint);
-  font-size: 12px;
-}
-
 .fh-card-credit {
   position: absolute;
   right: 6px;
@@ -294,7 +302,7 @@
 }
 
 
-/* Status line and the primary action (Chase / Map) side by side. */
+/* Status line, the expand toggle and the primary action (Chase / Map) side by side. */
 .fh-card-foot {
   display: flex;
   align-items: center;
@@ -305,7 +313,24 @@
 .fh-card-foot .fh-card-status {
   flex: 1;
   min-width: 0;
+  padding-right: 0; /* the foot's gap spaces it from the toggle */
   padding-bottom: 0;
+}
+
+/* The expand toggle: the Chase pill's height, on a tile, so it reads as a button. */
+.fh-ibtn.fh-card-expand {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fh-ibtn.fh-card-expand:hover {
+  background: var(--fh-hover);
+}
+
+.fh-ibtn.fh-card-expand[aria-expanded='true'] {
+  background: var(--fh-accent-soft);
 }
 
 .fh-card-status-t {
@@ -400,6 +425,12 @@
 /* Touch screens and phones: a 44 px Chase button. Beside the side rail (a tablet, a phone on its side) the card is wider,
    so its 44 px action buttons leave the callsign room (336 px still clears a wide panel at 861 px: 12 + 336 < 861 - 512). */
 @media (pointer: coarse), (max-width: 640px) {
+  .fh-ibtn.fh-card-expand {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
   .fh-pill {
     height: 44px;
     padding: 0 16px 0 14px;
