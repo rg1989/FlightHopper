@@ -120,6 +120,7 @@ export function frameLayout(sq: Square, sizes: Record<BlockId, { w: number; h: n
 
 const NO_DERIVED: ReadonlySet<keyof FlightData> = new Set()
 const AGL_DERIVED: ReadonlySet<keyof FlightData> = new Set(['aglFt'])
+export const AGL_SHOWN_BELOW_FT = 15_000
 
 /**
  * The frame's data in live chase: the drawn state for altitude, vertical speed, speed and track, and what the aircraft
@@ -144,7 +145,9 @@ export function formatBlocks(d: FlightData): Record<BlockId, BlockView> {
 
   const left: Field[][] = []
   if (fin(d.altFt)) left.push([{ ...f('altFt', '', num(by10(d.altFt)), 'ft'), big: true }])
-  if (fin(d.aglFt)) left.push([f('aglFt', 'AGL', num(by10(Math.max(0, d.aglFt))), 'ft')])
+  // Height above the ground only where the ground matters: high up it reads as noise (over the sea a geometric AGL even
+  // tops the barometric ALT above it).
+  if (fin(d.aglFt) && d.aglFt < AGL_SHOWN_BELOW_FT) left.push([f('aglFt', 'AGL', num(by10(Math.max(0, d.aglFt))), 'ft')])
   if (fin(d.vsFpm)) {
     const v = by10(d.vsFpm)
     left.push([f('vsFpm', '', Math.abs(d.vsFpm) < LEVEL_FPM ? '0' : `${v > 0 ? '↑' : '↓'} ${num(Math.abs(v))}`, 'fpm')])

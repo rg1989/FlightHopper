@@ -190,6 +190,11 @@ const FULL: FlightData = {
 }
 const texts = (v: BlockView): string[] => v.rows.map(rowText)
 
+test('formatBlocks: height above ground shows only below 15,000 ft', () => {
+  assert.deepEqual(texts(formatBlocks({ ...FULL, altFt: 27_100, aglFt: 27_660 }).left), ['27,100 ft', '↑ 1,500 fpm'])
+  assert.deepEqual(texts(formatBlocks({ ...FULL, aglFt: 14_990 }).left), ['12,300 ft', 'AGL 14,990 ft', '↑ 1,500 fpm'])
+})
+
 test('formatBlocks: every block of a full record', () => {
   const b = formatBlocks(FULL)
   assert.deepEqual(texts(b.left), ['12,300 ft', 'AGL 11,850 ft', '↑ 1,500 fpm'])

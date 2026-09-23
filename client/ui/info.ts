@@ -20,6 +20,8 @@ const SHORTCUTS: [string, string][] = [
   ['T', '3-D terrain'],
   ['L', 'Sun and moon light'],
   ['X', 'See-through buildings'],
+  ['Space', 'In a scenario: play or pause'],
+  ['← →', 'In a scenario: back or ahead 10 s (Shift: 60 s)'],
 ]
 
 export interface InfoPanelHandle {
