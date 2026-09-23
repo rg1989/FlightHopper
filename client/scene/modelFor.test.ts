@@ -1,0 +1,48 @@
+// client/scene/modelFor.test.ts
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import type { ModelManifest, ModelManifestEntry } from '../types.ts'
+import { ModelPicker } from './modelFor.ts'
+
+const e = (id: string, types: string[] = []): ModelManifestEntry => ({
+  id, uri: `models/${id}.glb`, license: 'x', author: 'x', source: 'x', forwardAxisFix: { headingDeg: 90, pitchDeg: 0, rollDeg: 0 },
+  gearHeightM: 1, lengthM: 30, scale: 1, types,
+})
+const man: ModelManifest = {
+  default: 'generic',
+  fallback: { A1: 'c182', A2: 'c550', A3: 'a320', A4: 'a321', A5: 'b789', A7: 'ec135', light: 'c182', jet: 'a320', heavy: 'b789', heli: 'ec135' },
+  models: [
+    e('generic'), e('a320', ['A320', 'A20N']), e('a321', ['A321', 'A21N']), e('b738', ['B73*', 'B38M']), e('b789', ['B789']),
+    e('c550', ['C25*', 'C68A']), e('c182', ['C1*', 'C2*']), e('ec135', ['EC35']), e('b744', ['B744', 'A388']),
+  ],
+}
+const pick = new ModelPicker(man)
+const id = (type: string | null, cat: string | null = null): string => pick.for(type, cat).id
+
+test('exact designator first, then the longest prefix', () => {
+  assert.equal(id('A21N', 'A3'), 'a321')
+  assert.equal(id('B38M'), 'b738')
+  assert.equal(id('B739'), 'b738') // B73* prefix
+  assert.equal(id('C25B'), 'c550') // C25* beats C2*
+  assert.equal(id('C208'), 'c182')
+  assert.equal(id('a388'), 'b744') // designators are upper-cased
+})
+
+test('unlisted types: a helicopter designator wins, then the ADS-B category, then the type family', () => {
+  assert.equal(id('R44', 'A1'), 'ec135') // a helicopter squawking A1
+  assert.equal(id('GLF6', 'A2'), 'c550')
+  assert.equal(id('B77W', null), 'b789') // heavy list
+  assert.equal(id('PA46', null), 'c182') // light pattern
+  assert.equal(id('XYZ9', null), 'a320') // unknown jet
+  assert.equal(id(null, 'A5'), 'b789')
+  assert.equal(id(null, 'A7'), 'ec135')
+})
+
+test('no type and no category (or a ground vehicle): the default model', () => {
+  assert.equal(id(null, null), 'generic')
+  assert.equal(id('', 'C1'), 'generic')
+})
+
+test('a fallback naming a missing model is a manifest error', () => {
+  assert.throws(() => new ModelPicker({ ...man, fallback: { A1: 'nope' } }), /nope/)
+})

@@ -157,38 +157,68 @@ export function modelUrl(m: ModelManifestEntry): string {
 }
 
 export class ChaseModel {
-  readonly model: Model
+  /** The model drawn now: the chased type's once it has loaded (use), until then the one before. */
+  model: Model
   private readonly viewer: Viewer
-  private readonly m: ModelManifestEntry
+  private m: ModelManifestEntry
   private visible = true
   private placed = false
-  private readonly liveries: LiveryShaders | null
+  private readonly liveries = new Map<string, LiveryShaders>()
   private livery: string | null | undefined
+  private readonly ready = new Map<string, Model>() // every loaded model by entry id, in the scene (hidden unless drawn)
+  private readonly asked = new Set<string>() // entry ids loading or loaded (or failed: not asked again)
+  private readonly loader: (m: ModelManifestEntry) => Promise<Model>
 
   /** Prefer ChaseModel.load. Adds the model to the scene hidden: it appears on the first update(), not at the Earth's centre. */
-  constructor(viewer: Viewer, m: ModelManifestEntry, model: Model) {
+  constructor(viewer: Viewer, m: ModelManifestEntry, model: Model, loader = loadChaseModel) {
     this.viewer = viewer
+    this.loader = loader
     this.m = m
     this.model = model
-    this.liveries = m.paint ? new LiveryShaders(m.paint) : null
     model.show = false
     viewer.scene.primitives.add(model)
+    this.ready.set(m.id, model)
+    this.asked.add(m.id)
   }
 
   static async load(viewer: Viewer, m: ModelManifestEntry): Promise<ChaseModel> {
-    // Model clones its own identity modelMatrix, which update() then rewrites. The scale is in modelMatrixFor, so
-    // Model.scale stays 1. minimumPixelSize keeps a distant model visible. Cesium exaggerates models with the terrain
-    // by default (squashed towards verticalExaggerationRelativeHeight, flat at factor 0); the aircraft keeps its true
-    // height while the topography toggle flattens or grows the ground.
-    const model = await Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
-    return new ChaseModel(viewer, m, model)
+    return new ChaseModel(viewer, m, await loadChaseModel(m))
+  }
+
+  /**
+   * Draws the chased aircraft on entry's model (ModelPicker). Loads it on first use and keeps the current model until
+   * it is ready. True when the drawn model changed this call (the Sun re-attaches its light to the new one).
+   */
+  use(entry: ModelManifestEntry): boolean {
+    if (entry === this.m) return false
+    if (!this.asked.has(entry.id)) {
+      this.asked.add(entry.id)
+      this.loader(entry).then(
+        (model) => {
+          model.show = false
+          this.viewer.scene.primitives.add(model)
+          this.ready.set(entry.id, model)
+        },
+        (err: unknown) => console.warn(`FlightHopper: chase model ${entry.id} not loaded; keeping ${this.m.id}:`, err),
+      )
+    }
+    const next = this.ready.get(entry.id)
+    if (next === undefined) return false
+    this.model.show = false
+    this.model = next
+    this.m = entry
+    this.livery = undefined
+    this.model.show = this.visible && this.placed
+    return true
   }
 
   /** Paints the model in a livery (livery.ts liveryCode; null: plain white). Cheap when unchanged. */
   paint(code: string | null): void {
-    if (this.liveries === null || code === this.livery) return
+    if (!this.m.paint || code === this.livery) return
     this.livery = code
-    this.model.customShader = this.liveries.for(code)
+    let l = this.liveries.get(this.m.id)
+    if (l === undefined) this.liveries.set(this.m.id, (l = new LiveryShaders(this.m.paint)))
+    this.model.customShader = l.for(code)
   }
 
   /** Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. */
@@ -207,8 +237,19 @@ export class ChaseModel {
     this.model.show = v && this.placed
   }
 
-  /** Removes the model from the scene. PrimitiveCollection destroys what it removes by default. */
+  /** Removes every loaded model from the scene. PrimitiveCollection destroys what it removes by default. */
   destroy(): void {
-    this.viewer.scene.primitives.remove(this.model)
+    for (const model of this.ready.values()) this.viewer.scene.primitives.remove(model)
+    this.ready.clear()
   }
+}
+
+/**
+ * One chase model. Model clones its own identity modelMatrix, which update() then rewrites. The scale is in
+ * modelMatrixFor, so Model.scale stays 1. minimumPixelSize keeps a distant model visible. Cesium exaggerates models with
+ * the terrain by default (squashed towards verticalExaggerationRelativeHeight, flat at factor 0); the aircraft keeps
+ * its true height while the topography toggle flattens or grows the ground.
+ */
+export function loadChaseModel(m: ModelManifestEntry): Promise<Model> {
+  return Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
 }

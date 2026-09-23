@@ -190,3 +190,43 @@ test('ChaseModel.load: the model does not follow terrain exaggeration (keeps its
   assert.deepEqual(f.added, [f.model])
   assert.equal(f.model.show, false)
 })
+
+test('ChaseModel.use: loads another type once, keeps the current model until it is ready, then swaps (shown as before)', async () => {
+  const f = fakes()
+  const other = { modelMatrix: new Matrix4(), show: true }
+  const b738 = { ...m, id: 'b738', uri: 'models/b738.glb' }
+  let loads = 0
+  let done!: (v: Model) => void
+  const cm = new ChaseModel(f.viewer, m, f.model as unknown as Model, () => (loads++, new Promise<Model>((r) => (done = r))))
+  cm.update(state(KSFO.lat, KSFO.lon, 0, 0))
+  assert.equal(cm.use(m), false, 'same type: nothing to do')
+  assert.equal(cm.use(b738), false, 'not loaded yet')
+  assert.equal(cm.use(b738), false)
+  assert.equal(loads, 1, 'asked once')
+  assert.equal(cm.model, f.model)
+  done(other as unknown as Model)
+  await Promise.resolve()
+  assert.equal(other.show, false, 'added hidden')
+  assert.equal(cm.use(b738), true)
+  assert.equal(cm.model, other)
+  assert.equal(other.show, true)
+  assert.equal(f.model.show, false)
+  assert.equal(cm.use(m), true, 'back to the first: already loaded')
+  cm.destroy()
+  assert.deepEqual(f.added, [])
+})
+
+test('every manifest model: ≤ 1 MB (the default ≤ 5 MB), provenance, true size, wheels, and the nose along the heading', () => {
+  for (const e of manifest.models) {
+    const url = new URL(`public/${e.uri}`, root)
+    assert.ok(statSync(url).size <= (e.id === manifest.default ? 5 : 1) * 1024 * 1024, e.id)
+    for (const k of ['license', 'author', 'source'] as const) assert.ok(e[k].length > 0, `${e.id} ${k}`)
+    const a = measureGlb(readFileSync(url))
+    near(a.lengthM * e.scale, e.lengthM, 0.05, `${e.id} lengthM`)
+    near(a.belowOriginM * e.scale, e.gearHeightM, 0.05, `${e.id} gearHeightM`)
+    // measureGlb finds the nose from the fin, which a helicopter's rotor outranks: livetaiwan's models all face glTF −Z.
+    const nose = e.id === 'ec135' ? new Cartesian3(-1, 0, 0) : a.nose
+    const s = state(KSFO.lat, KSFO.lon, 0, 297.9)
+    assert.ok(azErr(azimuth(enu(modelMatrixFor(s, e), nose, s.lat, s.lon)), 297.9) <= 1, `${e.id} nose`)
+  }
+})

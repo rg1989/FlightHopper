@@ -121,6 +121,8 @@ test('attribution: adsb.lol ODbL, OurAirports, OpenFlights ODbL, OpenStreetMap, 
   assert.ok(lines.some((l) => /OpenStreetMap contributors/.test(l) && /ODbL/.test(l)), lines.join(' | '))
   assert.ok(lines.some((l) => /planespotters\.net/.test(l)), lines.join(' | '))
   assert.ok(lines.includes('3D model: CesiumJS Contributors (Cesium GS, Inc.), Apache-2.0'), lines.join(' | '))
+  assert.ok(lines.some((l) => /FlightGear/.test(l) && /GPL/.test(l)), 'the GPL aircraft models are credited')
+  assert.ok(lines.some((l) => /Wikimedia Commons/.test(l)), 'the logo decals are credited')
   assert.equal(attributionFor(null).length, lines.length - 1)
   assert.equal(attributionFor(m, null).length, lines.length - 1, 'no flight-data credit before the source is known')
 })

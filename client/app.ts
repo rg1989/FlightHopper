@@ -30,6 +30,7 @@ import { makeMapLayer } from './scene/mapLayer.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { liveryCode } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
+import { ModelPicker } from './scene/modelFor.ts'
 import { Traffic } from './scene/traffic.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
@@ -218,6 +219,8 @@ export function attributionFor(model: ModelManifestEntry | null, source: SourceK
     'Photos: planespotters.net, © each photographer',
     'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the short form of NIGHT_CREDIT (nightLights.ts)
     BUILDINGS_CREDIT,
+    'Aircraft models: FlightGear community via FlightAirMap, Flightradar24 and livetaiwan, GPL (source in the repo)',
+    'Airline logos: Wikimedia Commons, public domain; trademarks of their airlines',
   ]
   // Manifest licences read "<SPDX id>: <note>"; the id is enough on screen.
   if (model) lines.push(`3D model: ${model.author}, ${model.license.split(':')[0].trim()}`)
@@ -292,6 +295,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       return null
     }),
   ])
+  const pick = manifest ? new ModelPicker(manifest) : null
   const entry = manifest?.models.find((m) => m.id === manifest.default) ?? null
   const model = entry
     ? await ChaseModel.load(viewer, entry).catch((e: unknown): null => {
@@ -331,7 +335,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
-  const traffic = entry ? new Traffic(viewer, entry, div('fh-traffic', root)) : null
+  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root)) : null
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
   // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
@@ -590,7 +594,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       groundM = topo.ground(sampled, tf, acGround, carto)
       if (groundM === null && bench !== null) performance.mark('fh:ground-unknown')
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
-      model?.paint(liveryCode((chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info))?.callsign ?? null))
+      const ci = chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info) ?? null
+      if (model !== null && pick !== null && model.use(pick.for(ci?.typeCode ?? null, ci?.category ?? null))) sun.attachModel(model.model)
+      model?.paint(liveryCode(ci?.callsign ?? null))
       model?.update(placed)
       clearanceM = chaseCam.update(placed, dtS).clearanceM
       traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame

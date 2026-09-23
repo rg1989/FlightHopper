@@ -56,8 +56,9 @@ vec4 decal(sampler2D t, vec3 p, float z0, float y0, float w, float h) {
 }
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   if (material.alpha < 0.98) return;
-  vec3 p = fsInput.attributes.positionMC;
-  vec3 n = normalize(v_nMC);
+  vec3 turn = vec3(${p.noseMinusZ ? '-1.0, 1.0, -1.0' : '1.0'});
+  vec3 p = fsInput.attributes.positionMC * turn;
+  vec3 n = normalize(v_nMC) * turn;
   float lum = dot(material.diffuse, vec3(0.299, 0.587, 0.114));
   float detail = mix(0.2, 1.0, smoothstep(0.06, 0.14, lum));
   bool body = abs(p.x) < ${f(p.bodyHalfWidth)};

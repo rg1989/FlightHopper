@@ -1,5 +1,6 @@
 {
   "default": "cesium-air",
+  "fallback": { "A1": "c182", "A2": "c550", "A3": "a320", "A4": "a321", "A5": "b789", "A7": "ec135", "light": "c182", "jet": "a320", "heavy": "b789", "heli": "ec135" },
   "models": [
     {
       "id": "cesium-air",
@@ -15,6 +16,230 @@
         "bodyHalfWidth": 2.25, "bellyBelowY": -0.95,
         "fin": { "behindZ": -8.6, "aboveY": 0.95, "halfWidth": 0.9 }, "finSplit": [0.55, -14, 2.6],
         "engines": [2.3, 4.5, -6, 2.3], "finLogo": [-11.9, 3.1, 3.3], "title": [-6.6, -0.3, 4.6]
+      }
+    },
+    {
+      "id": "a320",
+      "uri": "models/a320.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "FlightGear A320-family authors (fredb, curt, mfranz, Ryan Miller, Durk Talsma, janodesbois, F-JJTH, James Turner); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/a320/glTF2/A320.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 6.26, "lengthM": 38.23, "scale": 1,
+      "types": ["A320", "A20N", "A319", "A19N", "A318"],
+      "box": { "centre": [0, 0, -0.41], "half": 20.65 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 2.24, "bellyBelowY": -3.68,
+        "fin": { "behindZ": -13.48, "aboveY": -0.67, "halfWidth": 0.41 }, "finSplit": [0.55, -19.12, 3.06],
+        "engines": [2.34, 9.11, -0.96, 7.41], "finLogo": [-16.09, 2.69, 3.36], "title": [7.65, -2.21, 8.41]
+      }
+    },
+    {
+      "id": "a321",
+      "uri": "models/a321.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "FlightGear A320-family authors (fredb, curt, mfranz, Ryan Miller, Durk Talsma, janodesbois, F-JJTH, James Turner); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/a320/glTF2/A321.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 6.18, "lengthM": 44.49, "scale": 1,
+      "types": ["A321", "A21N", "B752", "B753"],
+      "box": { "centre": [0, 0, -0.48], "half": 24.02 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 2.25, "bellyBelowY": -3.47,
+        "fin": { "behindZ": -15.95, "aboveY": -0.49, "halfWidth": 0.45 }, "finSplit": [0.55, -22.24, 2.85],
+        "engines": [2.36, 9.14, -2.48, 5.91], "finLogo": [-19.03, 2.65, 3.14], "title": [8.9, -2.01, 9.79]
+      }
+    },
+    {
+      "id": "b738",
+      "uri": "models/b738.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Innis Cunningham (3D) and the FlightGear 737-800 authors; converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/b738/737.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 6.37, "lengthM": 39.48, "scale": 1,
+      "types": ["B73*", "B37M", "B38M", "B39M", "B3XM", "BCS1", "BCS3"],
+      "box": { "centre": [0, 0, -0.31], "half": 21.32 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 2.1, "bellyBelowY": -4.28,
+        "fin": { "behindZ": -13.08, "aboveY": -1.46, "halfWidth": 0.41 }, "finSplit": [0.55, -19.74, 3.6],
+        "engines": [2.13, 9.98, -2.97, 6.16], "finLogo": [-16.11, 2.5, 3.96], "title": [7.9, -2.9, 8.69]
+      }
+    },
+    {
+      "id": "b773",
+      "uri": "models/b773.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Syd Adams (3D) and the FlightGear 777 authors; converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/b773/777-300.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 9.21, "lengthM": 74.41, "scale": 1,
+      "types": ["B77*"],
+      "box": { "centre": [0, 0, -0.59], "half": 40.18 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 3.47, "bellyBelowY": -5.41,
+        "fin": { "behindZ": -26.05, "aboveY": -0.98, "halfWidth": 0.66 }, "finSplit": [0.55, -37.21, 4.51],
+        "engines": [3.47, 15.62, -5.16, 10.74], "finLogo": [-31.62, 3.97, 4.96], "title": [14.88, -3.25, 16.37]
+      }
+    },
+    {
+      "id": "b789",
+      "uri": "models/b789.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Jonathan Redpath and MSA-S23 (787-9 3D), after the FlightGear 787-8 by Joshua W and others; converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/b789/787-900.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 7.96, "lengthM": 65.79, "scale": 1,
+      "types": ["B78*", "B76*"],
+      "box": { "centre": [0, 0, -0.45], "half": 35.53 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 3.21, "bellyBelowY": -4.76,
+        "fin": { "behindZ": -22.34, "aboveY": -0.55, "halfWidth": 0.38 }, "finSplit": [0.55, -32.89, 3.81],
+        "engines": [3.14, 12.66, -2.61, 11.22], "finLogo": [-27.69, 3.64, 4.19], "title": [13.16, -2.7, 14.47]
+      }
+    },
+    {
+      "id": "a333",
+      "uri": "models/a333.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Narendran Muraleedharan (FlightGear A330-300); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/a333/glTF2/A333.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 8.41, "lengthM": 63.06, "scale": 1,
+      "types": ["A33*", "A306", "A30B", "A310", "A3ST"],
+      "box": { "centre": [0, 0, -0.62], "half": 34.05 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 3.25, "bellyBelowY": -4.99,
+        "fin": { "behindZ": -22.74, "aboveY": -0.63, "halfWidth": 0.53 }, "finSplit": [0.55, -31.53, 3.9],
+        "engines": [3.19, 16.37, -4.71, 9.38], "finLogo": [-27.07, 3.66, 4.29], "title": [12.61, -2.86, 13.87]
+      }
+    },
+    {
+      "id": "a359",
+      "uri": "models/a359.glb",
+      "license": "GPL-2.0-or-later: third_party/aircraft-models/README.md",
+      "author": "Juuso Tapaninen (jormapaappa1235), Brendan O'Gara (Sbyx), Chris Leung, Chris Andrews, Joshua Davidson (FlightGear A350XWB); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/a350/glTF2/A350.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 8.85, "lengthM": 67.05, "scale": 1,
+      "types": ["A359", "A35K"],
+      "box": { "centre": [0, 0, -0.58], "half": 36.21 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 3.42, "bellyBelowY": -4.94,
+        "fin": { "behindZ": -23.74, "aboveY": -0.56, "halfWidth": 0.48 }, "finSplit": [0.55, -33.53, 4.13],
+        "engines": [3.33, 18.87, -6.5, 11.44], "finLogo": [-28.59, 3.97, 4.54], "title": [13.41, -2.8, 14.75]
+      }
+    },
+    {
+      "id": "e75l",
+      "uri": "models/e75l.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Narendran Muraleedharan (FlightGear E-jet-family); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E75L.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 4.98, "lengthM": 30.82, "scale": 1,
+      "types": ["E17*", "E75*", "E19*", "E29*", "E135", "E145", "E45X"],
+      "box": { "centre": [0, 0, -0.24], "half": 16.64 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 1.7, "bellyBelowY": -3,
+        "fin": { "behindZ": -10.25, "aboveY": -0.35, "halfWidth": 0.35 }, "finSplit": [0.55, -15.41, 2.43],
+        "engines": [2.81, 5.37, -1.11, 5.76], "finLogo": [-12.7, 2.32, 2.67], "title": [6.16, -1.7, 6.78]
+      }
+    },
+    {
+      "id": "crj9",
+      "uri": "models/crj9.glb",
+      "license": "GPL-2.0-or-later: third_party/aircraft-models/README.md",
+      "author": "Ryan Miller (FlightGear CRJ700-family 3D and FDM); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/crj9/glTF2/CRJ9.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 3.05, "lengthM": 36.39, "scale": 1,
+      "types": ["CRJ*", "MD8*", "MD9*", "DC9*", "B712", "F100", "F70"],
+      "box": { "centre": [0, 0, 0], "half": 19.65 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 1.56, "bellyBelowY": -1.86,
+        "fin": { "behindZ": -12.4, "aboveY": 0.55, "halfWidth": 3.14 }, "finSplit": [0.55, -18.19, 1.25],
+        "engines": [1.64, 3.19, -11.73, -7.8], "finLogo": [-15.57, 1.92, 1.38], "title": [7.28, -0.68, 8.01]
+      }
+    },
+    {
+      "id": "at75",
+      "uri": "models/at75.glb",
+      "license": "GPL-3.0-only: third_party/aircraft-models/README.md",
+      "author": "Narendran Muraleedharan, Donald Belcham, Dwayne Gable, Oliver (ot-666), camelon (FlightGear ATR72); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/atr72/glTF2/AT75.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 3.45, "lengthM": 27.15, "scale": 1,
+      "types": ["AT4*", "AT7*", "DH8*", "SF34", "SB20", "D328", "JS41"],
+      "box": { "centre": [0, 0, 0], "half": 14.66 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 1.61, "bellyBelowY": -2.33,
+        "fin": { "behindZ": -8.95, "aboveY": -0.3, "halfWidth": 0.62 }, "finSplit": [0.55, -13.58, 1.88],
+        "engines": [1.63, 9.73, -1.03, 4.99], "finLogo": [-11.22, 1.76, 2.06], "title": [5.43, -1.33, 5.97]
+      }
+    },
+    {
+      "id": "b744",
+      "uri": "models/b744.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Gijs de Rooy and the FlightGear 747-400 authors; converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/b744/747.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 9.71, "lengthM": 70.95, "scale": 1,
+      "types": ["B74*", "A34*", "A38*", "A124", "A225", "IL96", "IL86"],
+      "box": { "centre": [0, 0, -0.52], "half": 38.31 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 3.63, "bellyBelowY": -5.99,
+        "fin": { "behindZ": -22.89, "aboveY": -0.25, "halfWidth": 0.72 }, "finSplit": [0.55, -35.48, 4.46],
+        "engines": [3.59, 24.52, -9.24, 14.73], "finLogo": [-29.22, 4.66, 4.91], "title": [14.19, -3.18, 15.61]
+      }
+    },
+    {
+      "id": "c550",
+      "uri": "models/c550.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Curtis L. Olson, Ludovic Brenta, chris_blues (FlightGear Citation II); converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/citation/citation.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 2.03, "lengthM": 14.49, "scale": 1,
+      "types": ["C25*", "C50*", "C51*", "C52*", "C55*", "C56*", "C65*", "C68*", "C700", "C750", "E50P", "E55P", "E545", "E550", "CL30", "CL35", "CL60", "GL5T", "GL7T", "GLEX", "GLF*", "FA*", "F2TH", "F900", "LJ*", "H25*", "BE40", "PRM1", "HDJT", "PC24", "G150", "G280", "GALX", "ASTR"],
+      "box": { "centre": [0, 0, 0], "half": 8.42 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 0.87, "bellyBelowY": -1.39,
+        "fin": { "behindZ": -4.68, "aboveY": -0.25, "halfWidth": 2.16 }, "finSplit": [0.55, -7.25, 1.14],
+        "engines": [0.91, 2.85, -5.94, -0.73], "finLogo": [-5.91, 1, 1.26], "title": [2.9, -0.83, 3.19]
+      }
+    },
+    {
+      "id": "c182",
+      "uri": "models/c182.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Heiko Schulz (3D) and the FlightGear c182s authors; glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/c182/glTF2/C182.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 1.62, "lengthM": 8.5, "scale": 1,
+      "types": ["C172", "C182", "C152", "C150", "P28*", "SR2*"],
+      "box": { "centre": [0, 0, 0], "half": 5.89 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 0.71, "bellyBelowY": -1.02,
+        "fin": { "behindZ": -2.72, "aboveY": 0.3, "halfWidth": 0.09 }, "finSplit": [0.55, -4.25, 0.66],
+        "engines": [0, 0, 0, 0], "finLogo": [-3.46, 1.02, 0.72], "title": [1.7, -0.37, 1.87]
+      }
+    },
+    {
+      "id": "ec135",
+      "uri": "models/ec135.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Heiko Schulz (3D) and the FlightGear ec135 authors; converted by Flightradar24; simplified by GoLocalNear/livetaiwan",
+      "source": "https://github.com/Flightradar24/fr24-3d-models/blob/dd53267690c6a4ecbb290a3acf0284333a5d68a9/source/ec135/ec135.blend",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 2.19, "lengthM": 11.83, "scale": 1,
+      "types": ["EC35"],
+      "box": { "centre": [0, 0, -0.2], "half": 6.39 },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 1.2, "bellyBelowY": -1.15,
+        "fin": { "behindZ": -4.59, "aboveY": 1.12, "halfWidth": 0.16 }, "finSplit": [0.55, -5.92, 0.33],
+        "engines": [0, 0, 0, 0], "finLogo": [-5.34, 1.49, 0.37], "title": [2.37, -0.44, 2.6]
       }
     }
   ]

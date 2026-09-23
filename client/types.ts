@@ -44,14 +44,17 @@ export interface ModelManifestEntry {
   lengthM: number                               // real-world length the scale targets
   scale: number
   paint?: Paint                                 // where the livery goes (client/scene/livery.ts); absent: unpainted
+  types?: string[]                              // ICAO designators it draws; "B73*" matches a prefix (modelFor.ts)
+  box?: { centre: [number, number, number]; half: number } // traffic bracket square: model frame, unscaled (traffic.ts)
 }
 
 /**
- * Where a model's livery regions are, in its glTF mesh frame (x lateral, y up, z nose-forward; unscaled), measured
+ * Where a model's livery regions are, in its glTF mesh frame (x left, y up, z nose-forward; unscaled), measured
  * from its vertices. The fuselage (|x| < bodyHalfWidth) takes the base colour and, below bellyBelowY, the belly
  * colour; everything wider (wings, tailplane) is light grey on every airline.
  */
 export interface Paint {
+  noseMinusZ?: boolean                                        // the mesh faces −Z (+X right wing): turned 180° about y first
   bodyHalfWidth: number
   bellyBelowY: number
   fin: { behindZ: number; aboveY: number; halfWidth: number } // the vertical fin: z < behindZ, y > aboveY, |x| < halfWidth
@@ -63,6 +66,7 @@ export interface Paint {
 
 export interface ModelManifest {
   default: string                               // id of the model used when no type match
+  fallback?: Record<string, string>             // ADS-B category (A1…) or icon kind (light/jet/heavy/heli) → model id
   models: ModelManifestEntry[]
 }
 

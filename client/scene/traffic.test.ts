@@ -59,10 +59,15 @@ test('minScale: a far model is enlarged to MIN_PX on screen, exactly the square 
   near((20 * g * 1000) / (50_000 * Math.tan(Math.PI / 6)), MIN_PX, 1e-9, 'its projected diameter is MIN_PX')
 })
 
-test('the bracket square is centred on the model and spans its wingspan (constants match the GLB)', () => {
-  assert.ok(Cartesian3.equalsEpsilon(BOX_CENTRE, axes.centre, 0, 0.01), `centre ${axes.centre}`)
-  assert.ok(BOX_HALF >= axes.spanM / 2 && BOX_HALF <= 0.6 * axes.spanM, 'half the span plus a small margin')
-  assert.ok(BOX_HALF >= axes.lengthM / 2, 'the length fits too')
+test('the bracket square is centred on each model and spans its wingspan and length (box matches the GLB)', () => {
+  for (const e of manifest.models) {
+    const a = e === m ? axes : measureGlb(readFileSync(new URL(`public/${e.uri}`, root)))
+    const centre = e.box ? Cartesian3.fromArray(e.box.centre) : BOX_CENTRE
+    const half = e.box?.half ?? BOX_HALF
+    const size = Math.max(a.spanM, a.lengthM)
+    assert.ok(Cartesian3.equalsEpsilon(centre, a.centre, 0, 0.01), `${e.id} centre ${a.centre}`)
+    assert.ok(half >= size / 2 && half <= 0.6 * size, `${e.id}: half the larger of span and length plus a small margin`)
+  }
 })
 
 test('hitAt: inside a square hits; overlapping squares → the nearest to the camera; outside → null', () => {
