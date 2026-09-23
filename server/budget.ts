@@ -2,7 +2,6 @@
 import type { BudgetState, Degraded } from '../shared/api.ts'
 
 const BURST = 2
-const RECOVERY_STEP_MS = 60_000 // ×1.1 per step without a 429
 const RATE_LIMITED_MS = 60_000 // a 429 younger than this → degraded 'rate-limited'
 const MAX_BACKOFF_MS = 60_000
 const DEFAULT_RETRY_AFTER_S = 5
@@ -10,7 +9,7 @@ const DEFAULT_RETRY_AFTER_S = 5
 /**
  * Upstream request budget: a token bucket (burst 2) whose rate adapts to what the upstream answers.
  * Call tryTake() before each request and onResult() with its outcome.
- * 429 → rate halves (floor maxRps/8) and pauses for Retry-After; the rate recovers ×1.1 per quiet minute.
+ * 429 → rate halves for good and pauses for Retry-After (PLAN.md Global Constraints: never climb back toward a refused rate).
  * 401/403 → blocked forever (never retry a block). 5xx / network error (status 0) → exponential pause.
  * After any pause exactly one probe request is allowed; then the steady rate applies.
  */
@@ -21,7 +20,6 @@ export class TokenBucket {
   #rps: number
   #tokens = BURST
   #lastMs: number // tokens are accrued up to this time
-  #stepMs = 0 // start of the current recovery step (reset by every 429)
   #last429Ms = -Infinity
   #pausedUntilMs = 0
   #blocked = false
@@ -49,9 +47,8 @@ export class TokenBucket {
     if (status === 429) {
       this.#counts.r429++
       this.#fails = 0
-      this.#rps = Math.max(this.#maxRps / 8, this.#rps / 2)
+      this.#rps /= 2
       this.#last429Ms = now
-      this.#stepMs = now
       this.#pause(now + (retryAfterS ?? DEFAULT_RETRY_AFTER_S) * 1000)
     } else if (status === 401 || status === 403) {
       this.#counts.r4xx++
@@ -87,14 +84,9 @@ export class TokenBucket {
     return null
   }
 
-  /** Brings rate and tokens up to now; returns now. Recovery steps are applied at their own step boundaries. */
+  /** Brings tokens up to now; returns now. */
   #advance(): number {
     const now = this.#now()
-    while (this.#rps < this.#maxRps && now - this.#stepMs >= RECOVERY_STEP_MS) {
-      this.#stepMs += RECOVERY_STEP_MS
-      this.#accrue(this.#stepMs)
-      this.#rps = Math.min(this.#maxRps, this.#rps * 1.1)
-    }
     this.#accrue(now)
     return now
   }

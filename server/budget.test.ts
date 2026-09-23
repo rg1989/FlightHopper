@@ -41,14 +41,14 @@ test('idle time never banks more than the burst', () => {
   assert.equal(b.state().tokens, 0)
 })
 
-test('429 halves the rate down to a floor of maxRps/8', () => {
+test('every 429 halves the rate; no floor holds it at a rate that was refused', () => {
   const { b } = setup(1)
   const rates: number[] = []
   for (let i = 0; i < 4; i++) {
     b.onResult(429, null)
     rates.push(b.state().rps)
   }
-  assert.deepEqual(rates, [0.5, 0.25, 0.125, 0.125])
+  assert.deepEqual(rates, [0.5, 0.25, 0.125, 0.0625])
 })
 
 test('429 pauses for Retry-After, then allows one probe and continues at the halved rate', () => {
@@ -77,24 +77,30 @@ test('429 without Retry-After pauses 5 s', () => {
   assert.equal(b.tryTake(), true)
 })
 
-test('recovery: ×1.1 per 60 s without a 429, capped at maxRps; a new 429 restarts the clock', () => {
+test('after a 429 at rate r the rate never exceeds r/2, even after hours without a 429', () => {
   const { b, c } = setup(1)
   b.onResult(429, null)
-  near(b.state().rps, 0.5)
-  c.t = 59_999
-  near(b.state().rps, 0.5)
-  c.t = 60_000
-  near(b.state().rps, 0.55)
-  c.t = 120_000
-  near(b.state().rps, 0.605)
+  for (const t of [60_000, 3_600_000, 10 * 3_600_000]) {
+    c.t = t
+    assert.ok(b.state().rps <= 0.5, `rps ${b.state().rps} at t=${t}`)
+  }
+  // tokens are issued at that rate too: ~0.5 × 36,000 s after the pause, plus at most the burst
+  let taken = 0
+  for (let t = 5000; t <= 36_005_000; t += 1000) {
+    c.t = t
+    if (b.tryTake()) taken++
+  }
+  assert.ok(taken <= 0.5 * 36_000 + 2, `taken ${taken}`)
+})
+
+test('two 429s give r/4, and it stays there', () => {
+  const { b, c } = setup(1)
   b.onResult(429, null)
-  near(b.state().rps, 0.3025)
-  c.t = 179_999
-  near(b.state().rps, 0.3025)
-  c.t = 180_000
-  near(b.state().rps, 0.33275)
-  c.t = 3_600_000
-  assert.equal(b.state().rps, 1)
+  c.t = 10 * 60_000
+  b.onResult(429, null)
+  near(b.state().rps, 0.25)
+  c.t = 10 * 3_600_000
+  near(b.state().rps, 0.25)
 })
 
 test('degraded is rate-limited while the last 429 is < 60 s old', () => {
