@@ -342,9 +342,13 @@ export class Poller {
   #batch(now: number): string[] {
     if (this.#chased.size === 0) return []
     const view = this.#cells.get('view')?.cell
+    // Only chases a client asked about in the last 2.5 s (clients ask every second): one released by Esc or a new
+    // selection stays in #chased for chaseTtlMs but is not worth a request.
+    const recent = now + this.#opts.chaseTtlMs - 2500
     return [...this.#chased]
       .sort((a, b) => b[1] - a[1])
-      .filter(([hex]) => {
+      .filter(([hex, expiresMs]) => {
+        if (expiresMs < recent) return false
         if ((this.#hexRetryMs.get(hex) ?? -Infinity) > now) return false
         const s = this.#store.latest(hex)
         // Inside the view circle its answers carry the aircraft (or, once it is gone, a hex request would not find it either).

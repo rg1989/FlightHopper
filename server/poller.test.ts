@@ -265,8 +265,19 @@ test('a chase expires after chaseTtlMs', async () => {
   s.poller.touchChase('a1c7e4')
   assert.deepEqual(s.poller.report().chasedHexes, ['a1c7e4'])
   await runUntil(s, 12_000)
-  assert.deepEqual(rel(s.calls, 'hexes'), [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000])
-  assert.deepEqual(s.poller.report().chasedHexes, [])
+  assert.deepEqual(rel(s.calls, 'hexes'), [0, 1000, 2000], 'asked while touched within 2.5 s')
+  assert.deepEqual(s.poller.report().chasedHexes, [], 'gone after chaseTtlMs')
+})
+
+test('a chase released more than 2.5 s ago gets no hex request, though it has not expired yet', async () => {
+  const s = setup({ liveHexes: true, opts: { chasePeriodMs: 1400 } })
+  s.poller.touchView(LLBG[0], LLBG[1], 5)
+  s.poller.touchChase('a1c7e4') // outside the view circle: hex requests
+  await runUntil(s, 6000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(LLBG[0], LLBG[1], 5) // the view is still watched; the chase is not
+  })
+  assert.deepEqual(rel(s.calls, 'hexes'), [0, 1400])
+  assert.deepEqual(s.poller.report().chasedHexes, ['a1c7e4'], 'not expired: still within chaseTtlMs')
 })
 
 test('the chase batch holds at most 100 hexes, most recently touched first', async () => {
@@ -379,7 +390,7 @@ test('report: periods, counters and bytes per hour', async () => {
   s.poller.touchView(LLBG[0], LLBG[1], 5)
   s.poller.touchChase('a1c7e4')
   await runUntil(s, 9950, () => {
-    if ((s.clock.t - T0) % 5000 !== 0) return
+    if ((s.clock.t - T0) % 1000 !== 0) return // like the client: every second
     s.poller.touchView(LLBG[0], LLBG[1], 5)
     s.poller.touchChase('a1c7e4')
   })
