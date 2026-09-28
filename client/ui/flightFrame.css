@@ -388,14 +388,18 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.fh-vs {
+/* Under the tapes, level with each other: the vertical speed (green, as the pointer on its scale; grey when level) and
+   the true airspeed (cyan, the air's colour): two speeds, told apart by name, unit and colour. */
+.fh-vsl .fh-v {
   color: var(--fh-i-green);
-  font: 650 11px/1 var(--fh-font);
-  font-variant-numeric: tabular-nums;
 }
 
-.fh-vs[data-dir='level'] {
+.fh-vsl[data-dir='level'] .fh-v {
   color: var(--fh-i-label);
+}
+
+.fh-tas .fh-v {
+  color: var(--fh-i-cyan);
 }
 
 /* ---- heading ---------------------------------------------------------------------------------------------------- */

@@ -1,9 +1,11 @@
 // client/scene/flightFrame.ts
 // The flight-data frame (.planning/scenarios-design.md §5): the traffic's two corner brackets around the chased
 // aircraft, and four glass blocks of instruments around them, glass-cockpit style: on the left an altitude tape with the
-// vertical-speed scale and the height above the ground; on the right an airspeed tape (ground speed without one) and the
-// ground speed; on top a heading tape with the wind; below, the attitude indicator (the horizon and the aircraft against
-// it), bank, pitch, load factor, gear and flaps, and the engines' thrust under them. One component for live chase
+// vertical-speed scale, and under it the vertical speed (V/S, ft/min) and the height above the ground; on the right an
+// airspeed tape (IAS: what the cockpit shows; the ground speed without one), and under it, level with the V/S, the true
+// airspeed (TAS: the speed through the air) and the ground speed (GS); on top a heading tape with the wind; below, the
+// attitude indicator (the horizon and the aircraft against it), bank, pitch, load factor, gear and flaps, and the
+// engines' thrust under them. One component for live chase
 // (liveFlightData: what ADS-B broadcasts and the drawn state) and scenarios (the track's FlightData). Every instrument
 // moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS, but the tapes' readouts roll
 // every frame, and the speed tape's trend arrow points at the speed 10 s ahead. frameLayout (pure) places the blocks
@@ -11,6 +13,7 @@
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
+import { trueAirspeedKt } from '../track/airspeed.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
 import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
 import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
@@ -187,18 +190,23 @@ const LIVE_DERIVED_AGL_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg'
  * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, heading, track and attitude, and
  * what the aircraft broadcasts in the chase reply for the rest (wind: Mode S enhanced surveillance, when it does). The
  * altitude is the smoothed height the aircraft is drawn at (the sample's barometric figure only without one), so ALT −
- * AGL is the ground under it; the airspeed the track's average of the broadcast one. The heading and attitude are the
- * drawn ones, the 3-D model's, so the instruments and the model agree: the heading while the aircraft reports one (the
- * track + its averaged crab), the attitude synthesised from the path, so an estimate; aglFt (the app's ground under the
- * aircraft) is one too. One line per field: each is the one place its source is chosen.
+ * AGL is the ground under it; the airspeed the track's average of the broadcast one; the true airspeed the aircraft's
+ * own where it broadcasts one, else from its airspeed at its pressure altitude (in its reported outside air temperature,
+ * else the standard atmosphere's). The heading and attitude are the drawn ones, the 3-D model's, so the
+ * instruments and the model agree: the heading while the aircraft reports one (the track + its averaged crab), the
+ * attitude synthesised from the path, so an estimate; aglFt (the app's ground under the aircraft) is one too. One line
+ * per field: each is the one place its source is chosen.
  */
 export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null, gear: FlightData['gear'] = null): FlightData {
   const n = (v: number | undefined): number | null => (fin(v) ? v : null)
+  const iasKt = s.iasKt ?? n(raw?.ias)
+  const pressureAltFt = s.altBaroFt ?? s.altMslFt ?? null // the true airspeed's height: the air's pressure there
   return {
     altFt: s.altMslFt ?? s.altBaroFt,
     aglFt,
     vsFpm: s.vsFpm,
-    iasKt: s.iasKt ?? n(raw?.ias),
+    iasKt,
+    tasKt: n(raw?.tas) ?? (iasKt !== null && iasKt > 0 && pressureAltFt !== null ? trueAirspeedKt(iasKt, pressureAltFt, n(raw?.oat)) : null),
     gsKt: s.gsKt,
     hdgDeg: fin(raw?.true_heading) ? s.headingDeg : null,
     trackDeg: s.trackDeg,
@@ -227,6 +235,7 @@ export interface FrameView {
   agl: Reading | null // below AGL_SHOWN_BELOW_FT only, never below 0
   vs: Reading | null
   speed: (Reading & { kind: 'IAS' | 'GS' }) | null // the tape
+  tas: Reading | null // the true airspeed: the speed through the air, level with the vertical speed
   gs: Reading | null // the ground speed beside an airspeed tape
   hdg: (Reading & { kind: 'HDG' | 'TRK' }) | null // the tape: the heading, else the track (an estimate of the nose)
   track: Reading | null // the track diamond on the heading tape, once it differs from the heading by TRACK_DIAMOND_DEG
@@ -268,6 +277,9 @@ export function frameView(d: FlightData): FrameView {
     agl: fin(d.aglFt) && d.aglFt < AGL_SHOWN_BELOW_FT ? { value: Math.max(0, d.aglFt), est: est('aglFt') } : null,
     vs: read('vsFpm', d.vsFpm),
     speed,
+    // From a known airspeed the true airspeed is physics (to the outside air's temperature, a few %): an estimate only
+    // when the airspeed is.
+    tas: fin(d.tasKt) && d.tasKt > 0 ? { value: d.tasKt, est: est('tasKt') || est('iasKt') } : null,
     gs: speed?.kind === 'IAS' ? gs : null,
     hdg,
     track,
@@ -383,17 +395,19 @@ const dim = (el: Element, on: boolean): void => {
 export class FlightFrame {
   readonly #bracket = h('div', 'fh-bracket')
   readonly #blocks: Record<BlockId, HTMLDivElement>
-  // Left: the altitude tape, the vertical-speed scale and figure, the height above the ground.
+  // Left: the altitude tape and the vertical-speed scale; under them the vertical speed and the height above the ground.
   readonly #alt = new Tape(ALT_TAPE, 'alt')
   readonly #vsi = new Vsi()
-  readonly #vs = h('span', 'fh-vs')
   readonly #altRow = h('div', 'fh-brow')
+  readonly #vs = line('fh-vsl', 'V/S', 'ft/min')
   readonly #agl = line('fh-agl', 'AGL', 'ft')
-  // Right: the speed tape (airspeed, else ground speed), the ground speed.
+  // Right: the speed tape (airspeed, else ground speed); under it the true airspeed, level with the V/S, and the ground
+  // speed: the three speeds, each named (a dive's V/S and TAS both grow, the one in ft/min, the other in kt).
   readonly #spd = new Tape(SPEED_TAPE, 'spd')
   readonly #spdKind = h('span', 'fh-k')
   readonly #spdHead = head(label(this.#spdKind, 'kt'))
   readonly #spdRow = h('div', 'fh-brow')
+  readonly #tas = line('fh-tas', 'TAS', 'kt')
   readonly #gs = line('fh-gs', 'GS', 'kt')
   // Top: the wind, the heading tape.
   readonly #wind = h('div', 'fh-wind')
@@ -420,6 +434,7 @@ export class FlightFrame {
     alt: new Glide(0.25, 2_000),
     vs: new Glide(0.35, 4_000),
     spd: new Glide(0.25, 60),
+    tas: new Glide(0.25, 60),
     gs: new Glide(0.25, 60),
     hdg: new Glide(0.3, 90, true),
     trk: new Glide(0.3, 90, true),
@@ -458,10 +473,10 @@ export class FlightFrame {
       b.hidden = true
     }
     this.#altRow.append(this.#alt.el, this.#vsi.el)
-    blocks.left.append(head(label('Alt', 'ft'), this.#vs), this.#altRow, this.#agl.el)
+    blocks.left.append(head(label('Alt', 'ft')), this.#altRow, this.#vs.el, this.#agl.el)
 
     this.#spdRow.append(this.#spd.el)
-    blocks.right.append(this.#spdHead, this.#spdRow, this.#gs.el)
+    blocks.right.append(this.#spdHead, this.#spdRow, this.#tas.el, this.#gs.el)
 
     const windRow = h('div', 'fh-wind-row')
     windRow.append(this.#wdial.el, this.#windText, this.#windUnit)
@@ -597,6 +612,7 @@ export class FlightFrame {
     const rate = this.#trend.step(v.speed?.value ?? null, dataDt) // the data's own rate, not the glide's
     this.#trendOn = rate !== null && trendShown(this.#trendOn, rate * TREND_S)
     this.#spd.trend(this.#trendOn ? rate! * TREND_S : null, dpr)
+    gl.tas.step(v.tas?.value ?? null, dt)
     gl.gs.step(v.gs?.value ?? null, dt)
     const hdg = gl.hdg.step(v.hdg?.value ?? null, dt)
     const trk = gl.trk.step(v.track?.value ?? null, dt)
@@ -619,13 +635,13 @@ export class FlightFrame {
     show(this.#alt.el, v.alt !== null)
     if (v.alt !== null) dim(this.#alt.el, v.alt.est)
     show(this.#vsi.el, v.vs !== null)
-    show(this.#vs, v.vs !== null)
+    show(this.#vs.el, v.vs !== null)
     if (v.vs !== null && gl.vs.value !== null) {
       const t = vsText(gl.vs.value)
-      say(this.#vs, t.arrow === '' ? t.text : `${t.arrow} ${t.text}`)
-      this.#vs.dataset.dir = t.arrow === '↑' ? 'up' : t.arrow === '↓' ? 'down' : 'level'
+      say(this.#vs.value, t.arrow === '' ? t.text : `${t.arrow} ${t.text}`)
+      this.#vs.el.dataset.dir = t.arrow === '↑' ? 'up' : t.arrow === '↓' ? 'down' : 'level'
       dim(this.#vsi.el, v.vs.est)
-      dim(this.#vs, v.vs.est)
+      dim(this.#vs.el, v.vs.est)
     }
     show(this.#altRow, v.alt !== null || v.vs !== null)
     show(this.#agl.el, v.agl !== null)
@@ -639,6 +655,11 @@ export class FlightFrame {
     if (v.speed !== null) {
       say(this.#spdKind, v.speed.kind)
       dim(this.#spd.el, v.speed.est)
+    }
+    show(this.#tas.el, v.tas !== null)
+    if (v.tas !== null && gl.tas.value !== null) {
+      say(this.#tas.value, speedText(gl.tas.value))
+      dim(this.#tas.el, v.tas.est)
     }
     show(this.#gs.el, v.gs !== null)
     if (v.gs !== null && gl.gs.value !== null) {
@@ -699,8 +720,8 @@ export class FlightFrame {
     const phone = this.#phone?.matches ?? false
     const len = (el: Element): number => el.textContent?.length ?? 0
     const keys: Record<BlockId, string> = {
-      left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, this.#alt.leadLength, len(this.#vs), len(this.#agl.value)].join(),
-      right: [phone, v.speed?.kind, v.gs !== null, this.#spd.leadLength, len(this.#gs.value)].join(),
+      left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, this.#alt.leadLength, len(this.#vs.value), len(this.#agl.value)].join(),
+      right: [phone, v.speed?.kind, v.tas !== null, v.gs !== null, this.#spd.leadLength, len(this.#tas.value), len(this.#gs.value)].join(),
       top: [phone, v.hdg?.kind, v.wind !== null, v.wind?.rel !== null, len(this.#windText)].join(),
       bottom: [
         phone, v.adi !== null, v.roll !== null, v.pitch !== null, v.g !== null, v.gear !== null, v.flaps !== null, len(this.#flaps),

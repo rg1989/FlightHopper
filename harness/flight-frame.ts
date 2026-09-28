@@ -19,6 +19,7 @@ import type { Rect, Square } from '../client/scene/flightFrame.ts'
 import { MIN_PX } from '../client/scene/traffic.ts'
 import type { FlightData, RenderState } from '../client/types.ts'
 import type { ReadsbAircraft } from '../shared/types.ts'
+import { trueAirspeedKt } from '../client/track/airspeed.ts'
 
 const SETS = ['scenario', 'live', 'sparse', 'approach', 'takeoff', 'turn', 'jal123', 'cruise'] as const
 type DataSet = (typeof SETS)[number]
@@ -31,7 +32,7 @@ const derived = (...k: Array<keyof FlightData>): ReadonlySet<keyof FlightData> =
 
 // A recorded flight: every field, some estimated (dimmed), gear and flaps out.
 const SCENARIO: FlightData = {
-  altFt: 6_480, aglFt: 3_120, vsFpm: -1_480, iasKt: 208, gsKt: 231, hdgDeg: 252, trackDeg: 256, pitchDeg: 4.2, rollDeg: 31.5,
+  altFt: 6_480, aglFt: 3_120, vsFpm: -1_480, iasKt: 208, tasKt: trueAirspeedKt(208, 6_480), gsKt: 231, hdgDeg: 252, trackDeg: 256, pitchDeg: 4.2, rollDeg: 31.5,
   g: 1.21, windFromDeg: 220, windKt: 16, gear: 'down', flaps: 10, epr: [1.22, 1.18, 1.31, 1.27],
   derived: derived('aglFt', 'windFromDeg', 'windKt'),
 }
@@ -54,17 +55,17 @@ const S_CRUISE: RenderState = {
 const RAW_CRUISE: ReadsbAircraft = { hex: 'abc123', gs: 462, track: 71.4, alt_baro: 36_000 }
 // A take-off climb: 15° nose up, 2,400 fpm, gear still down, flaps 5.
 const TAKEOFF: FlightData = {
-  altFt: 1_520, aglFt: 1_440, vsFpm: 2_400, iasKt: 165, gsKt: 172, hdgDeg: 340, trackDeg: 342, pitchDeg: 15, rollDeg: 0.4,
+  altFt: 1_520, aglFt: 1_440, vsFpm: 2_400, iasKt: 165, tasKt: trueAirspeedKt(165, 1_520), gsKt: 172, hdgDeg: 340, trackDeg: 342, pitchDeg: 15, rollDeg: 0.4,
   g: 1.12, windFromDeg: 320, windKt: 14, gear: 'down', flaps: 5, epr: [1.52, 1.54], derived: derived('aglFt', 'trackDeg'),
 }
 // A level turn: 25° of right bank, 1.1 g.
 const TURN: FlightData = {
-  altFt: 9_000, aglFt: 7_260, vsFpm: 0, iasKt: 250, gsKt: 286, hdgDeg: 45, trackDeg: 49, pitchDeg: 2.5, rollDeg: 25,
+  altFt: 9_000, aglFt: 7_260, vsFpm: 0, iasKt: 250, tasKt: trueAirspeedKt(250, 9_000), gsKt: 286, hdgDeg: 45, trackDeg: 49, pitchDeg: 2.5, rollDeg: 25,
   g: 1.1, windFromDeg: 270, windKt: 35, gear: 'up', flaps: 0, epr: null, derived: derived('aglFt', 'trackDeg'),
 }
 // JAL 123 in its dutch roll, gear down (track.csv, 18:40:03–04).
 const JAL123: FlightData = {
-  altFt: 24_531, aglFt: null, vsFpm: 2_899, iasKt: 205.4, gsKt: 299.6, hdgDeg: 35.8, trackDeg: 38.6, pitchDeg: 11, rollDeg: 37,
+  altFt: 24_531, aglFt: null, vsFpm: 2_899, iasKt: 205.4, tasKt: trueAirspeedKt(205.4, 24_531), gsKt: 299.6, hdgDeg: 35.8, trackDeg: 38.6, pitchDeg: 11, rollDeg: 37,
   g: 0.8, windFromDeg: 221, windKt: 9, gear: 'down', flaps: 0, epr: [1.09, 1.1, 1.069, 1.048], derived: derived('trackDeg'),
 }
 

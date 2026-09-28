@@ -34,8 +34,10 @@ export interface FlightData {
   altFt: number | null // true altitude: above mean sea level
   aglFt: number | null // above the ground drawn under the aircraft
   vsFpm: number | null
-  iasKt: number | null
-  gsKt: number | null
+  iasKt: number | null // indicated (calibrated) airspeed: what the pilots' airspeed indicator shows
+  tasKt?: number | null // true airspeed: the speed through the air (IAS grows into it with height); optional so FlightData
+  // literals written before it keep compiling| null // true airspeed: the speed through the air (IAS grows into it with height)
+  gsKt: number | null // ground speed: over the ground, the true airspeed's horizontal part plus the wind
   hdgDeg: number | null // true heading of the nose
   trackDeg: number | null // true course over the ground
   pitchDeg: number | null // nose-up +

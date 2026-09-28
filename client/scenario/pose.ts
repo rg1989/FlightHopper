@@ -9,6 +9,7 @@
 
 import { bearingDeg, distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
+import { trueAirspeedKt } from '../track/airspeed.ts'
 import type { FlightData, RenderState } from '../types.ts'
 import type { TrackRow } from './types.ts'
 
@@ -204,10 +205,12 @@ export class PoseTrack {
       if (windFromDeg !== null) derived.add('windFromDeg')
       if (windKt !== null) derived.add('windKt')
     }
+    const iasKt = lin(a.iasKt, b.iasKt, u)
     return {
       altFt: this.#alt,
       vsFpm: this.#vs,
-      iasKt: lin(a.iasKt, b.iasKt, u),
+      iasKt,
+      tasKt: iasKt !== null && iasKt > 0 ? trueAirspeedKt(iasKt, this.#alt) : null,
       gsKt: this.#gs,
       hdgDeg: this.#hdg,
       trackDeg: this.#trk,

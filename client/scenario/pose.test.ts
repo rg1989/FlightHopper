@@ -293,6 +293,13 @@ test('the geoid is read at most every 0.5 km of travel, and again after a seek',
 
 // ---------- optional scalars ----------
 
+test('the true airspeed: from the row airspeed at the pose\'s height (standard atmosphere); none without an airspeed', () => {
+  const p = new PoseTrack([row({ t: 0, altFt: 10_000, iasKt: 250 }), row({ t: 2, altFt: 10_000, iasKt: 250 }), row({ t: 4 })], ZERO_N)
+  near(p.dataAt(1).tasKt, 288.7, 0.5, '250 kt at 10,000 ft')
+  assert.equal(p.dataAt(4).tasKt, null)
+  assert.equal(p.dataAt(1).derived.has('tasKt'), false, 'physics, not an estimate: drawn as bright as the airspeed')
+})
+
 test('optional scalars are linear between rows; wind direction goes through its unit vector', () => {
   const rows = [
     row({ t: 0, iasKt: 250, g: 1, windFromDeg: 350, windKt: 20 }),

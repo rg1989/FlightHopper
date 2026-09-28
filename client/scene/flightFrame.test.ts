@@ -6,6 +6,7 @@ import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, RenderState } from '../types.ts'
 import type { BlockId, BlockSize, Placed, Rect, Square } from './flightFrame.ts'
 import { MIN_PX } from './traffic.ts'
+import { trueAirspeedKt } from '../track/airspeed.ts'
 
 // flightFrame.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
 registerHooks({
@@ -242,14 +243,14 @@ const plain = (d: FlightData): object => ({ ...d, derived: [...d.derived].sort()
 
 test('liveFlightData: the render state and the ADS-B reply map onto the frame; the attitude is the drawn one, an estimate', () => {
   assert.deepEqual(plain(liveFlightData(S, RAW, 7400)), {
-    altFt: 7975, aglFt: 7400, vsFpm: -951, iasKt: 268, gsKt: 337.1, hdgDeg: 105.24, trackDeg: 101.81, pitchDeg: -1.5,
+    altFt: 7975, aglFt: 7400, vsFpm: -951, iasKt: 268, tasKt: trueAirspeedKt(268, 7975), gsKt: 337.1, hdgDeg: 105.24, trackDeg: 101.81, pitchDeg: -1.5,
     rollDeg: 0.5, g: null, windFromDeg: 281, windKt: 22, gear: null, flaps: null, epr: null, derived: ['aglFt', 'pitchDeg', 'rollDeg'],
   })
 })
 
 test('liveFlightData: no reply: the reply fields are null; the drawn attitude still shows (the 3-D model and the instrument agree)', () => {
   assert.deepEqual(plain(liveFlightData(S, null, null)), {
-    altFt: 7975, aglFt: null, vsFpm: -951, iasKt: null, gsKt: 337.1, hdgDeg: null, trackDeg: 101.81, pitchDeg: -1.5,
+    altFt: 7975, aglFt: null, vsFpm: -951, iasKt: null, tasKt: null, gsKt: 337.1, hdgDeg: null, trackDeg: 101.81, pitchDeg: -1.5,
     rollDeg: 0.5, g: null, windFromDeg: null, windKt: null, gear: null, flaps: null, epr: null, derived: ['pitchDeg', 'rollDeg'],
   })
   const bare = liveFlightData(S, { hex: '4691c4', alt_baro: 7975 }, null)
@@ -263,6 +264,14 @@ test('liveFlightData: the track\'s smoothed altitude and airspeed, not the sampl
   assert.equal(d.altFt, 7890.4, 'the height the aircraft is drawn at, so ALT − AGL is the ground under it')
   assert.equal(d.iasKt, 266.2)
   assert.equal(liveFlightData({ ...S, altMslFt: null, iasKt: null }, RAW, null).altFt, 7975, 'none (on the ground): the sample\'s')
+})
+
+test('liveFlightData: the true airspeed: the aircraft\'s own when it sends one; else from its airspeed, height and air temperature', () => {
+  assert.equal(liveFlightData(S, { ...RAW, tas: 301 }, null).tasKt, 301, 'broadcast (Mode S EHS): as sent')
+  const isa = liveFlightData(S, RAW, null).tasKt!
+  assert.ok(Math.abs(isa - 300.2) < 1, `268 kt at 7,975 ft in the standard atmosphere: ${isa}`)
+  assert.ok(liveFlightData(S, { ...RAW, oat: 15 }, null).tasKt! > isa + 3, 'a warmer day than standard (−0.8 °C there): faster')
+  assert.equal(liveFlightData(S, { ...RAW, ias: undefined }, null).tasKt, null, 'no airspeed, none sent: unknown (never from the ground speed)')
 })
 
 test('liveFlightData: the drawn gear, an estimate (the crew timing, not a broadcast)', () => {
@@ -353,6 +362,13 @@ test('frameView: every instrument of a full record', () => {
   assert.deepEqual(v.gear, { est: false })
   assert.deepEqual(v.flaps, { value: 10, est: false })
   assert.deepEqual(blocksShown(v), { left: true, right: true, top: true, bottom: true })
+})
+
+test('frameView: the true airspeed beside the vertical speed; an estimate only when the airspeed it comes from is one', () => {
+  assert.deepEqual(frameView({ ...FULL, tasKt: 312.5 }).tas, { value: 312.5, est: false })
+  assert.deepEqual(frameView({ ...FULL, tasKt: 312.5, derived: new Set<keyof FlightData>(['iasKt']) }).tas, { value: 312.5, est: true })
+  assert.equal(frameView({ ...FULL, tasKt: null }).tas, null)
+  assert.equal(frameView(FULL).tas, null, 'a record without the field (written before it existed)')
 })
 
 test('frameView: height above ground only below 15,000 ft (high up it reads as noise)', () => {
