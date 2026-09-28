@@ -5,7 +5,7 @@
 import { Cartesian2, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
-import { targetAttitude } from '../track/attitude.ts'
+import { aeroPitchRoll } from '../track/attitude.ts'
 import type { FleetEntry, ModelManifestEntry } from '../types.ts'
 import { LiveryShaders, liveryCode } from './livery.ts'
 import type { ModelPicker } from './modelFor.ts'
@@ -21,7 +21,7 @@ export const BOX_CENTRE = new Cartesian3(-2.7, 0, 1.58)
 export const BOX_HALF = 13.9
 const KT = 1852 / 3600
 const FPM = 0.3048 / 60
-const SLOW_KT = 40 // slower than this a vertical rate says little about pitch (a helicopter, a hover): level
+const SLOW_KT = 40 // slower than this no wing flies (a helicopter's hover, a glitch): level
 /** Length factor per ADS-B emitter category on a generic model (one without `types`); a typed model is true size. */
 const SCALE: Record<string, number> = { A1: 0.35, A2: 0.6, A3: 1, A4: 1.2, A5: 1.8, A7: 0.4 }
 
@@ -75,17 +75,18 @@ export function hitAt(boxes: readonly Box[], n: number, x: number, y: number): s
 }
 
 /**
- * Cesium HeadingPitchRoll of a traffic aircraft (trafficMatrix turns model m to it): the nose along its track (headingDeg when it has none),
- * pitch from its climb (targetAttitude: flight-path angle + AoA), wings level (the fleet keeps only the newest sample,
- * so no turn rate). ponytail: roll 0; upgrade: the track change between samples, as the chased Track does.
+ * Cesium HeadingPitchRoll of a traffic aircraft from its newest sample (trafficMatrix turns model m to it): the nose along
+ * its track (headingDeg when it has none), pitch from flight mechanics (aeroPitchRoll: path angle + angle of attack),
+ * wings level (one sample has no turn rate). Traffic with a Track uses the track's attitude instead (Traffic.update).
  */
 export function trafficHpr(e: FleetEntry, headingDeg: number, out: HeadingPitchRoll): HeadingPitchRoll {
   const gs = e.gsKt ?? 0
-  const att = targetAttitude({
-    gsMs: gs * KT, vsMs: gs >= SLOW_KT ? (e.vsFpm ?? 0) * FPM : 0, headingDeg: e.trackDeg ?? headingDeg,
-    broadcastRollDeg: 0, turnRateDegS: 0, onGround: e.onGround, phase: null, mlat: false,
+  // Slower than any wing flies (a hover, a glitch): level.
+  const pr = gs < SLOW_KT ? { pitchDeg: 0, rollDeg: 0 } : aeroPitchRoll({
+    gsMs: gs * KT, vsMs: (e.vsFpm ?? 0) * FPM, turnRateDegS: 0, alongMs2: 0, easKt: null,
+    altM: e.hM, onGround: e.onGround, category: e.info?.category ?? null,
   })
-  return hprFor(att, out)
+  return hprFor({ headingDeg: e.trackDeg ?? headingDeg, ...pr }, out)
 }
 
 const lift = new Cartesian3()

@@ -1,5 +1,5 @@
 // client/track/hermite.ts
-// Horizontal motion between and after samples, in a local ENU frame (t s, e/n m, ve/vn m/s).
+// Horizontal motion after the newest sample, and the blend that hides a correction (local ENU: t s, e/n m, ve/vn m/s).
 import type { KinPoint } from './types.ts'
 
 export interface HState {
@@ -7,33 +7,6 @@ export interface HState {
   n: number
   ve: number
   vn: number
-}
-
-/**
- * Cubic Hermite interpolation on e and n. Tangents are the sampled velocities scaled by the segment
- * length (b.t − a.t), so the curve passes through both positions with both velocities, and a
- * constant-velocity line is reproduced exactly. t is clamped to [a.t, b.t].
- */
-export function hermite(a: KinPoint, b: KinPoint, t: number): HState {
-  const h = b.t - a.t
-  if (!(h > 0)) return { e: b.e, n: b.n, ve: b.ve, vn: b.vn } // degenerate segment: the newest point wins
-  const s = (Math.min(b.t, Math.max(a.t, t)) - a.t) / h
-  const s2 = s * s
-  const s3 = s2 * s
-  const h00 = 2 * s3 - 3 * s2 + 1
-  const h01 = -2 * s3 + 3 * s2
-  const h10 = s3 - 2 * s2 + s
-  const h11 = s3 - s2
-  // d/ds of the basis; dh01 = −dh00. Written so s = 0 and s = 1 return a's and b's values bit-exactly.
-  const d00 = 6 * s2 - 6 * s
-  const d10 = 3 * s2 - 4 * s + 1
-  const d11 = 3 * s2 - 2 * s
-  return {
-    e: h00 * a.e + h01 * b.e + h * (h10 * a.ve + h11 * b.ve),
-    n: h00 * a.n + h01 * b.n + h * (h10 * a.vn + h11 * b.vn),
-    ve: (d00 * (a.e - b.e)) / h + d10 * a.ve + d11 * b.ve,
-    vn: (d00 * (a.n - b.n)) / h + d10 * a.vn + d11 * b.vn,
-  }
 }
 
 /**

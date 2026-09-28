@@ -55,5 +55,8 @@ export function toSample(ac: ReadsbAircraft, upstreamNowMs: number, offsetMs: nu
     callsign: callsignOf(ac.flight),
     typeCode: str(ac.t),
     reg: str(ac.r),
+    iasKt: num(ac.ias),
+    tasKt: num(ac.tas),
+    category: str(ac.category),
   }
 }

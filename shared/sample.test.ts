@@ -61,3 +61,13 @@ test('PIA (4) and LADD (8) are hidden; military (1) is not', () => {
   assert.equal(isHidden({ hex: 'a', dbFlags: 1 }), false)
   assert.equal(isHidden({ hex: 'a' }), false)
 })
+
+test('airspeeds and the emitter category come along when broadcast, else null', () => {
+  const s = toSample({ ...byHex('71bd79'), ias: 250, tas: 420, category: 'A3' }, 0, 0, 0)!
+  assert.equal(s.iasKt, 250)
+  assert.equal(s.tasKt, 420)
+  assert.equal(s.category, 'A3')
+  const bare = toSample({ hex: 'abc123', lat: 1, lon: 1, seen_pos: 0 }, 0, 0, 0)!
+  assert.equal(bare.iasKt, null)
+  assert.equal(bare.category, null)
+})

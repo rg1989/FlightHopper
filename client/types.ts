@@ -11,10 +11,10 @@ export interface RenderState {
   headingDeg: number                            // true, nose direction
   pitchDeg: number                              // nose-up positive
   rollDeg: number                               // right-wing-down positive
-  gsKt: number | null                           // copied from the newest sample
-  trackDeg: number | null                       // copied from the newest sample
-  altBaroFt: number | null                      // copied from the newest sample
-  vsFpm: number | null                          // from the vertical filter (derived)
+  gsKt: number | null                           // from the smoothed path
+  trackDeg: number | null                       // from the smoothed path
+  altBaroFt: number | null                      // the current sample's (at or before the render time)
+  vsFpm: number | null                          // from the smoothed height (derived)
   mode: 'interp' | 'extrap' | 'stale'           // stale = extrapolated past 8 s → frozen
   altSource: AltSource
   onGround: boolean
@@ -22,6 +22,8 @@ export interface RenderState {
   quality: Quality
   callsign: string | null
   typeCode: string | null
+  altMslFt?: number | null                      // the smoothed height above mean sea level; null on the ground
+  iasKt?: number | null                         // indicated airspeed while the aircraft reports it (averaged, ≤ 30 s old)
 }
 
 /**

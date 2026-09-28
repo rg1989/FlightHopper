@@ -32,9 +32,12 @@ function truthAt(t: number): { e: number; n: number; trackDeg: number } {
   return { e: 2 * R, n: V * 60 - V * (t - 150), trackDeg: 180 }
 }
 
-/** abc123 at position time t (s after T0), reported seenPos seconds before the response's `now`. */
+/**
+ * abc123 at position time t (s after T0), reported seenPos seconds before the response's `now`. Its track trails the
+ * position by 0.75 s, as adsb.fi's does (measured in turns at Heathrow, 2026-09-28: median 0.73 s).
+ */
 function abc(t: number, seenPos: number): ReadsbAircraft {
-  const p = truthAt(t)
+  const p = { ...truthAt(t), trackDeg: truthAt(Math.max(0, t - 0.75)).trackDeg }
   const g = ORIGIN.inv(p.e, p.n, 0)
   const altFt = Math.round((10_000 - (1000 * t) / 60) / 25) * 25 // −1000 fpm, 25 ft quantised
   return {

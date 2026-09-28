@@ -84,4 +84,8 @@ export interface Sample {
   callsign: string | null
   typeCode: string | null
   reg: string | null
+  // Optional (older recordings and tests leave them out). From Mode S enhanced surveillance where a radar asks for it.
+  iasKt?: number | null
+  tasKt?: number | null
+  category?: string | null // ADS-B emitter category (A1 light … A5 heavy, A7 rotorcraft)
 }
