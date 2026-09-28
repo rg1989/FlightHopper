@@ -1,20 +1,36 @@
 # FlightHopper — Handoff
 
-**Updated:** 2026-09-28 (flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain, painted
-runways, landing gear). The previous handoff (UI revamp, live data on adsb.fi, polling, URL state, data-source options)
-is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from it.
+**Updated:** 2026-09-28, late (the polish below; the Air Astana 1388 scenario still waits on the user's yes to three
+downloads). Earlier the same day: flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain,
+painted runways, landing gear. The previous handoff (UI revamp, live data on adsb.fi, polling, URL state, data-source
+options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from it.
 
 ## Where things stand
 
-- **`main` is `c9c3e32`.** `npm run check`: `tsc` clean, 1112/1112 (1114 in the main checkout with the uncommitted work
-  below). `vite build` works (the usual chunk-size warning only).
+- **`main` is this handoff's commit, on `4cc271e`.** `npm run check`: `tsc` clean, 1120/1120 in the worktree (1123 in the
+  main checkout with the uncommitted work below). `vite build` works (the usual chunk-size warning only).
 - **Uncommitted in the main checkout, not ours:** another session's voice-over/playbar work (`client/scenario/{format,run,
   types}.ts` and tests, `client/ui/{icons,info,playbar}.*`, `public/scenarios/jal123/scenario.json`, untracked
   `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
   (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
   touch those files, and none of ours does.
-- **Not pushed:** `origin/main` is `b9e0f1f`; the 39 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
+- **Not pushed:** `origin/main` is `b9e0f1f`; the 45 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
   2026-09-28) are local. Ask before pushing.
+
+### What the late session of 2026-09-28 added (all on `main`)
+
+| What | Where |
+|---|---|
+| Rolling digits: the altitude readout's last two digits on a drum in 20 ft steps, the speed's last digit; a speed-trend arrow (green, along the ticks, index → the speed 10 s ahead; shows from 2 kt, hides below 1 kt). The trend runs on the data's clock: a scenario's pause holds it, a seek restarts it, 4× play does not stretch it. | `client/scene/instrumentMath.ts` (`drum`, `drumLabels`, `drumShift`, `Trend`, `trendShown`), `client/ui/instruments.ts` (`Tape`), `FlightFrame.update(…, dataT)` |
+| Runways at night: moonlit like the ground. They took their light from the Sun's elevation alone while the globe also gets the Moon, so two days past full moon LLBG 21 was a black wedge. `Sun.update` now reports the light it set (`SunState.intensity`, `dayBrightness`, the Moon's included); runways and a scenario airfield use it. | `client/scene/sun.ts`, `client/app.ts` |
+| Threshold markers (the yellow dots + idents, user asked what they are) show from 3 to 30 km: up close the paint shows the designators itself. | `client/scene/runways.ts` `MARKER_RANGE` |
+| Air Astana (KZR) livery: white, midnight-blue fin `#253168` (brand; a May 2018 Commons photo of P4-KCJ agrees), light engines. Colours only: the logo is not free-licensed. | `client/scene/liveries.json` |
+
+Checked on screen (Browser pane, visible while the user was at the desk): the painted, flattened hero runways at KSFO 28L
+(live, day and night), LLBG 21 (live, night: the bug above) and LOWI 26 (the synthetic replay
+`data/recordings/synthetic-lowi.jsonl`, launch config `physics-lowi-api`, REPLAY_SPEED=4). JAL 123's 1985 imagery at the
+default chase range looks soft, not smeared; the smear at ~20 m camera height is the GSI photos' own ~1 m/px (max z17), and
+no app setting sharpens it: left as a known limit.
 
 ### What 2026-09-28 added (all on `main`)
 
@@ -36,7 +52,8 @@ same photos).
 
 ## Next
 
-1. **Air Astana 1388 scenario — blocked on the user's permission to download** (asked, not yet answered):
+1. **Air Astana 1388 scenario — blocked on the user's permission to download** (asked twice on 2026-09-28, not yet
+   answered; the KZR livery colours are done):
    - `E190.glb`, 3.5 MB, GPL-2.0: `https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E190.glb`
      (same source and licence as `e75l.glb`; keep the upstream file in `third_party/aircraft-models/source/flightairmap-glb/`,
      update that README and `licences.json`).
@@ -45,18 +62,21 @@ same photos).
      Browser pane a PDF turns into a save dialog on the user's screen — do not open PDF links there).
    - FR24's MLAT track `KC1388_1e84fc24.csv` (29 KB) and `KC1388-Altitude-Only-Data.csv` (71 KB) from the FR24 blog post,
      as a reference only: FR24's terms, not committed.
-   - **Then:** manifest entry + a `GEAR` spec for the E190 (animated gear, as asked); Air Astana livery (colours; a logo only
-     if public domain, per the liveries rule); a package like JAL 123 (`docs/scenarios.md`): track, events, transcript and
-     captions **only from the official record**; `airport.json` for Alverca (LPAR) and Beja (LPBJ, landed on 19L meaning 19R).
+   - **Then:** manifest entry + a `GEAR` spec for the E190 (animated gear, as asked); the scenario's `aircraft.livery` from
+     the KZR colours (base `#f7f7f7`, fin `#253168`, engine `#d0d5da`; titles `#273161`, gold ornament `#9b804d` if a body
+     decal is drawn); a package like JAL 123 (`docs/scenarios.md`): track, events, transcript and captions **only from the
+     official record**; `airport.json` for Alverca (LPAR) and Beja (LPBJ, landed on 19L meaning 19R). OurAirports' web
+     pages give only dimensions (LPAR 04/22 9,810 × 148 ft asphalt, displaced 820/787 ft; LPBJ 01L/19R 11,319 × 197 ft and
+     01R/19L 9,682 × 98 ft, concrete): take thresholds and elevations from the Portuguese AIP or the report (the builder's
+     OurAirports CSVs are a 17 MB download: ask).
    - **Facts so far (Wikipedia, SKYbrary, AvHerald, FR24):** 11 Nov 2018, KC1388/KZR1388, ERJ-190LR P4-KCJ (MSN 19000653),
      ferry Alverca → Minsk → Almaty after a C-check at OGMA; the aileron cables were installed reversed in both wings
      (SB 190-57-0038 work). Take-off 13:31 UTC in IMC; control repeatedly lost; direct mode regained partial control; two
      Portuguese F-16s from Monte Real escorted; ditching considered; three approaches at Beja, landed almost two hours
      after take-off; 3 crew (Capt Vyacheslav Aushev, FO Bauyrzhan Karasholakov, relief FO Sergey Sokolov) + 3 engineers,
      one minor injury; hull loss. FR24 tracked it by MLAT only (gaps), with altitudes for the three approaches.
-2. **Optional polish:** a speed-trend arrow and rolling digits on the tapes; a live look at the painted and flattened hero
-   runways (KSFO, LLBG, LOWI: only JAL 123's airfield was checked on screen); the era imagery's blur off the runway in
-   scenario close-ups.
+2. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
+   decal only if a public-domain wordmark turns up.
 
 ## How to check things on screen
 
@@ -84,6 +104,14 @@ profile that once had `?topo=0` stays flat.
   chase only; replays lit at their recorded time.
 
 ## Gotchas learned 2026-09-28
+
+- Anything that lights itself (runways, airfield) must take the light as the Sun set it (`SunState`), not recompute
+  `sunLook(elevation)`: the Moon (up to 1.7 intensity) is applied on top, only inside `Sun.update`.
+- A replay at `REPLAY_SPEED` > 1 moves positions faster: speeds read × that factor (GS 615 kt at 4×).
+- Planespotters answers tools with a bot check; Commons photo pages and `upload.wikimedia.org` thumbnails work, and a
+  canvas can sample their pixels (same origin when the image is the page).
+- The readout drum's cell is `DRUM_CELL_EM` (instruments.ts, set inline): moving it by whole em instead of cells was a
+  cell off.
 
 - Cesium puts a `BlendOption.TRANSLUCENT` BillboardCollection in the **opaque** pass with depth writes: a glow drawn before
   an aircraft punches a hole in it. Glows use `OPAQUE_AND_TRANSLUCENT`.
