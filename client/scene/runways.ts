@@ -57,7 +57,8 @@ export const RUNWAY_LIFT_M = 0.2
 
 const ASPHALT = Color.fromCssColorString('#3a3a3a')
 const PAINT = Color.fromCssColorString('#e4e4dc') // the markings' white, a little worn
-const MARKER_RANGE = new DistanceDisplayCondition(0, 30_000) // markers only near an airport
+// Markers only near an airport, and not up close: within 3 km the painted runway shows its own designators.
+const MARKER_RANGE = new DistanceDisplayCondition(3_000, 30_000)
 /** The smallest scale along up in a modelMatrix: at 0 it is singular, and Cesium inverts it (Matrix4.inverse throws). */
 const MIN_SCALE = 1e-3
 const COLS = Matrix4.toArray(Matrix4.IDENTITY) // followExaggeration's scratch (column-major): it allocates nothing
