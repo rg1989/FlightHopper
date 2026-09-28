@@ -43,7 +43,7 @@ import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
 import { FlatTerrainProvider, areasFor, stripsFor, type AirfieldAirport } from './scene/flatTerrain.ts'
 import { gearWanted } from './scene/gear.ts'
-import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
+import { Sun, parseSunParam, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
 import { eoxOnEsriFailure, imageryCredits, imageryStatus } from './scene/imagery.ts'
@@ -387,7 +387,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let lastFrameMs: number | null = null
   const carto = new Cartographic()
   const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
-  const runwayLook = sunLook(90) // the runways' light, rewritten every frame
   const onScreen: FleetEntry[] = [] // reused every frame
   // A scenario playing (run) or being fetched (loadingScenario): either way the polls wait.
   let run: ScenarioRun | null = null
@@ -821,8 +820,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
-    runways.setLight(chasing && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
-    airfield?.setLight(chasing && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
+    runways.setLight(chasing && prefs.light && st !== null ? st : null) // the light as set: the Moon's too
+    airfield?.setLight(chasing && prefs.light && st !== null ? st : null)
     // No state (before the first samples, pruned, or a gap > 2 min): the model goes; the camera stays put.
     if (model) model.show = chasing && s !== null
     toggles.setBusy(topo.animating)

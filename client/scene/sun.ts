@@ -183,6 +183,9 @@ export interface SunState {
   elevDeg: number
   night: number
   golden: number
+  // The light as set, the Moon's included: what draws its own light by it (the runways) matches the lit globe.
+  intensity: number
+  dayBrightness: number
 }
 
 /**
@@ -207,7 +210,7 @@ export class Sun {
   #enu = new Matrix4()
   #ibl = new Cartesian2(1, 1)
   #look = sunLook(90)
-  #state: SunState = { elevDeg: 90, night: 0, golden: 0 }
+  #state: SunState = { elevDeg: 90, night: 0, golden: 0, intensity: DAY_INTENSITY, dayBrightness: DAY_BRIGHTNESS }
 
   constructor(viewer: Viewer, layers: { day: ImageryLayer | null; night: ImageryLayer | null }) {
     this.#viewer = viewer
@@ -271,6 +274,8 @@ export class Sun {
     st.elevDeg = elevDeg
     st.night = look.night
     st.golden = look.golden
+    st.intensity = look.intensity
+    st.dayBrightness = look.dayBrightness
     if (!this.#enabled) {
       this.#aimOff()
       return st
@@ -280,6 +285,7 @@ export class Sun {
     const toMoon = Cartesian3.normalize(Cartesian3.subtract(moon, atWC, this.#toMoon), this.#toMoon)
     const moonW = moonWeight(sunElevationDeg(toMoon, atWC), moonLitFraction(moon, sun))
     moonLook(look, moonW)
+    st.intensity = look.intensity
     const light = this.#light
     const up = Ellipsoid.WGS84.geodeticSurfaceNormal(atWC, this.#up)
     aimLight(sun, up, look.night, light.direction, nightFrom(up, toMoon, moonW, this.#nightFrom))

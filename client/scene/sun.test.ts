@@ -273,6 +273,17 @@ test('full moon at LOWI (26 Sep, 22:30Z): the night light comes from the Moon, 1
   assert.equal(s.light.color.blue, 1)
 })
 
+test('update reports the light it set, moonlight included: what the runways light themselves by (not the moonless night)', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  const full = s.sun.update(TFULL, AIRCRAFT)!
+  near(full.intensity, 1.7, 0.005, 'full moon')
+  near(full.dayBrightness, 0.3, 1e-12)
+  const dark = s.sun.update(TNEW, AIRCRAFT)!
+  near(dark.intensity, 0.45, 1e-12, 'new moon')
+  near(dark.dayBrightness, 0.3, 1e-12)
+})
+
 test('a partly lit moon at LOWI (22 Sep, 21:00 local, 84 %, +21.6°): between the overhead light and the full-moon look', () => {
   const s = fakeViewer()
   s.sun.setEnabled(true)
