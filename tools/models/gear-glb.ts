@@ -46,7 +46,8 @@ export const GEAR: Record<string, GearSpec> = {
   b789: { noseAftM: 5.1, wheelbaseM: 25.6, trackM: 9.8, mains: 4, mainTyre: [1.37, 0.53], noseTyre: [1.02, 0.41], clearanceM: 0.9, mainsRetract: 'inboard' },
   a333: { noseAftM: 5.0, wheelbaseM: 25.37, trackM: 10.68, mains: 4, mainTyre: [1.37, 0.53], noseTyre: [1.14, 0.46], clearanceM: 0.75, mainsRetract: 'inboard' },
   a359: { noseAftM: 5.3, wheelbaseM: 28.67, trackM: 10.6, mains: 4, mainTyre: [1.27, 0.51], noseTyre: [1.02, 0.41], clearanceM: 0.9, mainsRetract: 'inboard' },
-  e75l: { noseAftM: 3.7, wheelbaseM: 11.3, trackM: 5.94, mains: 2, mainTyre: [0.86, 0.27], noseTyre: [0.61, 0.2], clearanceM: 0.6, mainsRetract: 'inboard' },
+  // E175: Embraer APM-2259 (general dimensions, footprint): wheelbase 11.40 m, track 5.20 m, H38x13-18 mains, 24x7.7 nose.
+  e75l: { noseAftM: 3.7, wheelbaseM: 11.4, trackM: 5.2, mains: 2, mainTyre: [0.97, 0.33], noseTyre: [0.61, 0.2], clearanceM: 0.6, mainsRetract: 'inboard' },
   e190: { noseAftM: 3.75, wheelbaseM: 13.83, trackM: 5.94, mains: 2, mainTyre: [1.04, 0.41], noseTyre: [0.61, 0.2], clearanceM: 0.5, mainsRetract: 'inboard' },
   crj9: { noseAftM: 2.8, wheelbaseM: 17.3, trackM: 4.0, mains: 2, mainTyre: [0.91, 0.3], noseTyre: [0.53, 0.14], clearanceM: 0.55, mainsRetract: 'inboard' },
   at75: { noseAftM: 2.9, wheelbaseM: 10.77, trackM: 4.1, mains: 2, mainTyre: [0.86, 0.22], noseTyre: [0.6, 0.18], clearanceM: 0.55, mainsRetract: 'forward' },

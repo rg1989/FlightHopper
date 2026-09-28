@@ -7,14 +7,14 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
-- **`main` is this handoff's commit, on `6660da5`.** `npm run check`: `tsc` clean, 1122/1122 in the worktree (1125 in the
+- **`main` is this handoff's commit.** `npm run check`: `tsc` clean, 1123/1123 in the worktree (1126 in the
   main checkout with the uncommitted work below). `vite build` works (the usual chunk-size warning only).
 - **Uncommitted in the main checkout, not ours:** another session's voice-over/playbar work (`client/scenario/{format,run,
   types}.ts` and tests, `client/ui/{icons,info,playbar}.*`, `public/scenarios/jal123/scenario.json`, untracked
   `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
   (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
   touch those files, and none of ours does.
-- **Not pushed:** `origin/main` is `b9e0f1f`; the 50 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
+- **Not pushed:** `origin/main` is `b9e0f1f`; the 51 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
   2026-09-28) are local. Ask before pushing.
 
 ### What 2026-09-29 added (all on `main`)
@@ -22,6 +22,7 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 | What | Where |
 |---|---|
 | **Air Astana 1388** (11 Nov 2018, ERJ-190LR P4-KCJ, Alverca → Beja, 13:29:30–15:28 UTC), the second scenario. Track (every row q=R): FR24's MLAT fixes 13:34–15:04 re-timed by airspeed (their time stamps wander) and smoothed with the app's own smoother; the take-off at the report's times; the three Beja approaches traced from the report's Figure 3 and timed by FR24's altitude record (go-arounds 15:08:00, 15:18:40; touchdown 15:26:50 on 19L), with a flare; attitude from the app's flight-mechanics model; IAS and g digitised from the report's DVDR plot (Figure 13). No transcript is published: 20 story messages quote the report (checked line by line against its pages). Closing card; crew by role (the report names nobody). | `public/scenarios/kc1388/`, build scripts and README `tools/scenarios/kc1388/`; inputs (report PDF, FR24 CSVs, OSM/SRTM JSON) in the main checkout's git-excluded `.work/kc1388/sources/` |
+| E175 gear on Embraer's APM-2259 (wheelbase 11.40 m, track 5.20 m, H38x13-18 mains; it had the E190's 5.94 m track). | `tools/models/gear-glb.ts`, `public/models/e75l-gear.glb` |
 | A package's `airport.json` may list several airfields (KC1388: Alverca and Beja, runway ends from OpenStreetMap, SRTM elevations); documented in `docs/scenarios.md` §1.11a. | `client/app.ts` |
 | **E190 model** (built by a helper agent with the documented livetaiwan pipeline; the same commands rebuild `e75l.glb` byte for byte): manifest `e190` (E19*, E29* move off `e75l`), paint map, lights, gear from Embraer's APM-1901 (wheelbase 13.83 m, track 5.94 m; fitted 0.38 m forward like e75l's). Renders: `.planning/reports/e190-model/`. | `public/models/e190{,-gear}.glb`, `tools/models/gear-glb.ts`, `third_party/aircraft-models/` |
 
@@ -67,9 +68,7 @@ same photos).
    attitude is not published); the Beja approaches are traced from a perspective figure (to within a few km); the
    take-off path before FR24's first fix is the smoothest one that keeps the report's times. Better data would come
    only from GPIAAF or Embraer (the DVDR values). Crew names are not in the report and are left out.
-2. **`e75l` gear track:** its `GEAR` spec has 5.94 m (the E190's); Embraer's E170/175 manual gives 5.20 m and H38x13-18
-   main tyres. Change, `node tools/models/gear-glb.ts --write`, look at an E175 on the ground (it is the common US regional).
-3. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
+2. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
    decal only if a public-domain wordmark turns up.
 
 ## How to check things on screen
