@@ -1,72 +1,97 @@
 # FlightHopper — Handoff
 
-**Updated:** 2026-09-23 (UI revamp). The previous handoff (apply terrain & sun, gate GE, run the full app) is done. Its step-by-step text is in `git show d242fed:.planning/HANDOFF.md`. The long-form backlog specs are in `git show 4a5e1cc:.planning/HANDOFF.md`.
+**Updated:** 2026-09-28 (flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain, painted
+runways, landing gear). The previous handoff (UI revamp, live data on adsb.fi, polling, URL state, data-source options)
+is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from it.
 
 ## Where things stand
 
-- **`main` has the MVP plus terrain & sun, F1, Esri imagery (`f2c2a35`, `15280e7`: Esri World Imagery when `VITE_ARCGIS_KEY` is set, EOX when it fails), the night-lights fade, 3-D buildings (`2d51c15`, see-through toggle X; `48cd0cb`: their night comes from the Sun state) and moonlight (`1e6af89`: the real Moon lights the night, cool blue by phase and height; `terrain-sun-design.md` §7 item 5).** `npm run check`: `tsc` clean, 747/747. `vite build` works (the only warning is the usual one about a chunk over 500 kB).
-- **Terrain & sun** (`5ff0b0e`): chase mode has 3-D relief with sun shading, a **3-D terrain** toggle (T) and a **Sun** toggle (L). The sun follows real time, and replays are lit at their recorded time. Design and decisions: `.planning/terrain-sun-design.md`. `apply_plans.py` gave 611 → 613 → 633 → 654 → 663 → 677 → 680, as planned.
-- **F1** (`85a7577`): after a 429, `server/budget.ts` halves the upstream rate for good. The handoff's ceiling rule (`ceiling = min(ceiling, rps/2)`, `rps = min(ceiling, max(maxRps/8, rps/2))`) reduces to `rps /= 2`, because `rps ≤ ceiling` always holds. So the ×1.1 recovery and the `maxRps/8` floor were deleted, and no `ceilingRps` field was needed. This is the same rule as `tools/record-cells.ts` `nextBase()`.
-- **(History; `make` is live on adsb.fi now, see below.)** `make live` was checked against adsb.lol: 10.8 min with a 40 nm view over LLBG, 27 requests (0.04 req/s plus the burst of 2), all 200, `r429` = `r4xx` = `r5xx` = `err` = 0. At that rate the cell cover refreshed each aircraft only every 50–100 s, so live was browse quality.
-- **Live at 0.04 req/s (2026-09-23 end-to-end check over KSFO and VHHH, all 200, 0 × 429):** F2 is done. Below `MAX_RPS` 0.5 the poller polls only the newest view's own circle (`singleCircle`), and no chase batch: the chase view is centred on the chased aircraft, so its circle carries it. Every aircraft refreshes every 25 s, and the circle's answers count as chase answers. The browse map dead-reckons each aircraft up to its staleS (was 20 s: most of the map sat frozen). The chase delay cap is 30 s (was 10 s), and a new selection snaps the render clock to max(track target, chase period + 1 s): the chased aircraft interpolates between real samples ~26 s behind, with no freeze and no "signal lost". Checked: a UAL 737 flown down final onto SFO 28R and rolled out, a Cathay A330 climbing out of HKG in daylight over 3-D relief, the toggles (buttons and T/L/X), Esc, persistence. Limits: one circle is at most 250 nm, so a continental view shows only the traffic around its centre; in chase the fleet is drawn at server now, so traffic runs up to ~26 s ahead of the chased aircraft (ponytail note in `app.ts`). F6 (adsb.fi) would lift both.
-- **The recorder** runs again from the main checkout (`--interval-ms 24000`, log `data/recordings/record-cells.log`). It polls adsb.lol; `make` / `make live` use adsb.fi, so they no longer conflict. Stop it only before `make live LIVE_SOURCE=adsblol` (one adsb.lol poller at a time; the Makefile refuses otherwise).
+- **`main` is `c9c3e32`.** `npm run check`: `tsc` clean, 1112/1112 (1114 in the main checkout with the uncommitted work
+  below). `vite build` works (the usual chunk-size warning only).
+- **Uncommitted in the main checkout, not ours:** another session's voice-over/playbar work (`client/scenario/{format,run,
+  types}.ts` and tests, `client/ui/{icons,info,playbar}.*`, `public/scenarios/jal123/scenario.json`, untracked
+  `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
+  (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
+  touch those files, and none of ours does.
+- **Not pushed:** `origin/main` is `b9e0f1f`; the 39 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
+  2026-09-28) are local. Ask before pushing.
 
-### Gate GE results (2026-09-23, headless Chrome on the M2)
+### What 2026-09-28 added (all on `main`)
 
-- **Ridge, 10 terrain presses:** FPS p50 144.9 / p5 102, `longTasks` [], worst animation frame 10.7–16.8 ms, `noGroundSettled` 0, `groundUnknownSettled` 0, `groundUnknown` 10 of 539 in the windows (the memo works), `shadows` false, clearance min 426 m, 0 violations. The validated run was 137 / 103 and 326 m.
-- **Looks match `.planning/plans/assets/WP-E-A/gate-GE/`:** LOWI morning, golden hour and night (61 GIBS tiles, all 200, z ≤ 8), the grow from flat (f 1e-7 → 0.24 → 0.70 → 1.00, `relH` 627.72), browse at night (unlit, toggles hidden, no GIBS), keys and persistence, phones 375×667 and 375×812 (no overlap, no sideways scroll), ground objects (HDG 261°, GND through a flatten and a grow), KSFO at its recorded time (clock 2026-09-22T18:00Z).
-- **Harness pages:** WP-E4 toggles and WP-E2 sun pass. WP-E1 topography: `undefinedSettled` 0 and `worstMs` ≤ 45 ms. `avgMs` was 16–29 ms at a load average of 10–20, which is over the 16.7 ms bar; WP-E1's own reference run was also over it (Cesium shader compiles). A first run at a higher load gave `undefinedSettled` 62; the rerun gave 0.
+| Area | What | Where |
+|---|---|---|
+| Motion | Kalman + RTS smoother per axis (white-jerk model; velocity reports lag positions by 0.75 s, measured), outlier gating, physical limits; quintic path between smoothed knots; flight-mechanics attitude (pitch = path angle + angle of attack from the lift equation, coordinated-turn bank, crab); traffic within 12 nm runs the same tracks. Final-approach pitch −1.0° → +3.0°, speed-change p99 35 → 2.4 kt/s (Heathrow capture). | `client/track/{smoother,attitude,track,registry}.ts`, design + results `.planning/flight-physics-design.md`, real-data test `client/track/realdata.test.ts` |
+| First seconds of a track | A velocity report is judged only against positions spanning ≥ 3 s; mis-stamped ADS-B positions are dropped by consensus (`positionOutliers`); MLAT velocity reports count (σ 5 m/s); MLAT readouts lag 2 s. No more 0 kt or 784 kt starts. | `client/track/{track,mlat}.ts` |
+| Instruments | Glass-cockpit blocks round the chased aircraft, never over it: altitude + V/S tapes, airspeed/GS tape, heading tape + wind, attitude indicator with bank scale, load/gear/flaps/thrust gauges. Live: ALT is the smoothed height, IAS the track's average, HDG the drawn nose, GEAR DN once the gear locks. | `client/scene/{flightFrame,instrumentMath}.ts`, `client/ui/{instruments.ts,flightFrame.css}`, harness `harness/flight-frame.*` |
+| Lights | Nav lights in their sectors, alternating beacons, double strobes, landing/taxi lights below 10,000 ft, lit fin, cabin window row, glossier paint; the chased model's lamps light its skin. ~0.1 ms/frame at 113 glows. | `client/scene/aircraftLights.ts`, `client/scene/livery.ts`, anchors `tools/models/light-anchors.ts` → manifest `lights` |
+| Flat runways | `FlatTerrainProvider` wraps the terrain source and lays the ground flat along every known runway (plane through the threshold heights, 100 m either side, 120 m blend) and over a scenario airfield's outline. The DEM is today's ground and in places a surface model: 1985 Haneda 15L sat on 13.5 m of modern relief. | `client/scene/flatTerrain.ts`; a scenario package may add `airport.json` (the `Airport` shape + `flat` rings), e.g. `public/scenarios/jal123/airport.json` |
+| Painted runways | Each runway a strip of quads every 100 m (follows the Earth's curvature), texture coordinates in metres, procedural ICAO markings (threshold stripes, designator glyph atlas, centre line, touchdown zone, aiming point, side stripes, asphalt, rubber). Hero airports and a scenario's airfield (no threshold dots there). | `client/scene/{runwayPaint,runways}.ts` |
+| Landing gear | The type models had none (they sat on their engines). Generated per type from published layouts, one node per leg hinged at its top; models stand on their wheels (`gearHeightM` = the gear's). Down on the ground and on the approach (< 2,000 ft AGL, descending, < 230 kt), up after lift-off (> 400 fpm), 12 s down / 9 s up; chased aircraft, traffic and scenario events. | `tools/models/gear-glb.ts` (`GEAR` specs; `node tools/models/gear-glb.ts --write` regenerates GLBs + manifest), `client/scene/gear.ts`, `ChaseModel.setGear/snapGear`, `Traffic` slots |
 
-## UI revamp (2026-09-23, `f7a88e0` `82b7847` `1aa4429`; design `.planning/ui-revamp-design.md`)
+JAL 123's "hilly take-off strip" (user report) had two causes: the modern DEM under the 1985 runway, and the scenario's
+GSI 1984–86 photos (max zoom 17, ~1 m/px, 6 KB tiles) smearing into ramps at the chase camera's 20 m. Terrain
+exaggeration, screen-space error, anisotropy and the imagery fade were each ruled out by test. Fixed by the flat
+airfield and the painted 1985 runways (15L/33R from the DFDR take-off roll, 04/22 and the island outline traced from the
+same photos).
 
-- **Shell:** every tool sits behind a square icon on a rail at the right edge (`client/ui/rail.ts`): Status (live dot), Aircraft (count badge), Scene, Altitude colours, About, Full screen (only where the page can go full screen). One panel at a time, all closed at start, Esc closes. No credit bar, no "Powered by" logo, no "Not for navigation" line (the user's call: personal use); the sources are listed under About.
-- **Focus vs chase:** a click on an aircraft (or a list row) *focuses* it: the flight card (`flightCard.ts`, top-left) shows identity, altitude / speed / V/S / track, a live status line and, expanded, the photo and every detail; the map stays top-down (a list row flies the map over it). The card's **Chase in 3-D** pill enters the chase and becomes **Top-down map** there. Esc: panel → chase → focus. A focused aircraft asks `/api/chase` every 10 s only (details); its position rides the view's refresh, and its card is Live until 2.5 view refreshes pass without a position. Leaving the chase restores the map's pre-chase zoom.
-- **Aircraft list:** refreshes every 10 s (countdown ring, manual refresh), dimmed and unclickable ~380 ms while it does; skeleton rows, an empty state; rows fade after two of the aircraft's own update gaps (`FleetEntry.gapS`).
-- **Loaders:** boot splash (`splash.ts`), the rail's live dot and busy arc, "Loading N areas" in Status, the terrain spinner, the photo skeleton; a toast only for provider trouble (bottom centre; top on phones).
-- **Phones (≤640 px):** the rail is a bottom tab bar with labels, panels are opaque sheets above it (swipe the header down to close), the card sits above the tab bar. **Touch screens:** 44 px targets and list rows, 16 px search text, a 36 px tap area for aircraft, touch gestures under About; in the chase, pinch zooms and a double tap goes back behind the aircraft (Cesium sends neither as wheel / double click). Safe-area insets everywhere (`viewport-fit=cover`); added to a home screen it opens full screen.
-- **Checked in the Browser pane** at 1100×710, 800×710, 740×360 (touch, landscape) and 375×812 (touch): splash, every panel, focus → chase → Top-down → Esc ladder with the URL at each step, list pick, expanded card with photo, sheets and swipe, chase orbit, request cadence (focus: `/api/chase` at 10 s; chase: 1 s). A 4-dimension review workflow (state, components, layout, perf/a11y; each finding adversarially verified) confirmed 23 findings, fixed in `1aa4429`; declined: restoring the disclaimer and Cesium's credit list.
+## Next
 
-## Live data since 2026-09-23 (adsb.fi, zoom-scaled polling, URL state)
+1. **Air Astana 1388 scenario — blocked on the user's permission to download** (asked, not yet answered):
+   - `E190.glb`, 3.5 MB, GPL-2.0: `https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E190.glb`
+     (same source and licence as `e75l.glb`; keep the upstream file in `third_party/aircraft-models/source/flightairmap-glb/`,
+     update that README and `licences.json`).
+   - The GPIAAF final report (process 08/ACCID/2018), 6.3 MB PDF, via the ASN mirror
+     `https://asn.flightsafety.org/reports/2018/20181111_E190_P4-KCJ.pdf` (gpiaaf.gov.pt answers 403 to tools; in the
+     Browser pane a PDF turns into a save dialog on the user's screen — do not open PDF links there).
+   - FR24's MLAT track `KC1388_1e84fc24.csv` (29 KB) and `KC1388-Altitude-Only-Data.csv` (71 KB) from the FR24 blog post,
+     as a reference only: FR24's terms, not committed.
+   - **Then:** manifest entry + a `GEAR` spec for the E190 (animated gear, as asked); Air Astana livery (colours; a logo only
+     if public domain, per the liveries rule); a package like JAL 123 (`docs/scenarios.md`): track, events, transcript and
+     captions **only from the official record**; `airport.json` for Alverca (LPAR) and Beja (LPBJ, landed on 19L meaning 19R).
+   - **Facts so far (Wikipedia, SKYbrary, AvHerald, FR24):** 11 Nov 2018, KC1388/KZR1388, ERJ-190LR P4-KCJ (MSN 19000653),
+     ferry Alverca → Minsk → Almaty after a C-check at OGMA; the aileron cables were installed reversed in both wings
+     (SB 190-57-0038 work). Take-off 13:31 UTC in IMC; control repeatedly lost; direct mode regained partial control; two
+     Portuguese F-16s from Monte Real escorted; ditching considered; three approaches at Beja, landed almost two hours
+     after take-off; 3 crew (Capt Vyacheslav Aushev, FO Bauyrzhan Karasholakov, relief FO Sergey Sokolov) + 3 engineers,
+     one minor injury; hull loss. FR24 tracked it by MLAT only (gaps), with altitudes for the three approaches.
+2. **Optional polish:** a speed-trend arrow and rolling digits on the tapes; a live look at the painted and flattened hero
+   runways (KSFO, LLBG, LOWI: only JAL 123's airfield was checked on screen); the era imagery's blur off the runway in
+   scenario close-ups.
 
-- **`make` is live now** (adsb.fi open data, `server/sources/adsbfi.ts`, MAX_RPS 0.9 with a strict burst of 1: adsb.fi documents 1 req/s for its public endpoints and restricts IPs after 400/404/429). `make replay` replays the newest recording; `make live LIVE_SOURCE=adsblol` is the old adsb.lol path (0.04 req/s, refuses while the recorder runs). The recorder keeps polling adsb.lol and no longer conflicts. adsb.fi terms: personal, non-commercial, cite with a link (the source badge links it; the credit line names it).
-- **Polling follows the zoom** (`server/poller.ts`): a view up to 250 nm is one circle of its own; a wider one is the grid cells within 2,500 nm of its centre (`WIDE_REACH_NM`). Each area is asked every `viewPeriodMs(r)`: 0.12 s/nm up to 500 nm (5 s city, 16 s regional, 60 s), then ∝ r² (4 min continent, 30 min globe), so every zoomed-out view costs ~0.3 req/s once filled. Empty answers → 4× the period (≤ 1 h). Never-asked areas go first: busy airspace boxes (`cells.ts` `BUSY`, hand-drawn) before the rest, centre-out. The newest view wins (one person's app).
-- **Chase**: the chase view circle (≥ 20 nm, centred on the chased aircraft) is asked every `chasePeriodMs` (1.4 s) and carries the aircraft and its traffic in one request. A hex request goes out only for a chased aircraft never stored or last seen outside the view circle (a `?hex=` link), and waits 30 s after one that found nothing. Measured: 0.7 req/s while chasing, 0 hex requests, data 0.6–1.8 s old.
-- **The server keeps each aircraft's newest sample 35 min** (`store.ts` `LATEST_HORIZON_MS`, longer than the 30-min globe refresh; track history still 180 s; the InfoStore the same 35 min), so a reload or a new view of a wide area finds what was polled. **Upstream safety:** 400/404 back off like 5xx (`budget.ts`); a chased hex whose good hex answer brings no position waits 30 s (per hex); non-ICAO `~` hexes are never sent to adsb.fi; a view circle that moves a third of its radius is a new area, asked at once; in `singleCircle` mode the period is the 250 nm circle's; only chases a client asked about in the last 2.5 s get hex requests (a released one waits out its TTL unasked). `make live` records nothing unless `LIVE_RECORD_DIR` is set (a RECORD_DIR from `.env.local` would append adsb.fi answers to the recorder's adsb.lol day files).
-- **Status** gains `viewEveryS`, `chaseEveryS` and `pendingAreas`; circle answers that carry a chased aircraft count in `chasePeriodP95S`. The client: chase delay ≥ `chaseEveryS` + p90 arrival age + 0.5 s (the "Predicting" flicker was the newest position arriving 1–2 s old); each aircraft lives `staleS` = max(60 s, 3 × its own sample gap, 2.5 × `viewEveryS`), dead-reckoned all the way (`browse/fleet.ts`), which also ends the 72 s blink of hero replays; a hidden tab stops polling.
-- **URL = what is on screen** (`client/ui/urlState.ts`): `?at=lat,lon,km` (browse camera, or the chased aircraft), `?hex=` (the focused aircraft), `?chase=1` (chasing it), `?cam=heading,pitch,range` (chase orbit), and non-default toggles; rewritten once a second with `replaceState`. A reload restores the same view; the card's link button copies it. A bare `?hex=` link (no `?at=`, e.g. G3) chases. Without `?at=` the app opens over LLBG.
-- **Chase on a lost signal**: the chased track is never pruned, so the model stays frozen at its last position under "Signal lost Ns ago" until data returns or Esc ("No recent position for this aircraft" when there is none at all); its map icon, ring and label hide while the model is drawn (the icon's dead-reckoned position ran kilometres ahead of a frozen model). After the selection snap the render delay shrinks at 0.05 s/s (a 20 % speed-up lurch at 0.2 when the arrival-age p90 moved) and grows at 0.2 s/s (an aircraft reporting every ~40 s under thin coverage reaches a delay that covers its gaps in ~2 min).
-- **Also**: a LIVE/REPLAY source badge with "loading N areas"; callsigns of `@`s or zeros read as none; legend ticks `1k … 40k+` (the phone-width overlap); `API_PORT` for the Makefile and vite.config.
+## How to check things on screen
 
-### Data-source options (for the world view)
-
-- **Now: adsb.fi public API** at ~1 req/s: a zoomed-in view costs one request per 5–16 s, chase 0.7 req/s, and the globe fills busy airspace first in ~5 min, then ~0.3 req/s. Oceans stay mostly empty (ground stations only).
-- **Best next step: feed a receiver.** Feeders get adsb.fi's `/v2/snapshot` (every aircraft worldwide, one request per 30 s) and adsb.lol's re-api (box and all queries). One request would fill the globe; it slots in as a `fullSnapshot`-style source for wide views (M6).
-- **OpenSky** `/states/all` returns the world in one call (anonymous: 400 credits/day = 100 global calls; a free account: 4,000/day), but its terms need a written agreement for any operational REST use, even non-profit. Ask them before using it.
-- airplanes.live's public API is similar to adsb.fi (point queries, ~1 req/s); adding it to stitch more budget would work around per-provider limits, which is not worth the goodwill.
+The Browser pane does not render while the user is away (hidden tab). Use headless Chrome over CDP, frame-capped:
+`--headless=new --remote-debugging-port=0 --user-data-dir=<own profile>` and read the port from
+`<profile>/DevToolsActivePort` (other sessions' Chromes hold fixed ports), or the repo's gate driver with `CDP_PORT=<free>`.
+Launch configs in the main checkout's `.claude/launch.json` (git-excluded): `physics-replay-api` (8796, replays the
+Heathrow capture `data/recordings/egll-arrivals-2026-09-28.jsonl` once — restart the API to replay) with
+`physics-replay-client` (5184), and `physics-live-*` (8797/5185, adsb.fi). Useful URLs: `?hex=3c65cf&chase=1&cam=-95,-4,48`
+(an A320 on final at Heathrow early in the replay), `&sun=2026-09-28T20:30:00Z` (night), `?scenario=jal123&t=65475`
+(t = seconds of the scenario's local day: 18:11:15). Pass `topo=1&light=1` explicitly: the app stores the toggles, so a
+profile that once had `?topo=0` stays flat.
 
 ## Rules
 
-- **adsb.lol:** only one process polls it at a time. This IP got 429s at 0.14–0.5 req/s, and once at ~0.082 req/s after 1.5 h; it has run clean at 0.04 req/s. `MAX_RPS` defaults per source (adsblol 0.04, adsbfi 0.9, `server/config.ts`), and the Makefile passes them explicitly (`LIVE_RPS_*`) so a MAX_RPS in `.env.local` never raises them.
-- **Tests never touch the network.**
-- **Keep the machine's load low:** no parallel full-suite runs and no stray servers. Stop what you start. Two timing tests flake when the load average is high: "sortRows and filterRows stay cheap at 12,000 rows" and "/api/view of a 250 nm circle with 5,000 aircraft". Confirm them with `node --test client/ui/table.test.ts server/main.browse.test.ts`.
-- **Other sessions share this machine.** Their headless Chromes have used CDP port 9334, which is also the gate driver's default. Run the driver with `CDP_PORT=<free port>`. The Browser pane is a hidden tab (`requestAnimationFrame` paused), so it cannot show the chase scene: use the gate driver.
-- **Git:** commit identity `rg1989 <roman.grinevic@gmail.com>` (set repo-locally). Push to `git@github.com:rg1989/FlightHopper.git`. `git add` explicit paths only. Never commit other sessions' untracked files.
-- **Decisions in `terrain-sun-design.md` stand:** no cast shadows; night keeps the mountains faintly visible; lighting applies in chase only; replays are lit at their recorded time.
+- **adsb.lol:** one poller at a time (429s above ~0.04 req/s). `make` is live on adsb.fi at 0.9 req/s; mind its terms.
+- **Tests never touch the network.** `npm run check` — and read its exit code: `npm run check | grep …` hides a failure.
+- **Keep the machine's load low:** no uncapped GPU benchmarks, no parallel full suites, stop every server and Chrome
+  you start. Timing tests can flake under load (table sort, `/api/view` at 5,000 aircraft); re-run them alone.
+- **Git:** identity `rg1989 <roman.grinevic@gmail.com>` (repo-local), `git add` explicit paths only, never commit other
+  sessions' files, messages end with the `Co-Authored-By` line.
+- **Downloads need the user's explicit yes** (file, source, size). Airline logos only if free-licensed (public domain);
+  else colours. Scenario captions only from the official record.
+- **Decisions in `terrain-sun-design.md` stand:** no cast shadows; night keeps the mountains faintly visible; lighting in
+  chase only; replays lit at their recorded time.
 
-## Night lights over big cities (resolved 2026-09-23, `dcce84a`)
+## Gotchas learned 2026-09-28
 
-At night, low over a big city, the VIIRS layer (z8, about 500 m per pixel) made the whole ground one flat white-beige blob. The night layer now fades with camera height: 12% at 1.5 km or lower (the user's pick from 0/12/20/30%), full from 5 km. Its brightness went from 1.6 to 1. The height is above the ellipsoid, so a valley city seen from a ridge keeps some glow (Innsbruck from the Nordkette: 44%). Evidence and the comparison sheets: `.planning/reports/night-washout/`. Decision: `terrain-sun-design.md` §7 item 4. Limit: a city high above sea level (Mexico City) fades less (ponytail note in `client/scene/sun.ts`).
-
-## Backlog
-
-- **World view follow-ups:** learn each cell's traffic and keep it across runs (replaces the hand-drawn `BUSY` boxes); a feeder snapshot source for wide views (above); the table's "On screen" counts every aircraft when the whole globe is in view (`computeViewRectangle` spans all longitudes); the grey polar cap of the street map at globe zoom (Web Mercator stops at 85°).
-
-- **F3 · MLAT re-join velocity continuity** (`hermite.ts`/`track.ts`). Measure it first with `tools/bench-track.ts`.
-- **F4 · Approach pitch** (`attitude.ts`): descending below 175 kt should use approach AoA.
-- **F5 · Estimator `dedupe` switch** for the bench.
-- **Flight card details:** a distance-from-home row, and signal ages that count up between polls.
-- **F7 · Real airliner glTF model**, with a re-run of the V3 calibration.
-- **Gates G1/G2/G3/GB** on the real repo, then `.planning/reports/VERDICT.md`.
-- **Milestones M4** (ground realism), **M5** (product loop), **M6** (receiver switch, when the hardware arrives).
-- **Terrain & sun follow-ups:** each WP-E plan's "Notes for later work". Examples: a `sampleTerrainMostDetailed` fallback for camera ground while the relief grows from flat, and an upstream report of Cesium's TerrainPicker race.
-- **Parallel work in other sessions (not committed):** a 3-D buildings PoC (OSM extrusions) and sharper chase imagery research (`.planning/reports/sharper-chase-imagery-research.md`).
+- Cesium puts a `BlendOption.TRANSLUCENT` BillboardCollection in the **opaque** pass with depth writes: a glow drawn before
+  an aircraft punches a hole in it. Glows use `OPAQUE_AND_TRANSLUCENT`.
+- `Primitive` compresses texture coordinates into two 12-bit fractions of 1 by default: set `compressVertices: false` for
+  `st` in metres (runways).
+- In page scripts, `import('/node_modules/.vite/deps/cesium.js')` without Vite's `?v=` hash is a second Cesium instance
+  (its `ContextLimits` are zero): reach Cesium through the app's objects (`window.viewer`, constructors of live objects).
+- Geared models' `gearHeightM` is the gear's height (wheels down); a new type model needs a `GEAR` spec, then
+  `node tools/models/gear-glb.ts --write` (a high wing's legs mount inboard on its fairings automatically).
+- A new scenario airfield is data only: `public/scenarios/<id>/airport.json` (runway ends with `thrHaeM` = MSL + EGM96
+  geoid, `flat` rings); `app.ts` loads it with the package, flattens the terrain and paints its runways while it plays.
