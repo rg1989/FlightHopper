@@ -41,16 +41,8 @@ const DAY_BRIGHTNESS = 0.9999
  */
 const NIGHT_MAX_ALPHA = 0.9999
 const NIGHT_SHOW_ALPHA = 0.01
-/**
- * The city lights (VIIRS, z8 ≈ 500 m/px) are one flat blob from a camera low over a big city (Tel Aviv, 2026-09-23), so
- * near the ground they fade to a faint glow and the day imagery shows through.
- * ponytail: the camera's height above the ellipsoid, not the ground. A valley city keeps its glow seen from a ridge
- * (Innsbruck from the Nordkette: ~44 %), but a city 2 km up (Mexico City) keeps ~40 % at 700 m above it. Upgrade: the
- * chase camera's clearance, minus a ridge-vs-valley test, if a high city shows the blob.
- */
-const LIGHTS_NEAR = 0.12 // the user's pick from 0, 0.12, 0.2 and 0.3
-const LIGHTS_NEAR_M = 1500 // at or below: LIGHTS_NEAR
-const LIGHTS_FULL_M = 5000 // at or above: all the lights
+/** Cesium's globe default (Globe.lambertDiffuseMultiplier), which the app keeps. */
+const LAMBERT = 0.9
 /** The model's environment map is rebuilt after this much movement (Cesium: 1 km, every ~4 s at airliner speed). */
 const ENV_MAP_EPSILON_M = 20_000
 /** Sun off: a light from 60° above the southern horizon. Where it travels, in east-north-up: north and down. */
@@ -109,11 +101,6 @@ export function sunLook(elevDeg: number, result?: SunLook): SunLook {
   return r
 }
 
-/** Share of the city lights kept with the camera at heightM: LIGHTS_NEAR low, 1 from LIGHTS_FULL_M, smooth between. */
-export function lightsFactor(heightM: number): number {
-  return LIGHTS_NEAR + (1 - LIGHTS_NEAR) * smoothstep((heightM - LIGHTS_NEAR_M) / (LIGHTS_FULL_M - LIGHTS_NEAR_M))
-}
-
 /** Moonlight on a look (w: moonWeight): by night, towards the MOON_* light in proportion to w; by day the Sun rules. Writes into look. */
 export function moonLook(look: SunLook, w: number): SunLook {
   const m = look.night * w
@@ -121,6 +108,21 @@ export function moonLook(look: SunLook, w: number): SunLook {
   look.red += (MOON_RED - 1) * m
   look.green += (MOON_GREEN - 1) * m
   return look
+}
+
+/**
+ * The night layer's brightness that makes the city lights shine by themselves. GlobeFS lights every imagery layer
+ * alike: its colour × czm_lightColor (the light's colour × intensity, scaled so no channel passes 1) × a Lambert term
+ * (0.9 × cos + the vertex shadow floor, at most 1). This divides that out on flat ground, as luminance, so the Moon
+ * lights the land but neither brightens nor dims the lamps. One number cannot undo the Moon's blue tint: the warm lamp
+ * colours (nightLights.ts) take it.
+ */
+export function lampBrightness(light: DirectionalLight, upWC: Cartesian3, shadowFloor: number): number {
+  const { red, green, blue } = light.color
+  const top = Math.max(red, green, blue) * light.intensity
+  const lum = (0.2126 * red + 0.7152 * green + 0.0722 * blue) * (top > 1 ? light.intensity / top : light.intensity)
+  const lambert = Math.max(0, -Cartesian3.dot(light.direction, upWC))
+  return 1 / (lum * Math.min(1, LAMBERT * lambert + shadowFloor))
 }
 
 /** dirWC (unit) raised to at least 2° above the horizon on its own azimuth. Not normalised; 0 for straight down. */
@@ -258,8 +260,7 @@ export class Sun {
   /**
    * Every frame, in both modes: tSunMs from sunTimeMs, atWC the chased aircraft (browse: the camera). Writes the clock,
    * which Cesium's sun, sky and environment maps take one frame later. On, applies sunLook at atWC; off, keeps the fixed
-   * light above atWC. null, writing nothing, for a time that is no Date or a non-finite position. The camera's height
-   * fades the city lights (lightsFactor).
+   * light above atWC. null, writing nothing, for a time that is no Date or a non-finite position.
    */
   update(tSunMs: number, atWC: Cartesian3): SunState | null {
     if (!Number.isFinite(this.#date.setTime(tSunMs)) || !Number.isFinite(Cartesian3.magnitudeSquared(atWC))) return null
@@ -296,9 +297,9 @@ export class Sun {
     this.#viewer.scene.globe.vertexShadowDarkness = look.vertexShadowDarkness
     if (this.#day) this.#day.brightness = look.dayBrightness
     if (this.#night) {
-      const alpha = look.nightAlpha * lightsFactor(this.#viewer.camera.positionCartographic.height)
-      this.#night.alpha = alpha
-      this.#night.show = alpha > NIGHT_SHOW_ALPHA // hidden layers request no tiles: none by day
+      this.#night.alpha = look.nightAlpha
+      this.#night.show = look.nightAlpha > NIGHT_SHOW_ALPHA // hidden layers request no tiles: none by day
+      this.#night.brightness = lampBrightness(light, up, look.vertexShadowDarkness)
     }
     this.#setIbl(look.iblFactor)
     return st

@@ -1,6 +1,7 @@
 // client/scene/mvt.ts
-// Just enough Mapbox Vector Tile 2.1 decoding for building footprints: one layer's polygons + properties, rings split
-// into polygons with holes and clipped to the tile (neighbouring tiles repeat the buffer strip, which would z-fight).
+// Just enough Mapbox Vector Tile 2.1 decoding for building footprints and roads: one layer's polygons + properties,
+// rings split into polygons with holes and clipped to the tile (neighbouring tiles repeat the buffer strip, which would
+// z-fight); or its lines.
 // ponytail: hand-rolled protobuf reader (~40 lines); take @mapbox/vector-tile + pbf if more layers or geometry types are needed.
 
 type Val = string | number | boolean
@@ -131,8 +132,10 @@ export function clip(r: Pt[], e: number): Pt[] {
   return out
 }
 
-/** The named layer's polygon features (type 3), clipped to the tile, or null when the tile has no such layer. */
-export function decodeLayer(buf: Uint8Array, name: string): Layer | null {
+interface Raw { id: number; type: number; props: Record<string, Val>; geom: number[] }
+
+/** The named layer's features, undecoded, or null when the tile has no such layer. */
+function rawLayer(buf: Uint8Array, name: string): { extent: number; features: Raw[] } | null {
   const tile = new Pbf(buf)
   while (tile.i < tile.end) {
     const tag = tile.varint()
@@ -157,7 +160,7 @@ export function decodeLayer(buf: Uint8Array, name: string): Layer | null {
       else l.skip(t & 7)
     }
     if (lname !== name) continue
-    const features: Feature[] = []
+    const features: Raw[] = []
     for (const fp of raw) {
       let id = 0
       let type = 0
@@ -172,20 +175,41 @@ export function decodeLayer(buf: Uint8Array, name: string): Layer | null {
         else if (f === 4) geom = fp.packed()
         else fp.skip(t & 7)
       }
-      if (type !== 3) continue
       const props: Record<string, Val> = {}
       for (let k = 0; k < tags.length; k += 2) props[keys[tags[k]]] = vals[tags[k + 1]]
-      const polys: Pt[][][] = []
-      for (const r of rings(geom)) {
-        const a = area(r)
-        const c = clip(r, extent)
-        if (c.length < 3) continue
-        if (a > 0) polys.push([c])
-        else if (polys.length) polys[polys.length - 1].push(c)
-      }
-      if (polys.length) features.push({ id, props, polys })
+      features.push({ id, type, props, geom })
     }
     return { extent, features }
   }
   return null
+}
+
+/** The named layer's polygon features (type 3), clipped to the tile, or null when the tile has no such layer. */
+export function decodeLayer(buf: Uint8Array, name: string): Layer | null {
+  const layer = rawLayer(buf, name)
+  if (!layer) return null
+  const features: Feature[] = []
+  for (const { id, type, props, geom } of layer.features) {
+    if (type !== 3) continue
+    const polys: Pt[][][] = []
+    for (const r of rings(geom)) {
+      const a = area(r)
+      const c = clip(r, layer.extent)
+      if (c.length < 3) continue
+      if (a > 0) polys.push([c])
+      else if (polys.length) polys[polys.length - 1].push(c)
+    }
+    if (polys.length) features.push({ id, props, polys })
+  }
+  return { extent: layer.extent, features }
+}
+
+export interface LineFeature { props: Record<string, Val>; lines: Pt[][] }
+
+/** The named layer's line features (type 2), in tile coordinates (the buffer strip included), or null when there is no such layer. */
+export function decodeLines(buf: Uint8Array, name: string): { extent: number; features: LineFeature[] } | null {
+  const layer = rawLayer(buf, name)
+  if (!layer) return null
+  const features = layer.features.filter((f) => f.type === 2).map((f) => ({ props: f.props, lines: rings(f.geom) }))
+  return { extent: layer.extent, features }
 }

@@ -38,7 +38,7 @@ import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
 import { Traffic } from './scene/traffic.ts'
 import { AircraftLights } from './scene/aircraftLights.ts'
-import { makeNightLayer } from './scene/nightLights.ts'
+import { STREETS_CREDIT, makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
 import { FlatTerrainProvider, areasFor, stripsFor, type AirfieldAirport } from './scene/flatTerrain.ts'
@@ -239,6 +239,7 @@ export function attributionFor(model: ModelManifestEntry | null, source: SourceK
     ...imageryCredits(imagery),
     'Photos: planespotters.net, © each photographer',
     'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the short form of NIGHT_CREDIT (nightLights.ts)
+    STREETS_CREDIT,
     BUILDINGS_CREDIT,
     'Aircraft models: FlightGear community via FlightAirMap, Flightradar24 and livetaiwan, GPL (source in the repo)',
     'Airline logos: Wikimedia Commons, public domain; trademarks of their airlines',

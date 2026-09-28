@@ -5,10 +5,14 @@
 //   ?sun=2026-09-22T05:00:00Z | +6h | -30m   start time (default now; see parseSunParam)
 //   ?at=0      seconds into the circle where the aircraft holds (default 0: 6 km east, heading north: the PoC's view)
 //   ?light=0   start with the Sun off (the browse look)
+//   ?pos=31.9321,35.0079,5720,281   hold the aircraft there instead: lat, lon, metres HAE, heading (level)
+//   ?cam=0,-23,150   the chase orbit, as the app's ?cam= (heading offset, pitch, range)
+//   ?imagery=esri   Esri day imagery with VITE_ARCGIS_KEY (default EOX)
 // Keys: [ ] −/+ 1 h   { } −/+ 10 min   P time-lapse ×600 (and clears the hitch log)   L Sun on/off
 // window.harness = { viewer, sun, setTime(iso), stats() }
 import { Cartesian3, CesiumTerrainProvider, Ellipsoid, ImageryLayer, Resource, Viewer } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
+import { readConfig } from '../client/config.ts'
 import { ChaseCamera } from '../client/scene/chaseCamera.ts'
 import { makeImagery } from '../client/scene/imagery.ts'
 import { ChaseModel } from '../client/scene/model.ts'
@@ -27,14 +31,18 @@ const AT_S = Number(q.get('at')) || 0
 const HOUR_MS = 3_600_000
 const LAPSE = 600
 
-/** The PoC's counter-clockwise circle round LOWI, level. */
+const POS = (q.get('pos') ?? '').split(',').map(Number)
+const CAM = (q.get('cam') ?? '').split(',').map(Number)
+
+/** The PoC's counter-clockwise circle round LOWI, level; or held at ?pos=. */
 function stateAt(tS: number): RenderState {
   const th = (SPEED_MS / RADIUS_M) * tS
-  const headingDeg = ((Math.atan2(-Math.sin(th), Math.cos(th)) * 180) / Math.PI + 360) % 360
+  const held = POS.length === 4 && POS.every(Number.isFinite)
+  const headingDeg = held ? POS[3] : ((Math.atan2(-Math.sin(th), Math.cos(th)) * 180) / Math.PI + 360) % 360
   return {
-    hex: '440abc', lat: LOWI.lat + (RADIUS_M * Math.sin(th)) / M_PER_DEG,
-    lon: LOWI.lon + (RADIUS_M * Math.cos(th)) / (M_PER_DEG * Math.cos((LOWI.lat * Math.PI) / 180)),
-    hM: H_M, headingDeg, pitchDeg: 0, rollDeg: 0, gsKt: SPEED_MS / 0.514444, trackDeg: headingDeg, altBaroFt: H_M / 0.3048,
+    hex: '440abc', lat: held ? POS[0] : LOWI.lat + (RADIUS_M * Math.sin(th)) / M_PER_DEG,
+    lon: held ? POS[1] : LOWI.lon + (RADIUS_M * Math.cos(th)) / (M_PER_DEG * Math.cos((LOWI.lat * Math.PI) / 180)),
+    hM: held ? POS[2] : H_M, headingDeg, pitchDeg: 0, rollDeg: 0, gsKt: SPEED_MS / 0.514444, trackDeg: headingDeg, altBaroFt: H_M / 0.3048,
     vsFpm: 0, mode: 'interp', altSource: 'geom', onGround: false, ageS: 1, quality: 'adsb2', callsign: 'HOP1', typeCode: 'A320',
   }
 }
@@ -45,7 +53,7 @@ async function main(): Promise<void> {
   const [terrainProvider, dayProvider, manifest] = await Promise.all([
     // Normals for slope shading; the query gives normal tiles their own browser-cache key (design D1).
     CesiumTerrainProvider.fromUrl(new Resource({ url: REEARTH_TERRAIN_URL, queryParameters: { extensions: 'octvertexnormals' } }), { requestVertexNormals: true }),
-    makeImagery({ terrain: 'reearth', imagery: 'eox', ionToken: null, arcgisKey: null, apiBase: '/api' }),
+    makeImagery(q.get('imagery') === 'esri' ? readConfig(import.meta.env) : { terrain: 'reearth', imagery: 'eox', ionToken: null, arcgisKey: null, apiBase: '/api' }),
     fetch('/models/manifest.json').then((r) => r.json() as Promise<ModelManifest>),
   ])
   const day = dayProvider ? new ImageryLayer(dayProvider) : null
@@ -65,6 +73,7 @@ async function main(): Promise<void> {
   let lit = q.get('light') !== '0'
   sun.setEnabled(lit)
   const chase = new ChaseCamera(viewer)
+  if (CAM.length === 3 && CAM.every(Number.isFinite)) chase.orbit.set(CAM[0], CAM[1], CAM[2])
   const s = stateAt(AT_S)
   const aircraftWC = Cartesian3.fromDegrees(s.lon, s.lat, s.hM, Ellipsoid.WGS84)
 

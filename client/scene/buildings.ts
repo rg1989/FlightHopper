@@ -138,8 +138,8 @@ export function extentM(f: Footprint, groundsM: number[]): { baseM: number; topM
 }
 
 let tileUrl: Promise<string> | null = null
-/** The `building` layer of one tile from OpenFreeMap; null where there is none. The tile URL comes from its TileJSON (it is versioned). */
-export async function openFreeMapLayer(x: number, y: number): Promise<Layer | null> {
+/** OpenFreeMap's tile URL template ({z}/{x}/{y}), from its TileJSON (it is versioned); asked again after a failure. */
+export async function openFreeMapTiles(): Promise<string> {
   tileUrl ??= fetch(OPENFREEMAP_TILEJSON)
     .then((r) => (r.ok ? (r.json() as Promise<{ tiles?: unknown[] }>) : Promise.reject(new Error(`TileJSON: HTTP ${r.status}`))))
     .then((j) => {
@@ -148,13 +148,17 @@ export async function openFreeMapLayer(x: number, y: number): Promise<Layer | nu
       if (typeof u !== 'string' || new URL(u).origin !== OPENFREEMAP_ORIGIN) throw new Error(`TileJSON: unexpected tile URL ${String(u)}`)
       return u
     })
-  let url: string
   try {
-    url = await tileUrl
+    return await tileUrl
   } catch (e) {
     tileUrl = null // asked again with the next tile
     throw e
   }
+}
+
+/** The `building` layer of one tile from OpenFreeMap; null where there is none. */
+export async function openFreeMapLayer(x: number, y: number): Promise<Layer | null> {
+  const url = await openFreeMapTiles()
   const res = await fetch(url.replace('{z}', String(BUILDINGS_Z)).replace('{x}', String(x)).replace('{y}', String(y)))
   if (res.status === 204 || res.status === 404) return null
   if (!res.ok) throw new Error(`building tile ${x}/${y}: HTTP ${res.status}`)

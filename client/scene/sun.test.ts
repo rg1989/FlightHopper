@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Cartesian3, Clock, Color, DirectionalLight, DynamicAtmosphereLightingType, ImageBasedLighting, JulianDate } from 'cesium'
 import type { ImageryLayer, Model, Viewer } from 'cesium'
 import { makeNightLayer } from './nightLights.ts'
-import { Sun, aimLight, lightsFactor, moonLook, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
+import { Sun, aimLight, lampBrightness, moonLook, parseSunParam, sunDirectionWC, sunElevationDeg, sunLook, sunTimeMs } from './sun.ts'
 import { moonPositionWC } from './moon.ts'
 
 // Cesium asks for its IAU 2006 XYS table the first time the ICRF frame is needed. Without CESIUM_BASE_URL (Node) that is
@@ -254,7 +254,7 @@ test('moonless night at LOWI (new moon, 10 Oct): a dim light from straight overh
   near(s.day.brightness, 0.3, 1e-12)
   assert.equal(s.night.show, true)
   assert.equal(s.night.alpha, 0.9999) // never 1: APPLY_ALPHA stays on at full night
-  assert.equal(s.night.brightness, 1)
+  near(s.night.brightness, 1 / 0.45, 1e-9) // the lamps undo the dim light the globe multiplies them by
   near(s.ibl()[0], 0.15, 1e-12)
   near(s.ibl()[1], 0.15, 1e-12)
   assert.equal(s.globe.vertexShadowDarkness, 0.3)
@@ -271,6 +271,33 @@ test('full moon at LOWI (26 Sep, 22:30Z): the night light comes from the Moon, 1
   near(s.light.color.red, 0.62, 0.002)
   near(s.light.color.green, 0.74, 0.002)
   assert.equal(s.light.color.blue, 1)
+})
+
+/** What GlobeFS multiplies a layer by on flat ground under this light (czm_lightColor × Lambert), as luminance. */
+function groundLight(light: DirectionalLight, p: { lat: number; lon: number }, floor = 0.3): number {
+  const [r, g, b] = [light.color.red, light.color.green, light.color.blue].map((c) => c * light.intensity)
+  const k = Math.max(r, g, b) > 1 ? 1 / Math.max(r, g, b) : 1 // UniformState: czm_lightColor tops out at 1
+  const lambert = Math.max(0, -Cartesian3.dot(light.direction, enu(p)[2]))
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) * k * Math.min(1, 0.9 * lambert + floor)
+}
+
+test('lampBrightness: the city lights shine by themselves; the globe light they are multiplied by is divided out', () => {
+  const [, , up] = enu(LOWI)
+  const down = Cartesian3.negate(up, new Cartesian3())
+  near(lampBrightness(new DirectionalLight({ direction: down, intensity: 0.45 }), up, 0.3), 1 / 0.45, 1e-9) // moonless
+  const moon = new DirectionalLight({ direction: Cartesian3.negate(dirAt(46.6, 160, LOWI), new Cartesian3()), intensity: 1.7, color: new Color(0.62, 0.74, 1) })
+  near(lampBrightness(moon, up, 0.3), 1 / (0.2126 * 0.62 + 0.7152 * 0.74 + 0.0722) / (0.9 * Math.sin(46.6 * DEG) + 0.3), 1e-9)
+  near(lampBrightness(moon, up, 0.3) * groundLight(moon, LOWI), 1, 1e-9)
+  near(lampBrightness(new DirectionalLight({ direction: down, intensity: 2 }), up, 0.3), 1, 1e-9) // daylight: as drawn
+})
+
+test('the lamps are as bright under a full moon as on a moonless night (the Moon lights the land, not the lamps)', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  s.sun.update(TFULL, AIRCRAFT)
+  near(s.night.brightness * groundLight(s.light, LOWI), 1, 1e-6)
+  s.sun.update(TNEW, AIRCRAFT)
+  near(s.night.brightness * groundLight(s.light, LOWI), 1, 1e-6)
 })
 
 test('update reports the light it set, moonlight included: what the runways light themselves by (not the moonless night)', () => {
@@ -305,27 +332,14 @@ test('moonLook: moonlight only at night, in proportion to the moon weight; no mo
   assert.deepEqual(moonLook(sunLook(45), 1), sunLook(45)) // by day the Sun rules
 })
 
-test('lightsFactor: 12 % of the city lights at or below 1.5 km camera height, all of them from 5 km, smooth between', () => {
-  for (const h of [-50, 0, 700, 1500]) assert.equal(lightsFactor(h), 0.12, `${h} m`)
-  for (const h of [5000, 10_000, 300_000]) assert.equal(lightsFactor(h), 1, `${h} m`)
-  near(lightsFactor(3250), 0.56, 1e-12) // the midpoint: 0.12 + 0.88 × smoothstep(0.5)
-  let last = 0
-  for (let h = 0; h <= 6000; h += 50) {
-    assert.ok(lightsFactor(h) >= last, `${h} m`)
-    last = lightsFactor(h)
-  }
-})
-
-test('night, camera low: the city lights fade to 12 % below 1.5 km camera height, come back from 5 km', () => {
+test('the city lights keep their strength at any camera height: drawn as streets, they are no blob up close', () => {
   const s = fakeViewer()
   s.sun.setEnabled(true)
-  s.viewer.camera.positionCartographic.height = 500
-  s.sun.update(T19, AIRCRAFT)
-  near(s.night.alpha, 0.9999 * 0.12, 1e-12)
-  assert.equal(s.night.show, true)
-  s.viewer.camera.positionCartographic.height = 8000
-  s.sun.update(T19, AIRCRAFT)
-  assert.equal(s.night.alpha, 0.9999)
+  for (const h of [100, 500, 8000]) {
+    s.viewer.camera.positionCartographic.height = h
+    s.sun.update(T19, AIRCRAFT)
+    assert.equal(s.night.alpha, 0.9999, `${h} m`)
+  }
 })
 
 test('dusk at LOWI: the night layer shows only above 1 % alpha; the light warms and never comes from below 2°', () => {

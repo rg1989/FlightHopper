@@ -175,6 +175,7 @@ test('attribution: the satellite imagery in use, as plain source lines (Esri key
 
 test('attribution: the night lights credit NASA GIBS (design D13)', () => {
   assert.ok(attributionFor(null).includes('Night lights: NASA GIBS, VIIRS Black Marble'))
+  assert.ok(attributionFor(null).includes('Street lights: OpenFreeMap, © OpenMapTiles, data © OpenStreetMap contributors'))
 })
 
 test('safeArea (the flight-data frame): the canvas minus its covers, each cut from the side that keeps the most room', () => {
