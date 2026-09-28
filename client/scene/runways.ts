@@ -23,6 +23,7 @@ import type { Airport, Runway } from '../../shared/airports.ts'
 import { bearingDeg, destination } from '../../shared/geo.ts'
 import type { TerrainFrame } from '../types.ts'
 import { drawnHeightM } from './exaggeration.ts'
+import { runwayGeometry, runwayGeometryData, runwayMaterial } from './runwayPaint.ts'
 
 /**
  * The paved rectangle of a runway: the two PHYSICAL ends (ends[i].lat/lon) ± half the width,
@@ -55,6 +56,7 @@ export function runwayCorners(r: Runway): { lat: number; lon: number; h: number 
 export const RUNWAY_LIFT_M = 0.2
 
 const ASPHALT = Color.fromCssColorString('#3a3a3a')
+const PAINT = Color.fromCssColorString('#e4e4dc') // the markings' white, a little worn
 const MARKER_RANGE = new DistanceDisplayCondition(0, 30_000) // markers only near an airport
 /** The smallest scale along up in a modelMatrix: at 0 it is singular, and Cesium inverts it (Matrix4.inverse throws). */
 const MIN_SCALE = 1e-3
@@ -89,7 +91,7 @@ export function followExaggeration(up: Cartesian3, upDotBase: number, hM: number
 
 /** One airport's planes and markers: they move together with the terrain exaggeration (design D7). */
 interface Placed {
-  planes: Primitive
+  planes: Primitive[] // one per runway: each its own markings (runwayPaint.ts)
   model: Matrix4 // where update() puts them: copied into planes.modelMatrix, and applied by the markers
   hM: number // the airport's runway height: mean of its thresholds' thrHaeM
   up: Cartesian3 // n: ellipsoid normal at the airport reference point
@@ -109,6 +111,7 @@ interface Placed {
 export function addRunways(
   viewer: Viewer,
   airports: Airport[],
+  opts: { markers?: boolean } = {}, // markers: the threshold dots and idents (default on; a scenario's airfield: off)
 ): {
   update(frame: TerrainFrame): void
   setLight(look: { dayBrightness: number; intensity: number } | null): void
@@ -116,25 +119,34 @@ export function addRunways(
 } {
   const placed: Placed[] = []
   const markers: Entity[] = []
-  const paint = ASPHALT.clone() // every airport's material reads it: setLight() writes it in place
+  const asphalt = ASPHALT.clone() // every runway's material reads both: setLight() writes them in place
+  const paint = PAINT.clone()
   for (const ap of airports) {
     if (ap.runways.length === 0) continue
-    const instances: GeometryInstance[] = []
+    const planes: Primitive[] = []
     const model = Matrix4.clone(Matrix4.IDENTITY)
     let sumH = 0
     for (const r of ap.runways) {
-      const corners = runwayCorners(r).map((c) => Cartesian3.fromDegrees(c.lon, c.lat, c.h + RUNWAY_LIFT_M))
-      instances.push(
-        new GeometryInstance({
-          geometry: new PolygonGeometry({
-            polygonHierarchy: new PolygonHierarchy(corners),
-            perPositionHeight: true,
-            vertexFormat: MaterialAppearance.MaterialSupport.BASIC.vertexFormat,
+      const d = runwayGeometryData(r, RUNWAY_LIFT_M)
+      planes.push(
+        viewer.scene.primitives.add(
+          new Primitive({
+            geometryInstances: new GeometryInstance({ geometry: runwayGeometry(d) }),
+            appearance: new MaterialAppearance({
+              material: runwayMaterial(d, r, asphalt, paint),
+              materialSupport: MaterialAppearance.MaterialSupport.TEXTURED, // position, normal, st (metres)
+              flat: false,
+              translucent: false,
+            }),
+            asynchronous: false,
+            allowPicking: false,
+            compressVertices: false, // st is in metres: compression packs it as two 12-bit fractions of 1
           }),
-        }),
+        ),
       )
       for (const e of r.ends) {
         sumH += e.thrHaeM
+        if (opts.markers === false) continue
         const at = Cartesian3.fromDegrees(e.thrLon, e.thrLat, e.thrHaeM + RUNWAY_LIFT_M)
         markers.push(
           viewer.entities.add({
@@ -167,19 +179,7 @@ export function addRunways(
     const hM = sumH / (2 * ap.runways.length)
     const up = Ellipsoid.WGS84.geodeticSurfaceNormalCartographic(Cartographic.fromDegrees(ap.lon, ap.lat))
     placed.push({
-      planes: viewer.scene.primitives.add(
-        new Primitive({
-          geometryInstances: instances,
-          appearance: new MaterialAppearance({
-            material: Material.fromType('Color', { color: paint }),
-            materialSupport: MaterialAppearance.MaterialSupport.BASIC, // position + normal
-            flat: false,
-            translucent: false,
-          }),
-          asynchronous: false,
-          allowPicking: false,
-        }),
-      ),
+      planes,
       model,
       hM,
       up,
@@ -207,7 +207,7 @@ export function addRunways(
       relHM = frame.relHM
       for (const p of placed) {
         followExaggeration(p.up, p.upDotBase, p.hM, f, relHM, p.model)
-        Matrix4.clone(p.model, p.planes.modelMatrix) // in place: Primitive compares it every frame
+        for (const pl of p.planes) Matrix4.clone(p.model, pl.modelMatrix) // in place: Primitive compares it every frame
       }
     },
     /**
@@ -223,13 +223,16 @@ export function addRunways(
       const l = look === null ? 1 : Math.min(1, look.intensity)
       const k = look === null ? 1 : (2 * look.dayBrightness * l) / (1 + l)
       if (!Number.isFinite(k)) return
-      paint.red = ASPHALT.red * k
-      paint.green = ASPHALT.green * k
-      paint.blue = ASPHALT.blue * k
+      asphalt.red = ASPHALT.red * k
+      asphalt.green = ASPHALT.green * k
+      asphalt.blue = ASPHALT.blue * k
+      paint.red = PAINT.red * k
+      paint.green = PAINT.green * k
+      paint.blue = PAINT.blue * k
     },
     destroy(): void {
       if (viewer.isDestroyed()) return
-      for (const p of placed) viewer.scene.primitives.remove(p.planes)
+      for (const p of placed) for (const pl of p.planes) viewer.scene.primitives.remove(pl)
       for (const m of markers) viewer.entities.remove(m)
     },
   }

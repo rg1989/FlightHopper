@@ -661,7 +661,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
     if (ap !== null) {
-      airfield = addRunways(viewer, [ap])
+      airfield = addRunways(viewer, [ap], { markers: false }) // a replay's airfield: no live-map threshold dots
       viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, [...heroStrips, ...stripsFor([ap])], areasFor([ap]))
     }
     sun.setEnabled(prefs.light)

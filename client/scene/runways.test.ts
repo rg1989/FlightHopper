@@ -12,9 +12,9 @@ import {
   MaterialAppearance,
   Matrix3,
   Matrix4,
-  PolygonGeometry,
   Primitive,
   ShadowMode,
+  type Geometry,
   type GeometryInstance,
   type Viewer,
 } from 'cesium'
@@ -113,48 +113,52 @@ function onDrawnTerrain(ap: Airport, fr: TerrainFrame, at: Cartesian3, lat: numb
   near(m(deg(c.latitude), deg(c.longitude), lat, lon), 0, 0.5, `${name} sideways`)
 }
 
-test('addRunways: one lit polygon primitive per airport, one marker per threshold', () => {
+/** Each runway's primitive, in the order addRunways added them: airport by airport, runway by runway. */
+const primsOf = (added: unknown[]): Primitive[] => added as Primitive[]
+const geometryOf = (p: Primitive): Geometry => (p.geometryInstances as GeometryInstance).geometry as Geometry
+const valuesOf = (g: Geometry, name: 'position' | 'normal'): number[] => Array.from(g.attributes[name]!.values as ArrayLike<number>)
+
+test('addRunways: one lit, painted primitive per runway, one marker per threshold', () => {
   const { viewer, added, entities } = fakeViewer()
   addRunways(viewer, [...airports, { ...ksfo, ident: 'XXXX', runways: [] }])
-  assert.equal(added.length, airports.length, 'an airport without runways adds nothing')
-  airports.forEach((ap, i) => {
-    const prim = added[i] as Primitive
+  const runways = airports.flatMap((a) => a.runways)
+  assert.equal(added.length, runways.length, 'an airport without runways adds nothing')
+  for (const prim of primsOf(added)) {
     assert.ok(prim instanceof Primitive)
-    assert.equal((prim.geometryInstances as unknown[]).length, ap.runways.length, ap.ident)
     const look = prim.appearance as MaterialAppearance
     assert.ok(look instanceof MaterialAppearance)
     assert.equal(look.flat, false, 'lit: darkens with the scene light')
     assert.equal(look.translucent, false)
-    assert.equal(look.material.type, 'Color')
-    assert.ok(Color.equals(look.material.uniforms.color as Color, ASPHALT), 'asphalt')
+    assert.ok(Color.equals(look.material.uniforms.asphalt as Color, ASPHALT), 'asphalt')
     assert.equal(prim.shadows, ShadowMode.DISABLED, 'casts and receives no shadows (D10)')
     assert.ok(Matrix4.equals(prim.modelMatrix, Matrix4.IDENTITY), 'unmoved until update')
-  })
-  const runways = airports.flatMap((a) => a.runways)
+    assert.equal(prim.compressVertices, false, 'st in metres survives (compression packs it into [0, 1])')
+  }
   assert.equal(entities.values.length, runways.length * 2)
   const ksfoLabels = entities.values.slice(0, 8).map((e) => e.label!.text!.getValue(now))
   assert.deepEqual(ksfoLabels, ['10L', '28R', '10R', '28L', '1L', '19R', '1R', '19L'])
 })
 
-test('addRunways: the polygon sits on the corners, lifted RUNWAY_LIFT_M, lit along its local up; the marker sits on the threshold', () => {
+test('addRunways: the painted strip spans the corners, lifted RUNWAY_LIFT_M, lit along its local up; the marker sits on the threshold', () => {
   const { viewer, added, entities } = fakeViewer()
   addRunways(viewer, [{ ...ksfo, runways: [rwy] }])
-  const instance = ((added[0] as Primitive).geometryInstances as GeometryInstance[])[0]
-  const geom = PolygonGeometry.createGeometry(instance.geometry as unknown as PolygonGeometry)!
-  const v = geom.attributes.position!.values as unknown as number[]
-  const n = geom.attributes.normal!.values as unknown as number[]
-  assert.equal(v.length, 4 * 3)
-  const corners = runwayCorners(rwy)
-  for (let i = 0; i < 4; i++) {
-    const p = new Cartesian3(v[3 * i], v[3 * i + 1], v[3 * i + 2])
-    const c = Cartographic.fromCartesian(p)
-    near(deg(c.latitude), corners[i].lat, 1e-7, `corner ${i} lat`)
-    near(deg(c.longitude), corners[i].lon, 1e-7, `corner ${i} lon`)
+  const geom = geometryOf(primsOf(added)[0])
+  const v = valuesOf(geom, 'position')
+  const n = valuesOf(geom, 'normal')
+  const rows = v.length / 6
+  assert.ok(rows >= Math.ceil((11870 * 0.3048) / 100) + 1, `a quad every 100 m or less: ${rows} rows`)
+  const corners = runwayCorners(rwy) // left, right of 10L; right, left of 28R
+  for (const [i, k] of [[0, 0], [1, 1], [2, 2 * rows - 1], [3, 2 * rows - 2]]) {
+    const c = Cartographic.fromCartesian(new Cartesian3(v[3 * k], v[3 * k + 1], v[3 * k + 2]))
+    near(deg(c.latitude), corners[i].lat, 2e-6, `corner ${i} lat`)
+    near(deg(c.longitude), corners[i].lon, 2e-6, `corner ${i} lon`)
     near(c.height, corners[i].h + RUNWAY_LIFT_M, 0.01, `corner ${i} h`)
-    const up = Ellipsoid.WGS84.geodeticSurfaceNormal(p)
-    near(Cartesian3.dot(up, new Cartesian3(n[3 * i], n[3 * i + 1], n[3 * i + 2])), 1, 1e-6, `corner ${i} normal`)
   }
-  assert.equal(geom.indices!.length, 2 * 3) // two flat triangles: a plane, no subdivision
+  for (let k = 0; k < 2 * rows; k++) {
+    const p = new Cartesian3(v[3 * k], v[3 * k + 1], v[3 * k + 2])
+    near(Cartesian3.dot(Ellipsoid.WGS84.geodeticSurfaceNormal(p), new Cartesian3(n[3 * k], n[3 * k + 1], n[3 * k + 2])), 1, 1e-6, `vertex ${k} normal`)
+  }
+  assert.equal(geom.indices!.length, (rows - 1) * 6)
   const p = Cartographic.fromCartesian(entities.values[1].position!.getValue(now)!)
   near(deg(p.latitude), e28R.thrLat, 1e-7)
   near(deg(p.longitude), e28R.thrLon, 1e-7)
@@ -174,27 +178,27 @@ test('update: each airport lies on the drawn terrain, its runways flattened with
     const { viewer, added, entities } = fakeViewer()
     addRunways(viewer, airports).update(fr)
     let marker = 0
-    airports.forEach((ap, i) => {
-      const prim = added[i] as Primitive
-      Matrix4.inverse(prim.modelMatrix, new Matrix4()) // Cesium inverts it (czm_normal, relative-to-eye): a singular one throws
-      // czm_normal without the view: the inverse transpose of the model's 3 × 3
-      const normalM = Matrix3.transpose(Matrix3.inverse(Matrix4.getMatrix3(prim.modelMatrix, new Matrix3()), new Matrix3()), new Matrix3())
-      ap.runways.forEach((r, j) => {
-        const g = (prim.geometryInstances as GeometryInstance[])[j].geometry as unknown as PolygonGeometry
-        const geom = PolygonGeometry.createGeometry(g)!
-        const v = geom.attributes.position!.values as unknown as number[]
-        const n = geom.attributes.normal!.values as unknown as number[]
-        for (const [k, c] of runwayCorners(r).entries()) {
+    let next = 0
+    for (const ap of airports) {
+      for (const r of ap.runways) {
+        const prim = primsOf(added)[next++]
+        Matrix4.inverse(prim.modelMatrix, new Matrix4()) // Cesium inverts it (czm_normal, relative-to-eye): a singular one throws
+        // czm_normal without the view: the inverse transpose of the model's 3 × 3
+        const normalM = Matrix3.transpose(Matrix3.inverse(Matrix4.getMatrix3(prim.modelMatrix, new Matrix3()), new Matrix3()), new Matrix3())
+        const geom = geometryOf(prim)
+        const v = valuesOf(geom, 'position')
+        const n = valuesOf(geom, 'normal')
+        for (let k = 0; k < v.length / 3; k += 7) { // every 7th vertex: both edges, all along
+          const built = Cartographic.fromCartesian(new Cartesian3(v[3 * k], v[3 * k + 1], v[3 * k + 2]))
           const at = Matrix4.multiplyByPoint(prim.modelMatrix, new Cartesian3(v[3 * k], v[3 * k + 1], v[3 * k + 2]), new Cartesian3())
-          onDrawnTerrain(ap, fr, at, c.lat, c.lon, c.h, `${r.ends[0].ident} corner ${k}`)
+          onDrawnTerrain(ap, fr, at, deg(built.latitude), deg(built.longitude), built.height - RUNWAY_LIFT_M, `${r.ends[0].ident} vertex ${k}`)
           const lit = Matrix3.multiplyByVector(normalM, new Cartesian3(n[3 * k], n[3 * k + 1], n[3 * k + 2]), new Cartesian3())
           const up = Ellipsoid.WGS84.geodeticSurfaceNormal(at)
-          // each plane's own normal: within its slope of up (0.16° at LLBG 08/26), less as it flattens
-          near(Cartesian3.dot(Cartesian3.normalize(lit, lit), up), 1, 1e-5, `${ap.ident} ${r.ends[0].ident} corner ${k} lit along up`)
+          near(Cartesian3.dot(Cartesian3.normalize(lit, lit), up), 1, 1e-5, `${ap.ident} ${r.ends[0].ident} vertex ${k} lit along up`)
         }
         for (const e of r.ends) onDrawnTerrain(ap, fr, entities.values[marker++].position!.getValue(now)!, e.thrLat, e.thrLon, e.thrHaeM, e.ident)
-      })
-    })
+      }
+    }
   }
 })
 
@@ -231,9 +235,11 @@ test('update: recomputes only when the factor or relH changes, and ignores a non
 test('setLight: the planes darken as the day imagery does under WP-E2’s light (czm_phong keeps half the colour unlit)', () => {
   const { viewer, added } = fakeViewer()
   const rw = addRunways(viewer, airports)
-  const colours = added.map((p) => ((p as Primitive).appearance as MaterialAppearance).material.uniforms.color as Color)
-  const paint = colours[0]
-  assert.ok(colours.every((c) => c === paint), 'one Color that every airport reads')
+  const uniforms = added.map((p) => ((p as Primitive).appearance as MaterialAppearance).material.uniforms)
+  const paint = uniforms[0].asphalt as Color
+  const white = uniforms[0].paint as Color
+  assert.ok(uniforms.every((u) => u.asphalt === paint && u.paint === white), 'one asphalt and one paint Color every runway reads')
+  const whiteBy = (): number => white.red / Color.fromCssColorString('#e4e4dc').red
   const k = (): number => paint.red / ASPHALT.red
   rw.setLight({ dayBrightness: 0.9999, intensity: 2 }) // by day
   near(k(), 0.9999, 1e-9)
@@ -242,6 +248,7 @@ test('setLight: the planes darken as the day imagery does under WP-E2’s light 
   near(k() * (0.5 + 0.5 * 0.45), 0.3 * 0.45, 1e-9, 'as dark as the imagery around it')
   near(paint.green / ASPHALT.green, k(), 1e-9)
   near(paint.blue / ASPHALT.blue, k(), 1e-9)
+  near(whiteBy(), k(), 1e-9, 'the markings darken as much')
   assert.equal(paint.alpha, 1, 'still opaque')
   const night = k()
   for (const bad of [{ dayBrightness: Number.NaN, intensity: 2 }, { dayBrightness: 0.3, intensity: Number.NaN }, { dayBrightness: 0.3, intensity: -1 }]) {
@@ -250,6 +257,13 @@ test('setLight: the planes darken as the day imagery does under WP-E2’s light 
   assert.equal(k(), night, 'a non-finite k is ignored')
   rw.setLight(null) // the Sun off
   assert.ok(Color.equals(paint, ASPHALT), 'as built')
+})
+
+test('addRunways: markers off (a scenario airfield): the runways, no threshold dots', () => {
+  const { viewer, added, entities } = fakeViewer()
+  addRunways(viewer, [ksfo], { markers: false })
+  assert.equal(added.length, ksfo.runways.length)
+  assert.equal(entities.values.length, 0)
 })
 
 test('addRunways: destroy removes exactly what it added; no airports adds nothing', () => {
