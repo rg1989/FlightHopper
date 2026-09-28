@@ -23,6 +23,10 @@ const EXTRAP_S = 8 // dead-reckoning cap; past it the pose freezes (mode 'stale'
 const RECENTRE_M = 100_000 // move the ENU origin when the newest sample is this far from it
 const GROUND_HOLD_S = 60 // on the ground, keep the last airborne height this long
 const CHECK_MIN_MS = 10 // below this finite-difference speed, position noise dominates: don't judge the reported velocity
+// A reported velocity is judged against the positions over ±3 s, and only when they span 3 s: over one 1.3 s step a
+// time stamp 0.9 s late (1 % of samples) reads as 800 kt and threw a correct 461 kt report away (B77W, Heathrow).
+const CHECK_HALF_S = 3
+const CHECK_BASE_S = 3
 const MAX_TURN_DEGS = 6 // dead-reckoning turn-rate clamp (2× standard rate)
 const R = 6_371_000 // mean Earth radius, only for the tangent-plane drop in #geo
 const REJOIN_S = 1.5 // re-join blend duration (G2: re-join blended within 1.5 s)
@@ -36,11 +40,13 @@ const POS_M = 10 // ADS-B position error, per axis
 const MLAT_M = 60
 const TIME_S = 0.12 // sample-time jitter (feeder latency): an error along the velocity
 const VEL_MS = 0.6 // reported velocity: 1 kt steps and its own age
+const MLAT_VEL_MS = 5 // MLAT: the aggregator's own estimate from its positions, loosely (it anchors a new track's speed)
 const H_M = 3 // height: 25 ft steps
 const RATE_MS = 0.5 // reported vertical rate
 // A velocity report is older than its position: measured in turns at Heathrow, the reported track trails the direction
 // flown by 0.73 s (median; quartiles 0.32–1.38 s). A barometric rate lags more (the air data computer filters it).
 const VEL_LAG = { s: 0.75, sd: 0.55 }
+const MLAT_VEL_LAG = { s: 1, sd: 1 } // ponytail: not measured; assumed a little older than an ADS-B report
 const RATE_LAG = { s: 1, sd: 0.7 }
 const RATE_TREND_S = 6 // a reported rate counts only when it agrees with the height trend over ±6 s…
 const RATE_AGREE_MS = 2.5 // …within 2.5 m/s or 40 % (a transponder reporting +2,600 fpm while level is ignored)
@@ -77,9 +83,9 @@ const dirDeg = (v: V): number => wrap360(Math.atan2(v.ve, v.vn) * DEG)
 const clampTurn = (w: number): number => Math.max(-MAX_TURN_DEGS, Math.min(MAX_TURN_DEGS, w))
 
 /** The reported velocity is trusted unless the positions clearly contradict it: > 20 % in speed or > 15° in direction. */
-function agrees(rep: V, fd: V): boolean {
+function agrees(rep: V, fd: V & { baseS: number }): boolean {
   const vFd = Math.hypot(fd.ve, fd.vn)
-  if (vFd < CHECK_MIN_MS) return true
+  if (fd.baseS < CHECK_BASE_S || vFd < CHECK_MIN_MS) return true
   return Math.abs(Math.hypot(rep.ve, rep.vn) - vFd) <= 0.2 * vFd && Math.abs(wrap180(dirDeg(rep) - dirDeg(fd))) <= 15
 }
 
@@ -284,22 +290,24 @@ export class Track {
       const [e, n] = enu.fwd(s.lat + 1e-4, s.lon, 0)
       return Math.atan2(e - pts[i].e, n - pts[i].n) * DEG
     })
-    const fd = velocitiesFromPositions(pts) // central differences, one-sided at the ends, 0 for a lone sample
+    const fd = velocitiesFromPositions(pts, CHECK_HALF_S) // over ±3 s, one-sided at the ends, 0 for a lone sample
     // ponytail: the noise model follows the newest sample's quality for the whole window; mixed windows are rare.
     const mlat = this.quality === 'mlat'
     const pos2 = (mlat ? MLAT_M : POS_M) ** 2
     const oe: Obs[] = []
     const on: Obs[] = []
     for (let i = 0; i < ss.length; i++) {
-      const rep = mlat ? null : this.#reported(i, fd[i])
+      const rep = this.#reported(i, fd[i])
       const ve = rep?.ve ?? fd[i].ve
       const vn = rep?.vn ?? fd[i].vn
-      oe.push({ t: pts[i].t, p: pts[i].e, rp: pos2 + (ve * TIME_S) ** 2, v: rep?.ve ?? null, rv: VEL_MS ** 2 })
-      on.push({ t: pts[i].t, p: pts[i].n, rp: pos2 + (vn * TIME_S) ** 2, v: rep?.vn ?? null, rv: VEL_MS ** 2 })
+      const rv = (mlat ? MLAT_VEL_MS : VEL_MS) ** 2
+      oe.push({ t: pts[i].t, p: pts[i].e, rp: pos2 + (ve * TIME_S) ** 2, v: rep?.ve ?? null, rv })
+      on.push({ t: pts[i].t, p: pts[i].n, rp: pos2 + (vn * TIME_S) ** 2, v: rep?.vn ?? null, rv })
     }
     const q = mlat ? Q_MLAT : Q_H
-    const ke = smooth(oe, q, H_LIMITS, VEL_LAG)
-    const kn = smooth(on, q, H_LIMITS, VEL_LAG)
+    const lag = mlat ? MLAT_VEL_LAG : VEL_LAG
+    const ke = smooth(oe, q, H_LIMITS, lag)
+    const kn = smooth(on, q, H_LIMITS, lag)
     this.#hk = ke.map((a, i) => ({ t: a.t, e: a.p, n: kn[i].p, ve: a.v, vn: kn[i].v, ae: a.a, an: kn[i].a }))
 
     const vo = this.#vObs
@@ -337,7 +345,7 @@ export class Track {
   }
 
   /** Reported velocity (gs + track; true heading on the ground), or null when missing or contradicted by the positions. */
-  #reported(i: number, fd: V): V | null {
+  #reported(i: number, fd: V & { baseS: number }): V | null {
     const s = this.#samples[i]
     const dir = s.trackDeg ?? (s.onGround ? s.trueHeadingDeg : null)
     if (s.gsKt === null || dir === null) return null

@@ -57,7 +57,20 @@ test('velocitiesFromPositions: central differences inside, one-sided at the ends
 })
 
 test('velocitiesFromPositions: one point has zero velocity; empty in, empty out', () => {
-  assert.deepEqual(velocitiesFromPositions([{ t: 7, e: 1, n: 2 }]), [{ t: 7, e: 1, n: 2, ve: 0, vn: 0 }])
+  assert.deepEqual(velocitiesFromPositions([{ t: 7, e: 1, n: 2 }]), [{ t: 7, e: 1, n: 2, ve: 0, vn: 0, baseS: 0 }])
   assert.deepEqual(velocitiesFromPositions([]), [])
 })
 
+
+test('velocitiesFromPositions: with halfS, each difference spans the points within ±halfS (a longer baseline averages out time-stamp jitter); baseS says how long', () => {
+  const pts: PosT[] = [0, 1, 2, 3, 4, 5, 6].map((t) => ({ t, e: 10 * t, n: 0 }))
+  pts[3] = { t: 3, e: 45, n: 0 } // a late time stamp: 15 m off
+  const narrow = velocitiesFromPositions(pts)
+  const wide = velocitiesFromPositions(pts, 3)
+  near(narrow[2].ve, 17.5, 1e-9, 'neighbours only: 75 % off')
+  near(wide[2].ve, 10, 1e-9, 'from t = 0 to t = 5')
+  assert.equal(wide[2].baseS, 5)
+  assert.equal(wide[0].baseS, 3, 'at the start: 0 … 3 s')
+  assert.equal(narrow[0].baseS, 1)
+  assert.equal(velocitiesFromPositions([{ t: 7, e: 1, n: 2 }], 3)[0].baseS, 0)
+})

@@ -472,3 +472,47 @@ test('empty track and render times before the first sample give null', () => {
   assert.equal(s.mode, 'interp')
   assert.equal(tr.stateAt(T0 + 12_000)!.mode, 'extrap')
 })
+
+// ---------- a new track's first seconds: never a made-up speed ----------
+
+test('new ADS-B track: a late-stamped second position does not throw away the reported speed (it read 125 kt, not 461)', () => {
+  // Measured (adsb.fi, B77W 4bb144 at FL320): the first two positions 1.27 s apart but 520 m apart — 800 kt — while both
+  // report 461.5 kt; one of the two time stamps is ~0.9 s off. The reported velocity is the trustworthy one.
+  const path = straight(461.5 * KT, 277)
+  const tr = new Track('abc123', { pollPeriodS: 1 })
+  tr.add(truthSample(path, 0))
+  const late = truthSample(path, 2.19) // flown 2.19 s…
+  tr.add({ ...late, tMs: T0 + 1270, rxMs: T0 + 1400 }) // …stamped 1.27 s
+  for (const dt of [0, 0.5, 1]) {
+    const s = tr.stateAt(T0 + 1270 + dt * 1000)!
+    near(s.gsKt!, 461.5, 25, `gs at +${dt} s`)
+    assert.ok(Math.abs(wrap180(s.trackDeg! - 277)) < 5, `track ${s.trackDeg} at +${dt} s`)
+  }
+})
+
+test('new MLAT track: the first frames show the reported speed, not 0 kt', () => {
+  const path = straight(107 * KT, 177)
+  const tr = new Track('abc123', { pollPeriodS: 1 })
+  tr.add(truthSample(path, 0, { quality: 'mlat', version: null }))
+  for (const dt of [0, 0.3, 0.8]) near(tr.stateAt(T0 + dt * 1000)!.gsKt!, 107, 11, `one sample, +${dt} s`)
+  tr.add(truthSample(path, 2.5, { quality: 'mlat', version: null }))
+  near(tr.stateAt(T0 + 2600)!.gsKt!, 107, 15, 'two samples')
+})
+
+test('MLAT light aircraft: 60 m position noise does not overrule its reported speed (a C152 at 93 kt was drawn at 22 kt)', (t) => {
+  const v = 93 * KT
+  const path = straight(v, 250)
+  const r = rng(11)
+  const samples: Sample[] = []
+  for (let ts = 0; ts <= 240; ts += 1 + 2.5 * r.uni() + (r.uni() < 0.05 ? 4 : 0)) {
+    const s = truthSample(path, ts, { quality: 'mlat', version: null, altGeomFt: null, gsKt: 93 + 3 * r.gauss(), trackDeg: 250 + 3 * r.gauss() })
+    const p = path(ts)
+    const g = geo(p.e + 60 * r.gauss(), p.n + 60 * r.gauss())
+    samples.push({ ...s, lat: g.lat, lon: g.lon })
+  }
+  const fr = replay(new Track('abc123'), samples, { fromS: 20, toS: 230, delayS: 6 })
+  const gs = fr.map((f) => f.s.gsKt!).sort((a, b) => a - b)
+  t.diagnostic(`drawn gs p1 ${gs[Math.floor(gs.length * 0.01)].toFixed(1)}, min ${gs[0].toFixed(1)}, p99 ${gs[Math.floor(gs.length * 0.99)].toFixed(1)} kt`)
+  assert.ok(gs[0] > 0.75 * 93, `min ${gs[0]}`)
+  assert.ok(gs[gs.length - 1] < 1.25 * 93, `max ${gs[gs.length - 1]}`)
+})
