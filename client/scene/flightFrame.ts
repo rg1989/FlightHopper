@@ -1,13 +1,18 @@
 // client/scene/flightFrame.ts
 // The flight-data frame (.planning/scenarios-design.md §5): the traffic's two corner brackets around the chased
-// aircraft, and four small readout blocks hugging them: altitude, height and vertical speed on the left; airspeed,
-// ground speed and thrust on the right; heading and wind on top; attitude, g and configuration below. One component for
-// live chase (liveFlightData: what ADS-B broadcasts) and scenarios (the track's FlightData). The blocks keep a fixed
-// pixel size at every zoom; frameLayout (pure) places them, every frame, and their text changes at most every TEXT_MS.
+// aircraft, and four glass blocks of instruments around them, glass-cockpit style: on the left an altitude tape with the
+// vertical-speed scale and the height above the ground; on the right an airspeed tape (ground speed without one) and the
+// ground speed; on top a heading tape with the wind; below, the attitude indicator (the horizon and the aircraft against
+// it), bank, pitch, load factor, gear and flaps, and the engines' thrust under them. One component for live chase
+// (liveFlightData: what ADS-B broadcasts and the drawn state) and scenarios (the track's FlightData). Every instrument
+// moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS. frameLayout (pure) places the
+// blocks round the aircraft, never over it.
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
+import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
+import { Glide, rel180 } from './instrumentMath.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
 import '../ui/flightFrame.css'
 
@@ -17,338 +22,461 @@ export interface Rect { x: number; y: number; w: number; h: number }
 export interface Square { x: number; y: number; side: number }
 export type BlockId = 'left' | 'right' | 'top' | 'bottom'
 
-/** One quantity as a block shows it: "AGL 11,850 ft" is { label: 'AGL', value: '11,850', unit: 'ft' }. est: an estimate, drawn dimmer. */
-export interface Field { key: string; label: string; value: string; unit: string; est: boolean; big?: true }
-export interface Chip { key: string; text: string; est: boolean }
-/** One engine's thrust bar: frac of the 1.0–2.0 EPR scale, 0–1; null: unknown. */
-export interface Bar { label: string; frac: number | null }
-/**
- * What one block shows: lines of fields, and its glyph (the top's wind dial, the bottom's horizon, the right's thrust
- * bars) with the angles to draw it at. A block with nothing (isEmpty) is hidden.
- */
-export interface BlockView {
-  rows: Field[][]
-  wind: { deg: number; est: boolean } | null // the arrow's bearing from the nose, clockwise, −180…180
-  horizon: { rotDeg: number; offsetPx: number; est: boolean } | null // the horizon's rotation (−roll) and its drop (pitch)
-  bars: { bars: Bar[]; est: boolean } | null
-  chips: Chip[]
-}
-
-export const TEXT_MS = 100 // text at most 10 times a second: steadier to read, and a DOM rebuild costs more than a transform
-export const PITCH_PX = 0.6 // the horizon glyph's line moves this many px per degree of pitch
-const HORIZON_MAX_PX = 12 // …up to ±20°, inside the glyph's 14 px radius
+export const TEXT_MS = 100 // figures at most 10 times a second: steadier to read (the instruments themselves move every frame)
+export const AGL_SHOWN_BELOW_FT = 15_000
 const LEVEL_FPM = 50 // within this a vertical speed reads 0, without an arrow (ADS-B rates come in 64 fpm steps)
-const EPR_MIN = 1
-const EPR_MAX = 2
-const MINUS = '\u2212' // the typographic minus: the width of the plus sign, not a hyphen's
+const TRACK_DIAMOND_DEG = 1 // the track diamond shows once the track is this far off the heading
+const MINUS = '−' // the typographic minus: the width of the plus sign, not a hyphen's
 const IDS: readonly BlockId[] = ['left', 'right', 'top', 'bottom']
 
 const fin = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
-const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
+
+// ---- layout ---------------------------------------------------------------------------------------------------------
+
+/**
+ * A block's size in one of its variants (the full one, then smaller ones), and its anchor: the point that lines up with
+ * the square's centre, x for a block above or below it, y for one beside it (the tapes' readouts level with the
+ * aircraft, the attitude indicator under it). Default: the block's centre.
+ */
+export interface BlockSize { w: number; h: number; ax?: number; ay?: number }
+/** Where a block went: its top-left, the side of the square it is on (its own, or another), and which variant. */
+export interface Placed { x: number; y: number; side: BlockId; v: number }
+/** Coming home from another side, or growing back to a larger variant, takes this much room to spare: no flicker. */
+export const HYST_PX = 16
+
+interface Box { x0: number; y0: number; x1: number; y1: number }
+interface Cand { x: number; y: number; cost: number }
+const EPS = 1e-6
+// Where a block with no room on its own side goes, in order, and the detour (px) each is charged.
+const AWAY: Record<BlockId, ReadonlyArray<readonly [BlockId, number]>> = {
+  left: [['right', 0], ['bottom', 40], ['top', 80]],
+  right: [['left', 0], ['bottom', 40], ['top', 80]],
+  top: [['bottom', 0], ['right', 40], ['left', 40]],
+  bottom: [['top', 0], ['right', 40], ['left', 40]],
+}
+const AWAY_ORDER: readonly BlockId[] = ['left', 'right', 'bottom', 'top'] // altitude, speed, attitude, heading
+const VARIANT_PX = 60 // away from home, a smaller variant is charged as this much detour
+const SLIDE_COST = 1.5 // a px along the side (out of line with the aircraft) costs this much more than a px out from it
+const STAY_PX = 30 // away from home, the place it had last frame is kept over one up to this much better
+
+/** The position nearest pref of a segment len long in [lo, hi], clear of every blocked (open) interval; null: none. */
+function slide(pref: number, len: number, lo: number, hi: number, blocked: ReadonlyArray<readonly [number, number]>): number | null {
+  if (hi - lo < len - EPS) return null
+  const cands = [Math.min(Math.max(pref, lo), hi - len), lo, hi - len]
+  for (const [a, b] of blocked) cands.push(a - len, b)
+  let best: number | null = null
+  for (const p of cands) {
+    if (p < lo - EPS || p + len > hi + EPS) continue
+    if (blocked.some(([a, b]) => p + len > a + EPS && p < b - EPS)) continue
+    if (best === null || Math.abs(p - pref) < Math.abs(best - pref)) best = p
+  }
+  return best
+}
+
+/**
+ * The best place for a block of size b on one side of the square S: against it at the gap, or out beyond a block already
+ * there (each such level is tried), slid along the side to its anchor's line as near as the safe area and the other
+ * blocks allow. Cost: how far out, plus SLIDE_COST × how far along (out of line with the aircraft). extra: room to spare
+ * it needs at the safe area's far edge.
+ */
+function onSide(side: BlockId, b: BlockSize, sq: Square, S: Box, taken: readonly Box[], safe: Rect, gap: number, extra: number): Cand | null {
+  const alongX = side === 'top' || side === 'bottom' // above or below the square it slides along x
+  const len = alongX ? b.w : b.h
+  const dep = alongX ? b.h : b.w
+  const pref = alongX ? sq.x - (b.ax ?? b.w / 2) : sq.y - (b.ay ?? b.h / 2)
+  const lo = alongX ? safe.x : safe.y
+  const hi = alongX ? safe.x + safe.w : safe.y + safe.h
+  const oLo = alongX ? safe.y : safe.x
+  const oHi = alongX ? safe.y + safe.h : safe.x + safe.w
+  const q = (t: Box): [number, number, number, number] => (alongX ? [t.y0, t.y1, t.x0, t.x1] : [t.x0, t.x1, t.y0, t.y1])
+  const out = side === 'left' || side === 'top' ? -1 : 1
+  const [s0, s1] = q(S)
+  const e0 = out < 0 ? s0 - gap : s1 + gap // the block's edge facing the square
+  const levels = [e0]
+  for (const t of taken) {
+    const [t0, t1] = q(t)
+    const e = out < 0 ? t0 - gap : t1 + gap
+    if (out < 0 ? e < e0 : e > e0) levels.push(e)
+  }
+  const boxes = [S, ...taken]
+  let best: Cand | null = null
+  for (const e of levels) {
+    const u0 = out < 0 ? e - dep : e
+    if (u0 < oLo + (out < 0 ? extra : 0) - EPS || u0 + dep > oHi - (out > 0 ? extra : 0) + EPS) continue
+    const blocked: Array<[number, number]> = []
+    for (const t of boxes) {
+      const [t0, t1, t2, t3] = q(t)
+      if (t0 - gap < u0 + dep - EPS && u0 < t1 + gap - EPS) blocked.push([t2 - gap, t3 + gap])
+    }
+    const s = slide(pref, len, lo, hi, blocked)
+    if (s === null) continue
+    const cost = Math.abs(e - e0) + SLIDE_COST * Math.abs(s - pref)
+    if (best === null || cost < best.cost - EPS) best = alongX ? { x: s, y: u0, cost } : { x: u0, y: s, cost }
+  }
+  return best
+}
+
+/**
+ * Where each block goes round the square sq, inside `safe`, never over the square (the aircraft) and never over another
+ * block: each keeps the gap to both. A block hugs its own side of the square at `gap`, its anchor on the square's centre
+ * line, sliding along that side as the safe area and the blocks placed before it require (the top and bottom blocks go
+ * out past side blocks taller than the square). With no room on its own side a block takes its smaller variant there,
+ * else goes to another side (the altitude beyond the speed, the heading under the attitude…), else it is hidden (null):
+ * a square larger than the safe area hides them all. sizes: each block's variants (0 × 0, or none: hidden). prev: the
+ * last frame's placement, for hysteresis: a block that went away comes home, or grows back, only with HYST_PX to spare.
+ */
+export function frameLayout(
+  sq: Square,
+  sizes: Record<BlockId, BlockSize | readonly BlockSize[]>,
+  safe: Rect,
+  gap = 10,
+  prev?: Partial<Record<BlockId, Placed | null>>,
+): Record<BlockId, Placed | null> {
+  const r = sq.side / 2
+  const S: Box = { x0: sq.x - r, y0: sq.y - r, x1: sq.x + r, y1: sq.y + r }
+  const out: Record<BlockId, Placed | null> = { left: null, right: null, top: null, bottom: null }
+  const taken: Box[] = []
+  const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => {
+    const s = sizes[id]
+    const list: readonly BlockSize[] = Array.isArray(s) ? s : [s as BlockSize]
+    return list.map((b, v) => ({ b, v })).filter(({ b }) => b.w > 0 && b.h > 0)
+  }
+  const put = (id: BlockId, c: Cand, side: BlockId, v: number, b: BlockSize): void => {
+    out[id] = { x: c.x, y: c.y, side, v }
+    taken.push({ x0: c.x, y0: c.y, x1: c.x + b.w, y1: c.y + b.h })
+  }
+  // Home first, every block, the largest variant that fits.
+  for (const id of IDS) {
+    const p = prev?.[id]
+    for (const { b, v } of variants(id)) {
+      const extra = p === null || (p !== undefined && (p.side !== id || v < p.v)) ? HYST_PX : 0
+      const c = onSide(id, b, sq, S, taken, safe, gap, extra)
+      if (c !== null) {
+        put(id, c, id, v, b)
+        break
+      }
+    }
+  }
+  // Then the ones with no room at home, elsewhere.
+  for (const id of AWAY_ORDER) {
+    if (out[id] !== null) continue
+    const p = prev?.[id]
+    let best: { c: Cand; side: BlockId; v: number; b: BlockSize; cost: number } | null = null
+    for (const { b, v } of variants(id)) {
+      for (const [side, detour] of AWAY[id]) {
+        const c = onSide(side, b, sq, S, taken, safe, gap, 0)
+        if (c === null) continue
+        const cost = c.cost + detour + VARIANT_PX * v - (p != null && p.side === side && p.v === v ? STAY_PX : 0)
+        if (best === null || cost < best.cost - EPS) best = { c, side, v, b, cost }
+      }
+    }
+    if (best !== null) put(id, best.c, best.side, best.v, best.b)
+  }
+  return out
+}
+
+// ---- data -----------------------------------------------------------------------------------------------------------
+
+const LIVE_DERIVED: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg'])
+const LIVE_DERIVED_AGL: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt'])
+
+/**
+ * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, track and attitude, and what the
+ * aircraft broadcasts in the chase reply for the rest (airspeed, heading, wind: Mode S enhanced surveillance, when it
+ * does). The attitude is the drawn one, the 3-D model's, so the instrument and the model agree: synthesised from the
+ * path (the broadcast roll smoothed in), so an estimate; aglFt (the app's ground under the aircraft) is one too. One line
+ * per field: each is the one place its source is chosen.
+ */
+export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null): FlightData {
+  const n = (v: number | undefined): number | null => (fin(v) ? v : null)
+  return {
+    altFt: s.altBaroFt,
+    aglFt,
+    vsFpm: s.vsFpm,
+    iasKt: n(raw?.ias),
+    gsKt: s.gsKt,
+    hdgDeg: n(raw?.true_heading),
+    trackDeg: s.trackDeg,
+    pitchDeg: s.pitchDeg,
+    rollDeg: s.rollDeg,
+    g: null,
+    windFromDeg: n(raw?.wd),
+    windKt: n(raw?.ws),
+    gear: null,
+    flaps: null,
+    epr: null,
+    derived: aglFt === null ? LIVE_DERIVED : LIVE_DERIVED_AGL,
+  }
+}
+
+/** One quantity an instrument shows: its value, and whether it is an estimate (drawn dimmer). */
+export interface Reading { value: number; est: boolean }
+
+/**
+ * What the instruments show for one FlightData: null where nothing is known (the instrument is hidden: no fake zeros).
+ * The speed tape shows the airspeed, else the ground speed (never a missing airspeed as 0); the heading tape the heading,
+ * else the track.
+ */
+export interface FrameView {
+  alt: Reading | null
+  agl: Reading | null // below AGL_SHOWN_BELOW_FT only, never below 0
+  vs: Reading | null
+  speed: (Reading & { kind: 'IAS' | 'GS' }) | null // the tape
+  gs: Reading | null // the ground speed beside an airspeed tape
+  hdg: (Reading & { kind: 'HDG' | 'TRK' }) | null // the tape: the heading, else the track (an estimate of the nose)
+  track: Reading | null // the track diamond on the heading tape, once it differs from the heading by TRACK_DIAMOND_DEG
+  // rel: where it comes from, clockwise from the nose; null: calm, or no nose.
+  wind: { fromDeg: number; kt: number; est: boolean; rel: { deg: number; est: boolean } | null } | null
+  roll: Reading | null
+  pitch: Reading | null
+  adi: { est: boolean } | null // the attitude indicator: with either angle, an estimate without both
+  g: Reading | null
+  epr: { values: ReadonlyArray<number | null>; est: boolean } | null // one per engine, null unknown
+  gear: { est: boolean } | null // down
+  flaps: Reading | null // out
+}
+
+export function frameView(d: FlightData): FrameView {
+  const est = (k: keyof FlightData): boolean => d.derived.has(k)
+  const read = (k: keyof FlightData, v: number | null | undefined): Reading | null => (fin(v) ? { value: v, est: est(k) } : null)
+  const gs = read('gsKt', d.gsKt)
+  // An airspeed of 0 or less is no airspeed (a transponder's empty field, or at rest on the ground): the ground speed.
+  const speed = fin(d.iasKt) && d.iasKt > 0
+    ? { value: d.iasKt, est: est('iasKt'), kind: 'IAS' as const }
+    : gs !== null ? { ...gs, kind: 'GS' as const } : null
+  const hdg = fin(d.hdgDeg)
+    ? { value: d.hdgDeg, est: est('hdgDeg'), kind: 'HDG' as const }
+    : fin(d.trackDeg) ? { value: d.trackDeg, est: true, kind: 'TRK' as const } : null
+  const track = fin(d.hdgDeg) && fin(d.trackDeg) && Math.abs(rel180(d.trackDeg - d.hdgDeg)) >= TRACK_DIAMOND_DEG
+    ? { value: d.trackDeg, est: est('trackDeg') }
+    : null
+  let wind: FrameView['wind'] = null
+  if (fin(d.windFromDeg) && fin(d.windKt)) {
+    const e = est('windFromDeg') || est('windKt')
+    const rel = Math.round(d.windKt) === 0 || hdg === null ? null : { deg: rel180(d.windFromDeg - hdg.value), est: e || hdg.est }
+    wind = { fromDeg: d.windFromDeg, kt: d.windKt, est: e, rel }
+  }
+  const roll = read('rollDeg', d.rollDeg)
+  const pitch = read('pitchDeg', d.pitchDeg)
+  return {
+    alt: read('altFt', d.altFt),
+    agl: fin(d.aglFt) && d.aglFt < AGL_SHOWN_BELOW_FT ? { value: Math.max(0, d.aglFt), est: est('aglFt') } : null,
+    vs: read('vsFpm', d.vsFpm),
+    speed,
+    gs: speed?.kind === 'IAS' ? gs : null,
+    hdg,
+    track,
+    wind,
+    roll,
+    pitch,
+    adi: roll !== null || pitch !== null ? { est: roll === null || pitch === null || roll.est || pitch.est } : null,
+    g: read('g', d.g),
+    epr: d.epr !== null && d.epr.length > 0 ? { values: d.epr.map((e) => (fin(e) ? e : null)), est: est('epr') } : null,
+    gear: d.gear === 'down' ? { est: est('gear') } : null,
+    flaps: fin(d.flaps) && Math.round(d.flaps) > 0 ? { value: d.flaps, est: est('flaps') } : null,
+  }
+}
+
+/** Which blocks have anything to show. */
+export function blocksShown(v: FrameView): Record<BlockId, boolean> {
+  return {
+    left: v.alt !== null || v.agl !== null || v.vs !== null,
+    right: v.speed !== null,
+    top: v.hdg !== null || v.wind !== null,
+    bottom: v.adi !== null || v.g !== null || v.gear !== null || v.flaps !== null || v.epr !== null,
+  }
+}
+
+// ---- text -----------------------------------------------------------------------------------------------------------
+
 /** Whole, thousands separated, a true minus sign: "−1,300". */
 const num = (v: number): string => {
   const r = Math.round(v) || 0 // `|| 0` turns −0 into 0
   return `${r < 0 ? MINUS : ''}${Math.abs(r).toLocaleString('en-US')}`
 }
-const by10 = (v: number): number => Math.round(v / 10) * 10
+/** Altitude to 10 ft: "12,300". */
+export const altText = (ft: number): string => num(Math.round(ft / 10) * 10)
+/** Speed, whole knots: "140". */
+export const speedText = (kt: number): string => num(kt)
+/** Vertical speed to 50 fpm (a VSI's digits), with its arrow; within LEVEL_FPM of level "0" and none. */
+export function vsText(fpm: number): { arrow: '↑' | '↓' | ''; text: string } {
+  if (!(Math.abs(fpm) >= LEVEL_FPM)) return { arrow: '', text: '0' }
+  const v = Math.round(fpm / 50) * 50
+  return { arrow: v > 0 ? '↑' : '↓', text: num(Math.abs(v)) }
+}
 /** Three figures, north as 360 (the aviation convention: 001–360). */
-const deg3 = (d: number): string => `${String((((Math.round(d) % 360) + 360) % 360) || 360).padStart(3, '0')}°`
-/** An angle in (−180, 180]. */
-const rel180 = (a: number): number => 180 - ((((180 - a) % 360) + 360) % 360)
-
-export const fieldText = (f: Field): string => [f.label, f.value, f.unit].filter((s) => s !== '').join(' ')
-export const rowText = (row: readonly Field[]): string => row.map(fieldText).join(' · ')
-export const isEmpty = (v: BlockView): boolean =>
-  v.rows.length === 0 && v.wind === null && v.horizon === null && v.bars === null && v.chips.length === 0
-
-/**
- * Where each block's top-left goes around the square sq (sizes: each block's measured size; 0 × 0: hidden, it takes
- * no room). Each hugs its side of the square at `gap`, centred on it; each stays inside `safe` (a square larger than
- * the safe area pins them to its edges). No two come closer than `gap`: left and right go side by side when clamping
- * brings them together; the top block rises above any side block it would touch and the bottom block drops below
- * them, and when an edge stops them the sides give way. Holds while the safe area fits the stack: top, the taller
- * side, bottom and two gaps high; left, a gap and right wide (a phone's is, with room to spare).
- */
-export function frameLayout(sq: Square, sizes: Record<BlockId, { w: number; h: number }>, safe: Rect, gap = 10): Record<BlockId, { x: number; y: number }> {
-  const r = sq.side / 2
-  const right = safe.x + safe.w
-  const bottom = safe.y + safe.h
-  const { left: L, right: R, top: T, bottom: B } = sizes
-  const cx = (x: number, w: number): number => Math.max(safe.x, Math.min(x, right - w))
-  const cy = (y: number, h: number): number => Math.max(safe.y, Math.min(y, bottom - h))
-  const p: Record<BlockId, { x: number; y: number }> = {
-    left: { x: cx(sq.x - r - gap - L.w, L.w), y: cy(sq.y - L.h / 2, L.h) },
-    right: { x: cx(sq.x + r + gap, R.w), y: cy(sq.y - R.h / 2, R.h) },
-    top: { x: cx(sq.x - T.w / 2, T.w), y: cy(sq.y - r - gap - T.h, T.h) },
-    bottom: { x: cx(sq.x - B.w / 2, B.w), y: cy(sq.y + r + gap, B.h) },
-  }
-  const on = (id: BlockId): boolean => sizes[id].w > 0 && sizes[id].h > 0
-  // Closer than the gap along x: they must be apart along y.
-  const nearX = (a: BlockId, b: BlockId): boolean => p[a].x < p[b].x + sizes[b].w + gap && p[b].x < p[a].x + sizes[a].w + gap
-  // Left and right both sit on the square's middle, so they meet only when clamped together: side by side, left first.
-  if (on('left') && on('right') && nearX('left', 'right')) {
-    p.right.x = Math.min(Math.max(p.right.x, p.left.x + L.w + gap), right - R.w)
-    p.left.x = Math.max(safe.x, Math.min(p.left.x, p.right.x - gap - L.w))
-  }
-  const sides = (['left', 'right'] as const).filter(on)
-  const t = on('top')
-  const b = on('bottom')
-  const tb = t && b && nearX('top', 'bottom')
-  // Out from the square: the top above the sides it would touch, the bottom below them.
-  for (const s of sides) {
-    if (t && nearX('top', s)) p.top.y = Math.min(p.top.y, p[s].y - gap - T.h)
-    if (b && nearX('bottom', s)) p.bottom.y = Math.max(p.bottom.y, p[s].y + sizes[s].h + gap)
-  }
-  // Down from the safe top: a top block stopped there pushes the sides down, and they the bottom.
-  if (t) p.top.y = Math.max(p.top.y, safe.y)
-  for (const s of sides) if (t && nearX('top', s)) p[s].y = Math.max(p[s].y, p.top.y + T.h + gap)
-  if (tb) p.bottom.y = Math.max(p.bottom.y, p.top.y + T.h + gap)
-  for (const s of sides) if (b && nearX('bottom', s)) p.bottom.y = Math.max(p.bottom.y, p[s].y + sizes[s].h + gap)
-  // Up from the safe bottom: the same the other way.
-  if (b) p.bottom.y = Math.min(p.bottom.y, bottom - B.h)
-  for (const s of sides) {
-    p[s].y = Math.min(p[s].y, bottom - sizes[s].h)
-    if (b && nearX('bottom', s)) p[s].y = Math.min(p[s].y, p.bottom.y - gap - sizes[s].h)
-  }
-  if (t) {
-    p.top.y = Math.min(p.top.y, bottom - T.h)
-    for (const s of sides) if (nearX('top', s)) p.top.y = Math.min(p.top.y, p[s].y - gap - T.h)
-    if (tb) p.top.y = Math.min(p.top.y, p.bottom.y - gap - T.h)
-  }
-  return p
+export const deg3 = (d: number): string => `${String((((Math.round(d) % 360) + 360) % 360) || 360).padStart(3, '0')}°`
+/** Bank with the side of the low wing: "13° R"; wings level "0°". */
+export function bankText(rollDeg: number): string {
+  const r = Math.round(rel180(rollDeg)) || 0
+  return `${Math.abs(r)}°${r > 0 ? ' R' : r < 0 ? ' L' : ''}`
 }
-
-const NO_DERIVED: ReadonlySet<keyof FlightData> = new Set()
-const AGL_DERIVED: ReadonlySet<keyof FlightData> = new Set(['aglFt'])
-export const AGL_SHOWN_BELOW_FT = 15_000
-
-/**
- * The frame's data in live chase: the drawn state for altitude, vertical speed, speed and track, and what the aircraft
- * broadcasts in the chase reply for the rest (airspeed, heading, roll, wind: Mode S enhanced surveillance, when it
- * does). s.rollDeg and s.pitchDeg are never shown: they are synthesised for drawing. aglFt (the app's ground under the
- * aircraft) is an estimate.
- */
-export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null): FlightData {
-  const n = (v: number | undefined): number | null => (fin(v) ? v : null)
-  return {
-    altFt: s.altBaroFt, aglFt, vsFpm: s.vsFpm, iasKt: n(raw?.ias), gsKt: s.gsKt, hdgDeg: n(raw?.true_heading),
-    trackDeg: s.trackDeg, pitchDeg: null, rollDeg: n(raw?.roll), g: null, windFromDeg: n(raw?.wd), windKt: n(raw?.ws),
-    gear: null, flaps: null, epr: null, derived: aglFt === null ? NO_DERIVED : AGL_DERIVED,
-  }
+/** Pitch with its sign: "+10°", "−3°", "0°". */
+export function pitchText(pitchDeg: number): string {
+  const r = Math.round(pitchDeg) || 0
+  return `${r > 0 ? '+' : r < 0 ? MINUS : ''}${Math.abs(r)}°`
 }
-
-/** The text and glyph angles of every block for d. Unknown (null) values are left out; a block left with nothing is empty. */
-export function formatBlocks(d: FlightData): Record<BlockId, BlockView> {
-  const est = (k: keyof FlightData): boolean => d.derived.has(k)
-  const f = (key: keyof FlightData, label: string, value: string, unit: string): Field => ({ key, label, value, unit, est: est(key) })
-  const view = (rows: Field[][], more: Partial<BlockView> = {}): BlockView => ({ rows, wind: null, horizon: null, bars: null, chips: [], ...more })
-
-  const left: Field[][] = []
-  if (fin(d.altFt)) left.push([{ ...f('altFt', '', num(by10(d.altFt)), 'ft'), big: true }])
-  // Height above the ground only where the ground matters: high up it reads as noise (over the sea a geometric AGL even
-  // tops the barometric ALT above it).
-  if (fin(d.aglFt) && d.aglFt < AGL_SHOWN_BELOW_FT) left.push([f('aglFt', 'AGL', num(by10(Math.max(0, d.aglFt))), 'ft')])
-  if (fin(d.vsFpm)) {
-    const v = by10(d.vsFpm)
-    left.push([f('vsFpm', '', Math.abs(d.vsFpm) < LEVEL_FPM ? '0' : `${v > 0 ? '↑' : '↓'} ${num(Math.abs(v))}`, 'fpm')])
-  }
-
-  const right: Field[][] = []
-  if (fin(d.iasKt)) right.push([f('iasKt', 'IAS', num(d.iasKt), 'kt')])
-  if (fin(d.gsKt)) right.push([f('gsKt', 'GS', num(d.gsKt), 'kt')])
-  const bars = d.epr !== null && d.epr.length > 0
-    ? {
-        bars: d.epr.map((e, i) => ({ label: String(i + 1), frac: fin(e) ? Math.round(clamp((e - EPR_MIN) / (EPR_MAX - EPR_MIN), 0, 1) * 1000) / 1000 : null })),
-        est: est('epr'),
-      }
-    : null
-
-  // The dial's nose is the heading; without one, the track (the nose within a few degrees of drift): an estimate.
-  const top: Field[] = []
-  if (fin(d.hdgDeg)) top.push(f('hdgDeg', 'HDG', deg3(d.hdgDeg), ''))
-  else if (fin(d.trackDeg)) top.push(f('trackDeg', 'TRK', deg3(d.trackDeg), ''))
-  const nose = fin(d.hdgDeg) ? d.hdgDeg : fin(d.trackDeg) ? d.trackDeg : null
-  let wind: BlockView['wind'] = null
-  if (fin(d.windFromDeg) && fin(d.windKt)) {
-    const windEst = est('windFromDeg') || est('windKt')
-    if (Math.round(d.windKt) === 0) top.push({ key: 'wind', label: '', value: 'Calm', unit: '', est: windEst })
-    else {
-      top.push({ key: 'wind', label: '', value: `${deg3(d.windFromDeg)}/${num(d.windKt)}`, unit: 'kt', est: windEst })
-      if (nose !== null) wind = { deg: Math.round(rel180(d.windFromDeg - nose)) || 0, est: windEst || !fin(d.hdgDeg) || est('hdgDeg') }
-    }
-  }
-
-  const attitude: Field[] = []
-  if (fin(d.rollDeg)) {
-    const r = Math.round(d.rollDeg) || 0
-    attitude.push(f('rollDeg', 'Bank', `${Math.abs(r)}°${r > 0 ? ' R' : r < 0 ? ' L' : ''}`, ''))
-  }
-  if (fin(d.pitchDeg)) {
-    const p = Math.round(d.pitchDeg) || 0
-    attitude.push(f('pitchDeg', 'Pitch', `${p > 0 ? '+' : p < 0 ? MINUS : ''}${Math.abs(p)}°`, ''))
-  }
-  const bottom: Field[][] = attitude.length > 0 ? [attitude] : []
-  if (fin(d.g)) {
-    const g = Math.abs(d.g).toFixed(1)
-    bottom.push([f('g', '', `${d.g < 0 && g !== '0.0' ? MINUS : ''}${g}`, 'g')])
-  }
-  // The glyph draws level for an unknown angle, so it is dimmed then.
-  const horizon = fin(d.rollDeg) || fin(d.pitchDeg)
-    ? {
-        rotDeg: -(d.rollDeg ?? 0) || 0,
-        offsetPx: clamp((d.pitchDeg ?? 0) * PITCH_PX, -HORIZON_MAX_PX, HORIZON_MAX_PX) || 0,
-        est: !fin(d.rollDeg) || !fin(d.pitchDeg) || est('rollDeg') || est('pitchDeg'),
-      }
-    : null
-  // Configuration shows when it is out of the clean cruise state: gear down, flaps out.
-  const chips: Chip[] = []
-  if (d.gear === 'down') chips.push({ key: 'gear', text: 'GEAR DN', est: est('gear') })
-  if (fin(d.flaps) && Math.round(d.flaps) > 0) chips.push({ key: 'flaps', text: `FLAPS ${Math.round(d.flaps)}`, est: est('flaps') })
-
-  return {
-    left: view(left),
-    right: view(right, { bars }),
-    top: view(top.length > 0 ? [top] : [], { wind }),
-    bottom: view(bottom, { horizon, chips }),
-  }
+/** Wind from/speed ("220°/16", knots), or "Calm". */
+export const windText = (fromDeg: number, kt: number): string => (Math.round(kt) === 0 ? 'Calm' : `${deg3(fromDeg)}/${num(kt)}`)
+/** Load factor to 0.1 g. */
+export function gText(g: number): string {
+  const t = Math.abs(g).toFixed(1)
+  return `${g < 0 && t !== '0.0' ? MINUS : ''}${t}`
 }
+/** Engine pressure ratio to 0.01. */
+export const eprText = (e: number): string => e.toFixed(2)
 
 // ---- DOM ------------------------------------------------------------------------------------------------------------
 
-const SVG_NS = 'http://www.w3.org/2000/svg'
+const GAP = 10 // between the square and a block, and between blocks
+const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag)
-  e.className = cls
-  if (text !== undefined) e.textContent = text
-  return e
+/** A small caps label with its unit: "ALT ft". */
+function label(text: string | HTMLElement, unit = ''): HTMLSpanElement {
+  const l = h('span', 'fh-l')
+  l.append(text)
+  if (unit !== '') l.append(' ', h('span', 'fh-u', unit))
+  return l
 }
 
-function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
-  const e = document.createElementNS(SVG_NS, tag)
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v))
-  return e
+/** A block's heading line: labels, spread across it. */
+function head(...kids: HTMLElement[]): HTMLDivElement {
+  const d = h('div', 'fh-bhead')
+  d.append(...kids)
+  return d
 }
 
-/** The tile's label when the field has none of its own: the altitude, vertical speed, g and wind read by their figures. */
-const TILE_LABEL: Readonly<Record<string, string>> = { altFt: 'Alt', vsFpm: 'V/S', g: 'Load', wind: 'Wind' }
-
-/**
- * One quantity as a tile, the flight card's stat style: the figure over a small caps label with the unit ("ALT ft"). The
- * text reads whole for copy and screen readers ("11,850 AGL ft").
- */
-function fieldEl(f: Field): HTMLDivElement {
-  const tile = h('div', `fh-ft${f.big ? ' fh-big' : ''}${f.est ? ' fh-est' : ''}`)
-  tile.dataset.key = f.key
-  const label = h('div', 'fh-ft-l', f.label || TILE_LABEL[f.key] || '')
-  if (f.unit !== '') label.append(' ', h('span', 'fh-ft-u', f.unit))
-  tile.append(h('div', 'fh-ft-v', f.value), label)
-  return tile
+/** A figure on a line with its label and unit: "AGL 1,700 ft". */
+function line(cls: string, name: string, unit: string): { el: HTMLDivElement; value: HTMLSpanElement } {
+  const el = h('div', `fh-line ${cls}`)
+  const value = h('span', 'fh-v')
+  el.append(h('span', 'fh-l', name), value, h('span', 'fh-u', unit))
+  return { el, value }
 }
 
-/** A row of tiles. */
-function rowEl(fields: readonly Field[]): HTMLDivElement {
-  const row = h('div', 'fh-frow')
-  row.append(...fields.map(fieldEl))
-  return row
+/** A figure under its label: "BANK / 13° R". */
+function stat(cls: string, name: string): { el: HTMLDivElement; value: HTMLSpanElement } {
+  const el = h('div', `fh-stat ${cls}`)
+  const value = h('span', 'fh-v')
+  el.append(h('span', 'fh-l', name), value)
+  return { el, value }
 }
 
-/** The wind dial, 18 px: a ring, a small aircraft nose-up in the middle, and the arrow blowing in from the wind's side. */
-function dialEl(): { root: SVGSVGElement; arrow: SVGGElement } {
-  const root = svg('svg', { class: 'fh-dial', viewBox: '0 0 18 18', width: 18, height: 18, 'aria-hidden': 'true' })
-  const arrow = svg('g', { class: 'fh-dial-arrow' })
-  arrow.append(svg('path', { d: 'M9 0.7V5.3' }), svg('path', { d: 'M7.1 3.5L9 5.5L10.9 3.5' }))
-  root.append(
-    svg('circle', { class: 'fh-dial-ring', cx: 9, cy: 9, r: 8.3 }),
-    svg('path', { class: 'fh-dial-ac', d: 'M9 7V11.7M6.6 9.2H11.4M8 11.3H10' }),
-    arrow,
-  )
-  return { root, arrow }
+const dim = (el: Element, on: boolean): void => {
+  el.classList.toggle('fh-est', on)
 }
-
-/** The horizon glyph, 28 px: sky over ground (with ±10° pitch marks) that rolls and pitches behind a fixed aircraft symbol. */
-function horizonEl(): { root: HTMLDivElement; world: HTMLDivElement } {
-  const root = h('div', 'fh-hz')
-  const world = h('div', 'fh-hz-w')
-  const w = svg('svg', { viewBox: '-40 -40 80 80', width: 80, height: 80, 'aria-hidden': 'true' })
-  const mark = (y: number, half: number): SVGPathElement => svg('path', { class: 'fh-hz-mark', d: `M${-half} ${y}H${half}` })
-  w.append(
-    svg('rect', { class: 'fh-hz-sky', x: -40, y: -40, width: 80, height: 40 }),
-    svg('rect', { class: 'fh-hz-gnd', x: -40, y: 0, width: 80, height: 40 }),
-    mark(-10 * PITCH_PX, 3.5),
-    mark(10 * PITCH_PX, 3.5),
-    svg('path', { class: 'fh-hz-line', d: 'M-40 0H40' }),
-  )
-  world.append(w)
-  const ac = svg('svg', { class: 'fh-hz-ac', viewBox: '-14 -14 28 28', width: 28, height: 28, 'aria-hidden': 'true' })
-  ac.append(svg('path', { d: 'M-8.5 0H-3.5L-2 1.6M8.5 0H3.5L2 1.6' }), svg('circle', { cx: 0, cy: 0, r: 0.9 }))
-  root.append(world, ac)
-  return { root, world }
-}
-
-const ZERO = (): { w: number; h: number } => ({ w: 0, h: 0 })
 
 /**
  * The frame in the DOM, in layer (a .fh-frame div the app creates over the globe). update() each frame after the
- * camera moved; draw() is the same without Cesium (the harness drives it with a square of its own). Each block keeps
- * its glyphs attached and rebuilds only its text slots: a detached element loses its style, and with it the transition
- * that smooths the 10 Hz steps.
+ * camera moved; draw() is the same without Cesium (the harness drives it with a square of its own). Every frame each
+ * instrument glides to its value (Glide) and moves by transforms only; at most every TEXT_MS the figures, which parts
+ * show, and the dimming of estimates are written, and a block whose parts changed is measured again (its full and
+ * compact variants, for frameLayout).
  * ponytail: the frame does not hide when terrain hides the aircraft, only behind the camera (as the traffic brackets).
  * Upgrade: a depth test under the square's centre.
  */
 export class FlightFrame {
   readonly #bracket = h('div', 'fh-bracket')
   readonly #blocks: Record<BlockId, HTMLDivElement>
-  readonly #sizes: Record<BlockId, { w: number; h: number }> = { left: ZERO(), right: ZERO(), top: ZERO(), bottom: ZERO() }
+  // Left: the altitude tape, the vertical-speed scale and figure, the height above the ground.
+  readonly #alt = new Tape(ALT_TAPE, 'alt')
+  readonly #vsi = new Vsi()
+  readonly #vs = h('span', 'fh-vs')
+  readonly #altRow = h('div', 'fh-brow')
+  readonly #agl = line('fh-agl', 'AGL', 'ft')
+  // Right: the speed tape (airspeed, else ground speed), the ground speed.
+  readonly #spd = new Tape(SPEED_TAPE, 'spd')
+  readonly #spdKind = h('span', 'fh-k')
+  readonly #spdHead = head(label(this.#spdKind, 'kt'))
+  readonly #spdRow = h('div', 'fh-brow')
+  readonly #gs = line('fh-gs', 'GS', 'kt')
+  // Top: the wind, the heading tape.
+  readonly #wind = h('div', 'fh-wind')
+  readonly #wdial = new WindDial()
+  readonly #windText = h('span', 'fh-v')
+  readonly #windUnit = h('span', 'fh-u', 'kt')
+  readonly #hdgCol = h('div', 'fh-hdgcol')
+  readonly #hdgKind = h('span', 'fh-k')
+  readonly #hdg = new HeadingTape()
+  // Bottom: bank and load factor, the attitude indicator, pitch, gear and flaps; the thrust under them.
+  readonly #adi = new Adi()
+  readonly #bank = stat('fh-bank', 'Bank')
+  readonly #pitch = stat('fh-pitch', 'Pitch')
+  readonly #gload = h('div', 'fh-gload')
+  readonly #g = new ArcGauge(G_GAUGE)
+  readonly #annun = h('div', 'fh-annun')
+  readonly #gear = h('span', 'fh-ann', 'GEAR DN')
+  readonly #flaps = h('span', 'fh-ann')
+  readonly #thrust = h('div', 'fh-thrust')
+  readonly #eprs = h('div', 'fh-eprs')
+  #eprGauges: ArcGauge[] = []
+  // Each moving part glides to its value; the angles unwrapped (a dial never spins the long way round).
+  readonly #gl = {
+    alt: new Glide(0.25, 2_000),
+    vs: new Glide(0.35, 4_000),
+    spd: new Glide(0.25, 60),
+    gs: new Glide(0.25, 60),
+    hdg: new Glide(0.3, 90, true),
+    trk: new Glide(0.3, 90, true),
+    wind: new Glide(0.4, 120, true),
+    roll: new Glide(0.05, 60, true),
+    pitch: new Glide(0.05, 20),
+    g: new Glide(0.1, 1),
+  }
+  #epr: Glide[] = []
+  #spdSrc: 'IAS' | 'GS' | null = null
+  readonly #phone: MediaQueryList | null
+  readonly #sizes: Record<BlockId, BlockSize[]> = { left: [], right: [], top: [], bottom: [] }
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
-  // Text slots, rebuilt when their text changes, beside the glyphs, which stay attached (their transitions smooth the
-  // 10 Hz steps).
-  readonly #leftTop = h('div', 'fh-frow') // the altitude
-  readonly #leftRow = h('div', 'fh-frow') // height above ground, vertical speed
-  readonly #rightRow = h('div', 'fh-frow') // airspeed, ground speed
-  readonly #epr = h('div', 'fh-ft fh-ft-epr') // thrust: one bar per engine
-  readonly #bars = h('div', 'fh-bars')
-  readonly #fills: HTMLDivElement[] = []
-  readonly #nav = h('div', 'fh-fslot') // heading (or track)
-  readonly #windTile = h('div', 'fh-ft fh-ft-wind')
-  readonly #windText = h('span', 'fh-ft-wv')
-  readonly #windLabel = h('div', 'fh-ft-l')
-  readonly #dial = dialEl()
-  readonly #hz = horizonEl()
-  readonly #hzTile = h('div', 'fh-ft fh-ft-hz')
-  readonly #att = h('div', 'fh-frow') // bank, pitch, g
-  readonly #chips = h('div', 'fh-fchips') // GEAR DN, FLAPS 10
+  #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
+  #placed: Partial<Record<BlockId, Placed | null>> = {}
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
   readonly #c = new Cartesian3()
   readonly #v = new Cartesian3()
   readonly #bc = new Cartesian3()
   readonly #w = new Cartesian2()
   #textAt = -Infinity
+  #lastMs = 0
   #shown = false
 
   constructor(layer: HTMLElement) {
+    this.#phone = typeof matchMedia === 'function' ? matchMedia(PHONE) : null
     this.#bracket.hidden = true
     const blocks = {} as Record<BlockId, HTMLDivElement>
     for (const id of IDS) {
       const b = (blocks[id] = h('div', 'fh-fblock'))
       b.dataset.block = id
+      b.dataset.v = '0'
       b.hidden = true
     }
-    const eprLabel = h('div', 'fh-ft-l', 'Thrust')
-    eprLabel.append(' ', h('span', 'fh-ft-u', 'EPR'))
-    this.#epr.append(this.#bars, eprLabel)
-    blocks.left.append(this.#leftTop, this.#leftRow)
-    blocks.right.append(this.#rightRow, this.#epr)
-    const windV = h('div', 'fh-ft-v')
-    windV.append(this.#dial.root, this.#windText)
-    this.#windTile.append(windV, this.#windLabel)
-    const topRow = h('div', 'fh-frow')
-    topRow.append(this.#nav, this.#windTile)
-    blocks.top.append(topRow) // HDG 250° · (dial) 220°/16 WIND kt
-    this.#hzTile.append(this.#hz.root)
-    const bottomRow = h('div', 'fh-frow')
-    bottomRow.append(this.#hzTile, this.#att)
-    blocks.bottom.append(bottomRow, this.#chips) // (horizon) BANK · PITCH · LOAD, then GEAR DN FLAPS 10
+    this.#altRow.append(this.#alt.el, this.#vsi.el)
+    blocks.left.append(head(label('Alt', 'ft'), this.#vs), this.#altRow, this.#agl.el)
+
+    this.#spdRow.append(this.#spd.el)
+    blocks.right.append(this.#spdHead, this.#spdRow, this.#gs.el)
+
+    const windRow = h('div', 'fh-wind-row')
+    windRow.append(this.#wdial.el, this.#windText, this.#windUnit)
+    this.#wind.append(head(label('Wind')), windRow)
+    this.#hdgCol.append(head(label(this.#hdgKind)), this.#hdg.el)
+    blocks.top.append(this.#wind, this.#hdgCol)
+
+    this.#gload.append(label('Load', 'g'), this.#g.el)
+    this.#annun.append(this.#gear, this.#flaps)
+    this.#gear.dataset.k = 'gear'
+    this.#flaps.dataset.k = 'flaps'
+    const left = h('div', 'fh-attcol fh-att-l')
+    left.append(this.#bank.el, this.#gload)
+    const right = h('div', 'fh-attcol fh-att-r')
+    right.append(this.#pitch.el, this.#annun)
+    const att = h('div', 'fh-attrow')
+    att.append(left, this.#adi.el, right)
+    // The engines under the attitude, left to right as on the wing.
+    const thrustLabel = h('div', 'fh-thrust-l')
+    thrustLabel.append(h('span', 'fh-l', 'Thrust'), h('span', 'fh-u', 'EPR'))
+    this.#thrust.append(thrustLabel, this.#eprs)
+    blocks.bottom.append(att, this.#thrust)
+
     this.#blocks = blocks
     layer.append(this.#bracket, ...IDS.map((id) => blocks[id]))
   }
@@ -365,36 +493,54 @@ export class FlightFrame {
   draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now()): void {
     const r = sq === null ? 0 : sq.side / 2
     if (sq === null || data === null || sq.x + r < safe.x || sq.x - r > safe.x + safe.w || sq.y + r < safe.y || sq.y - r > safe.y + safe.h) {
-      if (this.#shown) {
-        this.#bracket.hidden = true
-        for (const id of IDS) {
-          this.#blocks[id].hidden = true
-          this.#keys[id] = '' // shown again: filled and measured again
-        }
-        this.#shown = false
-      }
+      if (this.#shown) this.#hide()
       return
     }
+    // A long pause (a hidden tab) glides all the way: the same as a snap.
+    const dt = this.#shown ? Math.min(Math.max((nowMs - this.#lastMs) / 1000, 0), 1) : 0
+    this.#lastMs = nowMs
+    const v = frameView(data)
+    this.#step(v, dt)
     if (!this.#shown || nowMs - this.#textAt >= TEXT_MS) {
-      this.#text(formatBlocks(data))
+      this.#text(v)
       this.#textAt = nowMs
     }
     this.#shown = true
     const side = Math.round(sq.side)
     const br = this.#bracket
-    br.style.width = br.style.height = `${side}px`
-    br.style.transform = `translate3d(${(sq.x - side / 2).toFixed(1)}px, ${(sq.y - side / 2).toFixed(1)}px, 0)`
-    br.hidden = false
-    const at = frameLayout(sq, this.#sizes, safe)
+    const px = `${side}px`
+    if (br.style.width !== px) br.style.width = br.style.height = px
+    move(br, `translate3d(${(sq.x - side / 2).toFixed(1)}px, ${(sq.y - side / 2).toFixed(1)}px, 0)`)
+    show(br, true)
+    const at = frameLayout(sq, this.#sizes, safe, GAP, this.#placed)
     for (const id of IDS) {
       const b = this.#blocks[id]
-      if (!b.hidden) b.style.transform = `translate3d(${Math.round(at[id].x)}px, ${Math.round(at[id].y)}px, 0)` // whole px: crisp text
+      const p = at[id]
+      show(b, p !== null)
+      if (p === null) continue
+      const variant = String(p.v)
+      if (b.dataset.v !== variant) b.dataset.v = variant
+      move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
     }
+    this.#placed = at
   }
 
   destroy(): void {
     this.#bracket.remove()
     for (const id of IDS) this.#blocks[id].remove()
+    this.#shown = false
+  }
+
+  #hide(): void {
+    this.#bracket.hidden = true
+    for (const id of IDS) {
+      this.#blocks[id].hidden = true
+      this.#keys[id] = '' // shown again: measured again
+    }
+    // Shown again, every value snaps: none glides in from where it was.
+    for (const g of [...Object.values(this.#gl), ...this.#epr]) g.step(null, 0)
+    this.#spdSrc = null
+    this.#placed = {}
     this.#shown = false
   }
 
@@ -414,102 +560,186 @@ export class FlightFrame {
     return this.#sq
   }
 
-  /** Refills the blocks whose text changed and measures them (one layout for all); glyph angles on every call. */
-  #text(views: Record<BlockId, BlockView>): void {
-    const changed: BlockId[] = []
+  /** Every frame: each value glides on, each instrument moves to it. */
+  #step(v: FrameView, dt: number): void {
+    const gl = this.#gl
+    const dpr = globalThis.devicePixelRatio || 1
+    const alt = gl.alt.step(v.alt?.value ?? null, dt)
+    if (alt !== null) this.#alt.set(alt, dpr)
+    const vs = gl.vs.step(v.vs?.value ?? null, dt)
+    if (vs !== null) this.#vsi.set(vs)
+    const src = v.speed?.kind ?? null
+    if (src !== this.#spdSrc) {
+      gl.spd.step(null, 0) // airspeed ↔ ground speed: another quantity, no glide from one to the other
+      this.#spdSrc = src
+    }
+    const spd = gl.spd.step(v.speed?.value ?? null, dt)
+    if (spd !== null) this.#spd.set(spd, dpr)
+    gl.gs.step(v.gs?.value ?? null, dt)
+    const hdg = gl.hdg.step(v.hdg?.value ?? null, dt)
+    const trk = gl.trk.step(v.track?.value ?? null, dt)
+    if (hdg !== null) this.#hdg.set(hdg, trk === null ? null : rel180(trk - hdg), dpr)
+    const wind = gl.wind.step(v.wind?.rel?.deg ?? null, dt)
+    if (wind !== null) this.#wdial.set(wind)
+    const roll = gl.roll.step(v.roll?.value ?? null, dt)
+    const pitch = gl.pitch.step(v.pitch?.value ?? null, dt)
+    if (v.adi !== null) this.#adi.set(roll ?? 0, pitch ?? 0) // an unknown angle is drawn level (and the indicator dimmed)
+    this.#g.set(gl.g.step(v.g?.value ?? null, dt))
+    const epr = v.epr?.values ?? []
+    if (epr.length !== this.#eprGauges.length) this.#buildEpr(epr.length)
+    epr.forEach((e, i) => this.#eprGauges[i].set(this.#epr[i].step(e, dt)))
+  }
+
+  /** At most every TEXT_MS: the figures (from the glided values), which parts show, the dimming; then new sizes. */
+  #text(v: FrameView): void {
+    const gl = this.#gl
+    // Left.
+    const altT = v.alt !== null && gl.alt.value !== null ? altText(gl.alt.value) : ''
+    show(this.#alt.el, v.alt !== null)
+    if (v.alt !== null) {
+      this.#alt.text(altT)
+      dim(this.#alt.el, v.alt.est)
+    }
+    show(this.#vsi.el, v.vs !== null)
+    show(this.#vs, v.vs !== null)
+    if (v.vs !== null && gl.vs.value !== null) {
+      const t = vsText(gl.vs.value)
+      say(this.#vs, t.arrow === '' ? t.text : `${t.arrow} ${t.text}`)
+      this.#vs.dataset.dir = t.arrow === '↑' ? 'up' : t.arrow === '↓' ? 'down' : 'level'
+      dim(this.#vsi.el, v.vs.est)
+      dim(this.#vs, v.vs.est)
+    }
+    show(this.#altRow, v.alt !== null || v.vs !== null)
+    show(this.#agl.el, v.agl !== null)
+    if (v.agl !== null) {
+      say(this.#agl.value, altText(v.agl.value))
+      dim(this.#agl.el, v.agl.est)
+    }
+    // Right.
+    const spdT = v.speed !== null && gl.spd.value !== null ? speedText(gl.spd.value) : ''
+    show(this.#spdHead, v.speed !== null)
+    show(this.#spdRow, v.speed !== null)
+    if (v.speed !== null) {
+      say(this.#spdKind, v.speed.kind)
+      this.#spd.text(spdT)
+      dim(this.#spd.el, v.speed.est)
+    }
+    show(this.#gs.el, v.gs !== null)
+    if (v.gs !== null && gl.gs.value !== null) {
+      say(this.#gs.value, speedText(gl.gs.value))
+      dim(this.#gs.el, v.gs.est)
+    }
+    show(this.#thrust, v.epr !== null)
+    if (v.epr !== null) {
+      v.epr.values.forEach((e, i) => this.#eprGauges[i]?.text(e === null ? '—' : eprText(e)))
+      dim(this.#thrust, v.epr.est)
+    }
+    // Top.
+    show(this.#hdgCol, v.hdg !== null)
+    if (v.hdg !== null && gl.hdg.value !== null) {
+      say(this.#hdgKind, v.hdg.kind)
+      this.#hdg.text(deg3(gl.hdg.value), v.track?.est ?? false)
+      dim(this.#hdg.el, v.hdg.est)
+    }
+    show(this.#wind, v.wind !== null)
+    if (v.wind !== null) {
+      const t = windText(v.wind.fromDeg, v.wind.kt)
+      say(this.#windText, t)
+      show(this.#windUnit, t !== 'Calm')
+      show(this.#wdial.el, v.wind.rel !== null)
+      dim(this.#windText, v.wind.est)
+      dim(this.#wdial.el, v.wind.rel?.est ?? false)
+    }
+    // Bottom.
+    show(this.#adi.el, v.adi !== null)
+    if (v.adi !== null) dim(this.#adi.el, v.adi.est)
+    show(this.#bank.el, v.roll !== null)
+    if (v.roll !== null && gl.roll.value !== null) {
+      say(this.#bank.value, bankText(gl.roll.value))
+      dim(this.#bank.el, v.roll.est)
+    }
+    show(this.#pitch.el, v.pitch !== null)
+    if (v.pitch !== null && gl.pitch.value !== null) {
+      say(this.#pitch.value, pitchText(gl.pitch.value))
+      dim(this.#pitch.el, v.pitch.est)
+    }
+    show(this.#gload, v.g !== null)
+    if (v.g !== null && gl.g.value !== null) {
+      this.#g.text(gText(gl.g.value))
+      dim(this.#gload, v.g.est)
+    }
+    show(this.#gear, v.gear !== null)
+    if (v.gear !== null) dim(this.#gear, v.gear.est)
+    show(this.#flaps, v.flaps !== null)
+    if (v.flaps !== null) {
+      say(this.#flaps, `FLAPS ${Math.round(v.flaps.value)}`)
+      dim(this.#flaps, v.flaps.est)
+    }
+    show(this.#annun, v.gear !== null || v.flaps !== null)
+
+    // What sets a block's size: which parts it shows, their labels and the length of their figures (the readouts are
+    // sized for the usual lengths, so this rarely changes), and the phone layout. Values and dimming do not.
+    this.#has = blocksShown(v)
+    const phone = this.#phone?.matches ?? false
+    const len = (el: Element): number => el.textContent?.length ?? 0
+    const keys: Record<BlockId, string> = {
+      left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, altT.length, len(this.#vs), len(this.#agl.value)].join(),
+      right: [phone, v.speed?.kind, v.gs !== null, spdT.length, len(this.#gs.value)].join(),
+      top: [phone, v.hdg?.kind, v.wind !== null, v.wind?.rel !== null, len(this.#windText)].join(),
+      bottom: [
+        phone, v.adi !== null, v.roll !== null, v.pitch !== null, v.g !== null, v.gear !== null, v.flaps !== null, len(this.#flaps),
+        v.epr?.values.length ?? 0,
+      ].join(),
+    }
     for (const id of IDS) {
-      const v = views[id]
-      // What sets the block's size: its text and which glyphs it has. Angles, bar heights and dimming do not.
-      const key = JSON.stringify([v.rows, v.chips, v.wind !== null, v.horizon !== null, v.bars?.bars.length ?? 0])
-      if (key === this.#keys[id]) continue
-      this.#keys[id] = key
-      changed.push(id)
-      const empty = isEmpty(v)
-      this.#blocks[id].hidden = empty
-      if (!empty) this.#fill(id, v)
-    }
-    this.#glyphs(views)
-    for (const id of changed) {
-      const b = this.#blocks[id]
-      this.#sizes[id] = b.hidden ? ZERO() : { w: b.offsetWidth, h: b.offsetHeight }
-    }
-  }
-
-  #fill(id: BlockId, v: BlockView): void {
-    const fields = v.rows.flat()
-    if (id === 'left') {
-      // The altitude on its own row, the rest beside each other under it.
-      const [first, ...rest] = v.rows
-      this.#leftTop.replaceChildren(...(first ?? []).map(fieldEl))
-      this.#leftRow.replaceChildren(...rest.flat().map(fieldEl))
-      this.#leftRow.hidden = rest.length === 0
-    } else if (id === 'right') {
-      this.#rightRow.replaceChildren(...fields.map(fieldEl))
-      this.#rightRow.hidden = fields.length === 0
-      this.#epr.hidden = v.bars === null
-      if (v.bars !== null && v.bars.bars.length !== this.#fills.length) this.#buildBars(v.bars.bars)
-    } else if (id === 'top') {
-      const nav = fields.find((f) => f.key !== 'wind')
-      const wind = fields.find((f) => f.key === 'wind')
-      this.#nav.replaceChildren(...(nav ? [fieldEl(nav)] : []))
-      this.#nav.hidden = nav === undefined
-      this.#windTile.hidden = wind === undefined
-      if (wind !== undefined) {
-        this.#windTile.classList.toggle('fh-est', wind.est)
-        this.#windText.textContent = wind.value
-        this.#windLabel.replaceChildren('Wind', ...(wind.unit === '' ? [] : [' ', h('span', 'fh-ft-u', wind.unit)]))
+      if (!this.#has[id]) {
+        this.#sizes[id] = []
+        this.#keys[id] = ''
+      } else if (keys[id] !== this.#keys[id]) {
+        this.#keys[id] = keys[id]
+        this.#measure(id)
       }
-      this.#dial.root.style.display = v.wind === null ? 'none' : ''
-    } else {
-      this.#hzTile.hidden = v.horizon === null
-      this.#att.replaceChildren(...fields.map(fieldEl))
-      this.#att.hidden = fields.length === 0
-      this.#chips.replaceChildren(
-        ...v.chips.map((c) => {
-          const chip = h('span', `fh-chip${c.est ? ' fh-est' : ''}`, c.text)
-          chip.dataset.chip = c.key
-          return chip
-        }),
-      )
-      this.#chips.hidden = v.chips.length === 0
     }
   }
 
-  /** The wind arrow, the horizon and the thrust bars at this call's angles (their transitions fill the 10 Hz steps). */
-  #glyphs(views: Record<BlockId, BlockView>): void {
-    const wind = views.top.wind
-    if (wind !== null) {
-      this.#dial.arrow.setAttribute('transform', `rotate(${wind.deg} 9 9)`)
-      this.#dial.root.classList.toggle('fh-est', wind.est)
+  /** A block's size in each variant (full, compact) and its anchor: one layout per variant. */
+  #measure(id: BlockId): void {
+    const b = this.#blocks[id]
+    const hidden = b.hidden
+    const was = b.dataset.v
+    b.hidden = false
+    const out: BlockSize[] = []
+    for (const variant of ['0', '1']) {
+      b.dataset.v = variant
+      const r = b.getBoundingClientRect()
+      const s: BlockSize = { w: Math.ceil(r.width), h: Math.ceil(r.height) }
+      const a = this.#anchor(id)
+      if (a !== null) {
+        const ar = a.getBoundingClientRect()
+        if (id === 'left' || id === 'right') s.ay = Math.round(ar.top + ar.height / 2 - r.top)
+        else s.ax = Math.round(ar.left + ar.width / 2 - r.left)
+      }
+      out.push(s)
     }
-    const hz = views.bottom.horizon
-    if (hz !== null) {
-      this.#hz.world.style.transform = `rotate(${hz.rotDeg.toFixed(1)}deg) translateY(${hz.offsetPx.toFixed(1)}px)`
-      this.#hz.root.classList.toggle('fh-est', hz.est)
-    }
-    const bars = views.right.bars
-    if (bars !== null && bars.bars.length === this.#fills.length) {
-      this.#epr.classList.toggle('fh-est', bars.est)
-      bars.bars.forEach((bar, i) => {
-        const fill = this.#fills[i]
-        fill.style.height = `${((bar.frac ?? 0) * 100).toFixed(1)}%`
-        fill.parentElement!.classList.toggle('fh-na', bar.frac === null)
-      })
-    }
+    b.dataset.v = was
+    b.hidden = hidden
+    this.#sizes[id] = out
   }
 
-  /** EPR, one bar per engine on a 1.0–2.0 scale, numbered from the left wingtip. */
-  #buildBars(bars: readonly Bar[]): void {
-    this.#fills.length = 0
-    this.#bars.replaceChildren(
-      ...bars.map((bar) => {
-        const fill = h('div', 'fh-bar-f')
-        const track = h('div', 'fh-bar-t')
-        track.append(fill)
-        this.#fills.push(fill)
-        const cell = h('div', 'fh-bar')
-        cell.append(track, h('span', 'fh-bar-l', bar.label))
-        return cell
+  /** The part a block lines up with the aircraft: the tapes' middles, the heading index, the attitude indicator. */
+  #anchor(id: BlockId): HTMLElement | null {
+    const el = id === 'left' ? this.#altRow : id === 'right' ? this.#spdRow : id === 'top' ? this.#hdgCol : this.#adi.el
+    return el.hidden ? null : id === 'top' ? this.#hdg.el : el
+  }
+
+  /** One EPR gauge per engine, numbered from the left wingtip. */
+  #buildEpr(n: number): void {
+    this.#eprGauges = Array.from({ length: n }, () => new ArcGauge(EPR_GAUGE))
+    this.#epr = this.#eprGauges.map(() => new Glide(0.15, 0.3))
+    this.#eprs.replaceChildren(
+      ...this.#eprGauges.map((g, i) => {
+        g.el.dataset.engine = String(i + 1)
+        return g.el
       }),
     )
   }
