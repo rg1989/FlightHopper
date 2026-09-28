@@ -1,21 +1,31 @@
 # FlightHopper — Handoff
 
-**Updated:** 2026-09-28, late (the polish below; the Air Astana 1388 scenario still waits on the user's yes to three
-downloads). Earlier the same day: flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain,
+**Updated:** 2026-09-29 (the Air Astana 1388 scenario and the E190 model), after 2026-09-28 late (tape polish, moonlit
+runways, threshold markers, the KZR livery). Earlier on 2026-09-28: flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain,
 painted runways, landing gear. The previous handoff (UI revamp, live data on adsb.fi, polling, URL state, data-source
 options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from it.
 
 ## Where things stand
 
-- **`main` is this handoff's commit, on `4cc271e`.** `npm run check`: `tsc` clean, 1120/1120 in the worktree (1123 in the
+- **`main` is this handoff's commit, on `6660da5`.** `npm run check`: `tsc` clean, 1122/1122 in the worktree (1125 in the
   main checkout with the uncommitted work below). `vite build` works (the usual chunk-size warning only).
 - **Uncommitted in the main checkout, not ours:** another session's voice-over/playbar work (`client/scenario/{format,run,
   types}.ts` and tests, `client/ui/{icons,info,playbar}.*`, `public/scenarios/jal123/scenario.json`, untracked
   `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
   (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
   touch those files, and none of ours does.
-- **Not pushed:** `origin/main` is `b9e0f1f`; the 45 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
+- **Not pushed:** `origin/main` is `b9e0f1f`; the 50 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
   2026-09-28) are local. Ask before pushing.
+
+### What 2026-09-29 added (all on `main`)
+
+| What | Where |
+|---|---|
+| **Air Astana 1388** (11 Nov 2018, ERJ-190LR P4-KCJ, Alverca → Beja, 13:29:30–15:28 UTC), the second scenario. Track (every row q=R): FR24's MLAT fixes 13:34–15:04 re-timed by airspeed (their time stamps wander) and smoothed with the app's own smoother; the take-off at the report's times; the three Beja approaches traced from the report's Figure 3 and timed by FR24's altitude record (go-arounds 15:08:00, 15:18:40; touchdown 15:26:50 on 19L), with a flare; attitude from the app's flight-mechanics model; IAS and g digitised from the report's DVDR plot (Figure 13). No transcript is published: 20 story messages quote the report (checked line by line against its pages). Closing card; crew by role (the report names nobody). | `public/scenarios/kc1388/`, build scripts and README `tools/scenarios/kc1388/`; inputs (report PDF, FR24 CSVs, OSM/SRTM JSON) in the main checkout's git-excluded `.work/kc1388/sources/` |
+| A package's `airport.json` may list several airfields (KC1388: Alverca and Beja, runway ends from OpenStreetMap, SRTM elevations); documented in `docs/scenarios.md` §1.11a. | `client/app.ts` |
+| **E190 model** (built by a helper agent with the documented livetaiwan pipeline; the same commands rebuild `e75l.glb` byte for byte): manifest `e190` (E19*, E29* move off `e75l`), paint map, lights, gear from Embraer's APM-1901 (wheelbase 13.83 m, track 5.94 m; fitted 0.38 m forward like e75l's). Renders: `.planning/reports/e190-model/`. | `public/models/e190{,-gear}.glb`, `tools/models/gear-glb.ts`, `third_party/aircraft-models/` |
+
+Checked on screen (headless Chrome; the pane was hidden): KC1388's take-off roll on Alverca 04 (E190, Air Astana livery, gear), gear retracting after lift-off, the 13:39 upset (IAS 261, GS 210, 2.5 g), the flare and roll-out on Beja 19L, the closing card, the Scenarios panel; JAL 123 still paints 1985 Haneda.
 
 ### What the late session of 2026-09-28 added (all on `main`)
 
@@ -52,30 +62,14 @@ same photos).
 
 ## Next
 
-1. **Air Astana 1388 scenario — blocked on the user's permission to download** (asked twice on 2026-09-28, not yet
-   answered; the KZR livery colours are done):
-   - `E190.glb`, 3.5 MB, GPL-2.0: `https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E190.glb`
-     (same source and licence as `e75l.glb`; keep the upstream file in `third_party/aircraft-models/source/flightairmap-glb/`,
-     update that README and `licences.json`).
-   - The GPIAAF final report (process 08/ACCID/2018), 6.3 MB PDF, via the ASN mirror
-     `https://asn.flightsafety.org/reports/2018/20181111_E190_P4-KCJ.pdf` (gpiaaf.gov.pt answers 403 to tools; in the
-     Browser pane a PDF turns into a save dialog on the user's screen — do not open PDF links there).
-   - FR24's MLAT track `KC1388_1e84fc24.csv` (29 KB) and `KC1388-Altitude-Only-Data.csv` (71 KB) from the FR24 blog post,
-     as a reference only: FR24's terms, not committed.
-   - **Then:** manifest entry + a `GEAR` spec for the E190 (animated gear, as asked); the scenario's `aircraft.livery` from
-     the KZR colours (base `#f7f7f7`, fin `#253168`, engine `#d0d5da`; titles `#273161`, gold ornament `#9b804d` if a body
-     decal is drawn); a package like JAL 123 (`docs/scenarios.md`): track, events, transcript and captions **only from the
-     official record**; `airport.json` for Alverca (LPAR) and Beja (LPBJ, landed on 19L meaning 19R). OurAirports' web
-     pages give only dimensions (LPAR 04/22 9,810 × 148 ft asphalt, displaced 820/787 ft; LPBJ 01L/19R 11,319 × 197 ft and
-     01R/19L 9,682 × 98 ft, concrete): take thresholds and elevations from the Portuguese AIP or the report (the builder's
-     OurAirports CSVs are a 17 MB download: ask).
-   - **Facts so far (Wikipedia, SKYbrary, AvHerald, FR24):** 11 Nov 2018, KC1388/KZR1388, ERJ-190LR P4-KCJ (MSN 19000653),
-     ferry Alverca → Minsk → Almaty after a C-check at OGMA; the aileron cables were installed reversed in both wings
-     (SB 190-57-0038 work). Take-off 13:31 UTC in IMC; control repeatedly lost; direct mode regained partial control; two
-     Portuguese F-16s from Monte Real escorted; ditching considered; three approaches at Beja, landed almost two hours
-     after take-off; 3 crew (Capt Vyacheslav Aushev, FO Bauyrzhan Karasholakov, relief FO Sergey Sokolov) + 3 engineers,
-     one minor injury; hull loss. FR24 tracked it by MLAT only (gaps), with altitudes for the three approaches.
-2. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
+1. **Air Astana 1388 (`public/scenarios/kc1388/`, 2026-09-29):** done; see "What 2026-09-29 added". Known limits, all
+   said in the package: the attitude is what the path requires (the real aircraft rolled far more; the recorded
+   attitude is not published); the Beja approaches are traced from a perspective figure (to within a few km); the
+   take-off path before FR24's first fix is the smoothest one that keeps the report's times. Better data would come
+   only from GPIAAF or Embraer (the DVDR values). Crew names are not in the report and are left out.
+2. **`e75l` gear track:** its `GEAR` spec has 5.94 m (the E190's); Embraer's E170/175 manual gives 5.20 m and H38x13-18
+   main tyres. Change, `node tools/models/gear-glb.ts --write`, look at an E175 on the ground (it is the common US regional).
+3. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
    decal only if a public-domain wordmark turns up.
 
 ## How to check things on screen
@@ -98,12 +92,21 @@ profile that once had `?topo=0` stays flat.
   you start. Timing tests can flake under load (table sort, `/api/view` at 5,000 aircraft); re-run them alone.
 - **Git:** identity `rg1989 <roman.grinevic@gmail.com>` (repo-local), `git add` explicit paths only, never commit other
   sessions' files, messages end with the `Co-Authored-By` line.
-- **Downloads need the user's explicit yes** (file, source, size). Airline logos only if free-licensed (public domain);
-  else colours. Scenario captions only from the official record.
+- **Downloads that a task the user asked for needs are approved** (the user, emphatically, 2026-09-28: "i did like 10
+  times do it already"): fetch them, then say what (file, source, size). Ask first only for out-of-scope, very large,
+  paid or doubtful files (leaked audio, unclear licences). Airline logos only if free-licensed (public domain); else
+  colours. Scenario captions only from the official record.
 - **Decisions in `terrain-sun-design.md` stand:** no cast shadows; night keeps the mountains faintly visible; lighting in
   chase only; replays lit at their recorded time.
 
 ## Gotchas learned 2026-09-28
+
+- FR24's MLAT CSVs: the positions line up but the time stamps wander (consecutive fixes imply 108–381 kt around a flown
+  ~250) and the speed/direction columns repeat stale values; re-time by distance at the recorded airspeed
+  (`tools/scenarios/kc1388/reconstruct.ts`). Its altitude-only CSV uses bare CR line ends.
+- The ASN report mirror answers 403 to curl's default agent (a browser User-Agent works); Planespotters answers tools
+  with a bot check (Commons photo pages work). OpenStreetMap's Overpass API gives runway ends as small JSON.
+- A report figure in a PDF is a raster: `pdfimages` gives its native pixels (rendering the page at 400 dpi adds none).
 
 - Anything that lights itself (runways, airfield) must take the light as the Sun set it (`SunState`), not recompute
   `sunLook(elevation)`: the Moon (up to 1.7 intensity) is applied on top, only inside `Sun.update`.
