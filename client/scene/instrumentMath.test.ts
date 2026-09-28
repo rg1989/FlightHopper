@@ -2,8 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  ADI_PITCH_LIMIT, BANK_ALERT_DEG, Glide, VSI_MARKS, arcDeg, bankAlert, follow, glide, hdgLabel, marks, pitchShift, rel180,
-  stripCentre, tapeShift, vsiFrac,
+  ADI_PITCH_LIMIT, BANK_ALERT_DEG, Glide, TREND_S, Trend, VSI_MARKS, arcDeg, bankAlert, drum, drumLabels, drumShift, follow, glide,
+  hdgLabel, marks, pitchShift, rel180, stripCentre, tapeShift, trendShown, vsiFrac,
 } from './instrumentMath.ts'
 
 const near = (a: number, b: number, eps = 1e-9, msg = ''): void => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b} ${msg}`)
@@ -53,6 +53,79 @@ test('hdgLabel: the compass every 30°: cardinal letters, the others in tens; no
   assert.equal(hdgLabel(390), '3', 'and past it')
   assert.equal(hdgLabel(45), '')
   assert.equal(hdgLabel(10), '')
+})
+
+test('drum: whole units in figures, the rest a position on the drum in steps (an odometer); the magnitude, with its sign', () => {
+  const is = (d: ReturnType<typeof drum>, lead: number, pos: number, neg: boolean, msg: string): void => {
+    assert.equal(d.lead, lead, msg)
+    near(d.pos, pos, 1e-9, msg)
+    assert.equal(d.neg, neg, msg)
+  }
+  // Speed: tens in figures, the units rolling.
+  is(drum(140.4, 10, 1), 14, 0.4, false, '140.4 kt')
+  is(drum(149.5, 10, 1), 14, 9.5, false, '149.5 kt: the 9 rolls out, the 0 of 150 comes in')
+  is(drum(150, 10, 1), 15, 0, false, '150 kt')
+  is(drum(7, 10, 1), 0, 7, false, 'under 10 kt: no figures, only the drum')
+  // Altitude: hundreds in figures, the last two digits on a drum of 20 ft steps.
+  is(drum(12_345, 100, 20), 123, 2.25, false, '12,345 ft')
+  is(drum(-1_234, 100, 20), 12, 1.7, true, '−1,234 ft (the Dead Sea): the magnitude, and a minus')
+  is(drum(-11, 100, 20), 0, 0.55, true, '−11 ft (Schiphol)')
+  is(drum(-4, 100, 20), 0, 0.2, false, 'within half a step of zero: no minus')
+  is(drum(-0, 100, 20), 0, 0, false, '−0')
+})
+
+test('drumLabels: the drum\'s cells top to bottom, one past each end (the neighbours show above and below)', () => {
+  assert.deepEqual(drumLabels(10, 1, 1), ['1', '0', '9', '8', '7', '6', '5', '4', '3', '2', '1', '0', '9'])
+  assert.deepEqual(drumLabels(100, 20, 2), ['20', '00', '80', '60', '40', '20', '00', '80'])
+})
+
+test('drumShift: the drum moves down as the value rises, the position\'s cell centred in the window', () => {
+  const labels = drumLabels(10, 1, 1)
+  const centred = (pos: number): string => labels[Math.round(-drumShift(pos, 10))]
+  assert.equal(drumShift(0, 10), -11)
+  assert.equal(centred(0), '0')
+  assert.equal(centred(7), '7')
+  assert.equal(centred(9.99), '0', 'rolling over: the next ten\'s 0 has come in from above')
+  assert.ok(drumShift(3.2, 10) > drumShift(3.1, 10), 'rising: down')
+  assert.equal(drumLabels(100, 20, 2)[Math.round(-drumShift(2.25, 5))], '40', '12,345 ft reads 12,3|40')
+})
+
+test('Trend: the speed\'s change per second, smoothed: a steady acceleration reads as itself', () => {
+  assert.equal(TREND_S, 10, 'the arrow points at the speed 10 s ahead')
+  const tr = new Trend()
+  let v = 150
+  let out: number | null = tr.step(v, 1 / 60)
+  assert.equal(out, null, 'one value is no trend')
+  for (let i = 0; i < 300; i++) out = tr.step((v += 2 / 60), 1 / 60) // 2 kt/s for 5 s
+  near(out!, 2, 0.02)
+})
+
+test('Trend: a jump (a seek) or time going back restarts it; a pause holds it, and a value moved while paused is no acceleration', () => {
+  const tr = new Trend()
+  let v = 150
+  for (let i = 0; i < 300; i++) tr.step((v += 1 / 60), 1 / 60)
+  assert.equal(tr.step(v + 30, 1 / 60), null, '+30 kt in a frame is a seek')
+  const after = tr.step(v + 30 + 1 / 60, 1 / 60)
+  assert.ok(after !== null && Math.abs(after) < 0.1, `it starts again from nothing: ${after}`)
+
+  const held = new Trend()
+  v = 200
+  let last: number | null = null
+  for (let i = 0; i < 300; i++) last = held.step((v -= 1.5 / 60), 1 / 60)
+  assert.equal(held.step(v, 0), last, 'paused: held')
+  assert.equal(held.step((v += 8), 0), last, 'dragged while paused: still held')
+  near(held.step((v -= 1.5 / 60), 1 / 60)!, -1.5, 0.05, 'playing again: no spike from the drag')
+  assert.equal(held.step(v, -3), null, 'time went back')
+  assert.equal(held.step(null, 1 / 60), null, 'unknown')
+})
+
+test('trendShown: the arrow appears at 2 kt over 10 s and goes below 1 kt, so it does not flicker at the threshold', () => {
+  assert.equal(trendShown(false, 1.9), false)
+  assert.equal(trendShown(false, 2), true)
+  assert.equal(trendShown(false, -2.5), true)
+  assert.equal(trendShown(true, 1.2), true)
+  assert.equal(trendShown(true, 0.9), false)
+  assert.equal(trendShown(true, -0.9), false)
 })
 
 // ---- vertical speed -------------------------------------------------------------------------------------------------

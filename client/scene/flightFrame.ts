@@ -5,14 +5,15 @@
 // ground speed; on top a heading tape with the wind; below, the attitude indicator (the horizon and the aircraft against
 // it), bank, pitch, load factor, gear and flaps, and the engines' thrust under them. One component for live chase
 // (liveFlightData: what ADS-B broadcasts and the drawn state) and scenarios (the track's FlightData). Every instrument
-// moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS. frameLayout (pure) places the
-// blocks round the aircraft, never over it.
+// moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS, but the tapes' readouts roll
+// every frame, and the speed tape's trend arrow points at the speed 10 s ahead. frameLayout (pure) places the blocks
+// round the aircraft, never over it.
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
 import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
-import { Glide, rel180 } from './instrumentMath.ts'
+import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
 import '../ui/flightFrame.css'
 
@@ -429,6 +430,9 @@ export class FlightFrame {
   }
   #epr: Glide[] = []
   #spdSrc: 'IAS' | 'GS' | null = null
+  readonly #trend = new Trend() // the speed's rate, on the data's clock
+  #trendOn = false
+  #dataT: number | null = null
   readonly #phone: MediaQueryList | null
   readonly #sizes: Record<BlockId, BlockSize[]> = { left: [], right: [], top: [], bottom: [] }
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
@@ -488,13 +492,14 @@ export class FlightFrame {
   /**
    * The frame around the chased model this frame: its square from the manifest box through modelMatrix (which carries
    * entry.scale), as Traffic.update projects a traffic model's. data null, or the model behind the camera: hidden.
+   * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live).
    */
-  update(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry, data: FlightData | null, safe: Rect): void {
-    this.draw(data === null ? null : this.#square(viewer, modelMatrix, entry), data, safe)
+  update(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry, data: FlightData | null, safe: Rect, dataT?: number): void {
+    this.draw(data === null ? null : this.#square(viewer, modelMatrix, entry), data, safe, performance.now(), dataT)
   }
 
   /** The frame around sq (null: hidden) showing data, its blocks inside safe. Hidden too when sq is outside safe. */
-  draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now()): void {
+  draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now(), dataT?: number): void {
     const r = sq === null ? 0 : sq.side / 2
     if (sq === null || data === null || sq.x + r < safe.x || sq.x - r > safe.x + safe.w || sq.y + r < safe.y || sq.y - r > safe.y + safe.h) {
       if (this.#shown) this.#hide()
@@ -503,8 +508,11 @@ export class FlightFrame {
     // A long pause (a hidden tab) glides all the way: the same as a snap.
     const dt = this.#shown ? Math.min(Math.max((nowMs - this.#lastMs) / 1000, 0), 1) : 0
     this.#lastMs = nowMs
+    // The trend's time step: the data's (0 paused, negative after a seek back), else the frame's.
+    const dataDt = dataT === undefined ? dt : this.#dataT === null ? 0 : dataT - this.#dataT
+    this.#dataT = dataT ?? null
     const v = frameView(data)
-    this.#step(v, dt)
+    this.#step(v, dt, dataDt)
     if (!this.#shown || nowMs - this.#textAt >= TEXT_MS) {
       this.#text(v)
       this.#textAt = nowMs
@@ -523,7 +531,10 @@ export class FlightFrame {
       show(b, p !== null)
       if (p === null) continue
       const variant = String(p.v)
-      if (b.dataset.v !== variant) b.dataset.v = variant
+      if (b.dataset.v !== variant) {
+        b.dataset.v = variant
+        if (id === 'right') this.#spd.resized()
+      }
       move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
     }
     this.#placed = at
@@ -543,6 +554,9 @@ export class FlightFrame {
     }
     // Shown again, every value snaps: none glides in from where it was.
     for (const g of [...Object.values(this.#gl), ...this.#epr]) g.step(null, 0)
+    this.#trend.step(null, 0)
+    this.#trendOn = false
+    this.#dataT = null
     this.#spdSrc = null
     this.#placed = {}
     this.#shown = false
@@ -564,8 +578,8 @@ export class FlightFrame {
     return this.#sq
   }
 
-  /** Every frame: each value glides on, each instrument moves to it. */
-  #step(v: FrameView, dt: number): void {
+  /** Every frame: each value glides on, each instrument moves to it. dataDt: the data's time step (the speed trend). */
+  #step(v: FrameView, dt: number, dataDt: number): void {
     const gl = this.#gl
     const dpr = globalThis.devicePixelRatio || 1
     const alt = gl.alt.step(v.alt?.value ?? null, dt)
@@ -575,10 +589,14 @@ export class FlightFrame {
     const src = v.speed?.kind ?? null
     if (src !== this.#spdSrc) {
       gl.spd.step(null, 0) // airspeed ↔ ground speed: another quantity, no glide from one to the other
+      this.#trend.step(null, 0)
       this.#spdSrc = src
     }
     const spd = gl.spd.step(v.speed?.value ?? null, dt)
     if (spd !== null) this.#spd.set(spd, dpr)
+    const rate = this.#trend.step(v.speed?.value ?? null, dataDt) // the data's own rate, not the glide's
+    this.#trendOn = rate !== null && trendShown(this.#trendOn, rate * TREND_S)
+    this.#spd.trend(this.#trendOn ? rate! * TREND_S : null, dpr)
     gl.gs.step(v.gs?.value ?? null, dt)
     const hdg = gl.hdg.step(v.hdg?.value ?? null, dt)
     const trk = gl.trk.step(v.track?.value ?? null, dt)
@@ -598,12 +616,8 @@ export class FlightFrame {
   #text(v: FrameView): void {
     const gl = this.#gl
     // Left.
-    const altT = v.alt !== null && gl.alt.value !== null ? altText(gl.alt.value) : ''
     show(this.#alt.el, v.alt !== null)
-    if (v.alt !== null) {
-      this.#alt.text(altT)
-      dim(this.#alt.el, v.alt.est)
-    }
+    if (v.alt !== null) dim(this.#alt.el, v.alt.est)
     show(this.#vsi.el, v.vs !== null)
     show(this.#vs, v.vs !== null)
     if (v.vs !== null && gl.vs.value !== null) {
@@ -620,12 +634,10 @@ export class FlightFrame {
       dim(this.#agl.el, v.agl.est)
     }
     // Right.
-    const spdT = v.speed !== null && gl.spd.value !== null ? speedText(gl.spd.value) : ''
     show(this.#spdHead, v.speed !== null)
     show(this.#spdRow, v.speed !== null)
     if (v.speed !== null) {
       say(this.#spdKind, v.speed.kind)
-      this.#spd.text(spdT)
       dim(this.#spd.el, v.speed.est)
     }
     show(this.#gs.el, v.gs !== null)
@@ -687,8 +699,8 @@ export class FlightFrame {
     const phone = this.#phone?.matches ?? false
     const len = (el: Element): number => el.textContent?.length ?? 0
     const keys: Record<BlockId, string> = {
-      left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, altT.length, len(this.#vs), len(this.#agl.value)].join(),
-      right: [phone, v.speed?.kind, v.gs !== null, spdT.length, len(this.#gs.value)].join(),
+      left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, this.#alt.leadLength, len(this.#vs), len(this.#agl.value)].join(),
+      right: [phone, v.speed?.kind, v.gs !== null, this.#spd.leadLength, len(this.#gs.value)].join(),
       top: [phone, v.hdg?.kind, v.wind !== null, v.wind?.rel !== null, len(this.#windText)].join(),
       bottom: [
         phone, v.adi !== null, v.roll !== null, v.pitch !== null, v.g !== null, v.gear !== null, v.flaps !== null, len(this.#flaps),
@@ -708,6 +720,7 @@ export class FlightFrame {
 
   /** A block's size in each variant (full, compact) and its anchor: one layout per variant. */
   #measure(id: BlockId): void {
+    if (id === 'right') this.#spd.resized()
     const b = this.#blocks[id]
     const hidden = b.hidden
     const was = b.dataset.v

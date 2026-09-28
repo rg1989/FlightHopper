@@ -2,9 +2,12 @@
 // The flight-data frame's instruments (client/scene/flightFrame.ts), glass-cockpit style, as DOM + SVG: the altitude and
 // speed tapes, the vertical-speed scale, the heading tape, the attitude indicator, the wind dial and the small arc
 // gauges (load factor, EPR). Each is drawn once and then only moved: set() every frame writes transforms (compositor
-// work, no layout), text() at most every TEXT_MS writes figures. Sizes come from CSS (flightFrame.css): the tapes keep
-// their scale in px and show a shorter window when smaller; the round instruments scale as a whole.
-import { VSI_MARKS, arcDeg, bankAlert, hdgLabel, marks, pitchShift, stripCentre, tapeShift, vsiFrac } from '../scene/instrumentMath.ts'
+// work, no layout), text() at most every TEXT_MS writes figures; the tapes' readouts roll every frame, an odometer's
+// last digits on a drum. Sizes come from CSS (flightFrame.css): the tapes keep their scale in px and show a shorter
+// window when smaller; the round instruments scale as a whole.
+import {
+  VSI_MARKS, arcDeg, bankAlert, drum, drumLabels, drumShift, hdgLabel, marks, pitchShift, stripCentre, tapeShift, vsiFrac,
+} from '../scene/instrumentMath.ts'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const MINUS = '−'
@@ -56,6 +59,7 @@ export interface TapeSpec {
   ticks: 'left' | 'right'
   min?: number // no marks below it (no negative speeds)
   label: (v: number) => string
+  read: { unit: number; step: number; digits: number } // the readout: whole units in figures, the rest rolling in steps
 }
 
 const STRIP_W = 84 // the strip's drawn width; the tape's well clips it to its own
@@ -67,37 +71,58 @@ const LABEL_IN = 16 // a label's near end, from the tick edge
 export const ALT_TAPE: TapeSpec = {
   ppu: 0.11, minor: 100, major: 500, halfSpan: 2_000, window: 760, ticks: 'right',
   label: (v) => `${v < 0 ? MINUS : ''}${Math.abs(v).toLocaleString('en-US')}`,
+  read: { unit: 100, step: 20, digits: 2 }, // "12,3" and the tens rolling in 20 ft steps, as an airliner's
 }
 /** Speed: 14 px per 10 kt, a mark every 10 kt, a label every 20; nothing below 0. */
 export const SPEED_TAPE: TapeSpec = {
   ppu: 1.4, minor: 10, major: 20, halfSpan: 140, window: 64, ticks: 'left', min: 0, label: (v) => String(v),
+  read: { unit: 10, step: 1, digits: 1 },
 }
 
+const TREND_HEAD = 6 // the trend arrow's head, px; the arrow stops this far inside the tape's end
+const DRUM_CELL_EM = 1.15 // a drum cell's height: at rest the window (the readout box) shows none of the neighbours' ink
+
 /**
- * A vertical tape in its well, the value's readout boxed across its middle with a pointer to the ticks. The strip is
- * drawn round a centre and slid (whole device pixels: crisp lines) to put the value under the index.
+ * A vertical tape in its well, the value's readout boxed across its middle with a pointer to the ticks: its whole units
+ * in figures, the rest on a drum that rolls (the neighbouring digits come in from above and below). The strip is drawn
+ * round a centre and slid (whole device pixels: crisp lines) to put the value under the index. The speed tape adds the
+ * trend arrow: from the index to the speed 10 s ahead.
  */
 export class Tape {
   readonly el = h('div', 'fh-tapebox')
   readonly #spec: TapeSpec
   readonly #well = h('div', 'fh-tape')
   readonly #strip = h('div', 'fh-strip')
-  readonly #value = h('span', 'fh-read-v')
+  readonly #lead = h('span', 'fh-read-lead')
+  readonly #col = h('span', 'fh-drum-col')
+  readonly #n: number // the drum's cells per unit
   #centre: number | null = null
+  #arrow: { el: HTMLDivElement; shaft: HTMLDivElement; head: HTMLDivElement } | null = null
+  #half = 0 // half the well's height, px (0: measure it again)
 
   constructor(spec: TapeSpec, kind: string) {
     this.#spec = spec
     this.el.dataset.kind = kind
     this.el.dataset.ticks = spec.ticks
+    const { unit, step, digits } = spec.read
+    this.#n = unit / step
+    for (const l of drumLabels(unit, step, digits)) this.#col.append(h('span', 'fh-drum-c', l))
+    this.#col.style.lineHeight = `${DRUM_CELL_EM}em`
+    this.#col.style.top = `calc(50% - ${DRUM_CELL_EM / 2}em)` // the cell at the drum's position centred
+    const drumEl = h('span', 'fh-drum')
+    drumEl.style.width = `${digits}ch`
+    drumEl.append(this.#col)
+    const value = h('span', 'fh-read-v')
+    value.append(this.#lead, drumEl)
     const read = h('div', 'fh-read')
-    read.append(this.#value)
+    read.append(value)
     const view = h('div', 'fh-tape-view') // fades the marks out at the ends; the strip slides inside it
     view.append(this.#strip)
     this.#well.append(view)
     this.el.append(this.#well, read)
   }
 
-  /** Every frame: the strip at value. */
+  /** Every frame: the strip and the readout at value. */
   set(value: number, dpr: number): void {
     const s = this.#spec
     const c = stripCentre(value, this.#centre, s.halfSpan, s.window, s.major)
@@ -106,10 +131,43 @@ export class Tape {
       this.#build(c)
     }
     move(this.#strip, `translate3d(0,${tapeShift(value, c, s.ppu, dpr)}px,0)`)
+    const { unit, digits } = s.read
+    const d = drum(value, unit, s.read.step)
+    say(this.#lead, `${d.neg ? MINUS : ''}${d.lead === 0 ? '' : (d.lead * unit).toLocaleString('en-US').slice(0, -digits)}`)
+    // ponytail: in em, so it follows the readout's size; between whole px at rest on a 1× screen (sharp from 2×)
+    move(this.#col, `translate3d(0,${(drumShift(d.pos, this.#n) * DRUM_CELL_EM).toFixed(4)}em,0)`)
   }
 
-  text(value: string): void {
-    say(this.#value, value)
+  /** The readout's figures before the drum, in characters: what sizes the box. */
+  get leadLength(): number {
+    return this.#lead.textContent?.length ?? 0
+  }
+
+  /**
+   * Every frame on the speed tape: the trend arrow from the index to kt10, the change over the next 10 s (null: none),
+   * up for faster; pinned inside the tape's end.
+   */
+  trend(kt10: number | null, dpr: number): void {
+    if (this.#arrow === null) {
+      const a = { el: h('div', 'fh-trend'), shaft: h('div', 'fh-trend-shaft'), head: h('div', 'fh-trend-head') }
+      a.el.append(a.shaft, a.head)
+      this.#well.append(a.el)
+      this.#arrow = a
+    }
+    const a = this.#arrow
+    show(a.el, kt10 !== null)
+    if (kt10 === null) return
+    if (this.#half <= 0) this.#half = this.#well.clientHeight / 2 // a layout read, once per size
+    const len = Math.round(Math.min(Math.abs(kt10) * this.#spec.ppu, Math.max(0, this.#half - TREND_HEAD)) * dpr) / dpr
+    const dir = kt10 > 0 ? 'up' : 'down'
+    if (a.el.dataset.dir !== dir) a.el.dataset.dir = dir
+    move(a.shaft, `translate3d(0,${dir === 'up' ? -len : 0}px,0) scaleY(${len})`)
+    move(a.head, `translate3d(0,${dir === 'up' ? -len : len}px,0)`)
+  }
+
+  /** The tape's size changed (another variant, the phone layout): the trend arrow measures it again. */
+  resized(): void {
+    this.#half = 0
   }
 
   #build(c: number): void {

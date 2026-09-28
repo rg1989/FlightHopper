@@ -1,7 +1,8 @@
 // client/scene/instrumentMath.ts
 // The flight-data frame's instrument geometry (client/scene/flightFrame.ts, client/ui/instruments.ts), pure: where a
-// tape's marks go and how far it has scrolled, the vertical-speed scale, the compass labels, continuous angles (a dial
-// never spins the long way round), and the per-frame smoothing that turns stepped data into steady motion.
+// tape's marks go and how far it has scrolled, the readouts' rolling digits, the speed trend, the vertical-speed scale,
+// the compass labels, continuous angles (a dial never spins the long way round), and the per-frame smoothing that turns
+// stepped data into steady motion.
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 
@@ -45,6 +46,57 @@ export function hdgLabel(deg: number): string {
   if (d % 30 !== 0) return ''
   return d === 0 ? 'N' : d === 90 ? 'E' : d === 180 ? 'S' : d === 270 ? 'W' : String(d / 10)
 }
+
+// ---- readouts -------------------------------------------------------------------------------------------------------
+
+/**
+ * A readout's rolling digits, an odometer: the magnitude's whole `unit`s in figures (lead), the rest a position on a drum
+ * of `step`s (pos, 0 … unit/step), and a minus from half a step below zero.
+ */
+export function drum(v: number, unit: number, step: number): { lead: number; pos: number; neg: boolean } {
+  const a = Math.abs(v)
+  const lead = Math.floor(a / unit)
+  return { lead, pos: (a - lead * unit) / step, neg: v <= -step / 2 }
+}
+
+/** A drum's cells, top to bottom: one unit's steps from the top down, and one more past each end (its neighbours show). */
+export function drumLabels(unit: number, step: number, digits: number): string[] {
+  const n = unit / step
+  const out: string[] = []
+  for (let k = n + 1; k >= -1; k--) out.push(String((((k % n) + n) % n) * step).padStart(digits, '0'))
+  return out
+}
+
+/** How far a drum of n cells per unit moves, in cells, to centre position pos in its window: down as the value rises. */
+export const drumShift = (pos: number, n: number): number => pos - n - 1
+
+/** The speed trend arrow points at the speed this many seconds ahead, at the present rate of change. */
+export const TREND_S = 10
+const TREND_TAU_S = 1 // the rate's smoothing
+const TREND_JUMP_KT_S = 15 // faster than any aircraft changes speed: a seek, not flight
+
+/**
+ * A speed's rate of change per second of its own clock, smoothed (an exponential approach): the speed trend. dtS is the
+ * data's time: 0 while paused (the trend holds, and a value moved meanwhile, a drag, counts for nothing), negative after
+ * a seek back. Time going back, a jump no aircraft could make, and an unknown value start it again from nothing (null).
+ */
+export class Trend {
+  #last: number | null = null
+  #rate: number | null = null
+
+  step(v: number | null, dtS: number): number | null {
+    const last = this.#last
+    this.#last = v
+    if (v === null || last === null || dtS < 0) return (this.#rate = null)
+    if (dtS === 0) return this.#rate
+    const r = (v - last) / dtS
+    if (Math.abs(r) > TREND_JUMP_KT_S) return (this.#rate = null)
+    return (this.#rate = glide(this.#rate ?? 0, r, dtS, TREND_TAU_S))
+  }
+}
+
+/** Whether the speed trend arrow shows, for a change of kt10 over TREND_S: from 2 kt on, until it falls below 1 kt. */
+export const trendShown = (shown: boolean, kt10: number): boolean => Math.abs(kt10) >= (shown ? 1 : 2)
 
 // ---- vertical speed -------------------------------------------------------------------------------------------------
 

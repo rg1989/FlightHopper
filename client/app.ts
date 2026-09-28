@@ -804,7 +804,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         // relief: flattened or growing, the ground drawn is not the ground.
         const aglFt = groundM === null || !prefs.topo || topo.animating ? null : Math.max(0, placed.hM - groundM) / FT
         const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up')
-        flightFrame.update(viewer, model.model.modelMatrix, model.entry, data, frameSafe(now))
+        flightFrame.update(viewer, model.model.modelMatrix, model.entry, data, frameSafe(now), sf?.t)
         framed = true
       }
       chased = placed

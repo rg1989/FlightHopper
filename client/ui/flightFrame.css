@@ -230,6 +230,70 @@
   border-left: 1px solid rgba(255, 255, 255, 0.88);
 }
 
+/* The readout's last digits on a drum: the cells roll through a window the box's height, fading at its edges. */
+.fh-tapebox .fh-read-v {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+}
+
+.fh-drum {
+  position: relative;
+  align-self: stretch;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+  mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+}
+
+.fh-drum-col {
+  position: absolute;
+  left: 0;
+  will-change: transform; /* top and line-height (the cell) from instruments.ts */
+}
+
+.fh-drum-c {
+  display: block;
+}
+
+/* The speed trend: an arrow from the index to the speed 10 s ahead, along the ticks, under the readout. */
+.fh-trend {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 9px;
+  height: 0;
+}
+
+.fh-trend-shaft {
+  position: absolute;
+  left: 3.5px;
+  top: 0;
+  width: 2px;
+  height: 1px;
+  background: var(--fh-i-green);
+  transform-origin: 50% 0;
+  will-change: transform;
+}
+
+.fh-trend-head {
+  position: absolute;
+  left: 0;
+  width: 9px;
+  height: 7px;
+  background: var(--fh-i-green);
+  will-change: transform;
+}
+
+.fh-trend[data-dir='up'] .fh-trend-head {
+  top: -1px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.fh-trend[data-dir='down'] .fh-trend-head {
+  top: -6px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
 .fh-tapebox.fh-est {
   opacity: 1;
 }
