@@ -211,10 +211,11 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   vec3 q = fsInput.attributes.positionMC;
   vec3 nq = normalize(v_nMC);
   glow += albedo * (lamp(u_navL, vec3(1.0, 0.1, 0.06), 2.5, q, nq) + lamp(u_navR, vec3(0.08, 1.0, 0.4), 2.5, q, nq)
-    + lamp(u_navT, vec3(1.0, 0.94, 0.85), 2.0, q, nq) + lamp(u_bcn0, vec3(1.0, 0.06, 0.03), 3.5, q, nq)
-    + lamp(u_bcn1, vec3(1.0, 0.06, 0.03), 3.5, q, nq));
-  if (u_strobe > 0.0) glow += albedo * u_strobe * (lamp(vec4(u_navL.xyz, 1.0), vec3(3.0), 6.0, q, nq)
-    + lamp(vec4(u_navR.xyz, 1.0), vec3(3.0), 6.0, q, nq) + lamp(vec4(u_navT.xyz, 1.0), vec3(3.0), 5.0, q, nq));
+    + lamp(u_navT, vec3(1.0, 0.94, 0.85), 2.0, q, nq) + lamp(u_bcn0, vec3(1.0, 0.06, 0.03), 2.5, q, nq)
+    + lamp(u_bcn1, vec3(1.0, 0.06, 0.03), 2.5, q, nq));
+  // A strobe flash lights its wing and the skin near it, not the whole airframe evenly.
+  if (u_strobe > 0.0) glow += albedo * u_strobe * (lamp(vec4(u_navL.xyz, 1.0), vec3(1.8), 4.0, q, nq)
+    + lamp(vec4(u_navR.xyz, 1.0), vec3(1.8), 4.0, q, nq) + lamp(vec4(u_navT.xyz, 1.0), vec3(1.8), 3.5, q, nq));
   material.emissive += glow;
 }`
 }

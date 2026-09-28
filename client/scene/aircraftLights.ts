@@ -229,8 +229,10 @@ export class AircraftLights {
 
   constructor(viewer: Viewer) {
     this.#scene = viewer.scene
-    // TRANSLUCENT: one pass, soft edges; still depth-tested against what the opaque pass drew.
-    this.#bbs = viewer.scene.primitives.add(new BillboardCollection({ blendOption: BlendOption.TRANSLUCENT }))
+    // Cesium draws a TRANSLUCENT collection in the opaque pass, writing depth: a halo drawn before an aircraft punched
+    // a hole in its fuselage (the sky showed through). OPAQUE_AND_TRANSLUCENT: only the white-hot core is opaque; the
+    // halo is drawn after every opaque thing, depth-tested, writing no depth.
+    this.#bbs = viewer.scene.primitives.add(new BillboardCollection({ blendOption: BlendOption.OPAQUE_AND_TRANSLUCENT }))
     for (const k of KIND_NAMES) {
       this.#pools.set(k, [])
       this.#used.set(k, 0)
