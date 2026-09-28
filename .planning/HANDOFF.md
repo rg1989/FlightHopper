@@ -99,9 +99,11 @@ profile that once had `?topo=0` stays flat.
 
 ## Gotchas learned 2026-09-28
 
-- FR24's MLAT CSVs: the positions line up but the time stamps wander (consecutive fixes imply 108–381 kt around a flown
-  ~250) and the speed/direction columns repeat stale values; re-time by distance at the recorded airspeed
-  (`tools/scenarios/kc1388/reconstruct.ts`). Its altitude-only CSV uses bare CR line ends.
+- FR24's MLAT CSVs: keep their own time stamps (the altitudes match the flight recorder's to ~2 s). The spread of the
+  speeds consecutive fixes imply (108–381 kt around a flown ~250) is ~250 m of MLAT position noise, not clock error:
+  re-timing by distance at the airspeed (the first KC1388 build) moved the dives 25 s against the airspeed, so the
+  aircraft fell while slowing (fixed 2026-09-29, `tools/scenarios/fuse.ts`). The speed/direction columns repeat stale
+  values. Its altitude-only CSV uses bare CR line ends.
 - The ASN report mirror answers 403 to curl's default agent (a browser User-Agent works); Planespotters answers tools
   with a bot check (Commons photo pages work). OpenStreetMap's Overpass API gives runway ends as small JSON.
 - A report figure in a PDF is a raster: `pdfimages` gives its native pixels (rendering the page at 400 dpi adds none).
