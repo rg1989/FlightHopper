@@ -3,7 +3,7 @@
 // step, what the scenario shows at its time: the pose, the flight-data frame's numbers, the events, the captions and
 // the ending. ScenarioRun adds what lives in the page: the play bar, the captions and the ending card in the app's
 // overlay, the era imagery under the night lights, the audio (only when the package has it), and the keys (Space
-// play/pause, ←/→ ±10 s, Shift ±60 s). The app (app.ts) draws the rest from the frame: the model, the chase camera, the
+// play/pause, ←/→ ±10 s, Shift ±60 s, M mute). The app (app.ts) draws the rest from the frame: the model, the chase camera, the
 // sun at the scenario's instant and the frame around the aircraft. Dresser puts the scenario's type, livery, span,
 // damage and gear on the chase model.
 import { Color, ImageryLayer, Rectangle, UrlTemplateImageryProvider } from 'cesium'
@@ -116,11 +116,12 @@ export interface KeyLike {
  * (the browser's), on auto-repeat, while typing in a field (the play bar's scrubber takes its own keys), and for Space on
  * a focused button (Space presses it).
  */
-export function scenarioKey(e: KeyLike): { toggle: true } | { stepS: number } | null {
+export function scenarioKey(e: KeyLike): { toggle: true } | { stepS: number } | { mute: true } | null {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return null
   const t = e.target as { tagName?: string; isContentEditable?: boolean } | null
   if (t?.isContentEditable || TYPING.has(t?.tagName ?? '')) return null
   if (e.key === ' ') return t?.tagName === 'BUTTON' ? null : { toggle: true }
+  if (e.key === 'm' || e.key === 'M') return { mute: true }
   const step = e.shiftKey ? 60 : 10
   return e.key === 'ArrowLeft' ? { stepS: -step } : e.key === 'ArrowRight' ? { stepS: step } : null
 }
@@ -237,6 +238,7 @@ export class ScenarioRun {
   readonly #ending: ReturnType<typeof mountEnding>
   readonly #audioEl: HTMLAudioElement | null = null
   readonly #audio: AudioSync | null = null
+  #gain = 1 // the play bar's volume, 0 when muted
   readonly #onKey: (e: KeyboardEvent) => void
 
   static start(o: ScenarioRunOpts): ScenarioRun {
@@ -260,6 +262,7 @@ export class ScenarioRun {
       onSeek: (t) => this.player.seek(t),
       onRate: () => void clock.nextRate(),
       onExit: () => o.onExit(),
+      sound: s.audio !== null && s.present.audio ? { reenacted: s.audio.reenacted, onGain: (g) => (this.#gain = g) } : null,
     })
     // Over the base imagery, under the night lights: in the order the package lists them, the first lowest.
     const layers = o.viewer.imageryLayers
@@ -282,6 +285,7 @@ export class ScenarioRun {
       if (k === null) return
       e.preventDefault() // no page scroll, no click on the focused element
       if ('toggle' in k) this.player.toggle()
+      else if ('mute' in k) this.#bar.toggleMute()
       else this.player.seekBy(k.stepS)
     }
     window.addEventListener('keydown', this.#onKey)
@@ -298,7 +302,7 @@ export class ScenarioRun {
     this.#captions.update(f.lines.map((l) => this.#views.get(l)!))
     this.#story.update(f.story === null ? null : { key: f.story.key, clock: `${clockText(f.story.t)} ${this.scenario.clockLabel}`, text: f.story.text })
     this.#ending.update(f.fade, f.card ? this.scenario.ending!.card : null)
-    this.#audio?.update(f.t, clock.playing, clock.rate, 1 - f.fade)
+    this.#audio?.update(f.t, clock.playing, clock.rate, (1 - f.fade) * this.#gain)
     // The era imagery takes the base's brightness, which the Sun lowers at dusk.
     const layers = this.#viewer.imageryLayers
     const i = this.#layers.length === 0 ? -1 : layers.indexOf(this.#layers[0])

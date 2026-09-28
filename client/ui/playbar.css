@@ -286,6 +286,96 @@
   grid-area: exit;
 }
 
+/* The voices (with audio only): mute and a small volume slider, and over them, for a reenactment, a note in the title's
+   small caps that these are not the recorded voices (its title has the full sentence). */
+.fh-playbar.fh-has-sound {
+  grid-template-columns: auto clamp(150px, 20vw, 230px) minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'play meta track sound rate exit';
+}
+
+.fh-playbar-sound {
+  grid-area: sound;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.fh-playbar-note {
+  padding-left: 6px;
+  color: var(--fh-faint);
+  font: 600 10px/1.3 var(--fh-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.fh-playbar-vrow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fh-ibtn.fh-playbar-mute {
+  width: 32px;
+  height: 32px;
+  color: var(--fh-text);
+}
+
+.fh-playbar-vol {
+  width: 76px;
+  height: 20px;
+  margin: 0 4px 0 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.fh-playbar-vol::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--fh-accent) var(--fh-v, 80%), rgba(255, 255, 255, 0.16) var(--fh-v, 80%));
+}
+
+.fh-playbar-vol::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--fh-accent) var(--fh-v, 80%), rgba(255, 255, 255, 0.16) var(--fh-v, 80%));
+}
+
+.fh-playbar-vol::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(90, 169, 255, 0.45), 0 1px 4px rgba(0, 0, 0, 0.45);
+  -webkit-appearance: none;
+}
+
+.fh-playbar-vol::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(90, 169, 255, 0.45), 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.fh-playbar-vol:focus-visible {
+  outline: none;
+}
+
+.fh-playbar-vol:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px rgba(90, 169, 255, 0.55), 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.fh-playbar-vol:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 5px rgba(90, 169, 255, 0.55), 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
 /* Touch screens: 44 px targets for play, speed and exit; a 32 px scrubber (the 22 px thumb inside it) with the 24 px
    tick band under it. */
 @media (pointer: coarse) {
@@ -314,6 +404,16 @@
 
   .fh-playbar-range {
     height: 40px;
+  }
+
+  /* The device's own buttons set the volume (iOS ignores a page's): mute only. */
+  .fh-ibtn.fh-playbar-mute {
+    width: 44px;
+    height: 44px;
+  }
+
+  .fh-playbar-vol {
+    display: none;
   }
 
   /* 20 px (WCAG 2.5.8's "equivalent" exception holds: the scrubber and its keys reach every mark): late in JAL 123 the
@@ -365,6 +465,28 @@
     border-width: 1px 0 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .fh-playbar.fh-has-sound {
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      'meta meta note note note'
+      'play track sound rate exit';
+  }
+
+  /* The note joins the clock's row, the mute button the controls. */
+  .fh-playbar-sound {
+    display: contents;
+  }
+
+  .fh-playbar-note {
+    grid-area: note;
+    justify-self: end;
+    padding: 0 6px;
+  }
+
+  .fh-playbar-vrow {
+    grid-area: sound;
   }
 
   .fh-playbar-meta {

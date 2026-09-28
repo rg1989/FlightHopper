@@ -279,7 +279,13 @@ function parseManifest(manifest: unknown, problems: string[]): ManifestOut {
       }
       clips.push({ from: c.from, to: c.to, at })
     })
-    audio = { file: isString(audioRaw.file) ? audioRaw.file : '', source: isString(audioRaw.source) ? audioRaw.source : '', clips }
+    if (audioRaw.reenacted !== undefined && typeof audioRaw.reenacted !== 'boolean') add('audio.reenacted', 'true or false')
+    audio = {
+      file: isString(audioRaw.file) ? audioRaw.file : '',
+      source: isString(audioRaw.source) ? audioRaw.source : '',
+      reenacted: audioRaw.reenacted === true,
+      clips,
+    }
   }
 
   const sourcesRaw = Array.isArray(m.sources) ? m.sources : []

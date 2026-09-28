@@ -81,6 +81,12 @@
       ]
     }
   },
+  "audio": {
+    "file": "local/voiceover.m4a",
+    "source": "A reenactment, not the recording: synthetic voices (Kokoro-82M) read the English captions of transcript.csv, and the alerts the record names are synthesized. Made by tools/scenarios/voiceover.py with tools/scenarios/jal123/voices.json.",
+    "reenacted": true,
+    "clips": [{ "from": 0, "to": 2708, "at": "18:11:15" }]
+  },
   "sources": [
     {
       "id": "EN",

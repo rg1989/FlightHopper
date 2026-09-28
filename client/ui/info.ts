@@ -22,6 +22,7 @@ const SHORTCUTS: [string, string][] = [
   ['X', 'See-through buildings'],
   ['Space', 'In a scenario: play or pause'],
   ['← →', 'In a scenario: back or ahead 10 s (Shift: 60 s)'],
+  ['M', 'In a scenario: mute or unmute the voices'],
 ]
 
 export interface InfoPanelHandle {

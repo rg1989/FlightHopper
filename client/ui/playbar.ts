@@ -1,8 +1,9 @@
 // client/ui/playbar.ts
 // The scenario play bar (bottom, between the left gutter and the rail; on phones on top of the tab bar): play/pause, the
 // scenario clock with its zone, the phase, a scrubber over the timeline with the marks as ticks under it (a press seeks
-// to one), the speed and exit. It only asks: onToggle, onSeek(t), onRate, onExit; the app answers through update(),
-// which is cheap to call every frame (it writes only what changed, and leaves the thumb alone under a dragging finger).
+// to one), the voices' mute and volume (with audio only), the speed and exit. It only asks: onToggle, onSeek(t), onRate,
+// onExit, sound.onGain; the app answers through update(), which is cheap to call every frame (it writes only what
+// changed, and leaves the thumb alone under a dragging finger).
 // Keys on the focused scrubber: ←/→ ±10 s (Shift ±60 s), PgUp/PgDn ±60 s, Home/End, Space play/pause. Every other key,
 // and all keys on the bar's buttons except Space (which presses them), belong to the app's own handler. A mouse or finger
 // press leaves no focus on speed or a tick, so a later Space reaches the app (play/pause) instead of pressing them again.
@@ -21,6 +22,11 @@ export interface PlaybarView {
 /** The bar's clock text: whole seconds, floored (a second shows once it has begun), as the tick labels are. */
 export const clockText = (t: number): string => sToClock(Math.floor(t))
 
+export interface PlaybarSound {
+  reenacted: boolean // a voice-over, not the recording: a note over the controls says so
+  onGain(g: number): void // 0..1, 0 when muted: at mount (the setting this browser remembers) and on every change
+}
+
 export interface PlaybarOpts {
   start: number // the scrubber runs from start…
   stop: number // …to stop, the last second the clock reaches (the ending card may wait past the data)
@@ -32,10 +38,12 @@ export interface PlaybarOpts {
   onSeek(t: number): void
   onRate(): void
   onExit(): void
+  sound?: PlaybarSound | null // the scenario's audio is there
 }
 
 export interface PlaybarHandle {
   update(v: PlaybarView): void
+  toggleMute(): void // M: nothing without sound
   destroy(): void
 }
 
@@ -60,6 +68,92 @@ function button(className: string, label: string): HTMLButtonElement {
   b.type = 'button'
   b.setAttribute('aria-label', label)
   return b
+}
+
+const SOUND_KEY = 'fh-scenario-sound'
+export const REENACTED =
+  'A reenactment: synthetic voices read the English translation of the official record. They are not the recorded voices of the crew or the controllers.'
+
+interface SoundPref {
+  volume: number
+  muted: boolean
+}
+
+/** The volume this browser remembers: a convenience, so storage that is missing or throws gives the default. */
+function readSound(): SoundPref {
+  try {
+    const p: unknown = JSON.parse(localStorage.getItem(SOUND_KEY) ?? 'null')
+    const { volume, muted } = (p ?? {}) as Record<string, unknown>
+    if (typeof volume === 'number' && volume >= 0 && volume <= 1 && typeof muted === 'boolean') return { volume, muted }
+  } catch {
+    // the default
+  }
+  return { volume: 0.8, muted: false }
+}
+
+function writeSound(p: SoundPref): void {
+  try {
+    localStorage.setItem(SOUND_KEY, JSON.stringify(p))
+  } catch {
+    // not remembered
+  }
+}
+
+/** Mute and volume for the voices, and for a reenactment the note over them. Space on the slider plays or pauses. */
+function soundControl(o: PlaybarSound, onToggle: () => void): { el: HTMLElement; toggle(): void } {
+  const pref = readSound()
+  const el = h('div', 'fh-playbar-sound')
+  if (o.reenacted) {
+    const note = h('span', 'fh-playbar-note', 'Reenacted voices')
+    note.title = REENACTED
+    el.append(note)
+  }
+  const mute = button('fh-ibtn fh-playbar-mute', 'Mute the voices')
+  const vol = h('input', 'fh-playbar-vol')
+  vol.type = 'range'
+  vol.min = '0'
+  vol.max = '1'
+  vol.step = '0.05'
+  vol.setAttribute('aria-label', 'Voice volume')
+  const row = h('div', 'fh-playbar-vrow')
+  row.append(mute, vol)
+  el.append(row)
+
+  let shownOff: boolean | null = null
+  const apply = (): void => {
+    const off = pref.muted || pref.volume === 0
+    if (off !== shownOff) {
+      shownOff = off
+      mute.replaceChildren(icon(off ? 'muted' : 'volume', 18))
+      mute.setAttribute('aria-label', off ? 'Unmute the voices' : 'Mute the voices')
+      mute.title = off ? 'Unmute (M)' : 'Mute (M)'
+    }
+    vol.value = String(pref.volume)
+    vol.style.setProperty('--fh-v', `${Math.round((off ? 0 : pref.volume) * 100)}%`)
+    o.onGain(off ? 0 : pref.volume)
+    writeSound(pref)
+  }
+  const toggle = (): void => {
+    pref.muted = !pref.muted
+    if (!pref.muted && pref.volume === 0) pref.volume = 0.8
+    apply()
+  }
+  mute.addEventListener('click', (e) => {
+    toggle()
+    dropPointerFocus(mute, e)
+  })
+  vol.addEventListener('input', () => {
+    pref.volume = Number(vol.value)
+    if (pref.volume > 0) pref.muted = false
+    apply()
+  })
+  vol.addEventListener('keydown', (e) => {
+    if (e.key !== ' ') return
+    e.preventDefault()
+    onToggle()
+  })
+  apply()
+  return { el, toggle }
 }
 
 export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandle {
@@ -125,7 +219,10 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   exit.title = 'Exit scenario'
   exit.append(icon('x', 18))
 
-  bar.append(play, meta, track, rate, exit)
+  const sound = opts.sound ? soundControl(opts.sound, () => opts.onToggle()) : null
+  if (sound !== null) bar.classList.add('fh-has-sound')
+
+  bar.append(play, meta, track, ...(sound === null ? [] : [sound.el]), rate, exit)
   root.append(bar)
 
   // What is on screen, so update() writes only what changed.
@@ -238,6 +335,9 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
           fill(v.t)
         }
       }
+    },
+    toggleMute() {
+      sound?.toggle()
     },
     destroy() {
       bar.remove()

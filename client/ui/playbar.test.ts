@@ -7,7 +7,7 @@ import { registerHooks } from 'node:module'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { mountPlaybar, clockText } = await import('./playbar.ts')
+const { mountPlaybar, clockText, REENACTED } = await import('./playbar.ts')
 
 interface Ev { type: string; key?: string; shiftKey?: boolean; detail?: number; target: El; defaultPrevented: boolean; stopped: boolean; preventDefault(): void; stopPropagation(): void }
 
@@ -135,7 +135,14 @@ const MARKS = [
 ]
 const VIEW = { t: 66275.4, playing: false, rate: 1, clock: '18:24:35', phase: 'Failure: loss of hydraulics' }
 
-function mount(over: { stop?: number; marks?: { t: number; label: string }[] } = {}) {
+// This browser's storage for the remembered volume: a Map, emptied by each test that needs it.
+const stored = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => void stored.set(k, v) },
+})
+
+function mount(over: { stop?: number; marks?: { t: number; label: string }[]; sound?: { reenacted: boolean; onGain(g: number): void } } = {}) {
   const root = new El('div')
   const calls: string[] = []
   const bar = mountPlaybar(root as unknown as HTMLElement, {
@@ -144,6 +151,7 @@ function mount(over: { stop?: number; marks?: { t: number; label: string }[] } =
     onSeek: (t) => calls.push(`seek ${t}`),
     onRate: () => calls.push('rate'),
     onExit: () => calls.push('exit'),
+    sound: over.sound,
   })
   const range = all(root).find((e) => e.tag === 'input')!
   const play = one(root, 'fh-playbar-play')
@@ -306,4 +314,60 @@ test('keys belong to the app: no listeners outside the bar; destroy removes it',
   bar.destroy()
   assert.equal(root.children.length, 0)
   bar.destroy()
+})
+
+test('with audio: mute and a volume slider, remembered in this browser; M (toggleMute) mutes; the note for a reenactment', () => {
+  stored.clear()
+  const gains: number[] = []
+  const { root, bar, calls } = mount({ sound: { reenacted: true, onGain: (g) => gains.push(g) } })
+  assert.ok(one(root, 'fh-playbar').has('fh-has-sound'))
+  const note = one(root, 'fh-playbar-note')
+  assert.equal(text(note), 'Reenacted voices')
+  assert.equal(note.title, REENACTED)
+  const mute = one(root, 'fh-playbar-mute')
+  const vol = one(root, 'fh-playbar-vol')
+  assert.deepEqual([vol.type, vol.min, vol.max, vol.value], ['range', '0', '1', '0.8'])
+  assert.deepEqual(gains, [0.8], 'the default, at once')
+
+  mute.click(1)
+  assert.equal(gains.at(-1), 0)
+  assert.equal(mute.attrs['aria-label'], 'Unmute the voices')
+  assert.equal(mute.blurred, 1, 'a mouse click leaves no focus on it')
+  bar.toggleMute()
+  assert.equal(gains.at(-1), 0.8)
+  assert.equal(mute.attrs['aria-label'], 'Mute the voices')
+
+  vol.value = '0.3'
+  vol.fire('input')
+  assert.equal(gains.at(-1), 0.3)
+  vol.value = '0'
+  vol.fire('input')
+  assert.equal(gains.at(-1), 0)
+  assert.equal(mute.attrs['aria-label'], 'Unmute the voices', 'at zero the button offers sound back')
+  bar.toggleMute()
+  bar.toggleMute()
+  assert.equal(gains.at(-1), 0.8, 'unmuting from zero comes back at the default')
+  vol.value = '0.4'
+  vol.fire('input')
+  bar.toggleMute()
+
+  const space = vol.fire('keydown', { key: ' ' })
+  assert.ok(space.defaultPrevented)
+  assert.deepEqual(calls, ['toggle'], 'Space on the slider plays or pauses')
+
+  const again: number[] = []
+  mount({ sound: { reenacted: true, onGain: (g) => again.push(g) } })
+  assert.deepEqual(again, [0], 'remembered: muted, at 0.4')
+  bar.destroy()
+})
+
+test('with a recording: no note; without audio: no sound controls, and M does nothing', () => {
+  stored.clear()
+  const rec = mount({ sound: { reenacted: false, onGain: () => {} } })
+  assert.equal(all(rec.root).filter((e) => e.has('fh-playbar-note')).length, 0)
+  one(rec.root, 'fh-playbar-mute')
+  const none = mount()
+  assert.equal(all(none.root).filter((e) => e.has('fh-playbar-sound')).length, 0)
+  assert.ok(!one(none.root, 'fh-playbar').has('fh-has-sound'))
+  none.bar.toggleMute()
 })

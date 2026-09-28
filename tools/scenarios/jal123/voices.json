@@ -1,0 +1,46 @@
+{
+  "note": "The voice-over cast for tools/scenarios/voiceover.py. Kokoro-82M voices (Apache-2.0): a = American, b = British. Speakers never heard at the same time share a voice (the radio and PA sound set them apart). The record does not name the purser's sex; the cabin legend lists the assistant purser under the stewardesses, and the chief purser was a man.",
+  "voices": {
+    "CAP": "am_michael",
+    "COP": "am_puck",
+    "FE": "am_eric",
+    "JL123": "bm_lewis",
+    "PUR": "bm_lewis",
+    "STH": "af_bella",
+    "PRA": "bf_emma",
+    "TWR": "bm_george",
+    "DEP": "bm_fable",
+    "ACC": "bm_george",
+    "APC": "bm_fable",
+    "YOK": "bm_lewis",
+    "COM": "bm_fable",
+    "UNK": "bm_george",
+    "GPWS": "bm_george"
+  },
+  "calm": ["TWR", "DEP", "ACC", "APC", "YOK", "COM", "PRA"],
+  "failureAt": "18:24:35",
+  "shoutFrom": "18:47:39",
+  "delivery": {
+    "18:24:39 CAP": "urgent",
+    "18:24:42 CAP": "urgent",
+    "18:24:43 CAP": "urgent",
+    "18:24:44 CAP": "urgent",
+    "18:46:33 CAP": "quiet",
+    "18:47:39 CAP": "shout",
+    "18:47:43 CAP": "shout",
+    "18:47:53 CAP": "shout",
+    "18:48:02 FE": "shout",
+    "18:49:41 CAP": "shout",
+    "18:49:42 CAP": "shout",
+    "18:49:45 CAP": "shout",
+    "18:55:43 CAP": "shout",
+    "18:55:47 CAP": "shout",
+    "18:55:49 COP": "shout"
+  },
+  "sounds": {
+    "ALARM": { "kind": "horn", "s": 6 },
+    "SELCAL": { "kind": "chime" },
+    "STALL": { "kind": "shaker", "s": 5 },
+    "GPWS": { "kind": "gpws" }
+  }
+}

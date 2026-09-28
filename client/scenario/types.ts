@@ -105,6 +105,7 @@ export interface AudioClip {
 export interface AudioSpec {
   file: string // relative to the scenario folder (normally local/)
   source: string // provenance, required
+  reenacted: boolean // a voice-over, not the recording: the play bar says so
   clips: AudioClip[]
 }
 

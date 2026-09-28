@@ -158,7 +158,7 @@ test('ScenarioPlayer: the lines on screen at t, oldest first', () => {
   assert.deepEqual(p.step(0).lines.map((l) => l.text), ['Gear up.', '[unintelligible]'])
 })
 
-test('scenarioKey: Space plays or pauses, ←/→ step 10 s, with Shift 60 s; nothing else', () => {
+test('scenarioKey: Space plays or pauses, ←/→ step 10 s, with Shift 60 s, M mutes; nothing else', () => {
   const k = (key: string, o: Partial<{ shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean; repeat: boolean; target: unknown }> = {}) =>
     scenarioKey({ key, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, repeat: false, target: null, ...o })
   assert.deepEqual(k(' '), { toggle: true })
@@ -166,6 +166,8 @@ test('scenarioKey: Space plays or pauses, ←/→ step 10 s, with Shift 60 s; no
   assert.deepEqual(k('ArrowRight'), { stepS: 10 })
   assert.deepEqual(k('ArrowLeft', { shiftKey: true }), { stepS: -60 })
   assert.deepEqual(k('ArrowRight', { shiftKey: true }), { stepS: 60 })
+  assert.deepEqual(k('m'), { mute: true })
+  assert.deepEqual(k('M', { shiftKey: true }), { mute: true })
   for (const key of ['a', 'Enter', 'ArrowUp', 'Escape', 't']) assert.equal(k(key), null, key)
 })
 
@@ -180,6 +182,7 @@ test('scenarioKey: not with Cmd, Ctrl or Alt, on auto-repeat, while typing, or S
   assert.equal(k('ArrowLeft', { target: { tagName: 'TEXTAREA' } }), null)
   assert.equal(k(' ', { target: { tagName: 'DIV', isContentEditable: true } }), null)
   assert.equal(k(' ', { target: { tagName: 'BUTTON' } }), null)
+  assert.equal(k('m', { target: { tagName: 'INPUT' } }), null)
   assert.deepEqual(k('ArrowLeft', { target: { tagName: 'BUTTON' } }), { stepS: -10 }, 'an arrow is not a button key')
 })
 

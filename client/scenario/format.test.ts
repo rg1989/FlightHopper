@@ -223,6 +223,18 @@ test('parseScenario: audio with an empty source is a problem', () => {
   })
 })
 
+test('parseScenario: audio.reenacted marks a voice-over (default false); anything but true or false is a problem', () => {
+  const clips = [{ from: 0, to: 1, at: '18:11:15' }]
+  const at = (audio: object) => parseScenario(validFiles({ manifest: validManifest({ audio }) })).audio
+  assert.equal(at({ file: 'local/vo.m4a', source: 'x', reenacted: true, clips })?.reenacted, true)
+  assert.equal(at({ file: 'local/cvr.m4a', source: 'x', clips })?.reenacted, false)
+  assert.throws(() => at({ file: 'local/vo.m4a', source: 'x', reenacted: 'yes', clips }), (err: unknown) => {
+    assert.ok(err instanceof ScenarioError)
+    assert.ok(err.problems.some((p) => /audio\.reenacted/.test(p)), err.problems.join('\n'))
+    return true
+  })
+})
+
 test('parseScenario: an audio clip with from >= to is a problem', () => {
   const m = validManifest({ audio: { file: 'local/cvr.m4a', source: 'x', clips: [{ from: 5, to: 1, at: '18:11:15' }] } })
   assert.throws(() => parseScenario(validFiles({ manifest: m })), (err: unknown) => {

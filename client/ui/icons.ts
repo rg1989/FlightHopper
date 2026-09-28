@@ -41,6 +41,9 @@ const P: Record<string, string> = {
   // Media controls (the scenario play bar fills them).
   play: 'M7.5 5.2v13.6L18.8 12 7.5 5.2Z',
   pause: 'M7 5.5h3v13H7zM14 5.5h3v13h-3z',
+  // A speaker with its sound, and silenced.
+  volume: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM15.5 9.2a4 4 0 0 1 0 5.6M18.3 6.5a7.8 7.8 0 0 1 0 11',
+  muted: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM16 9.5l5 5M21 9.5l-5 5',
 }
 
 const NS = 'http://www.w3.org/2000/svg'
