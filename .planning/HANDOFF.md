@@ -14,8 +14,7 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
   `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
   (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
   touch those files, and none of ours does.
-- **Not pushed:** `origin/main` is `b9e0f1f`; the 51 commits since (liveries `ed2b0b0` onward, the JAL 123 scenario,
-  2026-09-28) are local. Ask before pushing.
+- **Pushed:** `origin/main` = `main` (2026-09-29, at the user's request). The next push needs the user's OK again.
 
 ### What 2026-09-29 added (all on `main`)
 
