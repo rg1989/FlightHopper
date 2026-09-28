@@ -4,9 +4,11 @@
 //   pitch = flight-path angle γ + angle of attack α, α from the lift the aircraft needs at its speed and load factor;
 //   γ through the air (vertical speed over true airspeed) where the airspeed is known: the wing meets the air;
 //   bank = the coordinated-turn bank for the path's turn rate.
-// No limits but the airframe's: α up to the stall, bank up to a 2.5-g turn, the nose as steep as the path (a dive at
-// 35° shows a nose 33° down, not a clamp's 15). AttitudeFilter then gives it the inertia of a real airframe (critically
-// damped, rate-limited).
+// α stops at the stall. Live data are normal operations, held to normal flight's envelope (NORMAL_LIMITS: pitch −15…+25°,
+// bank ±45°): past it the data are bad, not the flight (an MLAT height glitch drew a light aircraft 73° nose-up; a climb
+// path is bounded by excess thrust, sin γ ≤ (T − D)/W ≈ 0.3 for a light airliner). A scenario of an upset passes the
+// airframe's own (UPSET_LIMITS: a 35° dive shows the nose 34° down). AttitudeFilter then gives it the inertia of a real
+// airframe (critically damped, rate-limited).
 import { trueAirspeedKt } from './airspeed.ts'
 import type { Att } from './types.ts'
 
@@ -40,7 +42,6 @@ const SLOW_BRAKE_TO_MS2 = 1.2
 const ROTOR_PITCH_DEG = -5 // a helicopter's nose-down attitude at ROTOR_KT, in proportion below it
 const ROTOR_KT = 120
 const ALPHA_STALL = 15 // body angle of attack at the stall (airliners ~14–18°): the wing gives no more lift past it
-const MAX_BANK = 67 // the bank of a 2.5-g level turn: an airliner's limit load
 const MIN_AIR_H = 0.2 // the airspeed's horizontal part, at least this share of it: a path ≤ 78° steep (bad data aside)
 
 const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x))
@@ -75,14 +76,21 @@ export interface FlightState {
   category: string | null // ADS-B emitter category
 }
 
+/** The attitudes aeroPitchRoll may draw, °. */
+export interface AttLimits { pitchMin: number; pitchMax: number; bank: number }
+/** Normal operations: live data past these are bad data, not flight. */
+export const NORMAL_LIMITS: AttLimits = { pitchMin: -15, pitchMax: 25, bank: 45 }
+/** An upset's (a scenario that flew one): the path as steep as it was; bank up to a 2.5-g turn, an airliner's limit load. */
+export const UPSET_LIMITS: AttLimits = { pitchMin: -89, pitchMax: 89, bank: 67 }
+
 /**
  * Pitch and bank a real aircraft needs to fly this state: pitch = flight-path angle + body angle of attack, the angle
  * of attack being what the lift needs at this speed (relative to V_ref) and load factor, with the flaps where crews set
  * them. No thresholds anywhere: the attitude is continuous in every input.
  */
-export function aeroPitchRoll(s: FlightState): { pitchDeg: number; rollDeg: number } {
+export function aeroPitchRoll(s: FlightState, lim: AttLimits = NORMAL_LIMITS): { pitchDeg: number; rollDeg: number } {
   if (s.onGround) return { pitchDeg: 0, rollDeg: 0 }
-  const rollDeg = clamp(Math.atan((s.gsMs * (s.turnRateDegS / DEG)) / G) * DEG, -MAX_BANK, MAX_BANK)
+  const rollDeg = clamp(Math.atan((s.gsMs * (s.turnRateDegS / DEG)) / G) * DEG, -lim.bank, lim.bank)
   const vRef = vRefKt(s.category)
   if (vRef === null) {
     // No wing to fly: a rotorcraft tilts forward with speed; the rest (balloons, gliders on tow, vehicles) stay level.
@@ -111,7 +119,7 @@ export function aeroPitchRoll(s: FlightState): { pitchDeg: number; rollDeg: numb
   const slow = 1 - smoothstep(0.9, 1, s.gsMs / KT / vRef) // below the approach speed over the ground
   const braking = Math.max(smoothstep(BRAKE_FROM_MS2, BRAKE_TO_MS2, -s.alongMs2), slow * smoothstep(SLOW_BRAKE_FROM_MS2, SLOW_BRAKE_TO_MS2, -s.alongMs2))
   const rolling = braking * (1 - smoothstep(1, 2, Math.abs(s.vsMs)))
-  return { pitchDeg: clamp(gammaDeg + alphaDeg, -89, 89) * (1 - rolling), rollDeg: rollDeg * (1 - rolling) }
+  return { pitchDeg: clamp(gammaDeg + alphaDeg, lim.pitchMin, lim.pitchMax) * (1 - rolling), rollDeg: rollDeg * (1 - rolling) }
 }
 
 /** Rates (°/s) no attitude changes faster than. The default is normal flight's: a rotation is ~3°/s. */

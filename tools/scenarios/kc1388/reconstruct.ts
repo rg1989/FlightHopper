@@ -18,7 +18,7 @@
 //
 //   node tools/scenarios/kc1388/reconstruct.ts <fr24 positions csv> <fr24 altitude-only csv> <fig13.csv>
 import { readFileSync, writeFileSync } from 'node:fs'
-import { AttitudeFilter, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
+import { AttitudeFilter, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
 import type { Obs } from '../../../client/track/smoother.ts'
 import { trueAirspeedKt } from '../../../client/track/airspeed.ts'
 import { fuseGround, fuseHeight, knotAt, type HeightObs, type RateObs } from '../fuse.ts'
@@ -320,7 +320,7 @@ for (let t = START; t <= END + 1e-9; t += SUB) {
   const pr = aeroPitchRoll({
     gsMs: gs, vsMs: gnd ? 0 : h.v, turnRateDegS: turn, alongMs2: along, easKt: cas !== null && cas > 60 ? cas : null,
     altM: h.p, onGround: gnd, category: 'A3',
-  })
+  }, UPSET_LIMITS) // an upset: the airframe's limits, not normal flight's
   // Rotation: the nose comes up over the last 3 s of the roll; the touchdown keeps the flare's nose-up for 3 s.
   const rot = t > LIFT_T - 3 && t <= LIFT_T ? ((t - (LIFT_T - 3)) / 3) * 8 : 0
   // The nose points where the aircraft goes through the air: the ground velocity less the wind (crabbed into it).

@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { trueAirspeedKt } from './airspeed.ts'
-import { AttitudeFilter, UPSET_RATES, aeroPitchRoll, densityRatio, turnRateDegS, vRefKt, type FlightState } from './attitude.ts'
+import { AttitudeFilter, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll, densityRatio, turnRateDegS, vRefKt, type FlightState } from './attitude.ts'
 
 const KT = 1852 / 3600
 const FPM = 0.3048 / 60
@@ -108,15 +108,21 @@ test('on the ground: pitch 0 and wings level whatever the rest says', () => {
   assert.deepEqual(pr({ onGround: true, vsMs: 5, turnRateDegS: 3 }), { pitchDeg: 0, rollDeg: 0 })
 })
 
-test('limits are the airframe\'s: the nose as steep as the path, α to the stall, bank to a 2.5-g turn', () => {
-  // A 35° dive at 300 kt (Air Astana 1388 dived like this): the nose ~34° down with it, not held at a clamp's −15°.
+test('live data keep normal flight\'s envelope (pitch −15…+25°, bank ±45°): past it the data are bad, not the flight', () => {
+  // An MLAT height glitch on a light aircraft (60 m/s up at 60 kt) drew it 73° nose-up without the envelope.
+  within(pr({ vsMs: 60, gsMs: 60 * KT, easKt: 60, category: 'A1' }).pitchDeg, -15, 25)
+  within(pr({ vsMs: -60, gsMs: 60 * KT }).pitchDeg, -15, 25)
+  near(pr({ turnRateDegS: 20 }).rollDeg, 45, 1e-9)
+})
+
+test('an upset\'s limits are the airframe\'s: the nose as steep as the path, α to the stall, bank to a 2.5-g turn', () => {
+  // A 35° dive at 300 kt (Air Astana 1388 dived like this): the nose ~34° down with it, not held at −15°.
   const tas = trueAirspeedKt(300, 1800 / 0.3048) * KT
-  const dive = pr({ easKt: 300, altM: 1800, vsMs: -Math.sin(35 / DEG) * tas, gsMs: Math.cos(35 / DEG) * tas })
-  within(dive.pitchDeg, -35, -33, 'dive')
-  // Bad data (climbing 60 m/s at 60 kt): α stops at the stall, the path at ~78°: a steep nose, never past vertical.
-  const p = pr({ vsMs: 60, gsMs: 60 * KT, easKt: 60 })
-  within(p.pitchDeg, 60, 89, 'impossible zoom')
-  near(pr({ turnRateDegS: 20 }).rollDeg, 67, 1e-9, 'bank')
+  const up = (p: Partial<FlightState>): { pitchDeg: number; rollDeg: number } => aeroPitchRoll({ ...base, ...p }, UPSET_LIMITS)
+  within(up({ easKt: 300, altM: 1800, vsMs: -Math.sin(35 / DEG) * tas, gsMs: Math.cos(35 / DEG) * tas }).pitchDeg, -35, -33, 'dive')
+  // Climbing 60 m/s at 60 kt: α stops at the stall, the path at ~78°: a steep nose, never past vertical.
+  within(up({ vsMs: 60, gsMs: 60 * KT, easKt: 60 }).pitchDeg, 60, 89, 'zoom')
+  near(up({ turnRateDegS: 20 }).rollDeg, 67, 1e-9, 'bank')
 })
 
 test('the path through the air: a 40-kt headwind on a 3° glide raises the nose ~1°, as pilots see it', () => {
