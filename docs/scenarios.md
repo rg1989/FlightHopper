@@ -15,7 +15,9 @@ Part 1 is the package format. Part 2 says what to send and what not to send. Par
 accident scenarios. Part 4 is a prompt to give to a research agent.
 
 The first package is Japan Air Lines Flight 123 (12 August 1985) in `public/scenarios/jal123/`. The scripts that built
-it are in `tools/scenarios/jal123/`. Use them as a worked example. The design is in `.planning/scenarios-design.md`.
+it are in `tools/scenarios/jal123/`. Use them as a worked example. The second, Air Astana Flight 1388 (11 November 2018)
+in `public/scenarios/kc1388/`, shows a package built from tracking data instead of a flight data recorder: its scripts
+are in `tools/scenarios/kc1388/`. The design is in `.planning/scenarios-design.md`.
 The loader that checks every rule below is `client/scenario/format.ts`.
 
 ## Part 1. The package format (version 1)
@@ -28,6 +30,7 @@ public/scenarios/<id>/scenario.json    the manifest (required)
 public/scenarios/<id>/track.csv        the timed position and attitude (required)
 public/scenarios/<id>/events.csv       phases, marks, gear, flaps, damage (optional)
 public/scenarios/<id>/transcript.csv   the captions (optional)
+public/scenarios/<id>/airport.json     the airfields as they were: runways, flattened ground (optional)
 public/scenarios/<id>/livery/…         decal images, committed (optional)
 public/scenarios/<id>/local/…          files that must not be published: logos under trademark, audio (optional)
 ```
@@ -257,6 +260,14 @@ word. When the record gives only the minute, say so in the source note.
 - When part of a line is unintelligible, keep `q=D` and write `[unintelligible]` in its place in `text`. Keep the
   record's own mark (`・・・`, `+++`) in `original`.
 - Never fill an unintelligible passage from another source.
+
+### 1.11a airport.json (optional)
+
+The airfields the flight uses, when the app's own runways do not show them as they were: one airport, or a list of
+them (JAL 123: Haneda in 1985; KC1388: Alverca and Beja). Each is the app's `Airport` shape (`shared/airports.ts`) plus
+an optional `flat` list of rings (`{ "ring": [[lat, lon], …], "elevFt": … }`) where the ground is laid flat, and a
+`source` note. Every runway end needs `thrHaeM`: its threshold elevation in metres above MSL plus the EGM96 geoid
+height (`shared/geoid.ts`). While the scenario plays, the app paints these runways and lays the ground flat along them.
 
 ### 1.12 Checking a package
 

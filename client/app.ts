@@ -630,8 +630,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   async function startScenario(id: string, o: { t?: number; play?: boolean; cam?: Orbit | null; fromUrl?: boolean } = {}): Promise<void> {
     loadingScenario = id
     let scn: Scenario
-    // A package may carry its airfield as it was (airport.json: runways, flat rings); most have none (404).
-    const field = getJson<AirfieldAirport>(`${scenarioBase}scenarios/${id}/airport.json`).catch(() => null)
+    // A package may carry its airfields as they were (airport.json: one airport, or a list of them: runways, flat rings);
+    // most have none (404).
+    const field = getJson<AirfieldAirport | AirfieldAirport[]>(`${scenarioBase}scenarios/${id}/airport.json`).catch(() => null)
     try {
       scn = await loadScenario(scenarioBase, id)
     } catch (e) {
@@ -639,7 +640,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (loadingScenario === id) loadingScenario = null
       return
     }
-    const ap = await field // fetched alongside the package: settled by now
+    const got = await field // fetched alongside the package: settled by now
+    const aps = got === null ? [] : Array.isArray(got) ? got : [got]
     if (stopped || loadingScenario !== id) return // stopped, or Esc while it loaded
     loadingScenario = null
     if (run !== null) endRun()
@@ -662,9 +664,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present) : null
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
-    if (ap !== null) {
-      airfield = addRunways(viewer, [ap], { markers: false }) // a replay's airfield: no live-map threshold dots
-      viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, [...heroStrips, ...stripsFor([ap])], areasFor([ap]))
+    if (aps.length > 0) {
+      airfield = addRunways(viewer, aps, { markers: false }) // a replay's airfields: no live-map threshold dots
+      viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, [...heroStrips, ...stripsFor(aps)], areasFor(aps))
     }
     sun.setEnabled(prefs.light)
     ui.dataset.mode = 'chase'

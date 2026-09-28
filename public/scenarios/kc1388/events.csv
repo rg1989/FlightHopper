@@ -1,0 +1,46 @@
+time,type,value,label,src
+13:29:30,phase,,"Alverca, runway 04",GPIAAF:p.20
+13:29:30,gear,1,Gear down,GPIAAF:p.20
+13:29:30,flaps,1,"Flaps 1 (the take-off setting is not published; flaps 1 stayed set for the rest of the flight)",GPIAAF:p.22
+13:29:35,story,14,"Air Astana's Embraer 190 P4-KCJ leaves Alverca after six weeks of heavy maintenance at OGMA: a positioning flight to Almaty, refuelling in Minsk. Three pilots and three Air Astana technicians are aboard.",GPIAAF:p.11
+13:30:00,story,14,"During the maintenance the aileron control cables of both wings were re-routed and replaced, and installed reversed. The checks after the work did not find it.",GPIAAF:p.103
+13:30:21,mark,,Take-off initiated,GPIAAF:p.20
+13:30:21,phase,,Take-off,GPIAAF:p.20
+13:30:40,story,12,"Low cloud at Alverca: layers at 500 and 1,500 ft, 2,000 m visibility in rain, wind 050° at 7 kt.",GPIAAF:p.20
+13:31:35,mark,,Airborne,GPIAAF:p.20
+13:31:35,phase,,Climb in cloud,GPIAAF:p.20
+13:31:52,gear,0,"Gear up (not recorded; estimated)",GPIAAF:p.20
+13:32:00,story,12,"Right after take-off the aircraft does not respond normally and takes abnormal roll attitudes. The captain later said he tried the autopilot without success.",GPIAAF:p.20
+13:32:48,mark,,Emergency declared,GPIAAF:p.20
+13:32:48,phase,,Emergency,GPIAAF:p.20
+13:32:50,story,12,"Still on the Alverca tower frequency, the crew declares an emergency. The only alert is an autopilot failure: no other warning explains the rolling.",GPIAAF:p.20
+13:33:20,mark,,Flight controls to direct mode,GPIAAF:p.20
+13:33:22,story,14,"The crew switches the flight controls to direct mode for the first time. It helps: the roll spoilers, working the right way, now limit the reversed ailerons.",GPIAAF:p.95
+13:36:00,phase,,Loss of control in cloud,GPIAAF:p.21
+13:36:00,story,14,"In cloud, without effective control, the pilots' recoveries put high structural loads on the airframe. The recorder shows peaks above 4.5 g.",GPIAAF:p.44
+13:44:00,story,14,"Handed over to Lisbon approach, the crew asks several times for headings to the sea, to ditch away from people on the ground. The aircraft cannot hold them and drifts north-east.",GPIAAF:p.21
+13:55:00,story,14,"Retracting the flaps to 0 makes pitch control worse, so the crew keeps flaps 1. From the cabin and on the flight controls page they see the ailerons move erratically against the captain's inputs. They settle on direct mode for the rest of the flight.",GPIAAF:p.22
+14:08:00,story,12,"The captain flies. The co-pilot in the jump seat and the three technicians help work out what is wrong.",GPIAAF:p.21
+14:22:00,mark,,"Autopilot engagement attempt (the first of three the recorder shows; approximate)",GPIAAF:p.44
+14:26:00,story,14,"By trial and error the crew learns to fly the aircraft. It gets much better, but it never returns to normal, and pitch control stays difficult.",GPIAAF:p.22
+14:38:00,phase,,"East into clearer weather (time from the track)",GPIAAF:p.22
+14:38:00,story,12,"Flying east, the crew reaches better weather. With the ground in sight they can fly more precisely.",GPIAAF:p.22
+14:45:00,mark,,Turn south for Beja,GPIAAF:p.22
+14:45:00,phase,,South to Beja,GPIAAF:p.22
+14:45:05,story,14,"Air traffic control proposes an airport with good weather. The crew turns south. A pair of Portuguese Air Force F-16s joins them and leads them to Beja.",GPIAAF:p.22
+15:04:20,phase,,"First approach, runway 19R",GPIAAF:p.22
+15:04:20,gear,1,"Gear down (not recorded; estimated)",GPIAAF:p.22
+15:04:25,story,12,"A direct approach to runway 19R at Beja. With the control difficulties the approach is not stabilised and has to be discontinued.",GPIAAF:p.23
+15:08:00,mark,,Go-around (lowest point of the first approach),FR24
+15:08:00,phase,,Go-around,GPIAAF:p.23
+15:09:00,story,14,"The co-pilot flying as pilot monitoring is exhausted and unwell. The captain has the co-pilot from the jump seat take his place.",GPIAAF:p.23
+15:12:00,phase,,Second approach,GPIAAF:p.23
+15:18:40,mark,,Go-around (lowest point of the second approach),FR24
+15:18:40,phase,,Go-around,GPIAAF:p.23
+15:19:30,phase,,Third approach,GPIAAF:p.23
+15:19:35,story,12,A second non-stabilised approach ends in another go-around. The crew flies one more circuit.,GPIAAF:p.23
+15:26:50,mark,,Landing on runway 19L,GPIAAF:p.23
+15:26:50,phase,,Landing,GPIAAF:p.23
+15:26:55,story,12,"The aircraft drifts left of 19R and lands on the parallel runway, 19L. One tyre is damaged on a runway edge light.",GPIAAF:p.24
+15:27:25,mark,,Stopped: FLT CTR NO DISPATCH,GPIAAF:p.23
+15:27:26,story,10,"As it stops, the cockpit shows FLT CTR NO DISPATCH, the same flight-control message that maintenance had never resolved.",GPIAAF:p.23

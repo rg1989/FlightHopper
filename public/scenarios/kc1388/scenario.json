@@ -1,0 +1,70 @@
+{
+  "format": 1,
+  "id": "kc1388",
+  "title": "Air Astana Flight 1388",
+  "subtitle": "Alverca → Beja (bound for Minsk)",
+  "date": "2018-11-11",
+  "utcOffset": "+00:00",
+  "clockLabel": "UTC",
+  "start": "13:29:30",
+  "end": "15:28:00",
+  "note": "A reconstruction of a real accident in which nobody died. The aircraft rolled far more than its path can show: the recorded attitude is not published.",
+  "summary": [
+    "An Air Astana Embraer 190 on a positioning flight after heavy maintenance at Alverca, near Lisbon, bound for Almaty via Minsk, with three pilots and three Air Astana technicians aboard.",
+    "During the maintenance the aileron control cables of both wings had been installed reversed. From take-off in low cloud at 13:31 the aircraft did not respond normally and rolled abnormally.",
+    "In direct mode, by trial and error, the crew regained partial control, found clearer weather to the east and, escorted by two Portuguese Air Force F-16s, landed at Beja on the third approach at 15:27."
+  ],
+  "crew": [
+    { "role": "Commander", "name": "", "detail": "pilot flying; 40, 6,009 flight hours" },
+    { "role": "Co-pilot 1", "name": "", "detail": "pilot monitoring from Alverca to the first approach at Beja; 32, 2,692 hours" },
+    { "role": "Co-pilot 2", "name": "", "detail": "in the jump seat, then pilot monitoring; 26, 3,514 hours" }
+  ],
+  "aircraft": {
+    "registration": "P4-KCJ",
+    "type": "Embraer ERJ-190LR (190-100LR)",
+    "callsign": "KZR1388",
+    "operator": "Air Astana",
+    "model": "e75l",
+    "livery": {
+      "base": "#f7f7f7",
+      "belly": "#f7f7f7",
+      "fin": "#253168",
+      "engine": "#d0d5da"
+    }
+  },
+  "ending": {
+    "fadeFrom": "15:27:40",
+    "darkAt": "15:27:48",
+    "cardAfterS": 2,
+    "card": {
+      "title": "Air Astana Flight 1388",
+      "lines": [
+        "11 November 2018 · Embraer 190-100LR P4-KCJ, a positioning flight from Alverca to Almaty via Minsk.",
+        "The aileron control cables of both wings had been installed reversed during heavy maintenance, and the checks after it did not find it. For almost two hours the crew flew an aircraft that answered their roll inputs the wrong way.",
+        "They landed at Beja at 15:27. Of the six people aboard, one passenger was injured. The flight loads damaged the airframe: skin panels, the wing leading edges and the wing dihedral.",
+        "The investigation found the most probable cause in the improper aileron cable installation and the inadequate independent inspection after it, with contributing factors at the maintenance organisation, the manufacturer, the operator, the supervising authorities and in the crew's pre-flight checks.",
+        "Reconstruction from the final report of Portugal's GPIAAF (08/ACCID/2018, 2020) and Flightradar24's multilateration data."
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "GPIAAF",
+      "title": "GPIAAF (Portugal), final report 08/ACCID/2018: Embraer 190-100LR P4-KCJ, loss of control in flight, 11 November 2018 (June 2020), Portuguese and English",
+      "url": "https://asn.flightsafety.org/reports/2018/20181111_E190_P4-KCJ.pdf",
+      "note": "A copy of the GPIAAF publication on the Aviation Safety Network (gpiaaf.gov.pt refuses automated downloads). Page numbers are the report's printed ones, the same as the PDF's. History of the flight pp. 17–23; injuries and damage pp. 23–25; crew pp. 26–27; weather p. 40; aerodromes p. 42; DVDR data (Figure 13) p. 44, digitised by tools/scenarios/kc1388/digitize_fig13.py for the airspeed and load columns; the Beja approaches (Figure 3) p. 23; causes pp. 103–105."
+    },
+    {
+      "id": "FR24",
+      "title": "Flightradar24, “Flightradar24 data for Air Astana KC1388 E190 loss-of-control incident” (2018): the flight's multilateration data and altitude-only data",
+      "url": "https://www.flightradar24.com/blog/flightradar24-data-regarding-air-astana-kc1388-e190-loss-of-control-incident-near-lisbon/",
+      "note": "Positions 13:34:07–15:04:14 UTC (multilateration, about every 14 s) and the aircraft's own Mode S pressure altitudes to 15:26:15. track.csv smooths them with the app's own smoother (tools/scenarios/kc1388/reconstruct.ts); the files themselves are not in this repository. The take-off before the first position and the Beja approaches after the last one are reconstructed from the report."
+    },
+    {
+      "id": "OSM",
+      "title": "OpenStreetMap: the runways of Alverca (LPAR) and Beja (LPBJ); SRTM 30 m elevations via OpenTopoData",
+      "url": "https://www.openstreetmap.org/way/27507182",
+      "note": "© OpenStreetMap contributors, ODbL. Runway ends and end elevations for airport.json (tools/scenarios/kc1388/airports.ts), checked against the report's dimensions (p. 42)."
+    }
+  ]
+}

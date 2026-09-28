@@ -1,0 +1,111 @@
+[
+  {
+    "ident": "LPAR",
+    "name": "Alverca Air Base (BA1 / OGMA)",
+    "source": "Runway 04/22 ends from OpenStreetMap way 643904610 (2,500 m, as the GPIAAF report §1.10 gives it); width 45 m (report); elevation 11 ft (SRTM: the Tagus bank, 0–3 m). Heights: MSL + EGM96.",
+    "lat": 38.8833,
+    "lon": -9.0301,
+    "elevFt": 11,
+    "nM": 53.98,
+    "runways": [
+      {
+        "lengthFt": 8195,
+        "widthFt": 148,
+        "surface": "ASP",
+        "ends": [
+          {
+            "ident": "04",
+            "lat": 38.8737041,
+            "lon": -9.037774,
+            "thrLat": 38.8737041,
+            "thrLon": -9.037774,
+            "displacedFt": 0,
+            "elevFt": 11,
+            "hdgTrueDeg": 32.5,
+            "thrHaeM": 57.32
+          },
+          {
+            "ident": "22",
+            "lat": 38.8926808,
+            "lon": -9.0222391,
+            "thrLat": 38.8926808,
+            "thrLon": -9.0222391,
+            "displacedFt": 0,
+            "elevFt": 11,
+            "hdgTrueDeg": 212.5,
+            "thrHaeM": 57.34
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "ident": "LPBJ",
+    "name": "Beja Air Base (BA11) / Beja Airport",
+    "source": "Runway ends from OpenStreetMap ways 27507182 (01L/19R, 60 m) and 157940294 + 1446007553 (01R/19L, 30 m); the GPIAAF report §1.10: 19R/01L 3,450 × 60 m, 19L/01R 3,449 × 30 m, concrete, airport 617 ft, ARP N38°04′44.05″ W007°55′56.63″. End elevations from SRTM 30 m. Heights: MSL + EGM96.",
+    "lat": 38.078903,
+    "lon": -7.932397,
+    "elevFt": 617,
+    "nM": 54.91,
+    "runways": [
+      {
+        "lengthFt": 11314,
+        "widthFt": 197,
+        "surface": "CON",
+        "ends": [
+          {
+            "ident": "01L",
+            "lat": 38.0634496,
+            "lon": -7.934437,
+            "thrLat": 38.0634496,
+            "thrLon": -7.934437,
+            "displacedFt": 0,
+            "elevFt": 627,
+            "hdgTrueDeg": 5.9,
+            "thrHaeM": 246
+          },
+          {
+            "ident": "19R",
+            "lat": 38.0943509,
+            "lon": -7.930368,
+            "thrLat": 38.0943509,
+            "thrLon": -7.930368,
+            "displacedFt": 0,
+            "elevFt": 623,
+            "hdgTrueDeg": 185.9,
+            "thrHaeM": 244.81
+          }
+        ]
+      },
+      {
+        "lengthFt": 9705,
+        "widthFt": 98,
+        "surface": "CON",
+        "ends": [
+          {
+            "ident": "01R",
+            "lat": 38.0654423,
+            "lon": -7.931698,
+            "thrLat": 38.0654423,
+            "thrLon": -7.931698,
+            "displacedFt": 0,
+            "elevFt": 630,
+            "hdgTrueDeg": 5.9,
+            "thrHaeM": 246.92
+          },
+          {
+            "ident": "19L",
+            "lat": 38.0919489,
+            "lon": -7.9282007,
+            "thrLat": 38.0919489,
+            "thrLon": -7.9282007,
+            "displacedFt": 0,
+            "elevFt": 607,
+            "hdgTrueDeg": 185.9,
+            "thrHaeM": 239.94
+          }
+        ]
+      }
+    ]
+  }
+]
