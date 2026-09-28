@@ -7,14 +7,16 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
-- **`main` is this handoff's commit.** `npm run check`: `tsc` clean, 1123/1123 in the worktree (1126 in the
-  main checkout with the uncommitted work below). `vite build` works (the usual chunk-size warning only).
-- **Uncommitted in the main checkout, not ours:** another session's voice-over/playbar work (`client/scenario/{format,run,
-  types}.ts` and tests, `client/ui/{icons,info,playbar}.*`, `public/scenarios/jal123/scenario.json`, untracked
-  `tools/scenarios/voiceover.py`, `tools/scenarios/jal123/voices.json`). Leave it alone. Work in a worktree
-  (`../FlightHopper-physics` on `feat/flight-physics` = `main` now) and fast-forward `main`: git refuses a merge that would
-  touch those files, and none of ours does.
-- **Pushed:** `origin/main` = `main` (2026-09-29, at the user's request). The next push needs the user's OK again.
+- **`main` is this handoff's commit; everything is merged into it** (2026-09-29, at the user's request): every branch
+  (`feat/flight-physics`, `worktree-kc1388-airspeed`, `build/mvp`, `feat/traffic-id`) has no commit outside `main`, and
+  the main checkout has no uncommitted work. The voice-over/playbar work that sat uncommitted since 2026-09-23 is
+  `42a01d9`; `feat/traffic-id` (traffic flight IDs, distances, a popup with Chase) is merged as `94988fe`.
+  `npm run check`: `tsc` clean, 1159/1159. `vite build` works (the usual chunk-size warning only).
+- **Worktrees still on disk:** `../FlightHopper-physics` (`feat/flight-physics` = `main`), `../FlightHopper-build`
+  (`build/mvp`, old), `.claude/worktrees/kc1388-airspeed` (another session's). Work in a worktree and fast-forward `main`.
+- **Pushed:** `origin/main` is `d0f8158`; the 14 commits since (the KC1388 physics and TAS display, the live attitude
+  envelope `804aa69`, the lit-streets night `865f6e8`, the voice-over, the traffic-id merge) are local. A push needs the
+  user's OK.
 
 ### What 2026-09-29 added (all on `main`)
 
