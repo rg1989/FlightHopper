@@ -101,6 +101,14 @@ test('traffic model: nose along the track, pitched with the climb, wings level, 
   near(h - 5_000, m.gearHeightM * 2, 0.2, 'origin a gear height above the wheels, times the factor')
 })
 
+test('traffic with a smoothed track flies its attitude (heading, pitch and bank) instead of the newest sample\'s', () => {
+  const att = { headingDeg: 131, pitchDeg: 4, rollDeg: -22 }
+  const hpr = trafficHpr(fe('x', { trackDeg: 90, vsFpm: 0, gsKt: 250, att }), 0, new HeadingPitchRoll())
+  near(hpr.heading, ((131 - 90) * Math.PI) / 180, 1e-9)
+  near(hpr.pitch, (4 * Math.PI) / 180, 1e-9)
+  near(hpr.roll, (-22 * Math.PI) / 180, 1e-9)
+})
+
 test('traffic: a climbing type model (its nose on glTF −Z) raises its nose, not its tail', () => {
   const b738 = manifest.models.find((x) => x.id === 'b738')!
   const nose = measureGlb(readFileSync(new URL(`public/${b738.uri}`, root))).nose

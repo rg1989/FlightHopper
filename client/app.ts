@@ -71,6 +71,10 @@ import './ui/layout.css'
 
 const POLL_MS = 1000 // view and chase both poll at 1 Hz; TrackRegistry's pollPeriodS says the same
 const PRUNE_AGE_S = 60 // forget an aircraft at least this long after its newest sample (Fleet: its own staleS if longer)
+// Chase traffic runs the chased aircraft's physics too (TrackRegistry.applyTo): a track per aircraft this close to it
+// (the 3-D traffic shows 10 nm), dropped 30 s after its newest sample.
+const TRAFFIC_TRACK_NM = 12
+const TRAFFIC_TRACK_KEEP_S = 30
 const FAILS_DOWN = 3 // failed polls in a row before the banner reports it
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
 const MIN_VIEW_NM = 20
@@ -479,6 +483,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const api = new ApiClient(cfg.apiBase)
   const fleet = new Fleet()
   let registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
+  let trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
   let clock = new RenderClock(MIN_DELAY_S)
   // A new selection is a camera cut: its first chase reply sets the render delay at once. Slewing there at 0.2 s/s would
   // take ~2 min on a sparse live feed (25 s between samples → 26 s delay).
@@ -703,6 +708,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       // ponytail: dead reckoning, not interpolation between samples: a turning aircraft is off by its turn. Upgrade:
       // keep two samples per hex in Fleet.
       all = fleet.entries(chasing ? tRenderMs : tServerMs)
+      if (chasing) trafficTracks.applyTo(all, tRenderMs)
       if (selected !== null) {
         const track = registry.get(selected)
         s = track?.stateAt(tRenderMs) ?? null
@@ -853,6 +859,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const r = view.value
       fleet.ingest(r.samples, r.info)
       if (current) for (const x of r.samples) if (x.hex === hex) mine.push(x)
+      if (chasing && chased !== null) trafficTracks.ingestNear(r.samples, chased.lat, chased.lon, TRAFFIC_TRACK_NM, hex)
+      else if (!chasing) trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
       status = r.status
       ok = true
     }
@@ -896,6 +904,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (api.ready) {
       const t = api.serverNowMs()
       fleet.prune(t, PRUNE_AGE_S)
+      trafficTracks.prune(t, TRAFFIC_TRACK_KEEP_S)
       // The chased aircraft is never pruned: on a lost signal it stays frozen at its last position under "Signal lost
       // Ns ago" (the track goes stale 8 s past its newest sample) until data returns or Esc. Pruning it made the model,
       // HUD and banner vanish with no word. The registry holds only this aircraft and is replaced on each selection.

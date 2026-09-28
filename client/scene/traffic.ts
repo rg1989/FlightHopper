@@ -75,11 +75,12 @@ export function hitAt(boxes: readonly Box[], n: number, x: number, y: number): s
 }
 
 /**
- * Cesium HeadingPitchRoll of a traffic aircraft from its newest sample (trafficMatrix turns model m to it): the nose along
- * its track (headingDeg when it has none), pitch from flight mechanics (aeroPitchRoll: path angle + angle of attack),
- * wings level (one sample has no turn rate). Traffic with a Track uses the track's attitude instead (Traffic.update).
+ * Cesium HeadingPitchRoll of a traffic aircraft (trafficMatrix turns model m to it): its Track's attitude when it has one
+ * (e.att); else from its newest sample: the nose along its track (headingDeg when it has none), pitch from flight
+ * mechanics (aeroPitchRoll: path angle + angle of attack), wings level (one sample has no turn rate).
  */
 export function trafficHpr(e: FleetEntry, headingDeg: number, out: HeadingPitchRoll): HeadingPitchRoll {
+  if (e.att) return hprFor(e.att, out)
   const gs = e.gsKt ?? 0
   // Slower than any wing flies (a hover, a glitch): level.
   const pr = gs < SLOW_KT ? { pitchDeg: 0, rollDeg: 0 } : aeroPitchRoll({

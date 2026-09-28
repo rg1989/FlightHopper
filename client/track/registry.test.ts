@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Sample } from '../../shared/types.ts'
+import type { FleetEntry } from '../types.ts'
 import { TrackRegistry } from './registry.ts'
 
 const T0 = 1_760_000_000_000
@@ -58,4 +59,30 @@ test('prune drops tracks whose newest sample is older than maxAgeS', () => {
   reg.prune(T0 + 80_001, 30)
   assert.equal(reg.get('bbb222'), undefined)
   assert.deepEqual(reg.states(T0 + 50_000), [])
+})
+
+test('ingestNear keeps only aircraft within range of a point, never the one skipped', () => {
+  const reg = new TrackRegistry()
+  reg.ingestNear([s('aaa111', 0), s('bbb222', 0, { lon: 35.5 }), s('ccc333', 0)], 32, 34.9, 12, 'ccc333')
+  assert.ok(reg.get('aaa111'))
+  assert.equal(reg.get('bbb222'), undefined) // ~30 nm east
+  assert.equal(reg.get('ccc333'), undefined) // the chased aircraft has its own track
+})
+
+test('applyTo writes each tracked aircraft\'s smoothed state over its fleet entry, and clears the attitude elsewhere', () => {
+  const reg = new TrackRegistry()
+  reg.ingest([0, 1, 2, 3, 4].map((t) => s('aaa111', t)))
+  const entry = (hex: string): FleetEntry => ({
+    hex, lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 60,
+    gapS: 1, quality: 'adsb2', info: null, att: { headingDeg: 1, pitchDeg: 2, rollDeg: 3 },
+  })
+  const es = [entry('aaa111'), entry('bbb222')]
+  reg.applyTo(es, T0 + 2500)
+  const st = reg.get('aaa111')!.stateAt(T0 + 2500)!
+  assert.equal(es[0].lat, st.lat)
+  assert.equal(es[0].hM, st.hM)
+  assert.equal(es[0].gsKt, st.gsKt)
+  assert.deepEqual(es[0].att, { headingDeg: st.headingDeg, pitchDeg: st.pitchDeg, rollDeg: st.rollDeg })
+  assert.equal(es[1].att, null)
+  assert.equal(es[1].lat, 0) // untracked: left as the fleet placed it
 })

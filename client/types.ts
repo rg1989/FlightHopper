@@ -124,6 +124,9 @@ export interface FleetEntry {
   gapS: number                                  // its usual gap between samples, s (a running average; 0 before a second one)
   quality: Quality
   info: AircraftInfo | null
+  // Chase traffic with its own Track (app.ts): the smoothed attitude, its position and speeds written over the entry's
+  // dead reckoning for this frame. Absent or null: from the newest sample (traffic.ts trafficHpr).
+  att?: { headingDeg: number; pitchDeg: number; rollDeg: number } | null
 }
 
 /** The user’s scene toggles (design D11). Persisted: URL > localStorage > defaults (both on). */
