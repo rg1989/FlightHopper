@@ -22,6 +22,13 @@ test('livery code: the operator, its brand for a subsidiary or single-partner re
   assert.equal(liveryOf('DLH').belly, liveryOf('DLH').base) // omitted fields default
 })
 
+test('Air Astana (KZR): white, its midnight-blue fin, light engines; colours only (its logo is not free-licensed)', () => {
+  assert.equal(liveryCode('KZR1388'), 'KZR')
+  const l = liveryOf('KZR')
+  assert.deepEqual([l.base, l.belly, l.fin, l.engine], ['#f7f7f7', '#f7f7f7', '#253168', '#d0d5da'])
+  assert.deepEqual([l.titleUrl, l.finUrl], [null, null])
+})
+
 test('table: colours are #rrggbb, aliases land on liveries, every decal file exists with a source, none unused', () => {
   const hex = /^#[0-9a-f]{6}$/
   for (const [code, l] of Object.entries(TABLE.liveries)) {

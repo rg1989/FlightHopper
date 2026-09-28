@@ -258,6 +258,11 @@
    "base": "#ffe600",
    "fin": "#ffe600",
    "engine": "#1a1a1a"
+  },
+  "KZR": {
+   "base": "#f7f7f7",
+   "fin": "#253168",
+   "engine": "#d0d5da"
   }
  },
  "logos": {
