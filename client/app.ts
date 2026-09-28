@@ -41,6 +41,7 @@ import { AircraftLights } from './scene/aircraftLights.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
+import { FlatTerrainProvider, areasFor, stripsFor, type AirfieldAirport } from './scene/flatTerrain.ts'
 import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
@@ -458,6 +459,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   document.addEventListener('fullscreenchange', onFullscreen)
   const runways = addRunways(viewer, airports)
+  // Runways lie flat in the terrain itself (flatTerrain.ts): the hero airports' always, a scenario's airfield (its
+  // package's airport.json, as it was then) while it plays.
+  const baseTerrain = viewer.terrainProvider
+  const heroStrips = stripsFor(airports)
+  viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, heroStrips, [])
+  let airfield: ReturnType<typeof addRunways> | null = null // the playing scenario's runways
   const buildings = new Buildings(viewer) // chase only: update() gets no focus in browse
   buildings.setGlass(prefs.glass)
   // The city lights go right above the satellite base layer, under the street map added next (browse shows it on top).
@@ -621,6 +628,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   async function startScenario(id: string, o: { t?: number; play?: boolean; cam?: Orbit | null; fromUrl?: boolean } = {}): Promise<void> {
     loadingScenario = id
     let scn: Scenario
+    // A package may carry its airfield as it was (airport.json: runways, flat rings); most have none (404).
+    const field = getJson<AirfieldAirport>(`${scenarioBase}scenarios/${id}/airport.json`).catch(() => null)
     try {
       scn = await loadScenario(scenarioBase, id)
     } catch (e) {
@@ -628,6 +637,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (loadingScenario === id) loadingScenario = null
       return
     }
+    const ap = await field // fetched alongside the package: settled by now
     if (stopped || loadingScenario !== id) return // stopped, or Esc while it loaded
     loadingScenario = null
     if (run !== null) endRun()
@@ -650,6 +660,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present) : null
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
+    if (ap !== null) {
+      airfield = addRunways(viewer, [ap])
+      viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, [...heroStrips, ...stripsFor([ap])], areasFor([ap]))
+    }
     sun.setEnabled(prefs.light)
     ui.dataset.mode = 'chase'
     ui.dataset.scenario = scn.id
@@ -666,6 +680,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   function endRun(): void {
     run?.destroy()
     run = null
+    if (airfield !== null) {
+      airfield.destroy()
+      airfield = null
+      viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, heroStrips, [])
+    }
     dress = null
     if (model) Dresser.undress(model)
     delete ui.dataset.scenario
@@ -788,10 +807,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     buildings.setNight(chasing && prefs.light && st !== null ? st.night : 0) // the Sun's night, not the moon's
     lights.endFrame(chasing && prefs.light && st !== null ? st.night : 0, now) // the aircraft this frame gave it
     runways.update(tf)
+    airfield?.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
     runways.setLight(chasing && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
+    airfield?.setLight(chasing && prefs.light && st !== null ? sunLook(st.elevDeg, runwayLook) : null)
     // No state (before the first samples, pruned, or a gap > 2 min): the model goes; the camera stays put.
     if (model) model.show = chasing && s !== null
     toggles.setBusy(topo.animating)
@@ -1014,6 +1035,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       map.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()
+      airfield?.destroy()
       buildings.destroy()
       viewer.destroy()
       delete (window as unknown as { viewer?: Viewer }).viewer

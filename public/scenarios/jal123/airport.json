@@ -1,0 +1,152 @@
+{
+  "ident": "RJTT",
+  "name": "Tokyo International (Haneda), 1985",
+  "source": "15L: the threshold and heading of JAL 123's take-off roll (track.csv, GSI:15L threshold); 33R, 04, 22 ends and the flat ring traced from GSI aerial photographs 1984–1986 (gazo3); elevations from the DFDR take-off roll (12–13 ft). Heights: MSL + EGM96.",
+  "lat": 35.5485,
+  "lon": 139.7685,
+  "elevFt": 12,
+  "nM": 35.81,
+  "runways": [
+    {
+      "lengthFt": 10099,
+      "widthFt": 197,
+      "surface": "ASP",
+      "ends": [
+        {
+          "ident": "15L",
+          "lat": 35.56189,
+          "lon": 139.76002,
+          "thrLat": 35.56189,
+          "thrLon": 139.76002,
+          "displacedFt": 0,
+          "elevFt": 12,
+          "hdgTrueDeg": 145.3,
+          "thrHaeM": 39.56
+        },
+        {
+          "ident": "33R",
+          "lat": 35.539106,
+          "lon": 139.77939,
+          "thrLat": 35.539106,
+          "thrLon": 139.77939,
+          "displacedFt": 0,
+          "elevFt": 13,
+          "hdgTrueDeg": 325.3,
+          "thrHaeM": 39.69
+        }
+      ]
+    },
+    {
+      "lengthFt": 8433,
+      "widthFt": 148,
+      "surface": "ASP",
+      "ends": [
+        {
+          "ident": "04",
+          "lat": 35.548335,
+          "lon": 139.755391,
+          "thrLat": 35.548335,
+          "thrLon": 139.755391,
+          "displacedFt": 0,
+          "elevFt": 12,
+          "hdgTrueDeg": 34.9,
+          "thrHaeM": 39.51
+        },
+        {
+          "ident": "22",
+          "lat": 35.567305,
+          "lon": 139.771664,
+          "thrLat": 35.567305,
+          "thrLon": 139.771664,
+          "displacedFt": 0,
+          "elevFt": 12,
+          "hdgTrueDeg": 214.9,
+          "thrHaeM": 39.55
+        }
+      ]
+    }
+  ],
+  "flat": [
+    {
+      "ring": [
+        [
+          35.564148,
+          139.758533
+        ],
+        [
+          35.560715,
+          139.763289
+        ],
+        [
+          35.562658,
+          139.767093
+        ],
+        [
+          35.568682,
+          139.770818
+        ],
+        [
+          35.568487,
+          139.775019
+        ],
+        [
+          35.567062,
+          139.775415
+        ],
+        [
+          35.564148,
+          139.781359
+        ],
+        [
+          35.559096,
+          139.784926
+        ],
+        [
+          35.552813,
+          139.79087
+        ],
+        [
+          35.544847,
+          139.792851
+        ],
+        [
+          35.539666,
+          139.797211
+        ],
+        [
+          35.534808,
+          139.79404
+        ],
+        [
+          35.539342,
+          139.783341
+        ],
+        [
+          35.537075,
+          139.779378
+        ],
+        [
+          35.542256,
+          139.772245
+        ],
+        [
+          35.547114,
+          139.759563
+        ],
+        [
+          35.548409,
+          139.75243
+        ],
+        [
+          35.558772,
+          139.753223
+        ],
+        [
+          35.562334,
+          139.755601
+        ]
+      ],
+      "elevFt": 12
+    }
+  ]
+}
