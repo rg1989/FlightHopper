@@ -2,14 +2,15 @@
 // Chase traffic (.planning/chase-traffic-design.md): the other aircraft within RANGE_NM of the chased one as 3-D models
 // (the one GLB, sized by ADS-B emitter category), each framed on screen by two corner brackets whose square is also
 // its click target.
-import { Cartesian2, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
-import type { PerspectiveFrustum, Viewer } from 'cesium'
+import { Cartesian2, Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
+import type { ModelNode, PerspectiveFrustum, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { aeroPitchRoll } from '../track/attitude.ts'
 import type { FleetEntry, ModelManifestEntry } from '../types.ts'
 import { LiveryShaders, liveryCode } from './livery.ts'
 import type { ModelPicker } from './modelFor.ts'
-import { fixMatrix, hprFor, modelUrl } from './model.ts'
+import { GearMotion, gearWanted, swingLegs } from './gear.ts'
+import { fixMatrix, hprFor, loadGearModel, modelUrl } from './model.ts'
 
 export const RANGE_NM = 10
 export const MAX_MODELS = 30
@@ -111,7 +112,26 @@ export function loadTrafficModel(m: ModelManifestEntry): Promise<Model> {
   })
 }
 
-interface Slot { m: ModelManifestEntry; model: Model; hex: string | null; e: FleetEntry | null; headingDeg: number; livery?: string | null }
+interface Slot {
+  m: ModelManifestEntry
+  model: Model
+  hex: string | null
+  e: FleetEntry | null
+  headingDeg: number
+  livery?: string | null
+  // its landing gear (manifest gear): the model, where it is, the last decision (null: a first look), when the height
+  // above the ground was last read and what it was, and the leg nodes swung to legsAt
+  gear: Model | null
+  motion: GearMotion
+  want: boolean | null
+  aglS: number
+  aglFt: number | null
+  nodes?: Array<ModelNode | undefined>
+  legsAt: number
+}
+
+const FT = 0.3048
+const AGL_EVERY_S = 0.5 // a traffic aircraft's height above the drawn ground is read this often (globe.getHeight picks)
 
 /**
  * The chase traffic, each aircraft on its type's model (ModelPicker). Models come from a pool per GLB that grows to the
@@ -127,6 +147,8 @@ export class Traffic {
   readonly #pick: ModelPicker
   readonly #layer: HTMLElement
   readonly #load: (m: ModelManifestEntry) => Promise<Model>
+  readonly #loadGear: (uri: string) => Promise<Model>
+  readonly #carto = new Cartographic()
   readonly #paint = new Map<string, LiveryShaders>()
   readonly #wantOf = new Map<ModelManifestEntry, number>()
   readonly #loading = new Map<string, number>()
@@ -145,11 +167,12 @@ export class Traffic {
   #nBoxes = 0
   #destroyed = false
 
-  constructor(viewer: Viewer, pick: ModelPicker, layer: HTMLElement, load = loadTrafficModel) {
+  constructor(viewer: Viewer, pick: ModelPicker, layer: HTMLElement, load = loadTrafficModel, loadGear = loadGearModel) {
     this.#viewer = viewer
     this.#pick = pick
     this.#layer = layer
     this.#load = load
+    this.#loadGear = loadGear
   }
 
   /**
@@ -179,6 +202,9 @@ export class Traffic {
         if (s === undefined) continue // none free and ready yet: not drawn this frame
         s.hex = e.hex
         s.headingDeg = e.trackDeg ?? 0
+        s.motion.reset() // its gear as first seen, not swinging there
+        s.want = null
+        s.aglS = Infinity
         this.#byHex.set(e.hex, s)
       }
       s.e = e
@@ -192,7 +218,7 @@ export class Traffic {
    * After the camera moved this frame: each selected model goes where FleetLayer placed its aircraft, and its brackets
    * around it. ibl: the chased model's image-based light (the Sun dims it at night), copied so the traffic dims too.
    */
-  update(placed: { positionOf(hex: string): Cartesian3 | undefined }, ibl?: Cartesian2): void {
+  update(placed: { positionOf(hex: string): Cartesian3 | undefined }, ibl?: Cartesian2, dtS = 0): void {
     const scene = this.#viewer.scene
     const cam = scene.camera
     const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
@@ -203,6 +229,7 @@ export class Traffic {
       const pos = placed.positionOf(s.hex)
       if (pos === undefined) {
         s.model.show = false
+        if (s.gear !== null) s.gear.show = false
         continue
       }
       const e = s.e
@@ -222,6 +249,7 @@ export class Traffic {
       const mm = trafficMatrix(pos, trafficHpr(e, s.headingDeg, this.#hpr), m, k * g, s.model.modelMatrix)
       if (ibl) s.model.imageBasedLighting.imageBasedLightingFactor = ibl // the setter copies it
       s.model.show = true
+      this.#gear(s, pos, mm, ibl, dtS)
       const bc = m.box ? Cartesian3.fromArray(m.box.centre, 0, this.#bc) : BOX_CENTRE
       const c = Matrix4.multiplyByPoint(mm, bc, this.#c)
       const depthM = Cartesian3.dot(Cartesian3.subtract(c, cam.positionWC, this.#v), cam.directionWC)
@@ -251,7 +279,10 @@ export class Traffic {
 
   destroy(): void {
     this.#destroyed = true
-    for (const s of this.#slots) this.#viewer.scene.primitives.remove(s.model)
+    for (const s of this.#slots) {
+      this.#viewer.scene.primitives.remove(s.model)
+      if (s.gear !== null) this.#viewer.scene.primitives.remove(s.gear)
+    }
     this.#slots.length = 0
     this.#byHex.clear()
     for (const el of this.#els) el.remove()
@@ -259,8 +290,39 @@ export class Traffic {
     this.#nBoxes = 0
   }
 
+  /**
+   * A slot's gear this frame: down or up as a crew would have it (gear.ts, from its state and its height over the drawn
+   * ground, read every AGL_EVERY_S), moving at the hydraulics' pace, drawn with the aircraft's matrix unless fully up.
+   */
+  #gear(s: Slot, pos: Cartesian3, mm: Matrix4, ibl: Cartesian2 | undefined, dtS: number): void {
+    const legs = s.m.gear?.legs
+    if (s.gear === null || legs === undefined || s.e === null) return
+    s.aglS += dtS
+    if (s.aglS >= AGL_EVERY_S) {
+      s.aglS = 0
+      const c = Cartographic.fromCartesian(pos, undefined, this.#carto)
+      const ground = c === undefined ? undefined : this.#viewer.scene.globe.getHeight(c)
+      s.aglFt = c === undefined || ground === undefined ? null : (c.height - ground) / FT
+    }
+    const e = s.e
+    s.want = gearWanted(s.want, { onGround: e.onGround, aglFt: s.aglFt, vsFpm: e.vsFpm, gsKt: e.gsKt })
+    s.motion.step(s.want, dtS)
+    if (s.motion.pos <= 0 || !s.gear.ready) {
+      s.gear.show = false
+      return
+    }
+    Matrix4.clone(mm, s.gear.modelMatrix)
+    if (ibl) s.gear.imageBasedLighting.imageBasedLightingFactor = ibl
+    s.gear.show = true
+    if (s.motion.pos !== s.legsAt) {
+      s.nodes = swingLegs(s.gear, legs, s.motion.pos, s.nodes)
+      s.legsAt = s.motion.pos
+    }
+  }
+
   #free(s: Slot): void {
     s.model.show = false
+    if (s.gear !== null) s.gear.show = false
     if (s.hex !== null) this.#byHex.delete(s.hex)
     s.hex = null
     s.e = null
@@ -283,7 +345,20 @@ export class Traffic {
           if (this.#destroyed) return void model.destroy()
           model.show = false
           this.#viewer.scene.primitives.add(model)
-          this.#slots.push({ m, model, hex: null, e: null, headingDeg: 0 })
+          const slot: Slot = { m, model, hex: null, e: null, headingDeg: 0, gear: null, motion: new GearMotion(), want: null, aglS: Infinity, aglFt: null, legsAt: -1 }
+          this.#slots.push(slot)
+          if (m.gear !== undefined) {
+            this.#loadGear(m.gear.uri).then(
+              (g) => {
+                if (this.#destroyed) return void g.destroy()
+                g.show = false
+                Matrix4.clone(model.modelMatrix, g.modelMatrix) // hidden, it still renders its first sky map: here, not at the Earth's centre
+                this.#viewer.scene.primitives.add(g)
+                slot.gear = g
+              },
+              (err: unknown) => console.warn(`FlightHopper: traffic gear ${m.gear!.uri} not loaded; flying without it:`, err),
+            )
+          }
         },
         (err: unknown) => {
           this.#loading.set(m.id, this.#loading.get(m.id)! - 1)

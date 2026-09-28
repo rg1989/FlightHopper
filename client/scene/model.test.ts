@@ -8,6 +8,7 @@ import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg } from '../../shared/geo.ts'
 import type { ModelManifest, RenderState } from '../types.ts'
 import { liveryFromSpec } from './livery.ts'
+import { RETRACT_S } from './gear.ts'
 import { ChaseModel, GLTF_TO_CESIUM, fixMatrix, hprFor, loadGearModel, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
 
 const root = new URL('../../', import.meta.url)
@@ -235,7 +236,14 @@ test('every manifest model: ≤ 1 MB (the default ≤ 5 MB), provenance, true si
     for (const k of ['license', 'author', 'source'] as const) assert.ok(e[k].length > 0, `${e.id} ${k}`)
     const a = measureGlb(readFileSync(url))
     near(a.lengthM * e.scale, e.lengthM, 0.05, `${e.id} lengthM`)
-    near(a.belowOriginM * e.scale, e.gearHeightM, 0.05, `${e.id} gearHeightM`)
+    if (e.gear === undefined) near(a.belowOriginM * e.scale, e.gearHeightM, 0.05, `${e.id} gearHeightM: its own lowest point`)
+    else {
+      // a geared model stands on its wheels: gearHeightM is the gear's, below the model's own lowest point
+      const g = measureGlb(readFileSync(new URL(`public/${e.gear.uri}`, root)))
+      near(g.belowOriginM * e.scale, e.gearHeightM, 0.05, `${e.id} gearHeightM: its wheels`)
+      assert.equal(e.gear.heightM, e.gearHeightM, `${e.id} gear heightM`)
+      assert.ok(a.belowOriginM * e.scale < e.gearHeightM, `${e.id}: its wheels below its nacelles or belly`)
+    }
     // measureGlb finds the nose from the fin, which a helicopter's rotor outranks: livetaiwan's models all face glTF −Z.
     const nose = e.id === 'ec135' ? new Cartesian3(-1, 0, 0) : a.nose
     const s = state(KSFO.lat, KSFO.lon, 0, 297.9)
@@ -287,8 +295,8 @@ test("b744 manifest: body box, wing tip, damage cut and gear lie on the GLB's bo
   assert.ok(c.tailHalfWidth > p.fin.halfWidth && c.tailHalfWidth < p.bodyHalfWidth)
   const g = measureGlb(readFileSync(new URL(`public/${b744.gear!.uri}`, root)))
   near(g.belowOriginM * b744.scale, b744.gear!.heightM, 0.05, 'gear heightM = origin → wheel bottom')
-  near(b744.gear!.heightM, 11.6, 1e-9, 'belly −8.6 less 3.0 m of gear')
-  assert.ok(b744.gear!.heightM > b744.gearHeightM, 'the wheels hang below the nacelles')
+  near(b744.gear!.heightM, 11.6, 0.01, 'belly −8.6 less 3.0 m of gear')
+  assert.equal(b744.gear!.heightM, b744.gearHeightM, 'it stands on its wheels')
   inside(-g.max.x, Z, 'gear front') // raw frame: the gear sits under the aircraft
   inside(-g.min.x, Z, 'gear back')
   inside(-g.max.y, X, 'gear right')
@@ -349,7 +357,7 @@ test('ChaseModel.setShape/setDamage: u_span and u_cut on the current shader, re-
   assert.equal(half.model.customShader!.uniforms.u_span.value, 59.6, 'u_span is in the unscaled mesh frame')
 })
 
-test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix, wheels gear.heightM below the origin', async () => {
+test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix; the body stands gearHeightM up throughout', async () => {
   const f = fakes()
   const body = fakeModel()
   const gear = fakeModel()
@@ -359,12 +367,12 @@ test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix, w
   const s = state(KSFO.lat, KSFO.lon, 0, 297.9)
   const heightOf = (mm: Matrix4): number => Cartographic.fromCartesian(Matrix4.getTranslation(mm, new Cartesian3())).height
 
-  cm.update(s)
   cm.setGear(true)
   cm.setGear(true)
   assert.deepEqual(asked, ['models/b744-gear.glb'], 'asked once')
-  cm.update(s)
-  near(heightOf(body.modelMatrix), b744.gearHeightM, 1e-3, 'until it has loaded, the gearless height')
+  cm.update(s, 0.016)
+  near(heightOf(body.modelMatrix), b744.gearHeightM, 1e-3, 'on its wheels even before they have loaded: no jump when they do')
+  assert.equal(cm.gearPos, 1, 'the first target at once')
 
   done(gear as unknown as Model)
   await Promise.resolve()
@@ -372,8 +380,7 @@ test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix, w
   assert.equal(gear.show, false, 'added hidden')
   assert.ok(Matrix4.equals(gear.modelMatrix, body.modelMatrix), "placed with the aircraft on load: its first environment map is not at the Earth's centre")
   body.imageBasedLighting.imageBasedLightingFactor = new Cartesian2(0.2, 0.2)
-  cm.update(s)
-  near(heightOf(body.modelMatrix), b744.gear!.heightM, 1e-3, 'wheels on the ground')
+  cm.update(s, 0.016)
   assert.ok(Matrix4.equals(gear.modelMatrix, body.modelMatrix))
   assert.equal(gear.show, true)
   assert.ok(Cartesian2.equals(gear.imageBasedLighting.imageBasedLightingFactor, new Cartesian2(0.2, 0.2)), 'lit as the aircraft (the Sun dims it at night)')
@@ -381,18 +388,24 @@ test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix, w
   cm.show = false
   assert.equal(gear.show, false)
   cm.show = true
-  cm.update(s)
+  cm.update(s, 0.016)
   assert.equal(gear.show, true)
 
-  cm.setGear(false)
-  assert.equal(gear.show, false)
-  cm.update(s)
-  assert.equal(gear.show, false)
-  near(heightOf(body.modelMatrix), b744.gearHeightM, 1e-3)
+  cm.setGear(false) // up: it swings up over RETRACT_S, drawn until it is in
+  cm.update(s, RETRACT_S / 2)
+  assert.equal(gear.show, true, 'on its way up')
+  near(cm.gearPos, 0.5, 0.01)
+  cm.update(s, RETRACT_S)
+  assert.equal(cm.gearPos, 0)
+  assert.equal(gear.show, false, 'up: not drawn')
+  near(heightOf(body.modelMatrix), b744.gearHeightM, 1e-3, 'the body did not move')
   cm.setGear(true)
   assert.equal(asked.length, 1, 'not loaded again')
-  cm.update(s)
-  assert.equal(gear.show, true)
+  cm.update(s, 1)
+  assert.equal(gear.show, true, 'coming down')
+  cm.snapGear(false)
+  cm.update(s, 0)
+  assert.equal(gear.show, false, 'a seek: up at once')
 
   cm.destroy()
   assert.deepEqual(f.added, [])

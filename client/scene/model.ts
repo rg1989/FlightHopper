@@ -3,8 +3,9 @@
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
 // ChaseModel also carries a scenario's look: its livery, a folded span, damage and a separate landing gear.
 import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, Quaternion, Transforms } from 'cesium'
-import type { CustomShader, Viewer } from 'cesium'
+import type { CustomShader, ModelNode, Viewer } from 'cesium'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
+import { GearMotion, swingLegs } from './gear.ts'
 import { LiveryShaders } from './livery.ts'
 import type { Livery } from './livery.ts'
 
@@ -196,7 +197,10 @@ export class ChaseModel {
   private readonly gearAsked = new Set<string>()
   private halfSpanM: number | null = null
   private damaged = false
-  private gearDown = false
+  private gearDown = false // the target: down (true) or up
+  private readonly gear = new GearMotion()
+  private readonly legs = new Map<Model, Array<ModelNode | undefined>>() // each gear model's leg nodes, in its manifest order
+  private legsAt = -1 // the position the legs were last swung to (−1: not yet)
 
   /** Prefer ChaseModel.load. Adds the model to the scene hidden: it appears on the first update(), not at the Earth's centre. */
   constructor(viewer: Viewer, m: ModelManifestEntry, model: Model, loader = loadChaseModel, gearLoader = loadGearModel) {
@@ -246,6 +250,7 @@ export class ChaseModel {
     this.livery = undefined
     this.model.show = this.visible && this.placed
     this.look()
+    this.legsAt = -1
     if (this.gearDown) this.askGear()
     return true
   }
@@ -278,27 +283,43 @@ export class ChaseModel {
     this.look()
   }
 
-  /** Draws the entry's separate landing gear (manifest gear), loaded on first use. Cheap when unchanged. */
+  /**
+   * The landing gear's target: down or up (manifest gear, loaded when first wanted down). It moves there at the
+   * hydraulics' pace (gear.ts GearMotion) as update() is called; the first target is taken at once. Cheap when unchanged.
+   */
   setGear(on: boolean): void {
-    if (on === this.gearDown) return
     this.gearDown = on
     if (on) this.askGear()
-    else this.hideGears()
+  }
+
+  /** The gear at its target at once: a scenario's seek, another aircraft. */
+  snapGear(on: boolean): void {
+    this.setGear(on)
+    this.gear.snap(on)
+  }
+
+  /** Where the gear is: 0 up … 1 down. */
+  get gearPos(): number {
+    return this.gear.pos
   }
 
   /**
-   * Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. With the gear
-   * drawn, the wheels are gear.heightM below the origin, and the gear takes the same matrix and image-based light.
+   * Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. The wheels are
+   * gearHeightM below the origin (a geared model's gear-down height, gear up or not: no jump as it moves); the gear
+   * takes the same matrix and image-based light, and its legs swing to where the gear is (dtS: seconds since the last
+   * update). Fully up, it is not drawn.
    */
-  update(state: RenderState): void {
-    const gear = this.drawnGear()
-    modelMatrixFor(state, this.m, this.model.modelMatrix, gear === null ? this.m.gearHeightM : gear.heightM)
+  update(state: RenderState, dtS = 0): void {
+    this.gear.step(this.gearDown, dtS)
+    modelMatrixFor(state, this.m, this.model.modelMatrix)
     this.placed = true
     this.model.show = this.visible
+    const gear = this.drawnGear()
     if (gear === null) return
     Matrix4.clone(this.model.modelMatrix, gear.model.modelMatrix)
     gear.model.imageBasedLighting.imageBasedLightingFactor = this.model.imageBasedLighting.imageBasedLightingFactor // the setter copies it
     gear.model.show = this.visible
+    this.swingLegs(gear.model)
   }
 
   get show(): boolean {
@@ -342,12 +363,23 @@ export class ChaseModel {
     s.setUniform('u_cut', this.damaged ? 1 : 0)
   }
 
-  /** The gear drawn now: down, the entry has one, and it has loaded. */
+  /** The gear drawn now: not fully up, the entry has one, and it has loaded (the others hidden). */
   private drawnGear(): { model: Model; heightM: number } | null {
     const g = this.m.gear
-    if (!this.gearDown || g === undefined) return null
-    const model = this.gears.get(g.uri)
-    return model === undefined ? null : { model, heightM: g.heightM }
+    const model = g === undefined ? undefined : this.gears.get(g.uri)
+    if (g === undefined || model === undefined || this.gear.pos <= 0) {
+      this.hideGears()
+      return null
+    }
+    return { model, heightM: g.heightM }
+  }
+
+  /** Each leg of the drawn gear to the gear's position (gear.ts swingLegs), when it moved; a gear without legs stays down. */
+  private swingLegs(model: Model): void {
+    const legs = this.m.gear?.legs
+    if (legs === undefined || !model.ready || this.gear.pos === this.legsAt) return
+    this.legs.set(model, swingLegs(model, legs, this.gear.pos, this.legs.get(model)))
+    this.legsAt = this.gear.pos
   }
 
   private askGear(): void {
@@ -360,6 +392,7 @@ export class ChaseModel {
         Matrix4.clone(this.model.modelMatrix, model.modelMatrix) // hidden, it still renders its first sky map: here, not at the Earth's centre
         this.viewer.scene.primitives.add(model)
         this.gears.set(g.uri, model)
+        this.legsAt = -1
       },
       (err: unknown) => console.warn(`FlightHopper: landing gear ${g.uri} not loaded; flying without it:`, err),
     )

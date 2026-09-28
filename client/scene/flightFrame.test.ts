@@ -265,6 +265,14 @@ test('liveFlightData: the track\'s smoothed altitude and airspeed, not the sampl
   assert.equal(liveFlightData({ ...S, altMslFt: null, iasKt: null }, RAW, null).altFt, 7975, 'none (on the ground): the sample\'s')
 })
 
+test('liveFlightData: the drawn gear, an estimate (the crew timing, not a broadcast)', () => {
+  const d = liveFlightData(S, RAW, 700, 'down')
+  assert.equal(d.gear, 'down')
+  assert.deepEqual([...d.derived].sort(), ['aglFt', 'gear', 'pitchDeg', 'rollDeg'])
+  assert.equal(liveFlightData(S, RAW, null, 'up').gear, 'up')
+  assert.equal(liveFlightData(S, RAW, null).gear, null, 'unknown: none')
+})
+
 test('liveFlightData: the heading is the drawn nose (track + the averaged crab) while the aircraft reports one; else none (TRK)', () => {
   assert.equal(liveFlightData(S, RAW, null).hdgDeg, S.headingDeg, 'not the raw Comm-B heading: a stale snapshot, and the model shows the drawn one')
   assert.equal(liveFlightData(S, { ...RAW, true_heading: undefined }, null).hdgDeg, null)

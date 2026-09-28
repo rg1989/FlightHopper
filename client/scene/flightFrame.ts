@@ -179,6 +179,8 @@ export function frameLayout(
 
 const LIVE_DERIVED: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg'])
 const LIVE_DERIVED_AGL: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt'])
+const LIVE_DERIVED_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'gear'])
+const LIVE_DERIVED_AGL_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt', 'gear'])
 
 /**
  * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, heading, track and attitude, and
@@ -189,7 +191,7 @@ const LIVE_DERIVED_AGL: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'ro
  * track + its averaged crab), the attitude synthesised from the path, so an estimate; aglFt (the app's ground under the
  * aircraft) is one too. One line per field: each is the one place its source is chosen.
  */
-export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null): FlightData {
+export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null, gear: FlightData['gear'] = null): FlightData {
   const n = (v: number | undefined): number | null => (fin(v) ? v : null)
   return {
     altFt: s.altMslFt ?? s.altBaroFt,
@@ -204,10 +206,10 @@ export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt
     g: null,
     windFromDeg: n(raw?.wd),
     windKt: n(raw?.ws),
-    gear: null,
+    gear, // the drawn gear (gear.ts), as a crew would have it: an estimate
     flaps: null,
     epr: null,
-    derived: aglFt === null ? LIVE_DERIVED : LIVE_DERIVED_AGL,
+    derived: gear === null ? (aglFt === null ? LIVE_DERIVED : LIVE_DERIVED_AGL) : aglFt === null ? LIVE_DERIVED_GEAR : LIVE_DERIVED_AGL_GEAR,
   }
 }
 

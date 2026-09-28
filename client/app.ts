@@ -42,6 +42,7 @@ import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
 import { FlatTerrainProvider, areasFor, stripsFor, type AirfieldAirport } from './scene/flatTerrain.ts'
+import { gearWanted } from './scene/gear.ts'
 import { Sun, parseSunParam, sunLook, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
@@ -368,6 +369,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let chasing = selected !== null && (view0.chase || view0.at === null)
   let chased: RenderState | null = null // the selected aircraft as drawn in the last frame that had it
   let groundM: number | null = null // the ground drawn under it (lag-corrected), null while unknown
+  let liveGear: boolean | null = null // the chased aircraft's gear as a crew would have it (gear.ts); null: a first look
   // The last terrain readings under the aircraft and under the chase camera, with the points they were read at.
   // Topography.ground rescales them for an undefined reading (Cesium's picker race, in runs during an animation) within
   // 50 m of that point: about the first 0.5 s of a run at 180 kt. Reset on each selection.
@@ -563,6 +565,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     relatchPending = chasing && hex !== null
     chaseRaw = null
     chaseInfo = null
+    liveGear = null // another aircraft: its gear as first seen, not swinging there
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     snapClock = hex !== null
@@ -778,22 +781,29 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
       if (sf !== null) {
         if (model !== null && dress?.apply(model, sf.event.damage.has('fin'), sf.event.gear)) sun.attachModel(model.model)
+        if (sf.jumped) model?.snapGear(sf.event.gear) // a seek: the gear as it was then, not swinging there
+        liveGear = null
       } else {
         const ci = chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info) ?? null
         if (model !== null && pick !== null && model.use(pick.for(ci?.typeCode ?? null, ci?.category ?? null))) sun.attachModel(model.model)
         model?.paint(liveryCode(ci?.callsign ?? null))
+        // The gear as a crew would have it (gear.ts), from the height over the ground drawn under the aircraft.
+        const want = gearWanted(liveGear, { onGround: placed.onGround, aglFt: groundM === null ? null : (s.hM - groundM) / FT, vsFpm: placed.vsFpm, gsKt: placed.gsKt })
+        if (liveGear === null) model?.snapGear(want)
+        else model?.setGear(want)
+        liveGear = want
       }
-      model?.update(placed)
+      model?.update(placed, dtS)
       if (model !== null) lights.forChase(model.model, model.entry, placed, sf?.event.damage.has('fin') ?? false)
       if (sf?.jumped) chaseCam.snapHeading() // a seek: behind the aircraft at once, not a swing round to it
       clearanceM = chaseCam.update(placed, dtS).clearanceM
-      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame
+      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, dtS) // after the camera: brackets match this frame
       traffic?.forEachDrawn(lights.forTraffic)
       if (model !== null) {
         // The flight-data frame, after the camera (it projects the model). Height above the ground only over the true
         // relief: flattened or growing, the ground drawn is not the ground.
         const aglFt = groundM === null || !prefs.topo || topo.animating ? null : Math.max(0, placed.hM - groundM) / FT
-        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt)
+        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up')
         flightFrame.update(viewer, model.model.modelMatrix, model.entry, data, frameSafe(now))
         framed = true
       }

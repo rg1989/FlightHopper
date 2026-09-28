@@ -2,14 +2,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { measureGlb } from '../../client/scene/model.ts'
-import { b744Gear, GEAR_GLB, glb, WHEEL_BOTTOM_Y } from './gear-glb.ts'
+import { Cartesian3, Matrix3, Matrix4, Quaternion } from 'cesium'
+import { GLTF_TO_CESIUM, fixMatrix } from '../../client/scene/model.ts'
+import type { ModelManifest } from '../../client/types.ts'
+import { GEAR, allGear, gearFor, rootMatrix } from './gear-glb.ts'
+import { MANIFEST, loadBody } from './light-anchors.ts'
 
-const bytes = glb(b744Gear())
+const manifest: ModelManifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${msg} got ${a}, expected ${b} ± ${tol}`)
+const built = allGear(manifest)
 
-/** The JSON chunk and every primitive's POSITION and NORMAL as [x, y, z] triples (raw glTF frame). */
-function parse(b: Uint8Array): { gltf: any; prims: { pos: number[][]; nrm: number[][] }[] } {
+/** The JSON chunk and, per node, its primitives' POSITIONs and NORMALs as [x, y, z] (its own frame). */
+function parse(b: Uint8Array): { gltf: any; nodes: { name: string; pos: number[][]; nrm: number[][] }[] } {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
   const jsonLen = dv.getUint32(12, true)
   const gltf = JSON.parse(new TextDecoder().decode(b.subarray(20, 20 + jsonLen)))
@@ -19,100 +23,105 @@ function parse(b: Uint8Array): { gltf: any; prims: { pos: number[][]; nrm: numbe
     const o = bin + (gltf.bufferViews[a.bufferView].byteOffset ?? 0) + (a.byteOffset ?? 0)
     return Array.from({ length: a.count }, (_, k) => [0, 1, 2].map((c) => dv.getFloat32(o + 12 * k + 4 * c, true)))
   }
-  const prims = gltf.meshes[0].primitives.map((p: any) => ({ pos: read(p.attributes.POSITION), nrm: read(p.attributes.NORMAL) }))
-  return { gltf, prims }
+  const nodes = gltf.nodes.slice(1).map((n: any) => ({
+    name: n.name,
+    pos: gltf.meshes[n.mesh].primitives.flatMap((p: any) => read(p.attributes.POSITION)),
+    nrm: gltf.meshes[n.mesh].primitives.flatMap((p: any) => read(p.attributes.NORMAL)),
+  }))
+  return { gltf, nodes }
 }
 
-const { gltf, prims } = parse(bytes)
-const all = prims.flatMap((p) => p.pos)
-
-test('b744 gear: a glTF 2.0 GLB that measureGlb reads; the wheels touch y = −11.6 (belly −8.6 less 3.0 m)', () => {
-  assert.equal(WHEEL_BOTTOM_Y, -11.6)
-  near(measureGlb(bytes).belowOriginM, 11.6, 0.001)
-  near(Math.min(...all.map((p) => p[1])), -11.6, 0.001)
-  assert.equal(gltf.asset.version, '2.0')
-  assert.equal(gltf.extensionsRequired, undefined)
+test('every airliner and business jet gets a gear; light aircraft, the helicopter and the Cesium demo model do not', () => {
+  assert.deepEqual(built.map((b) => b.e.id).sort(), Object.keys(GEAR).sort())
+  for (const id of ['c182', 'ec135', 'cesium-air']) assert.equal(GEAR[id], undefined, id)
 })
 
-test('≤ 600 triangles; POSITION and NORMAL only (with min/max); every normal a unit vector on the counter-clockwise side', () => {
-  const tris = prims.reduce((n, p) => n + p.pos.length / 3, 0)
-  assert.ok(tris <= 600, `${tris} triangles`)
-  for (const p of gltf.meshes[0].primitives) {
-    assert.deepEqual(Object.keys(p.attributes).sort(), ['NORMAL', 'POSITION'])
-    assert.equal(p.indices, undefined)
-    const a = gltf.accessors[p.attributes.POSITION]
-    assert.equal(a.min.length, 3)
-    assert.equal(a.max.length, 3)
+test('the root node turns the body frame into the glTF frame: GLTF_TO_CESIUM · root = fixMatrix⁻¹', () => {
+  for (const { e } of built) {
+    const m = Matrix4.multiply(GLTF_TO_CESIUM, Matrix4.fromArray(rootMatrix(e)), new Matrix4())
+    const want = Matrix3.transpose(fixMatrix(e), new Matrix3())
+    const got = Matrix4.getMatrix3(m, new Matrix3())
+    for (let i = 0; i < 9; i++) near(got[i], want[i], 1e-8, `${e.id} [${i}]`)
   }
-  for (const { pos, nrm } of prims) {
-    assert.equal(pos.length % 3, 0)
-    for (let t = 0; t < pos.length; t += 3) {
-      const [a, b, c] = [pos[t], pos[t + 1], pos[t + 2]]
-      const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
-      const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
-      const g = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
-      for (const n of nrm.slice(t, t + 3)) {
-        near(Math.hypot(...n), 1, 1e-5, 'unit normal')
-        assert.ok(g[0] * n[0] + g[1] * n[1] + g[2] * n[2] > 0, `triangle ${t / 3} winds against its normal`)
+})
+
+test('each gear: its wheels touch heightM below the origin; its struts start inside the skin; nose ahead of the mains', () => {
+  for (const { e, bytes, entry } of built) {
+    const g = gearFor(e, GEAR[e.id], loadBody(e))
+    const { gltf, nodes } = parse(bytes)
+    assert.equal(gltf.asset.version, '2.0')
+    assert.deepEqual(nodes.map((n) => n.name), g.legs.map((l) => l.node))
+    assert.deepEqual(entry.legs!.map((l) => l.node), g.legs.map((l) => l.node))
+    let low = Infinity
+    for (const [i, n] of nodes.entries()) {
+      const h = gltf.nodes[i + 1].translation
+      for (const p of n.pos) low = Math.min(low, p[2] + h[2])
+      assert.ok(Math.max(...n.pos.map((p) => p[2])) <= 1e-6, `${e.id} ${n.name}: nothing above its hinge`)
+    }
+    near(-low, entry.heightM, 0.01, `${e.id} wheels at −heightM`)
+    const nose = gltf.nodes.find((n: any) => n.name === 'nose').translation
+    const mainL = gltf.nodes.find((n: any) => n.name === 'mainL').translation
+    near(nose[0] - mainL[0], GEAR[e.id].wheelbaseM, 1e-6, `${e.id} wheelbase`)
+    assert.ok(mainL[1] > 0.6 * GEAR[e.id].trackM / 2 && mainL[1] <= GEAR[e.id].trackM / 2 + 1e-9, `${e.id} left main on the left, at most the published track`)
+    // the hinge sits just inside the skin: above the lowest skin within 3 m of it, by no more than 2 m
+    const m = loadBody(e)
+    for (const node of gltf.nodes.slice(1)) {
+      const [x, y, z] = node.translation
+      let skin = Infinity
+      for (let k = 0; k < m.p.length; k += 3) if (Math.hypot(m.p[k] - x, m.p[k + 1] - y) < 3) skin = Math.min(skin, m.p[k + 2])
+      assert.ok(skin < Infinity && z >= skin - 0.05 && z <= skin + 2, `${e.id} ${node.name}: hinge ${z.toFixed(2)} vs the skin ${skin.toFixed(2)}`)
+    }
+  }
+})
+
+test('≤ 800 triangles a gear; every normal a unit vector on the counter-clockwise side', () => {
+  for (const { e, bytes } of built) {
+    const { nodes } = parse(bytes)
+    const tris = nodes.reduce((n, x) => n + x.pos.length / 3, 0)
+    assert.ok(tris <= 800, `${e.id}: ${tris} triangles`)
+    for (const { pos, nrm } of nodes) {
+      for (let t = 0; t < pos.length; t += 3) {
+        const [a, b, c] = [pos[t], pos[t + 1], pos[t + 2]]
+        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+        const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+        const g = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+        for (const n of nrm.slice(t, t + 3)) {
+          near(Math.hypot(...n), 1, 1e-5, 'unit normal')
+          assert.ok(g[0] * n[0] + g[1] * n[1] + g[2] * n[2] > 0, `${e.id}: triangle ${t / 3} winds against its normal`)
+        }
       }
     }
   }
 })
 
-test('layout: nose gear at z ≈ −28; main wheels within z −2.5…+3.3 under legs at x ±1.9 (body) and ±5.5 (wing)', () => {
-  const nose = all.filter((p) => p[2] < -20)
-  near((Math.min(...nose.map((p) => p[2])) + Math.max(...nose.map((p) => p[2]))) / 2, -28, 0.05, 'nose gear z')
-  const mains = all.filter((p) => p[2] > -20)
-  assert.ok(Math.min(...mains.map((p) => p[2])) >= -2.5 && Math.max(...mains.map((p) => p[2])) <= 3.3, 'mains within z −2.5…+3.3')
-  for (const x of [-5.5, -1.9, 1.9, 5.5]) {
-    const leg = mains.filter((p) => Math.abs(p[0] - x) < 0.9)
-    near((Math.min(...leg.map((p) => p[0])) + Math.max(...leg.map((p) => p[0]))) / 2, x, 0.01, 'leg x')
-    near(Math.min(...leg.map((p) => p[1])), -11.6, 0.001, `wheels under x ${x}`)
-  }
-  assert.equal(all.filter((p) => Math.abs(p[0]) > 6.5).length, 0, 'nothing outboard of the wing gear')
-  assert.ok(Math.max(...all.map((p) => p[1])) < -7, 'struts end inside the belly and wing (≥ −8.6 / −7.3)')
-})
-
-test('no see-through tube ends: every open rim is inside the skin (y > −8.6) or inside a closed part (beam, wheel, axle)', () => {
-  // Parts are the connected pieces of the triangle soup (vertices shared by position); a rim edge has one triangle.
-  // A part closes the space inside its bounding box when it has no rim below the skin, or when each such rim is inside
-  // a part that does (the nose axle: open ends inside the wheels, the strut's end inside it).
-  const key = (p: number[]): string => p.map((c) => c.toFixed(4)).join(',')
-  const tris = prims.flatMap(({ pos }) => Array.from({ length: pos.length / 3 }, (_, t) => pos.slice(3 * t, 3 * t + 3)))
-  const up = new Map<string, string>()
-  const root = (k: string): string => (up.has(k) && up.get(k) !== k ? root(up.get(k)!) : k)
-  const edges = new Map<string, number>()
-  for (const t of tris) {
-    const [a, b, c] = t.map(key)
-    for (const k of [b, c]) up.set(root(k), root(a))
-    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
-      const e = u < v ? `${u}|${v}` : `${v}|${u}`
-      edges.set(e, (edges.get(e) ?? 0) + 1)
+test('retraction: the nose swings forward and up, the mains inboard (or forward), each by 90°', () => {
+  for (const { e, entry } of built) {
+    const legs = entry.legs!
+    const swing = (node: string): Cartesian3 => {
+      const l = legs.find((x) => x.node === node)!
+      const r = Matrix3.fromQuaternion(
+        // right-handed rotation of the leg's downward axis
+        Quaternion.fromAxisAngle(Cartesian3.fromArray(l.axis), (l.upDeg * Math.PI) / 180),
+      )
+      return Matrix3.multiplyByVector(r, new Cartesian3(0, 0, -1), new Cartesian3())
+    }
+    const n = swing('nose')
+    assert.ok(n.x > 0.99, `${e.id} nose gear folds forward: ${n}`)
+    const l = swing('mainL')
+    const r = swing('mainR')
+    if (GEAR[e.id].mainsRetract === 'inboard') {
+      assert.ok(l.y < -0.99 && r.y > 0.99, `${e.id} mains fold inboard: ${l} ${r}`)
+    } else {
+      assert.ok(l.x > 0.99 && r.x > 0.99, `${e.id} mains fold forward`)
     }
   }
-  const parts = new Map<string, { lo: number[]; hi: number[]; rims: number[][] }>()
-  for (const p of tris.flat()) {
-    const r = root(key(p))
-    const b = parts.get(r) ?? { lo: [...p], hi: [...p], rims: [] }
-    for (const c of [0, 1, 2]) [b.lo[c], b.hi[c]] = [Math.min(b.lo[c], p[c]), Math.max(b.hi[c], p[c])]
-    parts.set(r, b)
-  }
-  for (const [e, n] of edges) {
-    if (n !== 1) continue
-    for (const v of e.split('|')) if (Number(v.split(',')[1]) <= -8.6) parts.get(root(v))!.rims.push(v.split(',').map(Number))
-  }
-  assert.ok([...parts.values()].some((b) => b.rims.length > 0), 'the struts are open tubes')
-  const closed = new Set([...parts.values()].filter((b) => b.rims.length === 0))
-  const inside = (p: number[]): boolean => [...closed].some((b) => [0, 1, 2].every((c) => p[c] > b.lo[c] + 1e-3 && p[c] < b.hi[c] - 1e-3))
-  for (let grew = true; grew; ) {
-    grew = false
-    for (const b of parts.values()) if (!closed.has(b) && b.rims.every(inside)) grew = Boolean(closed.add(b))
-  }
-  for (const b of parts.values()) {
-    if (!closed.has(b)) assert.fail(`open rim at ${b.rims.find((p) => !inside(p))} is not inside a closed part`)
+})
+
+test('public/models/<id>-gear.glb and the manifest are up to date (regenerate: node tools/models/gear-glb.ts --write)', () => {
+  for (const { e, bytes, entry } of built) {
+    assert.deepEqual(new Uint8Array(readFileSync(new URL(`../../public/${entry.uri}`, import.meta.url))), bytes, e.id)
+    assert.deepEqual(e.gear, entry, `${e.id} manifest gear`)
+    assert.equal(e.gearHeightM, entry.heightM, `${e.id} stands on its wheels`)
   }
 })
 
-test('public/models/b744-gear.glb is up to date (regenerate: node tools/models/gear-glb.ts)', () => {
-  assert.deepEqual(new Uint8Array(readFileSync(GEAR_GLB)), bytes)
-})

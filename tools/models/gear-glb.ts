@@ -1,20 +1,54 @@
 // tools/models/gear-glb.ts
-// Writes public/models/b744-gear.glb: the Boeing 747's landing gear, down, as boxes and eight-sided wheels in the raw
-// frame of public/models/b744.glb (glTF: +X right wing, +Y up, −Z nose; metres). b744.glb has no gear; ChaseModel.setGear
-// draws this one with the aircraft's matrix. No dependencies: a glTF 2.0 GLB with POSITION and NORMAL, no indices.
+// Each airliner's landing gear: public/models/<id>-gear.glb and its manifest `gear` entry. The type models are joined
+// meshes without gear (they sat on their engines). The gear is authored in the body frame (nose +X, left +Y, up +Z;
+// metres, the models' own unit: every manifest scale is 1), one node per leg hinged at the top of its strut, under a
+// root node that turns the body frame into the GLB's glTF frame (fixMatrix⁻¹ then GLTF_TO_CESIUM⁻¹, what Cesium and
+// modelMatrixFor apply to the aircraft). The app swings each leg about its hinge to retract it (manifest legs: node,
+// axis in the body frame, upDeg).
 //
-//   node tools/models/gear-glb.ts [out.glb]
+//   node tools/models/gear-glb.ts            print each model's `"gear": {…}` line
+//   node tools/models/gear-glb.ts --write    write the GLBs, each model's gear line and its gearHeightM (wheels down)
 //
-// Layout from public 747 dimensions (scenarios model report §4), approximate: nose gear at z −28 (7.5 m behind the
-// nose); main wheels within z −2.5…+3.3, the wing gear (x ±5.5) 3.0 m ahead of the body gear (x ±1.9); 4-wheel bogies
-// (1.47 m axle spacing, 1.12 m track, 49 in tyres), 2 nose wheels (46 in). Wheel bottoms 3.0 m below the belly (y −8.6).
-import { writeFileSync } from 'node:fs'
+// Layout per type from published dimensions (GEAR, approximate; E175's wheelbase fitted to its model's wing), the nose gear noseAftM behind the model's nose tip,
+// the mains wheelbaseM behind it, trackM apart; each strut from inside the skin above it (a ray from below: the wing or
+// the belly) down to its axle; the wheels touch clearanceM below the model's lowest point (its engines, or its belly).
+import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-
-export const GEAR_GLB = fileURLToPath(new URL('../../public/models/b744-gear.glb', import.meta.url))
-export const WHEEL_BOTTOM_Y = -11.6
+import { Matrix3, Matrix4 } from 'cesium'
+import { GLTF_TO_CESIUM, fixMatrix } from '../../client/scene/model.ts'
+import type { ModelManifest, ModelManifestEntry } from '../../client/types.ts'
+import { MANIFEST, loadBody, ray, type Mesh } from './light-anchors.ts'
 
 type V = [number, number, number]
+
+/** A type's gear, metres. Tyres: [diameter, width]. */
+export interface GearSpec {
+  noseAftM: number // nose gear axle behind the nose tip
+  wheelbaseM: number // nose gear axle to the main (wing) gear's centre
+  trackM: number // between the main legs' centre lines
+  mains: 1 | 2 | 4 | 6 // wheels per main leg: single, dual, bogie of 2 or 3 axles
+  mainTyre: [number, number]
+  noseTyre: [number, number]
+  noseWheels?: 1 | 2
+  clearanceM: number // the wheels' bottom this far below the model's lowest point
+  mainsRetract: 'inboard' | 'forward'
+  body?: { aftM: number; trackM: number } // 747 body gear: this far behind the wing gear, this far apart
+}
+
+export const GEAR: Record<string, GearSpec> = {
+  a320: { noseAftM: 5.1, wheelbaseM: 12.64, trackM: 7.59, mains: 2, mainTyre: [1.17, 0.43], noseTyre: [0.76, 0.22], clearanceM: 0.55, mainsRetract: 'inboard' },
+  a321: { noseAftM: 5.1, wheelbaseM: 16.91, trackM: 7.59, mains: 2, mainTyre: [1.24, 0.48], noseTyre: [0.76, 0.22], clearanceM: 0.5, mainsRetract: 'inboard' },
+  b738: { noseAftM: 3.4, wheelbaseM: 15.6, trackM: 5.72, mains: 2, mainTyre: [1.13, 0.42], noseTyre: [0.69, 0.2], clearanceM: 0.46, mainsRetract: 'inboard' },
+  b773: { noseAftM: 5.6, wheelbaseM: 31.22, trackM: 10.97, mains: 6, mainTyre: [1.32, 0.53], noseTyre: [1.09, 0.44], clearanceM: 0.8, mainsRetract: 'inboard' },
+  b789: { noseAftM: 5.1, wheelbaseM: 25.6, trackM: 9.8, mains: 4, mainTyre: [1.37, 0.53], noseTyre: [1.02, 0.41], clearanceM: 0.9, mainsRetract: 'inboard' },
+  a333: { noseAftM: 5.0, wheelbaseM: 25.37, trackM: 10.68, mains: 4, mainTyre: [1.37, 0.53], noseTyre: [1.14, 0.46], clearanceM: 0.75, mainsRetract: 'inboard' },
+  a359: { noseAftM: 5.3, wheelbaseM: 28.67, trackM: 10.6, mains: 4, mainTyre: [1.27, 0.51], noseTyre: [1.02, 0.41], clearanceM: 0.9, mainsRetract: 'inboard' },
+  e75l: { noseAftM: 3.7, wheelbaseM: 11.3, trackM: 5.94, mains: 2, mainTyre: [0.86, 0.27], noseTyre: [0.61, 0.2], clearanceM: 0.6, mainsRetract: 'inboard' },
+  crj9: { noseAftM: 2.8, wheelbaseM: 17.3, trackM: 4.0, mains: 2, mainTyre: [0.91, 0.3], noseTyre: [0.53, 0.14], clearanceM: 0.55, mainsRetract: 'inboard' },
+  at75: { noseAftM: 2.9, wheelbaseM: 10.77, trackM: 4.1, mains: 2, mainTyre: [0.86, 0.22], noseTyre: [0.6, 0.18], clearanceM: 0.55, mainsRetract: 'forward' },
+  c550: { noseAftM: 2.2, wheelbaseM: 5.4, trackM: 3.6, mains: 1, mainTyre: [0.56, 0.15], noseTyre: [0.46, 0.11], noseWheels: 1, clearanceM: 0.35, mainsRetract: 'inboard' },
+  b744: { noseAftM: 7.5, wheelbaseM: 26.9, trackM: 11.0, mains: 4, mainTyre: [1.24, 0.43], noseTyre: [1.18, 0.41], clearanceM: 1.89, mainsRetract: 'inboard', body: { aftM: 3.0, trackM: 3.8 } },
+}
 
 /** One primitive: a triangle soup (three vertices per triangle) and its material. */
 export interface Part {
@@ -24,6 +58,20 @@ export interface Part {
   roughness: number
   pos: number[]
   nrm: number[]
+}
+
+/** One leg: its node, its hinge (body frame, metres), its geometry relative to the hinge, and how it retracts. */
+export interface Leg {
+  node: string
+  hinge: V
+  parts: Part[]
+  axis: V // body frame
+  upDeg: number // retracted: this far about axis (right-handed)
+}
+
+export interface Gear {
+  legs: Leg[]
+  heightM: number // the model origin to the wheels' bottom, gear down
 }
 
 const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -40,17 +88,15 @@ function tri(p: Part, a: V, b: V, c: V, na: V, nb: V = na, nc: V = na): void {
   }
 }
 
-/** A box around (cx, cy, cz) with half sizes h; openAxis: without its two faces across that axis (a tube whose ends are hidden). */
-function box(p: Part, [cx, cy, cz]: V, [hx, hy, hz]: V, openAxis?: 0 | 1 | 2): void {
+/** A box around c with half sizes h. */
+function box(p: Part, c: V, h: V): void {
   for (const axis of [0, 1, 2]) {
-    if (axis === openAxis) continue
     for (const s of [-1, 1]) {
       const n: V = [0, 0, 0]
       n[axis] = s
       const [u, w] = [(axis + 1) % 3, (axis + 2) % 3]
-      const h: V = [hx, hy, hz]
       const corner = (du: number, dw: number): V => {
-        const q: V = [cx, cy, cz]
+        const q: V = [...c]
         q[axis] += s * h[axis]
         q[u] += du * h[u]
         q[w] += dw * h[w]
@@ -62,48 +108,97 @@ function box(p: Part, [cx, cy, cz]: V, [hx, hy, hz]: V, openAxis?: 0 | 1 | 2): v
   }
 }
 
-/** A wheel on an axle along x: an eight-sided prism with a vertex at the bottom, smooth tread, flat sides. */
+/** A tyre on an axle along y (lateral): an eight-sided prism, smooth tread, flat sides. */
 function wheel(p: Part, [cx, cy, cz]: V, r: number, halfW: number): void {
   const N = 8
-  const at = (k: number): { y: number; z: number; n: V } => {
-    const t = -Math.PI / 2 + (2 * Math.PI * k) / N
-    return { y: cy + r * Math.sin(t), z: cz + r * Math.cos(t), n: [0, Math.sin(t), Math.cos(t)] }
+  const at = (k: number): { x: number; z: number; n: V } => {
+    const t = (2 * Math.PI * k) / N
+    return { x: cx + r * Math.sin(t), z: cz - r * Math.cos(t), n: [Math.sin(t), 0, -Math.cos(t)] }
   }
   for (let k = 0; k < N; k++) {
     const [a, b] = [at(k), at(k + 1)]
-    const [a0, a1, b0, b1]: V[] = [[cx - halfW, a.y, a.z], [cx + halfW, a.y, a.z], [cx - halfW, b.y, b.z], [cx + halfW, b.y, b.z]]
-    tri(p, a0, a1, b1, a.n, a.n, b.n)
-    tri(p, a0, b1, b0, a.n, b.n, b.n)
+    tri(p, [a.x, cy - halfW, a.z], [a.x, cy + halfW, a.z], [b.x, cy + halfW, b.z], a.n, a.n, b.n)
+    tri(p, [a.x, cy - halfW, a.z], [b.x, cy + halfW, b.z], [b.x, cy - halfW, b.z], a.n, b.n, b.n)
     if (k === 0 || k === N - 1) continue
-    for (const s of [-1, 1]) tri(p, [cx + s * halfW, at(0).y, at(0).z], [cx + s * halfW, a.y, a.z], [cx + s * halfW, b.y, b.z], [s, 0, 0])
+    for (const s of [-1, 1]) tri(p, [at(0).x, cy + s * halfW, at(0).z], [a.x, cy + s * halfW, a.z], [b.x, cy + s * halfW, b.z], [0, s, 0])
   }
 }
 
-/** The gear: struts (grey metal) and tyres (dark rubber), ≤ 600 triangles. */
-export function b744Gear(): Part[] {
-  const strut: Part = { name: 'strut', color: [0.55, 0.57, 0.6], metallic: 0.6, roughness: 0.45, pos: [], nrm: [] }
-  const tyre: Part = { name: 'tyre', color: [0.05, 0.05, 0.055], metallic: 0, roughness: 0.9, pos: [], nrm: [] }
-  // A strut is open at both ends: its top inside the skin, its bottom inside the bogie beam or the nose axle.
-  const tube = (x: number, z: number, top: number, bottom: number, half: number): void =>
-    box(strut, [x, (top + bottom) / 2, z], [half, (top - bottom) / 2, half], 1)
+const STRUT: Omit<Part, 'pos' | 'nrm'> = { name: 'strut', color: [0.55, 0.57, 0.6], metallic: 0.6, roughness: 0.45 }
+const TYRE: Omit<Part, 'pos' | 'nrm'> = { name: 'tyre', color: [0.045, 0.045, 0.05], metallic: 0, roughness: 0.9 }
+const INSET_M = 0.3 // the strut's top this far inside the skin
 
-  // Mains: [x, bogie centre z, strut top inside the skin (belly −8.47 at x 1.9, wing −7.35 at x 5.5)]
-  // ponytail: no main axles (8 axles × 8 triangles would pass the 600 budget), so each wheel's inner face stands 0.2 m
-  // off the beam, seen only from close below. Upgrade: an open axle box per wheel pair if the budget grows.
-  const R = 0.62 // 49 × 17 in tyres
-  const axleY = WHEEL_BOTTOM_Y + R
-  for (const [x, z, top] of [[-5.5, -1.1, -7.1], [5.5, -1.1, -7.1], [-1.9, 1.9, -8.2], [1.9, 1.9, -8.2]]) {
-    tube(x, z, top, axleY, 0.14)
-    box(strut, [x, axleY, z], [0.15, 0.15, 0.98]) // bogie beam, wider than the strut so it closes the strut's end
-    for (const dz of [-0.735, 0.735]) for (const dx of [-0.56, 0.56]) wheel(tyre, [x + dx, axleY, z + dz], R, 0.215)
+/**
+ * One leg hinged at (x, y, top): its strut down to the axle, the axle's wheels (1 central, 2 either side of the strut,
+ * or bogies of 2 or 3 axles), all relative to the hinge. groundZ: the wheels' bottom, body frame.
+ */
+function leg(node: string, x: number, y: number, top: number, groundZ: number, wheels: number, [dia, w]: [number, number], axis: V, upDeg: number): Leg {
+  const strut: Part = { ...STRUT, pos: [], nrm: [] }
+  const tyre: Part = { ...TYRE, pos: [], nrm: [] }
+  const r = dia / 2
+  const axleZ = groundZ + r - top // relative to the hinge
+  const s = Math.max(0.07, 0.1 * dia) // strut half thickness
+  box(strut, [0, 0, axleZ / 2], [s, s, -axleZ / 2]) // from the hinge (inside the skin) to the axle
+  const off = w / 2 + s + 0.04
+  const axles = wheels === 6 ? [-1.45, 0, 1.45] : wheels === 4 ? [-0.73, 0.73] : [0]
+  if (axles.length > 1) box(strut, [0, 0, axleZ], [Math.max(...axles) + s, s, s]) // bogie beam
+  for (const ax of axles) {
+    if (wheels === 1) {
+      wheel(tyre, [ax, 0, axleZ], r, w / 2)
+      continue
+    }
+    box(strut, [ax, 0, axleZ], [s * 0.7, off, s * 0.7]) // the axle, its ends inside the wheels
+    for (const dy of [-off, off]) wheel(tyre, [ax, dy, axleZ], r, w / 2)
   }
-  // Nose: two 46 × 16 in wheels either side of the strut (the belly is at −8.14 there), on one axle whose open ends
-  // stop inside the wheels.
-  const Rn = 0.59
-  tube(0, -28, -7.9, WHEEL_BOTTOM_Y + Rn, 0.12)
-  box(strut, [0, WHEEL_BOTTOM_Y + Rn, -28], [0.45, 0.13, 0.13], 0)
-  for (const dx of [-0.45, 0.45]) wheel(tyre, [dx, WHEEL_BOTTOM_Y + Rn, -28], Rn, 0.205)
-  return [strut, tyre]
+  return { node, hinge: [x, y, top], parts: [strut, tyre], axis, upDeg }
+}
+
+/** Highest z below which a ray from under the model at (x, y) first meets its skin; null when it misses. */
+function skinAbove(m: Mesh, x: number, y: number, fromZ: number): number | null {
+  const t = ray(m, [x, y, fromZ], [0, 0, 1])
+  return t === null ? null : fromZ + t
+}
+
+/** e's gear from its spec, measured on its mesh (body frame). */
+export function gearFor(e: ModelManifestEntry, spec: GearSpec, m: Mesh): Gear {
+  let noseX = -Infinity
+  let lowZ = Infinity
+  for (let i = 0; i < m.p.length; i += 3) {
+    noseX = Math.max(noseX, m.p[i])
+    lowZ = Math.min(lowZ, m.p[i + 2])
+  }
+  const groundZ = lowZ - spec.clearanceM
+  const from = lowZ - 5
+  /**
+   * Where a leg meant for (x, y) hangs from: the skin above it (a low wing's root, the belly, a gear fairing) if that is
+   * within reach of the belly there (1.5 m, 3.5 % of the length on a big jet: a 777's wing root is 2 m up), else the
+   * nearest such skin further inboard (a high wing's gear fairings: ATR 72).
+   */
+  const reach = Math.max(1.5, 0.035 * e.lengthM)
+  const mount = (x: number, y: number): { y: number; top: number } => {
+    const belly = skinAbove(m, x, 0, from) ?? lowZ + 1
+    for (let f = 1; f > 0.3; f -= 0.05) {
+      const z = skinAbove(m, x, y * f, from)
+      if (z !== null && z < belly + reach) return { y: y * f, top: z + INSET_M }
+    }
+    return { y: 0, top: belly + INSET_M }
+  }
+  const xNose = noseX - spec.noseAftM
+  const xMain = xNose - spec.wheelbaseM
+  const fwd: V = [0, 1, 0] // about the left axis, −90°: the leg swings forward and up
+  const at = (node: string, x: number, y: number, wheels: number, tyre: [number, number], axis: V, upDeg: number): Leg => {
+    const p = mount(x, y)
+    return leg(node, x, p.y, p.top, groundZ, wheels, tyre, axis, upDeg)
+  }
+  const legs: Leg[] = [at('nose', xNose, 0, spec.noseWheels ?? 2, spec.noseTyre, fwd, -90)]
+  for (const [node, y] of [['mainL', spec.trackM / 2], ['mainR', -spec.trackM / 2]] as const) {
+    legs.push(spec.mainsRetract === 'forward' ? at(node, xMain, y, spec.mains, spec.mainTyre, fwd, -90) : at(node, xMain, y, spec.mains, spec.mainTyre, [1, 0, 0], y > 0 ? -90 : 90)) // inboard: about the nose axis
+  }
+  if (spec.body) {
+    const xb = xMain - spec.body.aftM
+    for (const [node, y] of [['bodyL', spec.body.trackM / 2], ['bodyR', -spec.body.trackM / 2]] as const) legs.push(at(node, xb, y, 4, spec.mainTyre, fwd, -90))
+  }
+  return { legs, heightM: -groundZ * e.scale }
 }
 
 const pad = (b: Uint8Array, fill: number): Uint8Array => {
@@ -112,8 +207,15 @@ const pad = (b: Uint8Array, fill: number): Uint8Array => {
   return out
 }
 
-/** A glTF 2.0 binary: one node, one mesh, one primitive per part (POSITION with min/max, NORMAL). */
-export function glb(parts: Part[]): Uint8Array {
+/** The root node's matrix: the body frame into e's glTF frame, (fixMatrix · GLTF_TO_CESIUM)⁻¹, column-major. */
+export function rootMatrix(e: ModelManifestEntry): number[] {
+  const fixInv = Matrix4.fromRotationTranslation(Matrix3.transpose(fixMatrix(e), new Matrix3()))
+  const m = Matrix4.multiply(Matrix4.inverseTransformation(GLTF_TO_CESIUM, new Matrix4()), fixInv, new Matrix4())
+  return Matrix4.toArray(m).map((v) => Math.round(v * 1e9) / 1e9 + 0)
+}
+
+/** A glTF 2.0 binary: a root node (matrix) with one child node per leg (translation: its hinge), one mesh each. */
+export function glb(legs: Leg[], root: number[]): Uint8Array {
   const arrays: Float32Array[] = []
   const bufferViews: object[] = []
   const accessors: object[] = []
@@ -131,14 +233,17 @@ export function glb(parts: Part[]): Uint8Array {
     offset += a.byteLength
     return accessors.length - 1
   }
-  const primitives = parts.map((p, i) => ({ attributes: { POSITION: add(p.pos, true), NORMAL: add(p.nrm, false) }, material: i }))
+  const meshes = legs.map((l) => ({
+    name: l.node,
+    primitives: l.parts.filter((p) => p.pos.length > 0).map((p) => ({ attributes: { POSITION: add(p.pos, true), NORMAL: add(p.nrm, false) }, material: p.name === 'strut' ? 0 : 1 })),
+  }))
   const gltf = {
     asset: { version: '2.0', generator: 'FlightHopper tools/models/gear-glb.ts' },
     scene: 0,
     scenes: [{ nodes: [0] }],
-    nodes: [{ name: 'gear', mesh: 0 }],
-    meshes: [{ name: 'gear', primitives }],
-    materials: parts.map((p) => ({ name: p.name, pbrMetallicRoughness: { baseColorFactor: [...p.color, 1], metallicFactor: p.metallic, roughnessFactor: p.roughness } })),
+    nodes: [{ name: 'gear', matrix: root, children: legs.map((_, i) => i + 1) }, ...legs.map((l, i) => ({ name: l.node, translation: l.hinge, mesh: i }))],
+    meshes,
+    materials: [STRUT, TYRE].map((p) => ({ name: p.name, pbrMetallicRoughness: { baseColorFactor: [...p.color, 1], metallicFactor: p.metallic, roughnessFactor: p.roughness } })),
     accessors,
     bufferViews,
     buffers: [{ byteLength: offset }],
@@ -164,10 +269,51 @@ export function glb(parts: Part[]): Uint8Array {
   return out
 }
 
+export const gearUri = (id: string): string => `models/${id}-gear.glb`
+const cm = (x: number): number => Math.round(x * 100) / 100 + 0
+
+/** The manifest entry for a gear: where it is, how high it stands, how each leg retracts. */
+export function gearEntry(id: string, g: Gear): NonNullable<ModelManifestEntry['gear']> {
+  return { uri: gearUri(id), heightM: cm(g.heightM), legs: g.legs.map((l) => ({ node: l.node, axis: l.axis, upDeg: l.upDeg })) }
+}
+
+/** Every geared model of the manifest: its GLB bytes and manifest entry. */
+export function allGear(manifest: ModelManifest): Array<{ e: ModelManifestEntry; bytes: Uint8Array; entry: NonNullable<ModelManifestEntry['gear']> }> {
+  return manifest.models.flatMap((e) => {
+    const spec = GEAR[e.id]
+    if (spec === undefined) return []
+    const g = gearFor(e, spec, loadBody(e))
+    return [{ e, bytes: glb(g.legs, rootMatrix(e)), entry: gearEntry(e.id, g) }]
+  })
+}
+
+/** The manifest line: `"gear": { … }`, the manifest's one-line-per-field style. */
+export function gearLine(g: NonNullable<ModelManifestEntry['gear']>): string {
+  const legs = (g.legs ?? []).map((l) => `{ "node": "${l.node}", "axis": [${l.axis.join(', ')}], "upDeg": ${l.upDeg} }`).join(', ')
+  return `"gear": { "uri": "${g.uri}", "heightM": ${g.heightM}, "legs": [${legs}] }`
+}
+
 if (import.meta.main) {
-  const out = process.argv[2] ?? GEAR_GLB
-  const parts = b744Gear()
-  const bytes = glb(parts)
-  writeFileSync(out, bytes)
-  console.log(`wrote ${out}: ${parts.reduce((n, p) => n + p.pos.length / 9, 0)} triangles, ${bytes.length} bytes`)
+  const text = readFileSync(MANIFEST, 'utf8')
+  const manifest: ModelManifest = JSON.parse(text)
+  const write = process.argv.includes('--write')
+  const lines = text.split('\n')
+  for (const { e, bytes, entry } of allGear(manifest)) {
+    const line = gearLine(entry)
+    console.log(`${e.id}: ${line}`)
+    if (!write) continue
+    writeFileSync(fileURLToPath(new URL(`../../public/${entry.uri}`, import.meta.url)), bytes)
+    const at = lines.findIndex((l) => l.includes(`"id": "${e.id}"`))
+    const end = lines.findIndex((l, i) => i > at && /^ {4}\}/.test(l))
+    const h = lines.findIndex((l, i) => i > at && i < end && l.includes('"gearHeightM": '))
+    lines[h] = lines[h].replace(/"gearHeightM": [-\d.]+/, `"gearHeightM": ${entry.heightM}`) // the model stands on its wheels
+    const old = lines.findIndex((l, i) => i > at && i < end && l.trim().startsWith('"gear"'))
+    if (old >= 0) lines[old] = lines[old].replace(/"gear".*?(,?)$/, `${line}$1`)
+    else lines.splice(h + 1, 0, `      ${line},`)
+  }
+  if (write) {
+    writeFileSync(MANIFEST, lines.join('\n'))
+    JSON.parse(readFileSync(MANIFEST, 'utf8')) // still JSON
+    console.log(`wrote ${MANIFEST}`)
+  }
 }
