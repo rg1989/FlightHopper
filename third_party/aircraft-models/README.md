@@ -1,8 +1,8 @@
 # Aircraft models: GPL corresponding source
 
-This folder is the corresponding source for 14 aircraft models in `public/models/`:
+This folder is the corresponding source for 15 aircraft models in `public/models/`:
 
-`a320.glb`, `a321.glb`, `a333.glb`, `a359.glb`, `at75.glb`, `b738.glb`, `b744.glb`, `b773.glb`, `b789.glb`, `c182.glb`, `c550.glb`, `crj9.glb`, `e75l.glb`, `ec135.glb`.
+`a320.glb`, `a321.glb`, `a333.glb`, `a359.glb`, `at75.glb`, `b738.glb`, `b744.glb`, `b773.glb`, `b789.glb`, `c182.glb`, `c550.glb`, `crj9.glb`, `e190.glb`, `e75l.glb`, `ec135.glb`.
 
 The models are GPL-licensed. The GPL says that whoever distributes the models must also make the source available. This folder keeps that source in this repository, next to the models, so FlightHopper meets that obligation itself.
 
@@ -12,7 +12,7 @@ The models are GPL-licensed. The GPL says that whoever distributes the models mu
 
 | Path | What it is |
 |---|---|
-| `source/flightairmap-glb/` | The 8 upstream glTF 2.0 files from FlightAirMap-3dmodels that 8 of the models were built from. Unchanged. |
+| `source/flightairmap-glb/` | The 9 upstream glTF 2.0 files from FlightAirMap-3dmodels that 9 of the models were built from. Unchanged. |
 | `source/fr24-blend/` | The 6 upstream Blender files from fr24-3d-models that the other 6 models were built from. Unchanged. |
 | `scripts/` | All the conversion scripts from livetaiwan-aircraft-models. Unchanged. |
 | `LICENSE-GPL-2.0` | The GPL version 2 text (from livetaiwan-aircraft-models). |
@@ -36,6 +36,7 @@ Upstream commits:
 | `a333.glb` | `models/flightairmap/A333.glb` | FAM `a333/glTF2/A333.glb` (FGMEMBERS/A330-300) | GPL-2.0-only | Narendran Muraleedharan |
 | `a359.glb` | `models/flightairmap/A350.glb` | FAM `a350/glTF2/A350.glb` (FGMEMBERS/A350XWB) | GPL-2.0-or-later | Juuso Tapaninen, Brendan O'Gara (Sbyx), Chris Leung, Chris Andrews, Joshua Davidson |
 | `e75l.glb` | `models/flightairmap/E75L.glb` | FAM `e190/glTF2/E75L.glb` (FGMEMBERS/E-jet-family) | GPL-2.0-only | Narendran Muraleedharan |
+| `e190.glb` | none: FlightHopper built it (see [Modified](#modified)) | FAM `e190/glTF2/E190.glb` (FGMEMBERS/E-jet-family) | GPL-2.0-only | Narendran Muraleedharan |
 | `crj9.glb` | `models/flightairmap/CRJ9.glb` | FAM `crj9/glTF2/CRJ9.glb` (FGMEMBERS/CRJ700-family) | GPL-2.0-or-later | Ryan Miller |
 | `at75.glb` | `models/flightairmap/AT75.glb` | FAM `atr72/glTF2/AT75.glb` (FGMEMBERS/ATR72) | GPL-3.0-only | Narendran Muraleedharan, Donald Belcham, Dwayne Gable, Oliver (ot-666), camelon |
 | `c182.glb` | `models/flightairmap/C182.glb` | FAM `c182/glTF2/C182.glb` (FGMEMBERS/c182s) | GPL-2.0-only | Heiko Schulz (3D) and the c182s authors |
@@ -60,7 +61,9 @@ livetaiwan labels every file "GPL-2.0-or-later". That label is wrong for some fi
 - **FR24 files.** The FR24 `LICENSE` is the GPL-2.0 text. The FR24 README says "All other models are licensed under GPLv2", with no "or later". So all 6 are GPL-2.0-only. This includes `c550.glb`, although its FlightGear upstream (FGMEMBERS/Citation) is GPL-2.0-or-later.
 - **Gaps upstream of FR24.** The FGMEMBERS/777 mirror has no licence file. For `b773.glb` we rely on the FR24 statement. The FlightGear FGAddon copy of the 777 has a GPL-2.0 `LICENSE`.
 
-Each GLB still has livetaiwan's `asset.copyright` string, "GPL-2.0-or-later, derived from FlightGear / FGMEMBERS / Flightradar24 fr24-3d-models". We did not change the files. `licences.json` and this README have the correct licence for each file.
+Each GLB that came from livetaiwan still has livetaiwan's `asset.copyright` string, "GPL-2.0-or-later, derived from FlightGear / FGMEMBERS / Flightradar24 fr24-3d-models". We did not change these files. `licences.json` and this README have the correct licence for each file.
+
+`e190.glb` did not come from livetaiwan. FlightHopper built it and wrote the correct licence in its `asset.copyright`: "GPL-2.0-only, derived from FlightGear E-jet-family (Narendran Muraleedharan) via FlightAirMap-3dmodels".
 
 ## Modified
 
@@ -74,6 +77,7 @@ These models are modified versions of the upstream files.
   5. Moved the origin to the centre of the airframe.
   6. Added a `COLOR_0` shade attribute from the vertex normals.
 - **FlightHopper (2026-09-23)** copied the 14 files unchanged from livetaiwan commit `00d6a934`. Only the file names changed (for example, `A350.glb` became `a359.glb` and `citation.glb` became `c550.glb`).
+- **FlightHopper (2026-09-28)** built `e190.glb` itself from FAM `E190.glb`, because livetaiwan has no E190. It used the pipeline in [How to rebuild](#how-to-rebuild) with Blender 5.2.2, so the file has the same 6 changes as the others. The only difference is the `asset.copyright` string (see above). The same commands rebuild `e75l.glb` from `E75L.glb` byte for byte. We checked this, so the process is the one livetaiwan used.
 
 ## How to rebuild
 
@@ -100,7 +104,19 @@ You need Blender 4.x or 5.x with the glTF exporter, and Python 3. Run these comm
 
 4. Rename each output to its FlightHopper name (see the table). Copy it to `public/models/`.
 
-Keep the livetaiwan file names until step 4. `canonicalise.py` finds the helicopter orientation by file name (`ec135`).
+Keep the livetaiwan file names until step 4. `canonicalise.py` finds the helicopter orientation by file name (`ec135`). `bl_join.py` names its output `<name>.single.glb`. Remove `.single` before step 2: `canonicalise.py` names the mesh after the file (for example `E75L`).
+
+`e190.glb` was built with these commands, in this folder:
+
+```bash
+blender -b --python scripts/bl_join.py -- source/flightairmap-glb/E190.glb out/ 0.20
+mkdir -p in && mv out/E190.single.glb in/E190.glb
+python3 scripts/canonicalise.py in/ models/ --report report.json
+python3 -c "import sys; sys.path.insert(0, 'scripts'); import embed_copyright as e; e.COPYRIGHT = 'GPL-2.0-only, derived from FlightGear E-jet-family (Narendran Muraleedharan) via FlightAirMap-3dmodels'; print(e.stamp('models/E190.glb'))"
+cp models/E190.glb ../../public/models/e190.glb
+```
+
+The last Python command uses `embed_copyright.py` unchanged, with the correct licence string for this file.
 
 `scripts/contact_sheet.py` draws a preview image of the models. It needs `numpy` and `Pillow`. The other scripts need only Python 3 or Blender.
 
@@ -113,5 +129,5 @@ The aircraft are the work of the FlightGear community. Thanks to:
 - [FlightGear](https://www.flightgear.org/) and the authors of each aircraft (see the table).
 - [FGMEMBERS](https://github.com/FGMEMBERS), who keep the FlightGear aircraft repositories.
 - [Flightradar24](https://github.com/Flightradar24/fr24-3d-models), who converted 6 of the models and published the Blender files.
-- [Ysurac / FlightAirMap](https://github.com/Ysurac/FlightAirMap-3dmodels), who converted 8 of the models to glTF 2.0.
-- [GoLocalNear / livetaiwan-aircraft-models](https://github.com/GoLocalNear/livetaiwan-aircraft-models), who made the web-ready versions and wrote the scripts.
+- [Ysurac / FlightAirMap](https://github.com/Ysurac/FlightAirMap-3dmodels), who converted 9 of the models to glTF 2.0.
+- [GoLocalNear / livetaiwan-aircraft-models](https://github.com/GoLocalNear/livetaiwan-aircraft-models), who made 14 of the web-ready versions and wrote the scripts.

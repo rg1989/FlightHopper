@@ -1,6 +1,7 @@
 // client/scene/modelFor.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import type { ModelManifest, ModelManifestEntry } from '../types.ts'
 import { ModelPicker } from './modelFor.ts'
 
@@ -45,4 +46,10 @@ test('no type and no category (or a ground vehicle): the default model', () => {
 
 test('a fallback naming a missing model is a manifest error', () => {
   assert.throws(() => new ModelPicker({ ...man, fallback: { A1: 'nope' } }), /nope/)
+})
+
+test('the shipped manifest: E190s and E195s (and their E2s) fly the E190 model; E170s, E175s and the ERJ family the E175', () => {
+  const shipped = new ModelPicker(JSON.parse(readFileSync(new URL('../../public/models/manifest.json', import.meta.url), 'utf8')))
+  for (const t of ['E190', 'E195', 'E290', 'E295']) assert.equal(shipped.for(t, 'A3').id, 'e190', t)
+  for (const t of ['E170', 'E175', 'E75L', 'E75S', 'E135', 'E145', 'E45X']) assert.equal(shipped.for(t, 'A3').id, 'e75l', t)
 })

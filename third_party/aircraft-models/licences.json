@@ -39,6 +39,11 @@
     "author": "Narendran Muraleedharan (FlightGear E-jet-family); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",
     "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E75L.glb"
   },
+  "e190.glb": {
+    "license": "GPL-2.0-only",
+    "author": "Narendran Muraleedharan (FlightGear E-jet-family); glTF by FlightAirMap (Ysurac); simplified by FlightHopper with the GoLocalNear/livetaiwan scripts",
+    "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E190.glb"
+  },
   "crj9.glb": {
     "license": "GPL-2.0-or-later",
     "author": "Ryan Miller (FlightGear CRJ700-family 3D and FDM); glTF by FlightAirMap (Ysurac); simplified by GoLocalNear/livetaiwan",

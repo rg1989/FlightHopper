@@ -117,6 +117,18 @@ test('retraction: the nose swings forward and up, the mains inboard (or forward)
   }
 })
 
+test('the E190 stands on its published gear (Embraer APM-1901): 13.83 m wheelbase, both mains under the wing 5.94 m apart, 0.5 m under its nacelles', () => {
+  const { e } = built.find((b) => b.e.id === 'e190')!
+  const m = loadBody(e)
+  const g = gearFor(e, GEAR.e190, m)
+  const hinge = (node: string): number[] => g.legs.find((l) => l.node === node)!.hinge
+  near(hinge('nose')[0] - hinge('mainL')[0], 13.83, 1e-9, 'wheelbase')
+  near(hinge('mainL')[1] - hinge('mainR')[1], 5.94, 1e-9, 'track: neither main moved inboard off the wing')
+  let low = Infinity
+  for (let k = 2; k < m.p.length; k += 3) low = Math.min(low, m.p[k])
+  near(g.heightM, 0.5 - low, 1e-9, 'the wheels 0.5 m below the nacelles')
+})
+
 test('public/models/<id>-gear.glb and the manifest are up to date (regenerate: node tools/models/gear-glb.ts --write)', () => {
   for (const { e, bytes, entry } of built) {
     assert.deepEqual(new Uint8Array(readFileSync(new URL(`../../public/${entry.uri}`, import.meta.url))), bytes, e.id)

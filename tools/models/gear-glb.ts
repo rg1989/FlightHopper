@@ -9,9 +9,12 @@
 //   node tools/models/gear-glb.ts            print each model's `"gear": {…}` line
 //   node tools/models/gear-glb.ts --write    write the GLBs, each model's gear line and its gearHeightM (wheels down)
 //
-// Layout per type from published dimensions (GEAR, approximate; E175's wheelbase fitted to its model's wing), the nose gear noseAftM behind the model's nose tip,
-// the mains wheelbaseM behind it, trackM apart; each strut from inside the skin above it (a ray from below: the wing or
-// the belly) down to its axle; the wheels touch clearanceM below the model's lowest point (its engines, or its belly).
+// Layout per type from published dimensions (GEAR, approximate; E175's wheelbase fitted to its model's wing; E190 from
+// Embraer APM-1901 figures 2.1 and 7.1 and table 2.2, its gear 0.38 m forward of the published 4.13 m nose-gear station
+// because this model's wing-root trailing edge ends just ahead of the published main gear line), the nose gear noseAftM
+// behind the model's nose tip, the mains wheelbaseM behind it, trackM apart; each strut from inside the skin above it (a
+// ray from below: the wing or the belly) down to its axle; the wheels touch clearanceM below the model's lowest point
+// (its engines, or its belly).
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Matrix3, Matrix4 } from 'cesium'
@@ -44,6 +47,7 @@ export const GEAR: Record<string, GearSpec> = {
   a333: { noseAftM: 5.0, wheelbaseM: 25.37, trackM: 10.68, mains: 4, mainTyre: [1.37, 0.53], noseTyre: [1.14, 0.46], clearanceM: 0.75, mainsRetract: 'inboard' },
   a359: { noseAftM: 5.3, wheelbaseM: 28.67, trackM: 10.6, mains: 4, mainTyre: [1.27, 0.51], noseTyre: [1.02, 0.41], clearanceM: 0.9, mainsRetract: 'inboard' },
   e75l: { noseAftM: 3.7, wheelbaseM: 11.3, trackM: 5.94, mains: 2, mainTyre: [0.86, 0.27], noseTyre: [0.61, 0.2], clearanceM: 0.6, mainsRetract: 'inboard' },
+  e190: { noseAftM: 3.75, wheelbaseM: 13.83, trackM: 5.94, mains: 2, mainTyre: [1.04, 0.41], noseTyre: [0.61, 0.2], clearanceM: 0.5, mainsRetract: 'inboard' },
   crj9: { noseAftM: 2.8, wheelbaseM: 17.3, trackM: 4.0, mains: 2, mainTyre: [0.91, 0.3], noseTyre: [0.53, 0.14], clearanceM: 0.55, mainsRetract: 'inboard' },
   at75: { noseAftM: 2.9, wheelbaseM: 10.77, trackM: 4.1, mains: 2, mainTyre: [0.86, 0.22], noseTyre: [0.6, 0.18], clearanceM: 0.55, mainsRetract: 'forward' },
   c550: { noseAftM: 2.2, wheelbaseM: 5.4, trackM: 3.6, mains: 1, mainTyre: [0.56, 0.15], noseTyre: [0.46, 0.11], noseWheels: 1, clearanceM: 0.35, mainsRetract: 'inboard' },

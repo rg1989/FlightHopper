@@ -154,13 +154,31 @@
       "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
       "gearHeightM": 5.58, "lengthM": 30.82, "scale": 1,
       "gear": { "uri": "models/e75l-gear.glb", "heightM": 5.58, "legs": [{ "node": "nose", "axis": [0, 1, 0], "upDeg": -90 }, { "node": "mainL", "axis": [1, 0, 0], "upDeg": -90 }, { "node": "mainR", "axis": [1, 0, 0], "upDeg": 90 }] },
-      "types": ["E17*", "E75*", "E19*", "E29*", "E135", "E145", "E45X"],
+      "types": ["E17*", "E75*", "E135", "E145", "E45X"],
       "box": { "centre": [0, 0, -0.24], "half": 16.64 },
       "lights": { "navLeft": [1.37, -12.53, -2.18], "navRight": [1.24, 12.53, -2.22], "tail": [15.51, 0, -1.36], "beacons": [[-1.7, 0, -0.67], [-1.7, 0, -3.95]], "landing": [[-3.89, -2.5, -3.31], [-3.89, 2.5, -3.31], [-11.4, 0, -4]] },
       "paint": {
         "noseMinusZ": true, "bodyHalfWidth": 1.7, "bellyBelowY": -3,
         "fin": { "behindZ": -10.25, "aboveY": -0.35, "halfWidth": 0.35 }, "finSplit": [0.55, -15.41, 2.43],
         "engines": [2.81, 5.37, -1.11, 5.76], "finLogo": [-12.7, 2.32, 2.67], "title": [6.16, -1.7, 6.78], "windows": [-1.8, -10.75, 11.4, 0.51]
+      }
+    },
+    {
+      "id": "e190",
+      "uri": "models/e190.glb",
+      "license": "GPL-2.0-only: third_party/aircraft-models/README.md",
+      "author": "Narendran Muraleedharan (FlightGear E-jet-family); glTF by FlightAirMap (Ysurac); simplified by FlightHopper with the GoLocalNear/livetaiwan scripts",
+      "source": "https://github.com/Ysurac/FlightAirMap-3dmodels/blob/0906d9ba1bdd906ce45807e45ed706c09912db19/e190/glTF2/E190.glb",
+      "forwardAxisFix": { "headingDeg": 90, "pitchDeg": 0, "rollDeg": 0 },
+      "gearHeightM": 5.84, "lengthM": 35.85, "scale": 1,
+      "gear": { "uri": "models/e190-gear.glb", "heightM": 5.84, "legs": [{ "node": "nose", "axis": [0, 1, 0], "upDeg": -90 }, { "node": "mainL", "axis": [1, 0, 0], "upDeg": -90 }, { "node": "mainR", "axis": [1, 0, 0], "upDeg": 90 }] },
+      "types": ["E19*", "E29*"],
+      "box": { "centre": [0, 0, -0.22], "half": 19.36 },
+      "lights": { "navLeft": [1.84, -13.85, -2.56], "navRight": [1.74, 13.85, -2.54], "tail": [18.02, 0, -1.63], "beacons": [[-2.24, 0, -1.07], [-2.24, 0, -4.94]], "landing": [[-4.54, -2.48, -3.7], [-4.54, 2.48, -3.7], [-13.26, 0, -4.35]] },
+      "paint": {
+        "noseMinusZ": true, "bodyHalfWidth": 1.68, "bellyBelowY": -3.36,
+        "fin": { "behindZ": -12.12, "aboveY": -0.74, "halfWidth": 0.34 }, "finSplit": [0.55, -17.92, 2.82],
+        "engines": [2.83, 5.37, -0.71, 6.52], "finLogo": [-14.8, 2.36, 3.1], "title": [7.17, -2.09, 7.89], "windows": [-2.2, -12.62, 13.26, 0.51]
       }
     },
     {
