@@ -614,7 +614,7 @@
 
 .fh-adi-ladder text {
   fill: #fff;
-  font: 650 9px var(--fh-font);
+  font: 700 10.5px var(--fh-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -794,9 +794,9 @@
 }
 
 .fh-ann[data-k='flaps'] {
-  border-color: rgba(79, 212, 255, 0.65);
-  background: rgba(79, 212, 255, 0.08);
-  color: var(--fh-i-cyan);
+  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fh-i-text);
 }
 
 /* ---- compact variant: when the full card has no room on its side ------------------------------------------------ */
