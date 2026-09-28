@@ -6,7 +6,7 @@ import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRoll, Matrix4 } from '
 import { destination } from '../../shared/geo.ts'
 import type { FleetEntry, ModelManifest } from '../types.ts'
 import { measureGlb, noseAzimuthDeg } from './model.ts'
-import { BOX_CENTRE, BOX_HALF, MIN_PX, hitAt, minScale, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
+import { BOX_CENTRE, BOX_HALF, MIN_PX, flightId, formatDistanceM, hitAt, isOccluded, minScale, popupPlacement, shownLabels, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
 import type { Box } from './traffic.ts'
 
 const root = new URL('../../', import.meta.url)
@@ -30,6 +30,13 @@ test('scale by ADS-B emitter category; unknown is 1', () => {
   assert.equal(scaleFor('A7'), 0.4)
   assert.equal(scaleFor('B2'), 1)
   assert.equal(scaleFor(null), 1)
+})
+
+test('flightId: the callsign, else the ICAO hex in capitals (as the map label)', () => {
+  const info = { hex: 'a1b2c3', callsign: 'UAL2478', reg: 'N12345', typeCode: 'B738', category: 'A3', squawk: null, emergency: null, military: false, route: null }
+  assert.equal(flightId(fe('a1b2c3', { info })), 'UAL2478')
+  assert.equal(flightId(fe('a1b2c3', { info: { ...info, callsign: null } })), 'A1B2C3')
+  assert.equal(flightId(fe('a1b2c3')), 'A1B2C3')
 })
 
 test('nearestInRange: within the range, airborne first (parked ones at a hub must not take every model), then nearest', () => {
@@ -72,14 +79,56 @@ test('the bracket square is centred on each model and spans its wingspan and len
 
 test('hitAt: inside a square hits; overlapping squares → the nearest to the camera; outside → null', () => {
   const boxes: Box[] = [
-    { hex: 'back', x: 100, y: 100, side: 80, depthM: 900 },
-    { hex: 'front', x: 120, y: 110, side: 40, depthM: 300 },
-    { hex: 'unused', x: 500, y: 500, side: 80, depthM: 1 },
+    { hex: 'back', x: 100, y: 100, side: 80, depthM: 900, label: '', distM: 0 },
+    { hex: 'front', x: 120, y: 110, side: 40, depthM: 300, label: '', distM: 0 },
+    { hex: 'unused', x: 500, y: 500, side: 80, depthM: 1, label: '', distM: 0 },
   ]
   assert.equal(hitAt(boxes, 2, 125, 115), 'front')
   assert.equal(hitAt(boxes, 2, 70, 70), 'back')
   assert.equal(hitAt(boxes, 2, 141, 100), null, 'just right of both')
   assert.equal(hitAt(boxes, 2, 500, 500), null, 'only the first n boxes count')
+})
+
+test('formatDistanceM: whole metres with thousands separators', () => {
+  assert.equal(formatDistanceM(849.6), '850 m')
+  assert.equal(formatDistanceM(12_345.4), '12,345 m')
+  assert.equal(formatDistanceM(0.2), '0 m')
+})
+
+test('isOccluded: something nearer than the model on the line to its centre hides it; the model itself or nothing does not', () => {
+  assert.equal(isOccluded(undefined, 500, 20), false, 'sky: nothing there')
+  assert.equal(isOccluded(300, 500, 20), true, 'a building 200 m in front')
+  assert.equal(isOccluded(485, 500, 20), false, "the model's own near side")
+  assert.equal(isOccluded(900, 500, 20), false, 'the ground behind it')
+})
+
+test('popupPlacement: beside the square, flipped at the right edge, kept on screen', () => {
+  const b: Box = { hex: 'x', x: 500, y: 400, side: 100, depthM: 1, label: '', distM: 0 }
+  assert.deepEqual(popupPlacement(b, 200, 100, 1280, 800), { left: 560, top: 350, flip: false, tickY: 50 })
+  assert.deepEqual(popupPlacement({ ...b, x: 1200 }, 200, 100, 1280, 800), { left: 940, top: 350, flip: true, tickY: 50 })
+  const top = popupPlacement({ ...b, y: 20, side: 40 }, 200, 100, 1280, 800)
+  assert.equal(top.top, 8, 'kept below the top edge')
+  assert.equal(top.tickY, 12, 'the tick still points at the square')
+  const rail = popupPlacement({ ...b, x: 1050 }, 200, 100, 1280, 800, 76, 8)
+  assert.equal(rail.flip, true, 'the rail (76 px on the right) is an edge too')
+  const bar = popupPlacement({ ...b, y: 760 }, 200, 100, 390, 800, 8, 69)
+  assert.equal(bar.top, 800 - 69 - 100, 'kept above a phone tab bar (69 px)')
+})
+
+test('shownLabels: nearest first; a flight ID that would overlap one already shown hides (a far airport reads)', () => {
+  const box = (hex: string, x: number, y: number, depthM: number, label = 'UAL1561'): Box => ({ hex, x, y, side: 24, depthM, label, distM: 0 })
+  const boxes = [
+    box('far', 105, 100, 9_000), // its ID would overlap near's: hidden
+    box('near', 100, 102, 3_000),
+    box('apart', 300, 100, 9_500), // clear of both: shown
+    box('below', 100, 125, 8_000), // one line lower: clear
+    box('unused', 100, 100, 1),
+  ]
+  assert.deepEqual(shownLabels(boxes, 4, []), [false, true, true, true])
+  assert.deepEqual(shownLabels([box('a', 100, 100, 5), box('b', 100 + 9 * 7 + 1, 100, 6)], 2, []), [true, true], 'side by side, just clear')
+  // b's ID (above its square) would sit on a's distance line (under a's): hidden
+  assert.deepEqual(shownLabels([box('a', 100, 100, 5), box('b', 100, 100 + 24 + 22, 6)], 2, []), [true, false], "an ID on another's distance")
+  assert.deepEqual(shownLabels([box('a', 100, 100, 5), box('b', 100, 100 + 24 + 40, 6)], 2, []), [true, true], 'a line lower: clear')
 })
 
 test('traffic model: nose along the track, pitched with the climb, wings level, wheels at the placed height', () => {

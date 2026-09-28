@@ -38,10 +38,24 @@ brackets that match the model's drawn size). Scope: chase mode only. Browse (the
    app draws the fleet at the same render time. `Fleet` dead-reckons backwards along the track when the render
    time is before the newest sample (`ageS` stays ≥ 0).
 
+## Follow-ups (2026-09-23, from the user's review)
+
+- **Look:** the brackets are 2.5 px, in the map's selection yellow (#ffd23f) with a dark shadow. The flight ID
+  (callsign, else the ICAO hex) is just above the square. The distance from the chased aircraft, in whole metres,
+  is just under it. When label lines of different aircraft would overlap, the nearer aircraft keeps its labels
+  (`shownLabels`).
+- **Hidden models:** a model that a building, the terrain or the chased aircraft hides loses its brackets. The app does
+  two depth reads per frame (`Scene.pickPosition`) at the square centres, in turn (`isOccluded`).
+- **Popup:** a click in a square opens a small card beside the aircraft, and the card follows it. The card shows the
+  flag, the ID, the type, the altitude, the speed, the distance and a **Chase** button (`select(hex)`: the chase moves
+  to that aircraft). A click anywhere else closes the card. A click in another square moves the card there, so only
+  one card is open. The card keeps clear of the rail and the phone tab bar (the padding of `.fh-traffic` in
+  layout.css).
+
 ## Known limits (ponytail)
 
-- Terrain, buildings and the horizon do not hide the brackets (only the camera's back does). Upgrade: test the depth
-  under the square's centre.
+- The depth check reads the previous frame, and it checks each square only every n / 2 frames. A bracket can show
+  for a few frames after its model goes behind a building. Upgrade: more reads per frame, if GPU stalls allow it.
 - The 10 nm edge has no hysteresis, so an aircraft on the edge can flip between model and hidden. Upgrade: 10.5 nm to
   leave the range.
 - The app has one model file for all types. Upgrade: more GLBs per icon kind (airliner, bizjet, helicopter).

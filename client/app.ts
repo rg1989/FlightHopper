@@ -399,7 +399,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
-  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root)) : null
+  // Its popup's Chase button chases that aircraft instead (select: a chase stays a chase, on the new aircraft).
+  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root), { flagOf, onChase: (hex) => select(hex) }) : null
   const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
   const frameLayer = div('fh-frame', root)
@@ -799,7 +800,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (model !== null) lights.forChase(model.model, model.entry, placed, sf?.event.damage.has('fin') ?? false)
       if (sf?.jumped) chaseCam.snapHeading() // a seek: behind the aircraft at once, not a swing round to it
       clearanceM = chaseCam.update(placed, dtS).clearanceM
-      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, dtS) // after the camera: brackets match this frame
+      sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt) // the chased aircraft
+      // After the camera, so the brackets match this frame; sunWC gives the distances under them.
+      traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, dtS, sunWC)
       traffic?.forEachDrawn(lights.forTraffic)
       if (model !== null) {
         // The flight-data frame, after the camera (it projects the model). Height above the ground only over the true
@@ -810,7 +813,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         framed = true
       }
       chased = placed
-      sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt)
     }
     if (!framed) flightFrame.draw(null, null, NO_RECT) // hidden: no chased state (or no model)
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
@@ -968,9 +970,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
-    // A traffic model's bracket square (chase) takes the click first. ponytail: caught with no action yet; the
-    // aircraft's own menu comes later.
-    if (traffic !== null && traffic.hitAt(e.position.x, e.position.y) !== null) return
+    // Chase traffic first: a click in a model's bracket square opens its popup (closing another: one at most); a click
+    // anywhere else closes an open one, and does nothing more.
+    if (traffic !== null) {
+      const hit = traffic.hitAt(e.position.x, e.position.y)
+      if (hit !== null) return void traffic.open(hit)
+      if (traffic.close()) return
+    }
     const hex = fleetLayer.pick(e.position, tapPx)
     if (hex !== null) select(hex)
     else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
@@ -998,6 +1004,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
+  // A press outside the canvas and the popup (the rail, the card, a panel) closes the traffic popup too. The canvas's own
+  // clicks go through LEFT_CLICK above, so a drag to orbit the camera keeps it open.
+  const onPressOutside = (e: PointerEvent): void => {
+    if (e.target !== viewer.canvas && !traffic?.popupContains(e.target as Node)) traffic?.close()
+  }
+  document.addEventListener('pointerdown', onPressOutside, true)
   const onKey = (e: KeyboardEvent): void => {
     // Esc steps back one level: an open panel, then a scenario or the chase (to the map), then the focus.
     if (e.key === 'Escape') {
@@ -1021,6 +1033,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       stopped = true
       removeFrame()
       window.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPressOutside, true)
       viewer.canvas.removeEventListener('pointerleave', onLeave)
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
