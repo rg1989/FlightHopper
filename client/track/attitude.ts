@@ -2,13 +2,18 @@
 // Attitude from flight mechanics (.planning/flight-physics-design.md §3). ADS-B carries no pitch and its roll is a
 // sparse, often stale radar reply, so the attitude is what the smoothed path requires of a real aircraft:
 //   pitch = flight-path angle γ + angle of attack α, α from the lift the aircraft needs at its speed and load factor;
+//   γ through the air (vertical speed over true airspeed) where the airspeed is known: the wing meets the air;
 //   bank = the coordinated-turn bank for the path's turn rate.
-// AttitudeFilter then gives it the inertia of a real airframe (critically damped, rate-limited).
+// No limits but the airframe's: α up to the stall, bank up to a 2.5-g turn, the nose as steep as the path (a dive at
+// 35° shows a nose 33° down, not a clamp's 15). AttitudeFilter then gives it the inertia of a real airframe (critically
+// damped, rate-limited).
+import { trueAirspeedKt } from './airspeed.ts'
 import type { Att } from './types.ts'
 
 const G = 9.80665
 const DEG = 180 / Math.PI
 const KT = 1852 / 3600
+const FT = 0.3048
 
 // The lift model, calibrated on a medium jet (A320/B737) as flown. With landing flap at the reference (approach) speed
 // the body angle of attack is 6°; between V_ref and ~1.6 V_ref crews set the flaps for the speed, which holds it near
@@ -34,6 +39,9 @@ const SLOW_BRAKE_FROM_MS2 = 0.4
 const SLOW_BRAKE_TO_MS2 = 1.2
 const ROTOR_PITCH_DEG = -5 // a helicopter's nose-down attitude at ROTOR_KT, in proportion below it
 const ROTOR_KT = 120
+const ALPHA_STALL = 15 // body angle of attack at the stall (airliners ~14–18°): the wing gives no more lift past it
+const MAX_BANK = 67 // the bank of a 2.5-g level turn: an airliner's limit load
+const MIN_AIR_H = 0.2 // the airspeed's horizontal part, at least this share of it: a path ≤ 78° steep (bad data aside)
 
 const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x))
 const wrap360 = (d: number): number => ((d % 360) + 360) % 360
@@ -74,14 +82,19 @@ export interface FlightState {
  */
 export function aeroPitchRoll(s: FlightState): { pitchDeg: number; rollDeg: number } {
   if (s.onGround) return { pitchDeg: 0, rollDeg: 0 }
-  const rollDeg = clamp(Math.atan((s.gsMs * (s.turnRateDegS / DEG)) / G) * DEG, -45, 45)
+  const rollDeg = clamp(Math.atan((s.gsMs * (s.turnRateDegS / DEG)) / G) * DEG, -MAX_BANK, MAX_BANK)
   const vRef = vRefKt(s.category)
   if (vRef === null) {
     // No wing to fly: a rotorcraft tilts forward with speed; the rest (balloons, gliders on tow, vehicles) stay level.
     const pitchDeg = s.category === 'A7' ? ROTOR_PITCH_DEG * Math.min(1, s.gsMs / KT / ROTOR_KT) : 0
     return { pitchDeg, rollDeg }
   }
-  const gammaDeg = Math.atan2(s.vsMs, Math.max(s.gsMs, 1)) * DEG
+  // The flight-path angle through the air where the airspeed is known (a head- or tailwind does not tilt it: on a 3°
+  // glide into a 40-kt headwind the air path is ~2° and the nose ~1° higher), else over the ground.
+  const tas = s.easKt !== null && s.easKt > 0 ? trueAirspeedKt(s.easKt, s.altM / FT) * KT : null
+  const gammaDeg = tas !== null
+    ? Math.atan2(s.vsMs, Math.sqrt(Math.max(tas * tas - s.vsMs * s.vsMs, (MIN_AIR_H * tas) ** 2))) * DEG
+    : Math.atan2(s.vsMs, Math.max(s.gsMs, 1)) * DEG
   // ponytail: without a broadcast airspeed the ground speed stands in (±wind); upgrade: the wind other aircraft report nearby.
   const x = s.easKt !== null
     ? Math.max(s.easKt / vRef, MIN_X)
@@ -94,16 +107,18 @@ export function aeroPitchRoll(s: FlightState): { pitchDeg: number; rollDeg: numb
   // The load factor of the turn scales the lift, so the angle of attack above zero lift. (A pull-up's would too, but
   // from 25 ft altitude steps its estimate is mostly noise: measured, it made the pitch wobble 30 % more on final.)
   const n = 1 / Math.cos(rollDeg / DEG)
-  const alphaDeg = alpha0 + (alpha1g - alpha0) * n
+  const alphaDeg = Math.min(alpha0 + (alpha1g - alpha0) * n, ALPHA_STALL)
   const slow = 1 - smoothstep(0.9, 1, s.gsMs / KT / vRef) // below the approach speed over the ground
   const braking = Math.max(smoothstep(BRAKE_FROM_MS2, BRAKE_TO_MS2, -s.alongMs2), slow * smoothstep(SLOW_BRAKE_FROM_MS2, SLOW_BRAKE_TO_MS2, -s.alongMs2))
   const rolling = braking * (1 - smoothstep(1, 2, Math.abs(s.vsMs)))
-  return { pitchDeg: clamp(gammaDeg + alphaDeg, -15, 25) * (1 - rolling), rollDeg: rollDeg * (1 - rolling) }
+  return { pitchDeg: clamp(gammaDeg + alphaDeg, -89, 89) * (1 - rolling), rollDeg: rollDeg * (1 - rolling) }
 }
 
-const PITCH_RATE = 5 // °/s: a rotation is about 3°/s
-const ROLL_RATE = 15 // °/s: airliners roll at 5–10°/s
-const YAW_RATE = 10 // °/s
+/** Rates (°/s) no attitude changes faster than. The default is normal flight's: a rotation is ~3°/s. */
+export interface AttRates { pitch: number; roll: number; yaw: number }
+export const NORMAL_RATES: AttRates = { pitch: 5, roll: 15, yaw: 10 } // airliners roll at 5–10°/s
+/** An upset's: a 4.5-g pull at 300 kt pitches at ~13°/s, the most an airliner's structure takes. */
+export const UPSET_RATES: AttRates = { pitch: 13, roll: 30, yaw: 20 }
 
 /**
  * A real airframe's inertia on each axis: a critically damped second-order response (ω = 4 rad/s: no overshoot, ~1 s to
@@ -112,11 +127,13 @@ const YAW_RATE = 10 // °/s
  */
 export class AttitudeFilter {
   readonly #w: number
+  readonly #r: AttRates
   #x: Att | null = null
   #v = { headingDeg: 0, pitchDeg: 0, rollDeg: 0 }
 
-  constructor(omega = 4) {
+  constructor(omega = 4, rates: AttRates = NORMAL_RATES) {
     this.#w = omega
+    this.#r = rates
   }
 
   step(target: Att, dtS: number): Att {
@@ -139,9 +156,9 @@ export class AttitudeFilter {
         return cur + step
       }
       this.#x = {
-        headingDeg: wrap360(axis(x.headingDeg, -wrap180(target.headingDeg - x.headingDeg), 'headingDeg', YAW_RATE)),
-        pitchDeg: axis(x.pitchDeg, x.pitchDeg - target.pitchDeg, 'pitchDeg', PITCH_RATE),
-        rollDeg: axis(x.rollDeg, x.rollDeg - target.rollDeg, 'rollDeg', ROLL_RATE),
+        headingDeg: wrap360(axis(x.headingDeg, -wrap180(target.headingDeg - x.headingDeg), 'headingDeg', this.#r.yaw)),
+        pitchDeg: axis(x.pitchDeg, x.pitchDeg - target.pitchDeg, 'pitchDeg', this.#r.pitch),
+        rollDeg: axis(x.rollDeg, x.rollDeg - target.rollDeg, 'rollDeg', this.#r.roll),
       }
     }
     return { ...this.#x! }
