@@ -242,7 +242,7 @@ const plain = (d: FlightData): object => ({ ...d, derived: [...d.derived].sort()
 
 test('liveFlightData: the render state and the ADS-B reply map onto the frame; the attitude is the drawn one, an estimate', () => {
   assert.deepEqual(plain(liveFlightData(S, RAW, 7400)), {
-    altFt: 7975, aglFt: 7400, vsFpm: -951, iasKt: 268, gsKt: 337.1, hdgDeg: 99.5, trackDeg: 101.81, pitchDeg: -1.5,
+    altFt: 7975, aglFt: 7400, vsFpm: -951, iasKt: 268, gsKt: 337.1, hdgDeg: 105.24, trackDeg: 101.81, pitchDeg: -1.5,
     rollDeg: 0.5, g: null, windFromDeg: 281, windKt: 22, gear: null, flaps: null, epr: null, derived: ['aglFt', 'pitchDeg', 'rollDeg'],
   })
 })
@@ -256,6 +256,18 @@ test('liveFlightData: no reply: the reply fields are null; the drawn attitude st
   assert.equal(bare.rollDeg, 0.5, 'the drawn roll, never the broadcast one: the model shows the drawn one')
   assert.equal(bare.iasKt, null)
   assert.equal(bare.windKt, null)
+})
+
+test('liveFlightData: the track\'s smoothed altitude and airspeed, not the sample\'s (25 ft steps, behind the drawn aircraft)', () => {
+  const d = liveFlightData({ ...S, altMslFt: 7890.4, iasKt: 266.2 }, RAW, 7400)
+  assert.equal(d.altFt, 7890.4, 'the height the aircraft is drawn at, so ALT − AGL is the ground under it')
+  assert.equal(d.iasKt, 266.2)
+  assert.equal(liveFlightData({ ...S, altMslFt: null, iasKt: null }, RAW, null).altFt, 7975, 'none (on the ground): the sample\'s')
+})
+
+test('liveFlightData: the heading is the drawn nose (track + the averaged crab) while the aircraft reports one; else none (TRK)', () => {
+  assert.equal(liveFlightData(S, RAW, null).hdgDeg, S.headingDeg, 'not the raw Comm-B heading: a stale snapshot, and the model shows the drawn one')
+  assert.equal(liveFlightData(S, { ...RAW, true_heading: undefined }, null).hdgDeg, null)
 })
 
 // ---- text -----------------------------------------------------------------------------------------------------------

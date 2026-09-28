@@ -181,21 +181,23 @@ const LIVE_DERIVED: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDe
 const LIVE_DERIVED_AGL: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt'])
 
 /**
- * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, track and attitude, and what the
- * aircraft broadcasts in the chase reply for the rest (airspeed, heading, wind: Mode S enhanced surveillance, when it
- * does). The attitude is the drawn one, the 3-D model's, so the instrument and the model agree: synthesised from the
- * path (the broadcast roll smoothed in), so an estimate; aglFt (the app's ground under the aircraft) is one too. One line
- * per field: each is the one place its source is chosen.
+ * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, heading, track and attitude, and
+ * what the aircraft broadcasts in the chase reply for the rest (wind: Mode S enhanced surveillance, when it does). The
+ * altitude is the smoothed height the aircraft is drawn at (the sample's barometric figure only without one), so ALT −
+ * AGL is the ground under it; the airspeed the track's average of the broadcast one. The heading and attitude are the
+ * drawn ones, the 3-D model's, so the instruments and the model agree: the heading while the aircraft reports one (the
+ * track + its averaged crab), the attitude synthesised from the path, so an estimate; aglFt (the app's ground under the
+ * aircraft) is one too. One line per field: each is the one place its source is chosen.
  */
 export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null): FlightData {
   const n = (v: number | undefined): number | null => (fin(v) ? v : null)
   return {
-    altFt: s.altBaroFt,
+    altFt: s.altMslFt ?? s.altBaroFt,
     aglFt,
     vsFpm: s.vsFpm,
-    iasKt: n(raw?.ias),
+    iasKt: s.iasKt ?? n(raw?.ias),
     gsKt: s.gsKt,
-    hdgDeg: n(raw?.true_heading),
+    hdgDeg: fin(raw?.true_heading) ? s.headingDeg : null,
     trackDeg: s.trackDeg,
     pitchDeg: s.pitchDeg,
     rollDeg: s.rollDeg,

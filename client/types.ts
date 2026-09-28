@@ -31,7 +31,7 @@ export interface RenderState {
  * chase. null: unknown, not shown. Fields in `derived` are estimates and are drawn dimmer.
  */
 export interface FlightData {
-  altFt: number | null // above mean sea level (a scenario: true altitude; live: barometric)
+  altFt: number | null // true altitude: above mean sea level
   aglFt: number | null // above the ground drawn under the aircraft
   vsFpm: number | null
   iasKt: number | null
