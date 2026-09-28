@@ -37,6 +37,7 @@ import { liveryCode, liveryFromSpec } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
 import { Traffic } from './scene/traffic.ts'
+import { AircraftLights } from './scene/aircraftLights.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
@@ -396,6 +397,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // places them; data-mode switches what browse and chase show.
   // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
   const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root)) : null
+  const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
   const frameLayer = div('fh-frame', root)
   const flightFrame = new FlightFrame(frameLayer)
@@ -763,9 +765,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         model?.paint(liveryCode(ci?.callsign ?? null))
       }
       model?.update(placed)
+      if (model !== null) lights.forChase(model.model, model.entry, placed, sf?.event.damage.has('fin') ?? false)
       if (sf?.jumped) chaseCam.snapHeading() // a seek: behind the aircraft at once, not a swing round to it
       clearanceM = chaseCam.update(placed, dtS).clearanceM
       traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor) // after the camera: brackets match this frame
+      traffic?.forEachDrawn(lights.forTraffic)
       if (model !== null) {
         // The flight-data frame, after the camera (it projects the model). Height above the ground only over the true
         // relief: flattened or growing, the ground drawn is not the ground.
@@ -782,6 +786,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     // time (D12): the server reports how far its clock is ahead of the upstream's. A scenario, at its own instant.
     const st = sun.update(sf !== null ? sf.tUtcMs : sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
     buildings.setNight(chasing && prefs.light && st !== null ? st.night : 0) // the Sun's night, not the moon's
+    lights.endFrame(chasing && prefs.light && st !== null ? st.night : 0, now) // the aircraft this frame gave it
     runways.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
@@ -1003,6 +1008,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       exitBrowse(viewer)
       model?.destroy()
       traffic?.destroy()
+      lights.destroy()
       fleetLayer.destroy()
       pendingLayer.destroy()
       map.destroy()

@@ -72,6 +72,20 @@ export interface ModelManifestEntry {
   types?: string[]                              // ICAO designators it draws; "B73*" matches a prefix (modelFor.ts)
   box?: { centre: [number, number, number]; half: number } // traffic bracket square: model frame, unscaled (traffic.ts)
   gear?: { uri: string; heightM: number }       // landing gear drawn with the model (ChaseModel.setGear); heightM: origin → wheel bottom, gear down
+  lights?: LightAnchors                         // exterior lights (aircraftLights.ts); absent: none drawn
+}
+
+/**
+ * Where a model's exterior lights sit, in the frame `box` uses (Cesium's model frame before forwardAxisFix; unscaled),
+ * measured from the GLB by tools/models/light-anchors.ts. The wing-tip strobes share the nav lights' places, the tail
+ * strobe the tail light's.
+ */
+export interface LightAnchors {
+  navLeft: [number, number, number]             // red position light, left (port) wing tip
+  navRight: [number, number, number]            // green, right (starboard) wing tip
+  tail: [number, number, number]                // white, aft-facing, on the tail cone
+  beacons: [number, number, number][]           // red anti-collision: the upper one first, then the belly's
+  landing: [number, number, number][]           // forward-facing: the wing roots, then the nose gear
 }
 
 /**
@@ -88,6 +102,7 @@ export interface Paint {
   engines: [xMin: number, xMax: number, zMin: number, zMax: number] // nacelles: |x| and z in range, not flat wing skin
   finLogo: [z: number, y: number, side: number]               // centre and side of the square fin decal
   title: [z: number, y: number, width: number]                // centre and width of the 4:1 fuselage title
+  windows?: [y: number, zAft: number, zFore: number, pitch: number] // the cabin window row (tools/models/light-anchors.ts)
   body?: [zNose: number, zTail: number, yBottom: number, yTop: number] // the box a scenario's body-wrap decal covers
   wingTipY?: number                                           // mesh y of the wing at the tip: ChaseModel.setShape folds the span to it
   cut?: {                                                     // the damage ChaseModel.setDamage shows (JAL 123: fin and tail cone lost)

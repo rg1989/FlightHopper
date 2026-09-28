@@ -244,6 +244,11 @@ export class Traffic {
     return hitAt(this.#boxes, this.#nBoxes, x, y)
   }
 
+  /** Each model drawn this frame (after update): its hex, the matrix it is drawn with, its manifest entry and aircraft. */
+  forEachDrawn(f: (hex: string, mm: Matrix4, m: ModelManifestEntry, e: FleetEntry) => void): void {
+    for (const s of this.#slots) if (s.hex !== null && s.e !== null && s.model.show) f(s.hex, s.model.modelMatrix, s.m, s.e)
+  }
+
   destroy(): void {
     this.#destroyed = true
     for (const s of this.#slots) this.#viewer.scene.primitives.remove(s.model)
