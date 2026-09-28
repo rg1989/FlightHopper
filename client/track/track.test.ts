@@ -546,3 +546,21 @@ test('MLAT: an occasional garbage speed report (4× the speed) neither jolts the
   assert.ok(Math.max(...gs) < 125 && Math.min(...gs) > 75, `gs ${Math.min(...gs).toFixed(0)}…${Math.max(...gs).toFixed(0)} kt`)
   assert.ok(rate[Math.floor(rate.length * 0.99)] < 10, `speed change p99 ${rate[Math.floor(rate.length * 0.99)].toFixed(1)} kt/s`)
 })
+
+test('MLAT: the speed readout is damped like an instrument (2 s): a sample every 1–3 s never steps it', (t) => {
+  const path = straight(100 * KT, 40)
+  const r = rng(9)
+  const samples: Sample[] = []
+  for (let ts = 0; ts <= 200; ts += 1 + 2 * r.uni()) {
+    const s = truthSample(path, ts, { quality: 'mlat', version: null, altGeomFt: null, gsKt: 100 + 4 * r.gauss(), trackDeg: 40 + 3 * r.gauss() })
+    const p = path(ts)
+    const g = geo(p.e + 60 * r.gauss(), p.n + 60 * r.gauss())
+    samples.push({ ...s, lat: g.lat, lon: g.lon })
+  }
+  const fr = replay(new Track('abc123'), samples, { fromS: 20, toS: 190, delayS: 6 })
+  const gs = fr.map((f) => f.s.gsKt!)
+  const rate = gs.slice(1).map((g, i) => Math.abs(g - gs[i]) * 60).sort((a, b) => a - b)
+  const p99 = rate[Math.floor(rate.length * 0.99)]
+  t.diagnostic(`speed readout change p99 ${p99.toFixed(2)} kt/s, max ${rate[rate.length - 1].toFixed(2)}`)
+  assert.ok(p99 < 3, `p99 ${p99} kt/s`)
+})

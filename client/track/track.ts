@@ -68,6 +68,7 @@ const BREAK_FRAC = 0.2 // aircraft flies into the newer state along its velocity
 const BREAK_MS = 3 // …or 3 m/s; vertically 2 m/s or 30 %)
 const BACK_RESET_S = 2 // render time jumping back further than this (a seek) starts the attitude afresh
 const READOUT_TAU_S = 0.5 // the speed and V/S shown lag like an instrument's, so a new sample's revision never steps
+const MLAT_READOUT_TAU_S = 2 // MLAT: its positions are six times noisier, and each new one revises the path more
 
 interface V { ve: number; vn: number }
 interface P3 { e: number; n: number; h: number }
@@ -209,7 +210,7 @@ export class Track {
     const trackDeg = gsMs >= 0.5 ? wrap360(dirDeg(m.hz) - this.#gamma[m.ci]) : cur.trackDeg
     const att = this.#att.step(this.#target(m, cur, tS, gsMs, trackDeg), Math.max(0, dtS))
     this.#heading = att.headingDeg
-    const k = 1 - Math.exp(-Math.max(0, dtS) / READOUT_TAU_S)
+    const k = 1 - Math.exp(-Math.max(0, dtS) / (this.quality === 'mlat' ? MLAT_READOUT_TAU_S : READOUT_TAU_S))
     this.#gsShown = this.#gsShown === null ? gsMs : this.#gsShown + k * (gsMs - this.#gsShown)
     this.#vsShown = m.vsMs === null ? null : this.#vsShown === null ? m.vsMs : this.#vsShown + k * (m.vsMs - this.#vsShown)
     const hM = m.hM + off.h
