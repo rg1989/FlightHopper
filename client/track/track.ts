@@ -8,7 +8,7 @@ import type { RenderState } from '../types.ts'
 import { AttitudeFilter, aeroPitchRoll } from './attitude.ts'
 import { p90, targetDelayS } from './delay.ts'
 import { RejoinBlend, extrapolate } from './hermite.ts'
-import { velocitiesFromPositions } from './mlat.ts'
+import { positionOutliers, velocitiesFromPositions } from './mlat.ts'
 import { quintic, smooth, trendSlopes, type Knot3, type Obs } from './smoother.ts'
 import type { AltSource, Att, PosT } from './types.ts'
 import { AltitudeLadder } from './vertical.ts'
@@ -40,7 +40,7 @@ const POS_M = 10 // ADS-B position error, per axis
 const MLAT_M = 60
 const TIME_S = 0.12 // sample-time jitter (feeder latency): an error along the velocity
 const VEL_MS = 0.6 // reported velocity: 1 kt steps and its own age
-const MLAT_VEL_MS = 5 // MLAT: the aggregator's own estimate from its positions, loosely (it anchors a new track's speed)
+const MLAT_VEL_MS = 5 // MLAT: the aggregator's own estimate (within ±7 % of the flown speed, p5–p95); far-off ones fail agrees()
 const H_M = 3 // height: 25 ft steps
 const RATE_MS = 0.5 // reported vertical rate
 // A velocity report is older than its position: measured in turns at Heathrow, the reported track trails the direction
@@ -290,19 +290,23 @@ export class Track {
       const [e, n] = enu.fwd(s.lat + 1e-4, s.lon, 0)
       return Math.atan2(e - pts[i].e, n - pts[i].n) * DEG
     })
-    const fd = velocitiesFromPositions(pts, CHECK_HALF_S) // over ±3 s, one-sided at the ends, 0 for a lone sample
     // ponytail: the noise model follows the newest sample's quality for the whole window; mixed windows are rare.
     const mlat = this.quality === 'mlat'
     const pos2 = (mlat ? MLAT_M : POS_M) ** 2
+    const reps = ss.map((_, i) => this.#reported(i))
+    // A mis-stamped ADS-B position (its neighbours and the reported velocities agree it is not where it says) is left
+    // out, its velocity kept: as a first sample it anchored the path 200 m off (a 461 kt B77W read 784 kt).
+    const out = mlat ? ss.map(() => false) : positionOutliers(pts, reps, (i) => Math.hypot(POS_M, Math.hypot(reps[i]?.ve ?? 0, reps[i]?.vn ?? 0) * TIME_S))
+    const fd = velocitiesFromPositions(pts, CHECK_HALF_S, out) // over ±3 s, one-sided at the ends, 0 for a lone sample
     const oe: Obs[] = []
     const on: Obs[] = []
     for (let i = 0; i < ss.length; i++) {
-      const rep = this.#reported(i, fd[i])
+      const rep = reps[i] !== null && agrees(reps[i]!, fd[i]) ? reps[i] : null
       const ve = rep?.ve ?? fd[i].ve
       const vn = rep?.vn ?? fd[i].vn
       const rv = (mlat ? MLAT_VEL_MS : VEL_MS) ** 2
-      oe.push({ t: pts[i].t, p: pts[i].e, rp: pos2 + (ve * TIME_S) ** 2, v: rep?.ve ?? null, rv })
-      on.push({ t: pts[i].t, p: pts[i].n, rp: pos2 + (vn * TIME_S) ** 2, v: rep?.vn ?? null, rv })
+      oe.push({ t: pts[i].t, p: out[i] ? null : pts[i].e, rp: pos2 + (ve * TIME_S) ** 2, v: rep?.ve ?? null, rv })
+      on.push({ t: pts[i].t, p: out[i] ? null : pts[i].n, rp: pos2 + (vn * TIME_S) ** 2, v: rep?.vn ?? null, rv })
     }
     const q = mlat ? Q_MLAT : Q_H
     const lag = mlat ? MLAT_VEL_LAG : VEL_LAG
@@ -344,14 +348,13 @@ export class Track {
     })
   }
 
-  /** Reported velocity (gs + track; true heading on the ground), or null when missing or contradicted by the positions. */
-  #reported(i: number, fd: V & { baseS: number }): V | null {
+  /** Reported velocity (gs + track; true heading on the ground), or null when missing. */
+  #reported(i: number): V | null {
     const s = this.#samples[i]
     const dir = s.trackDeg ?? (s.onGround ? s.trueHeadingDeg : null)
     if (s.gsKt === null || dir === null) return null
     const a = (dir + this.#gamma[i]) / DEG
-    const rep = { ve: s.gsKt * KT * Math.sin(a), vn: s.gsKt * KT * Math.cos(a) }
-    return agrees(rep, fd) ? rep : null
+    return { ve: s.gsKt * KT * Math.sin(a), vn: s.gsKt * KT * Math.cos(a) }
   }
 
   #horiz(t: number): HMotion {

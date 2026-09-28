@@ -516,3 +516,33 @@ test('MLAT light aircraft: 60 m position noise does not overrule its reported sp
   assert.ok(gs[0] > 0.75 * 93, `min ${gs[0]}`)
   assert.ok(gs[gs.length - 1] < 1.25 * 93, `max ${gs[gs.length - 1]}`)
 })
+
+test('new ADS-B track whose FIRST position is stamped late: no speed transient once the next positions agree (read 784 kt)', () => {
+  const path = straight(461.5 * KT, 277)
+  const first = truthSample(path, -0.93) // flown 0.93 s before…
+  const samples = [{ ...first, tMs: T0, rxMs: T0 + 300 }] // …stamped at 0
+  for (const t of [1.27, 3.12, 4.88, 6.7, 8.5, 10.3, 12.1]) samples.push(truthSample(path, t))
+  const fr = replay(new Track('abc123'), samples, { fromS: 0, toS: 12, delayS: 3, latencyS: 0.4 })
+  const gs = fr.map((f) => f.s.gsKt!)
+  assert.ok(Math.max(...gs) < 461.5 * 1.08 && Math.min(...gs) > 461.5 * 0.92, `gs ${Math.min(...gs).toFixed(0)}…${Math.max(...gs).toFixed(0)} kt`)
+})
+
+test('MLAT: an occasional garbage speed report (4× the speed) neither jolts the drawn speed nor drags it', () => {
+  const v = 100 * KT
+  const path = straight(v, 40)
+  const r = rng(5)
+  const samples: Sample[] = []
+  let n = 0
+  for (let ts = 0; ts <= 200; ts += 1 + 2 * r.uni()) {
+    const garbage = n++ % 9 === 4
+    const s = truthSample(path, ts, { quality: 'mlat', version: null, altGeomFt: null, gsKt: garbage ? 400 : 100 + 3 * r.gauss(), trackDeg: 40 + 3 * r.gauss() })
+    const p = path(ts)
+    const g = geo(p.e + 60 * r.gauss(), p.n + 60 * r.gauss())
+    samples.push({ ...s, lat: g.lat, lon: g.lon })
+  }
+  const fr = replay(new Track('abc123'), samples, { fromS: 20, toS: 190, delayS: 6 })
+  const gs = fr.map((f) => f.s.gsKt!)
+  const rate = gs.slice(1).map((g, i) => Math.abs(g - gs[i]) * 60).sort((a, b) => a - b)
+  assert.ok(Math.max(...gs) < 125 && Math.min(...gs) > 75, `gs ${Math.min(...gs).toFixed(0)}…${Math.max(...gs).toFixed(0)} kt`)
+  assert.ok(rate[Math.floor(rate.length * 0.99)] < 10, `speed change p99 ${rate[Math.floor(rate.length * 0.99)].toFixed(1)} kt/s`)
+})

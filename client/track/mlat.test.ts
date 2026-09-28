@@ -1,7 +1,7 @@
 // client/track/mlat.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { velocitiesFromPositions } from './mlat.ts'
+import { positionOutliers, velocitiesFromPositions } from './mlat.ts'
 import type { PosT } from './types.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
@@ -73,4 +73,26 @@ test('velocitiesFromPositions: with halfS, each difference spans the points with
   assert.equal(wide[0].baseS, 3, 'at the start: 0 … 3 s')
   assert.equal(narrow[0].baseS, 1)
   assert.equal(velocitiesFromPositions([{ t: 7, e: 1, n: 2 }], 3)[0].baseS, 0)
+})
+
+test('positionOutliers: a position its neighbours disagree with, while they agree with each other, is mis-stamped', () => {
+  const v = { ve: 200, vn: 0 }
+  const pts: PosT[] = [0, 1.3, 3.1, 4.9, 6.7].map((t) => ({ t, e: 200 * t, n: 0 }))
+  const vel = pts.map(() => v)
+  assert.deepEqual(positionOutliers(pts, vel, () => 30), [false, false, false, false, false])
+  const early = pts.map((p, i) => (i === 0 ? { ...p, e: p.e - 190 } : p)) // the first flown 0.95 s before its stamp
+  assert.deepEqual(positionOutliers(early, vel, () => 30), [true, false, false, false, false])
+  const mid = pts.map((p, i) => (i === 2 ? { ...p, e: p.e + 190 } : p))
+  assert.deepEqual(positionOutliers(mid, vel, () => 30), [false, false, true, false, false])
+  const last = pts.map((p, i) => (i === 4 ? { ...p, n: p.n + 190 } : p))
+  assert.deepEqual(positionOutliers(last, vel, () => 30), [false, false, false, false, true])
+})
+
+test('positionOutliers: a real turn moves every position alike (none dropped); without velocities or with two points, none', () => {
+  const w = 3 * Math.PI / 180, v = 200, rT = v / w
+  const pts: PosT[] = [0, 1.3, 3.1, 4.9, 6.7].map((t) => ({ t, e: rT * Math.sin(w * t), n: rT * (1 - Math.cos(w * t)) }))
+  const vel = pts.map((p) => ({ ve: v * Math.cos(w * p.t), vn: v * Math.sin(w * p.t) }))
+  assert.deepEqual(positionOutliers(pts, vel, () => 30), [false, false, false, false, false])
+  assert.deepEqual(positionOutliers(pts, pts.map(() => null), () => 30), [false, false, false, false, false])
+  assert.deepEqual(positionOutliers(pts.slice(0, 2), vel.slice(0, 2), () => 30), [false, false])
 })
