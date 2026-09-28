@@ -1,26 +1,50 @@
 /* client/ui/flightFrame.css */
-/* The flight-data frame around the chased aircraft (client/scene/flightFrame.ts): the traffic's corner brackets
-   (.fh-bracket, layout.css) and four small glass cards around them, in the flight card's stat style (flightCard.css):
-   each quantity a tile, the figure over a small caps label carrying its unit. No backdrop blur (a GPU pass every frame
-   the globe redraws). The cards keep their pixel size at every zoom. Over the traffic brackets (z 5), under every
-   panel (.fh-ui children from z 18). Nothing here takes the pointer. */
+/* The flight-data frame around the chased aircraft (client/scene/flightFrame.ts, client/ui/instruments.ts): the traffic's
+   corner brackets (.fh-bracket, layout.css) and four dark glass cards of glass-cockpit instruments around them. No
+   backdrop blur (a GPU pass every frame the globe redraws): a darker translucent fill, a hairline, a soft shadow. The
+   moving parts are transformed only. Sizes are CSS variables: the full cards, a compact variant (data-v="1", when the full
+   one has no room), and smaller ones on phones. Over the traffic brackets (z 5), under every panel (.fh-ui children from
+   z 18). Nothing here takes the pointer. */
 .fh-frame {
   position: absolute;
   inset: 0;
   z-index: 6;
   overflow: hidden;
   pointer-events: none;
-  --fh-f-card: rgba(13, 17, 25, 0.78);
-  --fh-f-tile: rgba(255, 255, 255, 0.055);
-  --fh-f-sky: #4f86c0;
-  --fh-f-ground: #8a6440;
-  --fh-f-gear: #3ccf6e;
+  /* Avionics colours: white scales and figures, green for what moves with the aircraft, cyan for the air, amber for the
+     aircraft symbol and alerts. */
+  --fh-i-card0: rgba(24, 30, 40, 0.8);
+  --fh-i-card1: rgba(8, 11, 17, 0.84);
+  --fh-i-well: rgba(0, 0, 0, 0.36);
+  --fh-i-line: rgba(255, 255, 255, 0.8);
+  --fh-i-dim: rgba(255, 255, 255, 0.42);
+  --fh-i-text: #f1f4f8;
+  --fh-i-label: #8d98aa;
+  --fh-i-green: #3fdc8e;
+  --fh-i-cyan: #4fd4ff;
+  --fh-i-amber: #ffbe3b;
+  --fh-i-sky0: #0b3f86;
+  --fh-i-sky1: #3b8be0;
+  --fh-i-gnd0: #8c5a2b;
+  --fh-i-gnd1: #3a220c;
+  /* Sizes, desktop: the full cards. */
+  --fh-alt-w: 72px;
+  --fh-spd-w: 64px;
+  --fh-tape-h: 152px;
+  --fh-vsi-w: 24px;
+  --fh-hdg-w: 196px;
+  --fh-adi: 88px;
+  --fh-read-h: 26px;
+  --fh-read-fs: 15.5px;
+  --fh-col-w: 66px;
 }
 
-/* Cards, slots and glyphs with nothing to show (several are flex containers, which would override `hidden`). */
+/* Cards, parts and glyphs with nothing to show (several are flex containers, which would override `hidden`). */
 .fh-frame [hidden] {
   display: none !important;
 }
+
+/* ---- the cards -------------------------------------------------------------------------------------------------- */
 
 .fh-fblock {
   position: absolute;
@@ -28,13 +52,13 @@
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--fh-hairline);
-  border-radius: var(--fh-radius);
-  background: var(--fh-f-card);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.25);
-  color: var(--fh-text);
+  gap: 6px;
+  padding: 7px 9px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--fh-i-card0), var(--fh-i-card1));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34), 0 1px 3px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: var(--fh-i-text);
   font-family: var(--fh-font);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -42,280 +66,835 @@
   will-change: transform;
 }
 
-.fh-frow {
+/* A card's heading line: small caps labels spread across it ("ALT ft … ↓ 750"). */
+.fh-bhead {
   display: flex;
-  gap: 4px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 11px;
 }
 
-/* A stat tile: the figure over its label. */
-.fh-ft {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 58px;
-  padding: 5px 9px 5px 8px;
-  border-radius: 8px;
-  background: var(--fh-f-tile);
-}
-
-.fh-ft-v {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font: 600 15px/1.2 var(--fh-font);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.005em;
-}
-
-.fh-ft-l {
-  margin-top: 1px;
-  color: var(--fh-faint);
-  font: 600 10px/1.2 var(--fh-font);
-  letter-spacing: 0.04em;
+.fh-l {
+  color: var(--fh-i-label);
+  font: 650 9.5px/1.15 var(--fh-font);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.fh-ft-u {
+.fh-u {
+  color: var(--fh-i-label);
+  font-weight: 550;
   letter-spacing: 0;
   text-transform: none;
 }
 
-/* The altitude: the figure the eye goes to first. */
-.fh-ft.fh-big {
-  flex: 1;
-  padding-block: 6px 6px;
+.fh-brow {
+  display: flex;
+  gap: 5px;
 }
 
-.fh-ft.fh-big .fh-ft-v {
-  font-size: 21px;
-  font-weight: 650;
+/* A figure on a line under a tape: "AGL 1,700 ft", "GS 132 kt". */
+.fh-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding-left: 1px;
+}
+
+.fh-line .fh-v {
+  font: 650 12.5px/1.1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-line .fh-u {
+  font-size: 10px;
+}
+
+/* Estimated values (FlightData.derived), and held ones: drawn dimmer. */
+.fh-frame .fh-est {
+  opacity: 0.5;
+}
+
+/* ---- tapes ------------------------------------------------------------------------------------------------------ */
+
+.fh-tapebox {
+  position: relative;
+  flex: none;
+  width: var(--fh-alt-w);
+  height: var(--fh-tape-h);
+}
+
+.fh-tapebox[data-kind='spd'] {
+  width: var(--fh-spd-w);
+}
+
+.fh-tape,
+.fh-hdg-tape {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--fh-i-well);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* The marks fade out towards the tape's ends. */
+.fh-tape-view {
+  position: absolute;
+  inset: 0;
+  -webkit-mask-image: linear-gradient(transparent, #000 13%, #000 87%, transparent);
+  mask-image: linear-gradient(transparent, #000 13%, #000 87%, transparent);
+}
+
+.fh-strip {
+  position: absolute;
+  will-change: transform;
+}
+
+.fh-strip svg {
+  display: block;
+  overflow: visible;
+}
+
+.fh-tapebox[data-ticks='right'] .fh-strip {
+  right: 0;
+}
+
+.fh-tapebox[data-ticks='left'] .fh-strip {
+  left: 0;
+}
+
+.fh-tick {
+  fill: var(--fh-i-line);
+}
+
+.fh-tape text,
+.fh-hdg-tape text {
+  fill: var(--fh-i-text);
+  font: 600 11px var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The readout: the value boxed across the tape's middle, a pointer to the ticks. */
+.fh-read {
+  position: absolute;
+  top: calc(50% - var(--fh-read-h) / 2);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: var(--fh-read-h);
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 5px;
+  background: #04070b;
+  /* A dark band above and below: the box cuts the tape cleanly, no label peeking round it. */
+  box-shadow: 0 -3px 0 -1px rgba(6, 9, 14, 0.85), 0 3px 0 -1px rgba(6, 9, 14, 0.85), 0 3px 10px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: 650 var(--fh-read-fs)/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
 
-/* Estimated (derived) values. */
-.fh-est {
-  opacity: 0.55;
-}
-
-/* Wind: the dial beside the figures. */
-.fh-dial {
-  display: block;
-  flex: none;
-  overflow: visible;
-}
-
-.fh-dial-ring {
-  fill: rgba(255, 255, 255, 0.04);
-  stroke: rgba(255, 255, 255, 0.28);
-  stroke-width: 1;
-}
-
-.fh-dial-ac {
-  fill: none;
-  stroke: var(--fh-muted);
-  stroke-width: 1;
-  stroke-linecap: round;
-}
-
-.fh-dial-arrow path {
-  fill: none;
-  stroke: var(--fh-accent);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-/* The attitude tile: a round horizon, sky over ground turning behind the fixed aircraft symbol. */
-.fh-ft.fh-ft-hz {
-  min-width: 0;
-  padding: 5px;
-}
-
-.fh-hz {
-  position: relative;
-  flex: none;
-  width: 30px;
-  height: 30px;
-  overflow: hidden;
-  border-radius: 50%;
-  isolation: isolate;
-}
-
-.fh-hz::after {
+.fh-read::after {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  top: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  background: #04070b;
+  transform: rotate(45deg);
 }
 
-.fh-hz-w {
-  position: absolute;
-  left: -25px;
-  top: -25px;
-  width: 80px;
-  height: 80px;
-  transition: transform 100ms linear; /* angles change at 10 Hz: this fills the steps */
+.fh-tapebox[data-ticks='right'] .fh-read {
+  left: -3px;
+  right: 8px;
+  justify-content: flex-end;
 }
 
-.fh-hz-w svg {
-  display: block;
+.fh-tapebox[data-ticks='right'] .fh-read::after {
+  right: -5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.88);
+  border-right: 1px solid rgba(255, 255, 255, 0.88);
 }
 
-.fh-hz-sky {
-  fill: var(--fh-f-sky);
-}
-
-.fh-hz-gnd {
-  fill: var(--fh-f-ground);
-}
-
-.fh-hz-line {
-  stroke: rgba(255, 255, 255, 0.95);
-  stroke-width: 1.2;
-}
-
-.fh-hz-mark {
-  stroke: rgba(255, 255, 255, 0.5);
-  stroke-width: 0.8;
-}
-
-.fh-hz-ac {
-  position: absolute;
-  inset: 1px;
-  z-index: 1;
-  width: calc(100% - 2px); /* over the svg's own width attribute */
-  height: calc(100% - 2px);
-  overflow: visible;
-}
-
-.fh-hz-ac path {
-  fill: none;
-  stroke: var(--fh-warn);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.fh-hz-ac circle {
-  fill: var(--fh-warn);
-}
-
-/* Configuration: small pills under the attitude, as the app's badges. */
-.fh-fchips {
-  display: flex;
-  gap: 4px;
-  padding: 0 2px 1px;
-}
-
-.fh-chip {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--fh-text);
-  font: 650 10px/1.3 var(--fh-font);
-  letter-spacing: 0.05em;
-}
-
-.fh-chip[data-chip='gear'] {
-  background: rgba(60, 207, 110, 0.16);
-  color: var(--fh-f-gear);
-}
-
-/* Thrust: one rounded bar per engine, 1.0–2.0 EPR, numbered under it. */
-.fh-ft.fh-ft-epr {
-  min-width: 0;
-  padding-top: 6px;
-}
-
-.fh-bars {
-  display: flex;
-  gap: 6px;
+.fh-tapebox[data-ticks='left'] .fh-read {
+  left: 8px;
+  right: -3px;
   justify-content: center;
 }
 
-.fh-bar {
+.fh-tapebox[data-ticks='left'] .fh-read::after {
+  left: -5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.88);
+  border-left: 1px solid rgba(255, 255, 255, 0.88);
+}
+
+.fh-tapebox.fh-est {
+  opacity: 1;
+}
+
+.fh-tapebox.fh-est .fh-tape-view,
+.fh-tapebox.fh-est .fh-read-v {
+  opacity: 0.5;
+}
+
+/* ---- vertical speed --------------------------------------------------------------------------------------------- */
+
+.fh-vsi {
+  position: relative;
+  flex: none;
+  width: var(--fh-vsi-w);
+  height: var(--fh-tape-h);
+  border-radius: 7px;
+  background: var(--fh-i-well);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.fh-vsi.fh-est {
+  opacity: 0.5;
+}
+
+.fh-vsi-scale {
+  position: absolute;
+  inset: 6px 0;
+}
+
+.fh-vsi-m {
+  position: absolute;
+  left: 4px;
+  width: 4px;
+  height: 1px;
+  background: var(--fh-i-dim);
+}
+
+.fh-vsi-m.fh-major {
+  width: 7px;
+  background: var(--fh-i-line);
+}
+
+.fh-vsi-l {
+  position: absolute;
+  left: 13px;
+  margin-top: -4px;
+  color: var(--fh-i-label);
+  font: 650 8.5px/1 var(--fh-font);
+}
+
+.fh-vsi-zero {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 11px;
+  height: 1px;
+  background: #fff;
+}
+
+/* The bar from level to the value (scaleY, signed) and the pointer at its end. */
+.fh-vsi-bar,
+.fh-vsi-ptr {
+  position: absolute;
+  top: 6px;
+  height: calc(50% - 6px);
+  will-change: transform;
+}
+
+.fh-vsi-bar {
+  left: 4px;
+  width: 3px;
+  border-radius: 1px;
+  background: linear-gradient(to top, rgba(63, 220, 142, 0.35), var(--fh-i-green));
+  transform-origin: 50% 100%;
+}
+
+.fh-vsi-ptr {
+  left: 1px;
+  right: 1px;
+}
+
+.fh-vsi-ptr::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 13px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fh-i-green);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.fh-vs {
+  color: var(--fh-i-green);
+  font: 650 11px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-vs[data-dir='level'] {
+  color: var(--fh-i-label);
+}
+
+/* ---- heading ---------------------------------------------------------------------------------------------------- */
+
+.fh-fblock[data-block='top'] {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.fh-hdgcol,
+.fh-wind {
   display: flex;
   flex-direction: column;
+  gap: 5px;
+}
+
+/* The heading's readout sits above the tape's middle, its pointer on the index; the label to its left. */
+.fh-hdgcol .fh-bhead {
+  min-height: 19px;
   align-items: center;
+}
+
+.fh-hdg {
+  position: relative;
+  flex: none;
+  width: var(--fh-hdg-w);
+  height: 30px;
+}
+
+.fh-hdg-tape .fh-tape-view {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+}
+
+.fh-hdg .fh-strip {
+  top: 0;
+}
+
+.fh-hdg-tape text.fh-card {
+  font-weight: 750;
+}
+
+/* The index: a small amber wedge at the tape's top edge, under the readout's pointer. */
+.fh-hdg-index {
+  position: absolute;
+  top: 0;
+  left: calc(50% - 4px);
+  width: 9px;
+  height: 7px;
+  background: var(--fh-i-amber);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+/* The track: a green diamond under the marks, where the aircraft is going. */
+.fh-hdg-trk {
+  position: absolute;
+  top: 9px;
+  left: calc(50% - 3px);
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--fh-i-green);
+  box-sizing: border-box;
+  will-change: transform;
+}
+
+.fh-hdg .fh-read {
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: calc(50% - 25px);
+  width: 51px;
+  height: 20px;
+  padding: 0;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.fh-hdg .fh-read::after {
+  top: auto;
+  bottom: -5px;
+  left: calc(50% - 4px);
+  border-right: 1px solid rgba(255, 255, 255, 0.88);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.88);
+}
+
+.fh-hdg.fh-est .fh-tape-view,
+.fh-hdg.fh-est .fh-read-v {
+  opacity: 0.5;
+}
+
+.fh-hdg.fh-est {
+  opacity: 1;
+}
+
+/* ---- wind ------------------------------------------------------------------------------------------------------- */
+
+.fh-wind-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+}
+
+.fh-wind .fh-bhead {
+  min-height: 19px;
+  align-items: center;
+}
+
+.fh-wind-row .fh-v {
+  font: 650 13px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-wind-row .fh-u {
+  margin-left: -4px;
+  font-size: 10px;
+}
+
+.fh-wdial {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+.fh-wdial svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.fh-wdial-arrow {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.fh-wdial-ring {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 1;
+}
+
+.fh-wdial-ac {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.78);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+
+.fh-wdial-shaft {
+  stroke: var(--fh-i-cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.fh-wdial-head {
+  fill: var(--fh-i-cyan);
+}
+
+/* ---- attitude --------------------------------------------------------------------------------------------------- */
+
+.fh-fblock[data-block='bottom'] {
+  padding: 8px 10px 9px;
+}
+
+.fh-attrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fh-attcol {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: var(--fh-col-w);
+}
+
+.fh-att-l {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.fh-att-r {
+  align-items: flex-start;
+}
+
+.fh-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fh-att-l .fh-stat {
+  align-items: flex-end;
+}
+
+.fh-stat .fh-v {
+  font: 650 16px/1.05 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.fh-adi {
+  position: relative;
+  flex: none;
+  width: calc(var(--fh-adi) * 1.1);
+  height: calc(var(--fh-adi) * 1.13);
+}
+
+.fh-adi-ball,
+.fh-adi-scale,
+.fh-adi-ptr,
+.fh-adi-ac {
+  position: absolute;
+  bottom: 0;
+  left: calc(50% - var(--fh-adi) / 2);
+  width: var(--fh-adi);
+  height: var(--fh-adi);
+}
+
+.fh-adi-ball {
+  overflow: hidden;
+  border-radius: 50%;
+  isolation: isolate;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.fh-adi-world {
+  position: absolute;
+  top: -100%;
+  left: -100%;
+  width: 300%;
+  height: 300%;
+  will-change: transform;
+}
+
+.fh-adi-world svg,
+.fh-adi-ptr svg,
+.fh-adi-scale,
+.fh-adi-ac {
+  display: block;
+  overflow: visible;
+}
+
+.fh-adi-world svg,
+.fh-adi-ptr svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fh-sky0 { stop-color: var(--fh-i-sky0); }
+.fh-sky1 { stop-color: var(--fh-i-sky1); }
+.fh-gnd0 { stop-color: var(--fh-i-gnd0); }
+.fh-gnd1 { stop-color: var(--fh-i-gnd1); }
+
+/* An estimated attitude (live: the drawn one): the same instrument, its colours muted. */
+.fh-adi.fh-est {
+  --fh-i-sky0: #203f63;
+  --fh-i-sky1: #4a7aad;
+  --fh-i-gnd0: #6f5537;
+  --fh-i-gnd1: #30251a;
+  opacity: 1;
+}
+
+.fh-adi-hz {
+  stroke: #fff;
+  stroke-width: 1.4;
+}
+
+.fh-adi-ladder path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 1.15;
+}
+
+.fh-adi-ladder text {
+  fill: #fff;
+  font: 700 10.5px var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The glass over the ball: a rim, a soft vignette, a faint highlight. */
+.fh-adi-glass {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.1), transparent 55%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24), inset 0 0 16px rgba(0, 0, 0, 0.4);
+}
+
+.fh-adi-bank {
+  fill: none;
+  stroke: var(--fh-i-line);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+
+.fh-adi-zero {
+  fill: var(--fh-i-text);
+}
+
+.fh-adi-ptr {
+  will-change: transform;
+}
+
+.fh-adi-ptr path {
+  fill: #fff;
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 0.8;
+  paint-order: stroke;
+}
+
+.fh-adi-ptr.fh-alert path {
+  fill: var(--fh-i-amber);
+}
+
+.fh-adi-ac path {
+  fill: var(--fh-i-amber);
+  stroke: #0a0c10;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+/* ---- load factor and thrust gauges ------------------------------------------------------------------------------ */
+
+.fh-gload {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 2px;
 }
 
-.fh-bar-t {
+.fh-arc {
+  --fh-arc: 44px;
   position: relative;
-  width: 6px;
-  height: 22px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.1);
+  flex: none;
+  width: var(--fh-arc);
+  height: calc(var(--fh-arc) * 0.84);
 }
 
-.fh-bar-f {
+.fh-arc svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.fh-arc > svg,
+.fh-arc-needle {
   position: absolute;
-  inset: auto 0 0;
-  border-radius: 3px;
-  background: linear-gradient(to top, #3d8fe8, var(--fh-accent));
-  transition: height 100ms linear;
+  top: 0;
+  left: 0;
+  width: var(--fh-arc);
+  height: var(--fh-arc);
 }
 
-.fh-bar-t.fh-na {
-  background: none;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+.fh-arc-needle {
+  will-change: transform;
 }
 
-.fh-bar-l {
-  color: var(--fh-faint);
-  font: 600 9px/1 var(--fh-font);
+.fh-arc-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 2.4;
+  stroke-linecap: round;
 }
 
-/* Phones: the same cards, a size smaller. */
+.fh-arc-ticks {
+  stroke: var(--fh-i-line);
+  stroke-width: 1.2;
+}
+
+.fh-arc-mark {
+  stroke: var(--fh-i-cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.fh-arc-needle path,
+.fh-arc-needle circle {
+  fill: #fff;
+}
+
+.fh-arc-v {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font: 650 11px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* The thrust: a row under the attitude, a gauge per engine, left to right as on the wing. */
+.fh-thrust {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.fh-thrust-l {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.fh-thrust-l .fh-u {
+  font-size: 10px;
+}
+
+.fh-eprs {
+  display: flex;
+  gap: 8px;
+}
+
+.fh-eprs .fh-arc {
+  --fh-arc: 30px;
+  height: 38px;
+}
+
+.fh-eprs .fh-arc-v {
+  font-size: 9.5px;
+}
+
+.fh-eprs .fh-arc-track {
+  stroke-width: 2.8;
+}
+
+/* ---- gear and flaps --------------------------------------------------------------------------------------------- */
+
+.fh-annun {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.fh-ann {
+  padding: 2px 6px 2px;
+  border: 1px solid;
+  border-radius: 4px;
+  font: 700 10px/1.25 var(--fh-font);
+  letter-spacing: 0.06em;
+}
+
+.fh-ann[data-k='gear'] {
+  border-color: rgba(63, 220, 142, 0.75);
+  background: rgba(63, 220, 142, 0.1);
+  color: var(--fh-i-green);
+}
+
+.fh-ann[data-k='flaps'] {
+  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fh-i-text);
+}
+
+/* ---- compact variant: when the full card has no room on its side ------------------------------------------------ */
+
+.fh-fblock[data-v='1'] {
+  --fh-alt-w: 64px;
+  --fh-spd-w: 56px;
+  --fh-tape-h: 112px;
+  --fh-vsi-w: 20px;
+  --fh-hdg-w: 150px;
+  --fh-adi: 70px;
+  --fh-read-h: 22px;
+  --fh-read-fs: 13.5px;
+  --fh-col-w: 54px;
+  gap: 4px;
+  padding: 6px 7px 7px;
+}
+
+.fh-fblock[data-v='1'] .fh-thrust,
+.fh-fblock[data-v='1'] .fh-gload {
+  display: none;
+}
+
+.fh-fblock[data-v='1'] .fh-stat .fh-v {
+  font-size: 14px;
+}
+
+/* ---- phones: smaller cards; the thrust and the load factor go ------------------------------------------------- */
+
 @media (max-width: 640px) {
+  .fh-frame {
+    --fh-alt-w: 62px;
+    --fh-spd-w: 54px;
+    --fh-tape-h: 116px;
+    --fh-vsi-w: 20px;
+    --fh-hdg-w: 150px;
+    --fh-adi: 68px;
+    --fh-read-h: 22px;
+    --fh-read-fs: 13.5px;
+    --fh-col-w: 52px;
+  }
+
   .fh-fblock {
-    gap: 3px;
-    padding: 3px;
+    gap: 4px;
+    padding: 5px 6px 6px;
     border-radius: 10px;
   }
 
-  .fh-frow {
-    gap: 3px;
+  .fh-fblock[data-block='bottom'] {
+    padding: 6px 7px;
   }
 
-  .fh-ft {
-    min-width: 48px;
-    padding: 4px 7px 4px 6px;
-    border-radius: 7px;
+  .fh-attrow {
+    gap: 7px;
   }
 
-  .fh-ft-v {
-    font-size: 13px;
+  .fh-fblock[data-block='top'] {
+    gap: 8px;
   }
 
-  .fh-ft.fh-big .fh-ft-v {
-    font-size: 17px;
+  .fh-fblock[data-v='1'] {
+    --fh-alt-w: 58px;
+    --fh-spd-w: 50px;
+    --fh-tape-h: 92px;
+    --fh-vsi-w: 18px;
+    --fh-hdg-w: 120px;
+    --fh-adi: 56px;
+    --fh-read-h: 20px;
+    --fh-read-fs: 12.5px;
+    --fh-col-w: 46px;
   }
 
-  .fh-ft-l {
-    font-size: 9px;
+  .fh-thrust,
+  .fh-gload,
+  .fh-fblock[data-v='1'] .fh-agl,
+  .fh-fblock[data-v='1'] .fh-gs {
+    display: none;
   }
 
-  .fh-hz {
-    width: 26px;
-    height: 26px;
+  .fh-stat .fh-v,
+  .fh-fblock[data-v='1'] .fh-stat .fh-v {
+    font-size: 13.5px;
   }
 
-  .fh-hz-w {
-    left: -27px;
-    top: -27px;
+  .fh-line .fh-v {
+    font-size: 11.5px;
   }
 
-  .fh-bar-t {
-    height: 18px;
+  .fh-read {
+    padding: 0 5px;
   }
-}
 
-@media (prefers-reduced-motion: reduce) {
-  .fh-hz-w,
-  .fh-bar-f {
-    transition: none;
+  .fh-wind-row .fh-v {
+    font-size: 12px;
+  }
+
+  .fh-tape text,
+  .fh-hdg-tape text {
+    font-size: 10px;
   }
 }
