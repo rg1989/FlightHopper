@@ -61,6 +61,7 @@ const BREAK_S = 12 // a gap this long whose ends disagree (a turn, a hold unseen
 const BREAK_FRAC = 0.2 // aircraft flies into the newer state along its velocity (speed off by more than 20 %…
 const BREAK_MS = 3 // …or 3 m/s; vertically 2 m/s or 30 %)
 const BACK_RESET_S = 2 // render time jumping back further than this (a seek) starts the attitude afresh
+const READOUT_TAU_S = 0.5 // the speed and V/S shown lag like an instrument's, so a new sample's revision never steps
 
 interface V { ve: number; vn: number }
 interface P3 { e: number; n: number; h: number }
@@ -136,6 +137,8 @@ export class Track {
   #bumpS = REJOIN_S
   #att = new AttitudeFilter()
   #heading: number | null = null // the last drawn heading, held while taxiing slowly
+  #gsShown: number | null = null // m/s, READOUT_TAU_S behind the estimate
+  #vsShown: number | null = null
   #lastT: number | null = null
 
   constructor(hex: string, opts: { pollPeriodS?: number } = {}) {
@@ -186,6 +189,7 @@ export class Track {
     if (dtS < -BACK_RESET_S) {
       this.#att = new AttitudeFilter()
       this.#heading = null
+      this.#gsShown = this.#vsShown = null
     }
     this.#lastT = tS
     const cur = this.#samples[m.ci]
@@ -199,6 +203,9 @@ export class Track {
     const trackDeg = gsMs >= 0.5 ? wrap360(dirDeg(m.hz) - this.#gamma[m.ci]) : cur.trackDeg
     const att = this.#att.step(this.#target(m, cur, tS, gsMs, trackDeg), Math.max(0, dtS))
     this.#heading = att.headingDeg
+    const k = 1 - Math.exp(-Math.max(0, dtS) / READOUT_TAU_S)
+    this.#gsShown = this.#gsShown === null ? gsMs : this.#gsShown + k * (gsMs - this.#gsShown)
+    this.#vsShown = m.vsMs === null ? null : this.#vsShown === null ? m.vsMs : this.#vsShown + k * (m.vsMs - this.#vsShown)
     const hM = m.hM + off.h
     return {
       hex: this.hex,
@@ -208,10 +215,10 @@ export class Track {
       headingDeg: att.headingDeg,
       pitchDeg: att.pitchDeg,
       rollDeg: att.rollDeg,
-      gsKt: this.#hk.length < 2 && cur.gsKt === null ? null : gsMs / KT,
+      gsKt: this.#hk.length < 2 && cur.gsKt === null ? null : this.#gsShown / KT,
       trackDeg,
       altBaroFt: cur.altBaroFt,
-      vsFpm: m.vsMs === null ? null : m.vsMs / FPM, // the estimate's: a re-join's few centimetres must not nod the nose
+      vsFpm: this.#vsShown === null ? null : this.#vsShown / FPM,
       mode: m.over <= 0 ? 'interp' : stale ? 'stale' : 'extrap',
       altSource: this.#altSource,
       onGround: cur.onGround,

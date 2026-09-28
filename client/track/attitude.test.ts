@@ -96,6 +96,13 @@ test('rolling out: braking harder than any airborne drag means wheels on the run
   }
 })
 
+test('rolling out below the approach speed: even moderate braking (1.2 m/s²) means the wheels are down', () => {
+  within(pr({ vsMs: -0.7, alongMs2: -1.2, easKt: null, gsMs: 118 * KT, altM: 80 }).pitchDeg, -0.01, 0.01, 'slow rollout')
+  // …but the same deceleration on the glide (descending) or fast (a speedbrake level-off at 190 kt) is flight
+  assert.ok(pr({ vsMs: -3.6, alongMs2: -1.2, easKt: null, gsMs: 135 * KT, altM: 300 }).pitchDeg > 2, 'on the glide')
+  assert.ok(pr({ vsMs: 0, alongMs2: -0.9, easKt: 190, gsMs: 190 * KT }).pitchDeg > 3, 'level-off at 190 kt')
+})
+
 test('on the ground: pitch 0 and wings level whatever the rest says', () => {
   assert.deepEqual(pr({ onGround: true, vsMs: 5, turnRateDegS: 3 }), { pitchDeg: 0, rollDeg: 0 })
 })

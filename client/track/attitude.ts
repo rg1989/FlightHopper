@@ -25,10 +25,13 @@ const MIN_X = 0.85 // an airspeed under this would be a stall: bad data or a wro
 const MIN_X_GUESSED = 1 // from the ground speed (unknown wind), never slower than the approach speed…
 const MAX_X_GUESSED = 2.1 // …nor faster than a fast descent
 const V_REF: Readonly<Record<string, number>> = { A1: 65, A2: 115, A3: 140, A4: 140, A5: 150, A6: 150 }
-// Airborne, drag with speedbrakes out slows an airliner by under ~1 m/s²; brakes and reversers on the runway by 2–3.
-// Braking harder than BRAKE_FROM (and nearly level) is a rollout the ground flag has not caught up with yet.
+// Airborne, drag with speedbrakes out slows an airliner by under ~1 m/s²; brakes and reversers on the runway by 1–3.
+// Braking harder than that while nearly level is a rollout the ground flag has not caught up with yet (some aircraft
+// report the ground only below 100 kt); slower than the approach speed, even moderate braking is.
 const BRAKE_FROM_MS2 = 0.8
 const BRAKE_TO_MS2 = 1.8
+const SLOW_BRAKE_FROM_MS2 = 0.4
+const SLOW_BRAKE_TO_MS2 = 1.2
 const ROTOR_PITCH_DEG = -5 // a helicopter's nose-down attitude at ROTOR_KT, in proportion below it
 const ROTOR_KT = 120
 
@@ -92,7 +95,9 @@ export function aeroPitchRoll(s: FlightState): { pitchDeg: number; rollDeg: numb
   // from 25 ft altitude steps its estimate is mostly noise: measured, it made the pitch wobble 30 % more on final.)
   const n = 1 / Math.cos(rollDeg / DEG)
   const alphaDeg = alpha0 + (alpha1g - alpha0) * n
-  const rolling = smoothstep(BRAKE_FROM_MS2, BRAKE_TO_MS2, -s.alongMs2) * (1 - smoothstep(1, 2, Math.abs(s.vsMs)))
+  const slow = 1 - smoothstep(0.9, 1, s.gsMs / KT / vRef) // below the approach speed over the ground
+  const braking = Math.max(smoothstep(BRAKE_FROM_MS2, BRAKE_TO_MS2, -s.alongMs2), slow * smoothstep(SLOW_BRAKE_FROM_MS2, SLOW_BRAKE_TO_MS2, -s.alongMs2))
+  const rolling = braking * (1 - smoothstep(1, 2, Math.abs(s.vsMs)))
   return { pitchDeg: clamp(gammaDeg + alphaDeg, -15, 25) * (1 - rolling), rollDeg: rollDeg * (1 - rolling) }
 }
 
