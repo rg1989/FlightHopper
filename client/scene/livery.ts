@@ -157,7 +157,9 @@ vec4 bellyAt(vec3 p) {
 /**
  * The fragment shader for one model's paint map and profile. The airline's paint is in the atlases (uniforms), so every
  * airline on a model shares one GLSL program. The fuselage and fin take the skin atlas by position (x > 0: the left
- * side), nacelles and wingtip devices theirs by the facing (the outboard face of the left engine faces +x). The old
+ * side), nacelles theirs by the facing (the outboard face of the left engine faces +x), wingtip devices theirs by
+ * outboard or inboard face (the winglet atlas's "left" half paints both outboard faces, its "right" half both inboard
+ * faces: winglets are painted differently inside and out, the same on both wings). The old
  * texture survives only where it is near black (windows). Translucent parts (propeller discs) keep their own look. The
  * damage is compiled in only where the paint map measures it (cut).
  * The finish: glossy paint, semi-gloss grey wings and tailplane, dark glass in the windows; where the model reflects
@@ -173,7 +175,8 @@ export function paintShaderText(p: Paint, prof: ModelProfile, detail = 1): strin
   const e = prof.engines
   const w = prof.winglet
   const engineTest = e
-    ? `abs(p.x) > ${f(e[0])} && abs(p.x) < ${f(e[1])} && p.z > ${f(e[2])} && p.z < ${f(e[3])} && p.y > ${f(e[4])} && p.y < ${f(e[5])} && abs(n.y) < 0.8`
+    // in the nacelle box: everything but the wing's lower skin over it (facing down, in the box's upper part)
+    ? `abs(p.x) > ${f(e[0])} && abs(p.x) < ${f(e[1])} && p.z > ${f(e[2])} && p.z < ${f(e[3])} && p.y > ${f(e[4])} && p.y < ${f(e[5])} && (n.y > -0.8 || p.y < ${f(e[4] + 0.6 * (e[5] - e[4]))})`
     : `abs(p.x) > ${f(ex0)} && abs(p.x) < ${f(ex1)} && p.z > ${f(ez0)} && p.z < ${f(ez1)} && abs(n.y) < 0.8`
   return `${atlasText('skin', prof.box, size.skin[1])}${bellyText(prof.box, bellyHalf(p), size.belly[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], size.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], size.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
@@ -196,7 +199,7 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   }${e ? `
   if (engine) c = nacelleAt(p, n.x > 0.0);` : `
   if (engine) c = u_engine;`}${w ? `
-  if (tip) c = tipAt(p, n.x > 0.0);` : ''}
+  if (tip) c = tipAt(p, (n.x > 0.0) == (p.x > 0.0));` : ''}
   bool side = abs(n.x) > 0.3;
   vec3 albedo = czm_srgbToLinear(c) * detail;
   bool wing = !body && !fin && !engine && !tip;
