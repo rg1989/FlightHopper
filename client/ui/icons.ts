@@ -21,7 +21,7 @@ const P: Record<string, string> = {
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 11v5.5M12 7.5h.01',
   // Four cards of different sizes: a layout (the flight-data frame's), to edit.
   layout: 'M3.5 3.5h7v9h-7zM13.5 3.5h7v5h-7zM13.5 11.5h7v9h-7zM3.5 15.5h7v5h-7z',
-  // An eye, open and struck through: shown, hidden.
+  // An eye, open and struck through: shown, hidden (the flight-data frame's cards), or a secret (Settings).
   eye: 'M2.5 12c2.2-4.3 5.6-6.5 9.5-6.5s7.3 2.2 9.5 6.5c-2.2 4.3-5.6 6.5-9.5 6.5S4.7 16.3 2.5 12ZM12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z',
   eyeOff: 'M2.5 12c2.2-4.3 5.6-6.5 9.5-6.5s7.3 2.2 9.5 6.5c-2.2 4.3-5.6 6.5-9.5 6.5S4.7 16.3 2.5 12ZM12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5ZM4 4l16 16',
   // Four corners out / in.
@@ -38,6 +38,8 @@ const P: Record<string, string> = {
   plane: 'M12 2.5c.9 0 1.5 1 1.5 2.5v4.5l7.5 4.5v2l-7.5-2.3v4.8l2 1.6v1.6L12 20.7l-3.5 1v-1.6l2-1.6v-4.8L3 16v-2l7.5-4.5V5c0-1.5.6-2.5 1.5-2.5Z',
   // A folded map: the top-down view.
   map: 'M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4ZM9 4v14M15 6v14',
+  // Two corner brackets (top right, bottom left): the chase traffic's mark.
+  bracket: 'M13.5 4.5h6v6M10.5 19.5h-6v-6',
   // A camera, struck through: no photo of this aircraft.
   cameraOff: 'M3.5 7.5H7L8.5 5h7L17 7.5h3.5v12h-17v-12ZM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM3 3l18 18',
   keyboard: 'M3.5 6.5h17v11h-17zM7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8',
@@ -46,6 +48,12 @@ const P: Record<string, string> = {
   // Media controls (the scenario play bar fills them).
   play: 'M7.5 5.2v13.6L18.8 12 7.5 5.2Z',
   pause: 'M7 5.5h3v13H7zM14 5.5h3v13h-3z',
+  // A gear with eight teeth round a hub: the settings.
+  settings: 'M10.16 5.14L10.53 2.72L13.47 2.72L13.84 5.14A7.1 7.1 0 0 1 15.55 5.85L17.53 4.4L19.6 6.47L18.15 8.45A7.1 7.1 0 0 1 18.86 10.16L21.28 10.53L21.28 13.47L18.86 13.84A7.1 7.1 0 0 1 18.15 15.55L19.6 17.53L17.53 19.6L15.55 18.15A7.1 7.1 0 0 1 13.84 18.86L13.47 21.28L10.53 21.28L10.16 18.86A7.1 7.1 0 0 1 8.45 18.15L6.47 19.6L4.4 17.53L5.85 15.55A7.1 7.1 0 0 1 5.14 13.84L2.72 13.47L2.72 10.53L5.14 10.16A7.1 7.1 0 0 1 5.85 8.45L4.4 6.47L6.47 4.4L8.45 5.85A7.1 7.1 0 0 1 10.16 5.14ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  // A box with an arrow leaving it: opens another site.
+  external: 'M13.5 4.5h6v6M19.5 4.5 11 13M17 14v4.5a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H10',
+  // A triangle with an exclamation mark: a warning.
+  alert: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4.5M12 17h.01',
   // A speaker with its sound, and silenced.
   volume: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM15.5 9.2a4 4 0 0 1 0 5.6M18.3 6.5a7.8 7.8 0 0 1 0 11',
   muted: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM16 9.5l5 5M21 9.5l-5 5',

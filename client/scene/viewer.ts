@@ -15,6 +15,8 @@ import { TileCache } from './tileCache.ts'
 export interface ViewerOpts {
   tileCache?: 'auto' | number
   fade?: boolean
+  /** Cesium ion failed (terrain.ts, imagery.ts): the keyless terrain or imagery took its place; why. */
+  onIonFallback?: (what: 'terrain' | 'imagery', why: string) => void
 }
 
 /**
@@ -24,7 +26,9 @@ export interface ViewerOpts {
  * FADE_MS instead of popping (opts.fade). The adaptive TileCache listens to scene.postRender, so it dies with the viewer.
  */
 export async function createViewer(el: HTMLElement | string, cfg: ClientConfig, opts: ViewerOpts = {}): Promise<Viewer> {
-  const [terrainProvider, imagery] = await Promise.all([makeTerrain(cfg), makeImagery(cfg)])
+  const [terrainProvider, imagery] = await Promise.all([
+    makeTerrain(cfg, (why) => opts.onIonFallback?.('terrain', why)), makeImagery(cfg, (why) => opts.onIonFallback?.('imagery', why)),
+  ])
   installImageryFade() // false on a Cesium without the privates it needs: no fade, the globe pops as before
   imageryFade.enabled = opts.fade ?? true
   const viewer = new Viewer(el, {

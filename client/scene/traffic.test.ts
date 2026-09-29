@@ -6,7 +6,7 @@ import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRoll, Matrix4 } from '
 import { destination } from '../../shared/geo.ts'
 import type { FleetEntry, ModelManifest } from '../types.ts'
 import { measureGlb, noseAzimuthDeg } from './model.ts'
-import { BOX_CENTRE, BOX_HALF, MIN_PX, flightId, formatDistanceM, hitAt, isOccluded, minScale, popupPlacement, shownLabels, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
+import { BOX_CENTRE, BOX_HALF, MIN_PX, flightId, hitAt, isOccluded, minScale, shownLabels, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
 import type { Box } from './traffic.ts'
 
 const root = new URL('../../', import.meta.url)
@@ -89,30 +89,11 @@ test('hitAt: inside a square hits; overlapping squares → the nearest to the ca
   assert.equal(hitAt(boxes, 2, 500, 500), null, 'only the first n boxes count')
 })
 
-test('formatDistanceM: whole metres with thousands separators', () => {
-  assert.equal(formatDistanceM(849.6), '850 m')
-  assert.equal(formatDistanceM(12_345.4), '12,345 m')
-  assert.equal(formatDistanceM(0.2), '0 m')
-})
-
 test('isOccluded: something nearer than the model on the line to its centre hides it; the model itself or nothing does not', () => {
   assert.equal(isOccluded(undefined, 500, 20), false, 'sky: nothing there')
   assert.equal(isOccluded(300, 500, 20), true, 'a building 200 m in front')
   assert.equal(isOccluded(485, 500, 20), false, "the model's own near side")
   assert.equal(isOccluded(900, 500, 20), false, 'the ground behind it')
-})
-
-test('popupPlacement: beside the square, flipped at the right edge, kept on screen', () => {
-  const b: Box = { hex: 'x', x: 500, y: 400, side: 100, depthM: 1, label: '', distM: 0 }
-  assert.deepEqual(popupPlacement(b, 200, 100, 1280, 800), { left: 560, top: 350, flip: false, tickY: 50 })
-  assert.deepEqual(popupPlacement({ ...b, x: 1200 }, 200, 100, 1280, 800), { left: 940, top: 350, flip: true, tickY: 50 })
-  const top = popupPlacement({ ...b, y: 20, side: 40 }, 200, 100, 1280, 800)
-  assert.equal(top.top, 8, 'kept below the top edge')
-  assert.equal(top.tickY, 12, 'the tick still points at the square')
-  const rail = popupPlacement({ ...b, x: 1050 }, 200, 100, 1280, 800, 76, 8)
-  assert.equal(rail.flip, true, 'the rail (76 px on the right) is an edge too')
-  const bar = popupPlacement({ ...b, y: 760 }, 200, 100, 390, 800, 8, 69)
-  assert.equal(bar.top, 800 - 69 - 100, 'kept above a phone tab bar (69 px)')
 })
 
 test('shownLabels: nearest first; a flight ID that would overlap one already shown hides (a far airport reads)', () => {
@@ -129,6 +110,14 @@ test('shownLabels: nearest first; a flight ID that would overlap one already sho
   // b's ID (above its square) would sit on a's distance line (under a's): hidden
   assert.deepEqual(shownLabels([box('a', 100, 100, 5), box('b', 100, 100 + 24 + 22, 6)], 2, []), [true, false], "an ID on another's distance")
   assert.deepEqual(shownLabels([box('a', 100, 100, 5), box('b', 100, 100 + 24 + 40, 6)], 2, []), [true, true], 'a line lower: clear')
+})
+
+test('shownLabels: the open aircraft (its card showing) keeps its labels over a nearer one that would clash', () => {
+  const box = (hex: string, x: number, depthM: number): Box => ({ hex, x, y: 100, side: 24, depthM, label: 'UAL1561', distM: 0 })
+  const boxes = [box('near', 100, 3_000), box('open', 105, 9_000)]
+  assert.deepEqual(shownLabels(boxes, 2, []), [true, false])
+  assert.deepEqual(shownLabels(boxes, 2, [], 'open'), [false, true])
+  assert.deepEqual(shownLabels(boxes, 2, [], 'gone'), [true, false], 'an open aircraft not drawn changes nothing')
 })
 
 test('traffic model: nose along the track, pitched with the climb, wings level, wheels at the placed height', () => {

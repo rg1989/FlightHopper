@@ -302,6 +302,37 @@
 }
 
 
+/* A traffic aircraft's distance from the chased one: a line above the status, by the brackets' mark in their colour. */
+.fh-card-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 14px 0 12px;
+  color: var(--fh-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fh-card-range[hidden] {
+  display: none;
+}
+
+.fh-card-range .fh-icon {
+  flex: none;
+  color: var(--fh-traffic);
+}
+
+.fh-card-range-d {
+  color: var(--fh-text);
+  font-weight: 600;
+}
+
+.fh-card-range-f {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Status line, the expand toggle and the primary action (Chase / Map) side by side. */
 .fh-card-foot {
   display: flex;
@@ -462,4 +493,60 @@
 
 @keyframes fh-card-up {
   from { opacity: 0; transform: translateY(8px); }
+}
+
+/* A traffic aircraft's card (a click in its brackets in the chase): the chased one's card at the top right, beside the
+   rail where a panel opens, edged in the brackets' colour; at the bottom instead where it would cover that aircraft
+   (keepClear: .fh-card-flip). A panel opened over it hides it until it closes (app.ts closes the panel when a bracket
+   is clicked). */
+.fh-card.fh-tcard {
+  right: calc(70px + var(--fh-right)); /* 12 px clear of the rail (12 px from the edge, 46 px wide) */
+  left: auto;
+  border-color: rgb(255 210 63 / 0.42);
+}
+
+.fh-card.fh-tcard.fh-card-flip {
+  top: auto;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  animation-name: fh-card-up;
+}
+
+.fh-ui:has(.fh-panel:not([hidden])) .fh-tcard {
+  visibility: hidden;
+}
+
+@media (pointer: coarse) {
+  .fh-card.fh-tcard {
+    right: calc(78px + var(--fh-right)); /* the rail's 44 px buttons make it 54 px wide */
+  }
+}
+
+/* Narrow screens: no room for two cards side by side. It takes the chased card's place, which waits hidden; on phones
+   that is above the tab bar, and its airline, registration and photo mark stay (a card opened to be read). */
+@media (max-width: 860px) {
+  .fh-card.fh-tcard {
+    right: auto;
+    left: var(--fh-left);
+  }
+
+  .fh-ui:has(.fh-tcard:not([hidden])) .fh-card:not(.fh-tcard) {
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 640px) {
+  .fh-card.fh-tcard {
+    right: 8px;
+    left: 8px;
+  }
+
+  .fh-card.fh-tcard.fh-card-flip {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    animation-name: fh-card-in;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-tcard .fh-card-sub:not([hidden]) {
+    display: flex;
+  }
 }
