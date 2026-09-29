@@ -1,0 +1,100 @@
+/* client/ui/mapKey.css */
+/* The top-down map's key (mapKey.ts), bottom left: the altitude colours bar, the scale rulers under it. Never takes the
+   pointer; the chase hides it. On phones it sits above the tab strip and gives way to a card there. */
+.fh-mapkey {
+  position: absolute;
+  z-index: 12;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  left: var(--fh-left);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 196px;
+  padding: 9px 11px 8px;
+  border-radius: var(--fh-radius-sm);
+  color: var(--fh-muted);
+  font: 600 10px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fh-ui[data-mode='chase'] .fh-mapkey {
+  display: none;
+}
+
+.fh-mapkey-alt {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  column-gap: 6px;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.fh-mapkey-gnd {
+  height: 6px;
+  border-radius: 2px;
+}
+
+.fh-mapkey-bar {
+  height: 6px;
+  border-radius: 3px;
+}
+
+/* The labels under the bar, each centred on its tick (the last right-aligned); GND under the swatch. */
+.fh-mapkey-ticks {
+  position: relative;
+  grid-column: 2;
+  height: 10px;
+}
+
+.fh-mapkey-t {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.fh-mapkey-t-end {
+  transform: translateX(-100%);
+}
+
+.fh-mapkey-t-gnd {
+  left: -16px;
+  transform: none;
+}
+
+.fh-mapkey-scale {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fh-mapkey-ruler {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  color: var(--fh-text);
+}
+
+.fh-mapkey-ruler[hidden] {
+  display: none;
+}
+
+/* A ruler: a line with a tick at each end. */
+.fh-mapkey-seg {
+  height: 5px;
+  border: 1.5px solid var(--fh-text);
+  border-top: 0;
+  transition: width var(--fh-fast) var(--fh-ease);
+}
+
+@media (max-width: 640px) {
+  .fh-mapkey {
+    bottom: calc(var(--fh-tabbar-h) + 8px);
+  }
+
+  .fh-ui:has(.fh-card:not([hidden])) .fh-mapkey {
+    display: none;
+  }
+}

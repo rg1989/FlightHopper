@@ -24,7 +24,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { FleetEntry } from '../client/types.ts'
 import { FleetLayer } from '../client/scene/fleetLayer.ts'
-import { mountLegend } from '../client/ui/legend.ts'
+import { mountMapKey } from '../client/ui/mapKey.ts'
 
 const q = new URLSearchParams(location.search)
 const N = Number(q.get('n') ?? 5000)
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
   }
 
   const layer = new FleetLayer(viewer)
-  mountLegend(document.getElementById('legend') as HTMLElement)
+  mountMapKey(document.getElementById('legend') as HTMLElement)
   let selected: string | null = null
   let hover: string | null = null
   let mouse: Cartesian2 | null = null

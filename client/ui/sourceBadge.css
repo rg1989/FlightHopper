@@ -71,3 +71,45 @@
     font-size: 14px;
   }
 }
+
+/* In the Aircraft panel: the status as one line over the list (app.ts), the mode and source, then the rows side by side. */
+.fh-status-line {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--fh-hairline);
+}
+
+.fh-status-line .fh-status-hero {
+  padding: 0;
+  gap: 10px;
+}
+
+.fh-status-line .fh-status-mode {
+  font-size: 13px;
+}
+
+.fh-status-line .fh-status-rows {
+  grid-auto-flow: column;
+  grid-template-rows: auto auto;
+  grid-template-columns: none;
+  gap: 3px 16px;
+  margin-left: auto;
+  padding: 0;
+  border-top: 0;
+}
+
+.fh-status-line .fh-status-rows dt {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fh-status-line .fh-status-rows dd {
+  justify-content: flex-start;
+  text-align: left;
+  white-space: nowrap;
+}

@@ -59,7 +59,7 @@ import type { Lookup } from './ui/detail.ts'
 import { entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountInfoPanel } from './ui/info.ts'
-import { mountLegend } from './ui/legend.ts'
+import { mountMapKey } from './ui/mapKey.ts'
 import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel.ts'
@@ -406,22 +406,25 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let toggles!: SceneTogglesHandle
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
-  let legend!: { destroy(): void }
   let scenarioPanel!: ScenarioPanelHandle
   // The Scenarios panel asks for its list at mount; it gets it once the panel is first opened, not at start.
   let openedScenarios!: () => void
   const scenariosOpened = new Promise<void>((resolve) => (openedScenarios = resolve))
   const rail = mountRail(ui, [
-    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: (b) => (statusPanel = mountStatusPanel(b)) } },
-    { id: 'aircraft', icon: 'list', label: 'Aircraft in view', short: 'Aircraft', group: 1, panel: {
+    // The live status (source, refresh, coverage, imagery) in a line over the list of the aircraft in view; the button
+    // carries the count, the feed's dot and its loading light.
+    { id: 'aircraft', icon: 'list', label: 'Aircraft in view and live status', short: 'Aircraft', panel: {
       title: 'Aircraft', wide: true,
-      mount: (b, head) => (table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })),
+      mount: (b, head) => {
+        const line = div('fh-status-line', b)
+        statusPanel = mountStatusPanel(line)
+        table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })
+      },
     } },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
     { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
       title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
     } },
-    { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
     // A traffic aircraft's card closes too (it and its brackets would sit over the cards), and none opens while editing.
     { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', spot: 'bottom', action: () => {
@@ -436,7 +439,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         onPlay: (id) => void startScenario(id, { play: true }),
       })),
     } },
-    { id: 'controls', icon: 'keyboard', label: 'Controls', short: 'Controls', group: 2, panel: { title: 'Controls', mount: (b) => mountInfoPanel(b) } },
+    // The keys; not where there are none (a touch screen).
+    ...(matchMedia('(pointer: coarse)').matches ? [] : [{ id: 'controls', icon: 'keyboard', label: 'Keyboard shortcuts', short: 'Keys', group: 2, panel: { title: 'Keyboard shortcuts', mount: (b: HTMLElement) => mountInfoPanel(b) } } as const]),
     { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', spot: 'corner', action: () => settings.open() },
     // Not where the page cannot go full screen (iPhone Safari).
     ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', spot: 'corner', action: () => toggleFullscreen() } as const] : []),
@@ -469,6 +473,22 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (hex !== null) select(hex)
   }
   const banner = mountBanner(ui)
+  const mapKey = mountMapKey(ui) // bottom left, top-down only: altitude colours and the scale
+  let scaleAtMs = -Infinity
+  const keyA = new Cartesian2()
+  const keyB = new Cartesian2()
+  const keyGa = new Cartesian3()
+  const keyGb = new Cartesian3()
+  /** Metres per CSS pixel on the ground at the screen's centre (the scale the key shows), or null where that is sky. */
+  const groundScale = (): number | null => {
+    const r = viewer.canvas.getBoundingClientRect()
+    keyA.x = r.width / 2 - 50
+    keyB.x = r.width / 2 + 50
+    keyA.y = keyB.y = r.height / 2
+    const a = viewer.camera.pickEllipsoid(keyA, undefined, keyGa)
+    const b = a && viewer.camera.pickEllipsoid(keyB, undefined, keyGb)
+    return a && b ? Cartesian3.distance(a, b) / 100 : null
+  }
   let firstData = false
   let lastBadgeMs = -Infinity
   const toggleFullscreen = (): void => {
@@ -895,11 +915,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     banner.update(sf === null ? shown : NO_STATUS) // live-feed trouble says nothing about a scenario
     const known = status === NO_STATUS ? null : shown
     statusPanel.update(known, api.ready ? api.serverNowMs() : null)
-    rail.setDot('status', statusDot(known))
+    rail.setDot('aircraft', statusDot(known))
     // In trouble no answers come; in a scenario none are asked for.
-    rail.setBusy('status', sf === null && (known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)))
+    rail.setBusy('aircraft', sf === null && (known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)))
     // In trouble too (they are still not loaded), but none shown as loading: no answer is coming.
     pendingLayer.update(status.pendingBoxes, !chasing, known !== null && known.degraded === null)
+    if (!chasing && now - scaleAtMs > 200) {
+      scaleAtMs = now
+      mapKey.setScale(groundScale())
+    }
     syncUrl(now)
     bench?.frame(s, clearanceM)
     measure?.('fh:frame', now)
@@ -1096,7 +1120,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       // T, L, X: they apply in the chase view (D9, D11), and can be set beforehand. M: map or satellite, for the view on
       // screen. R: roads and places. W: weather.
       const k = sceneKey(e)
-      const key = k === 'base' ? baseKey(chasing) : k
+      const key = k === 'base' ? (run === null ? baseKey(chasing) : null) : k // in a scenario M mutes (run.ts)
       if (key !== null) setPrefs({ ...prefs, [key]: !prefs[key] })
     }
   }
@@ -1124,7 +1148,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       trafficCard.destroy()
       settings.destroy()
       table.destroy()
-      legend.destroy()
+      mapKey.destroy()
       rail.destroy()
       ui.remove()
       chaseCam.release()

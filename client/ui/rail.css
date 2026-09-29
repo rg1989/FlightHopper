@@ -436,7 +436,7 @@
     top: 9px;
     right: auto;
     bottom: auto;
-    left: calc(50% + 6px);
+    left: calc(50% - 20px); /* left of the icon: the count badge is on its right */
   }
 
   .fh-rail .fh-ibtn.fh-busy::before {
