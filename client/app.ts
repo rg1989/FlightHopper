@@ -55,7 +55,7 @@ import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { mountBanner } from './ui/banner.ts'
 import type { Lookup } from './ui/detail.ts'
-import { mountFlightCard } from './ui/flightCard.ts'
+import { entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountInfoPanel, type InfoPanelHandle } from './ui/info.ts'
 import { mountLegend } from './ui/legend.ts'
@@ -104,6 +104,7 @@ const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 const FRAME_COVERS = '.fh-rail, .fh-panel, .fh-card, .fh-toast, .fh-playbar, .fh-captions'
 const SAFE_EVERY_MS = 100
+const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_RECT: Rect = { x: 0, y: 0, w: 0, h: 0 }
 
 /** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–5,400 nm. */
@@ -399,8 +400,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
   // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
-  // Its popup's Chase button chases that aircraft instead (select: a chase stays a chase, on the new aircraft).
-  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root), { flagOf, onChase: (hex) => select(hex) }) : null
+  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root)) : null
   const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
   const frameLayer = div('fh-frame', root)
@@ -443,7 +443,21 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   })
   const imagery0 = badgeView(imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
-  const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos: new PhotoCache(), lookup: lookupFor })
+  const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
+  const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor })
+  // A click in a traffic aircraft's brackets opens its card: live from the fleet, its full object asked for as a focused
+  // aircraft's is (poll). Its Chase chases it instead (select: a chase stays a chase, on the new aircraft).
+  const trafficCard = mountFlightCard(ui, {
+    traffic: true, onClose: () => traffic?.close(), onChase: () => chaseTraffic(), photos, lookup: lookupFor,
+  })
+  let trafficRaw: ReadsbAircraft | null = null // the open traffic aircraft's newest full upstream object
+  let trafficAsked: { hex: string; ms: number } | null = null
+  let trafficClick: Cartesian2 | null = null // where its brackets were clicked: the card keeps clear of it, once shown
+  const chaseTraffic = (): void => {
+    const hex = traffic?.openHex ?? null
+    traffic?.close()
+    if (hex !== null) select(hex)
+  }
   const banner = mountBanner(ui)
   let creditSource: SourceKind | null = null
   info.setCredits(attributionFor(entry, null, cfg.imagery))
@@ -833,6 +847,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     toggles.setChasing(chasing)
     // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
     card.update(selected, s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null)), shown, chasing) // ≤ 4 Hz
+    const th = traffic?.openHex ?? null // open only while chasing (Traffic.select closes it otherwise)
+    const te = th === null ? undefined : fleet.get(th)
+    const dist = traffic?.openDistM ?? null
+    const from = chaseInfo?.callsign ?? s?.callsign ?? selected?.toUpperCase() ?? ''
+    trafficCard.update(te === undefined ? null : th, te === undefined ? null : entryState(te), trafficRaw, te?.info ?? null, shown, false,
+      dist === null ? null : { distM: dist, from })
+    if (trafficClick !== null) {
+      const c = viewer.canvas.getBoundingClientRect()
+      trafficCard.keepClear(c.left + trafficClick.x, c.top + trafficClick.y, TRAFFIC_CLEAR_PX)
+      trafficClick = null
+    }
     banner.update(sf === null ? shown : NO_STATUS) // live-feed trouble says nothing about a scenario
     const known = status === NO_STATUS ? null : shown
     statusPanel.update(known, api.ready ? api.serverNowMs() : null)
@@ -889,7 +914,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const nowMs = performance.now()
     const ask = hex !== null && (chasing || nowMs - lastFocusAskMs >= FOCUS_ASK_MS)
     if (ask && !chasing) lastFocusAskMs = nowMs
-    const [view, chase] = await Promise.allSettled([api.view(v.lat, v.lon, v.nm), ask ? api.chase(hex) : noChase])
+    // The open traffic card's aircraft, as a focused one: at once, then every FOCUS_ASK_MS. Within 10 nm of the chased
+    // aircraft it is inside the view circle, so the server asks upstream nothing more for it.
+    const th = traffic?.openHex ?? null
+    const askTraffic = th !== null && (trafficAsked?.hex !== th || nowMs - trafficAsked.ms >= FOCUS_ASK_MS)
+    if (askTraffic) trafficAsked = { hex: th, ms: nowMs }
+    const [view, chase, trafficChase] = await Promise.allSettled([
+      api.view(v.lat, v.lon, v.nm), ask ? api.chase(hex) : noChase, askTraffic ? api.chase(th) : noChase,
+    ])
     if (stopped) return
     const t0 = measure === null ? 0 : performance.now()
     const current = hex !== null && hex === selected // a reply for an earlier selection only feeds the fleet
@@ -924,6 +956,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       }
       status = r.status
       ok = true
+    }
+    if (trafficChase.status === 'fulfilled' && trafficChase.value !== null) {
+      const r = trafficChase.value
+      fleet.ingest(r.samples, r.info ? [r.info] : undefined)
+      trafficRaw = r.raw ?? null // detailRows ignores one of another aircraft (the card moved on)
     }
     if (chased0) {
       // The first chase reply carries the stored history (since=0). A track takes samples in time order only, so the
@@ -970,28 +1007,33 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
-    // Chase traffic first: a click in a model's bracket square opens its popup (closing another: one at most); a click
-    // anywhere else closes an open one, and does nothing more.
+    // Chase traffic first: a click in a model's bracket square opens its card (in place of another: one at most) and
+    // closes a panel, which would cover it; a click anywhere else closes an open one, and does nothing more.
     if (traffic !== null) {
       const hit = traffic.hitAt(e.position.x, e.position.y)
-      if (hit !== null) return void traffic.open(hit)
+      if (hit !== null) {
+        traffic.open(hit)
+        rail.close()
+        trafficClick = Cartesian2.clone(e.position)
+        return
+      }
       if (traffic.close()) return
     }
     const hex = fleetLayer.pick(e.position, tapPx)
     if (hex !== null) select(hex)
     else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
   }, ScreenSpaceEventType.LEFT_CLICK)
-  // Hover over an icon: its callsign label and a pointer cursor. Picks at most every HOVER_PICK_MS, at the newest position.
+  // Hover over an icon: its callsign label and a pointer cursor; over a traffic bracket, the pointer. Picks at most every
+  // HOVER_PICK_MS, at the newest position.
   const mousePos = new Cartesian2()
   let hoverTimer: ReturnType<typeof setTimeout> | null = null
   let lastPickMs = -Infinity
   const pickHover = (): void => {
     hoverTimer = null
     lastPickMs = performance.now()
-    const hex = fleetLayer.pick(mousePos)
-    if (hex === mapHover) return
-    mapHover = hex
-    viewer.canvas.style.cursor = hex === null ? '' : 'pointer'
+    mapHover = fleetLayer.pick(mousePos)
+    const bracket = traffic?.hitAt(mousePos.x, mousePos.y) ?? null
+    viewer.canvas.style.cursor = mapHover === null && bracket === null ? '' : 'pointer'
   }
   mouse.setInputAction((m: ScreenSpaceEventHandler.MotionEvent) => {
     Cartesian2.clone(m.endPosition, mousePos)
@@ -1004,16 +1046,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
-  // A press outside the canvas and the popup (the rail, the card, a panel) closes the traffic popup too. The canvas's own
-  // clicks go through LEFT_CLICK above, so a drag to orbit the camera keeps it open.
-  const onPressOutside = (e: PointerEvent): void => {
-    if (e.target !== viewer.canvas && !traffic?.popupContains(e.target as Node)) traffic?.close()
-  }
-  document.addEventListener('pointerdown', onPressOutside, true)
   const onKey = (e: KeyboardEvent): void => {
-    // Esc steps back one level: an open panel, then a scenario or the chase (to the map), then the focus.
+    // Esc steps back one level: an open panel, then a traffic card, then a scenario or the chase (to the map), then the focus.
     if (e.key === 'Escape') {
-      if (!rail.close()) {
+      if (!rail.close() && !traffic?.close()) {
         if (run !== null || loadingScenario !== null) exitScenario()
         else if (chasing) setChase(false)
         else select(null)
@@ -1033,7 +1069,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       stopped = true
       removeFrame()
       window.removeEventListener('keydown', onKey)
-      document.removeEventListener('pointerdown', onPressOutside, true)
       viewer.canvas.removeEventListener('pointerleave', onLeave)
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
@@ -1046,6 +1081,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       toggles.destroy()
       banner.destroy()
       card.destroy()
+      trafficCard.destroy()
       table.destroy()
       legend.destroy()
       rail.destroy()

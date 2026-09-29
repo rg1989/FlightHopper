@@ -4,12 +4,14 @@
 // Predicting · Signal lost · Locating) with the expand toggle beside it, which shows every detail section below
 // (detail.ts detailRows). It replaces the old detail panel, HUD and chase
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
+// The same card, mounted with `traffic`, shows a chase-traffic aircraft (a click in its brackets): top right, with its
+// distance from the chased aircraft, and Chase to fly behind it instead.
 import type { StatusBrief } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
-import type { RenderState } from '../types.ts'
+import type { FleetEntry, RenderState } from '../types.ts'
 import { UPDATE_MS, detailRows, shareLink, sourceLabel, type Lookup } from './detail.ts'
-import { STALE_AGE_S, hudFields, isStale } from './format.ts'
+import { STALE_AGE_S, formatDistanceM, hudFields, isStale } from './format.ts'
 import { icon } from './icons.ts'
 import type { PhotoCache } from './photo.ts'
 import './flightCard.css'
@@ -36,6 +38,13 @@ export interface CardView {
   stats: CardStat[]
   state: CardState
   status: string
+  range: { dist: string; from: string } | null // a traffic aircraft's card: "7,371 m", "from UAL2478"
+}
+
+/** A traffic aircraft's distance from the chased one (m), and the chased one's flight ID. */
+export interface CardRange {
+  distM: number
+  from: string
 }
 
 const DASH = '—'
@@ -58,11 +67,12 @@ function split(v: string): [string, string] {
  * What the card shows. sinceSelectS: seconds since this aircraft was selected (for "Locating…" before its first
  * position). Chasing, the status line follows the track: interpolating → Live; extrapolating → Predicting; stale →
  * Signal lost. Only focused, the aircraft is refreshed with the view (every status.viewEveryS, zoom-scaled), so it is
- * Live until 2.5 of those refreshes go by without a position (the map hides an aircraft on the same rule).
+ * Live until 2.5 of those refreshes go by without a position (the map hides an aircraft on the same rule); so is a
+ * traffic aircraft (entryState), which also has its range.
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
-  sinceSelectS: number, chasing = true,
+  sinceSelectS: number, chasing = true, range: CardRange | null = null,
 ): CardView {
   const sections = detailRows(s, raw, info, lookup)
   const get = (key: string): string | null => {
@@ -111,6 +121,21 @@ export function cardView(
     ],
     state,
     status: text,
+    range: range === null ? null : { dist: formatDistanceM(range.distM), from: `from ${range.from}` },
+  }
+}
+
+/**
+ * A traffic aircraft's fleet entry as the card's state (cardView with chasing false): its newest sample dead-reckoned
+ * to the chase's render time, smoothed by its own track while it has one (TrackRegistry.applyTo). Copied: the Fleet
+ * reuses its entries every frame. Its height's source is unknown here: the least-trusted one, as a new Track's.
+ */
+export function entryState(e: FleetEntry): RenderState {
+  return {
+    hex: e.hex, lat: e.lat, lon: e.lon, hM: e.hM,
+    headingDeg: e.att?.headingDeg ?? e.trackDeg ?? 0, pitchDeg: e.att?.pitchDeg ?? 0, rollDeg: e.att?.rollDeg ?? 0,
+    gsKt: e.gsKt, trackDeg: e.trackDeg, altBaroFt: e.altFt, vsFpm: e.vsFpm, mode: 'interp', altSource: 'baro-bias',
+    onGround: e.onGround, ageS: e.ageS, quality: e.quality, callsign: e.info?.callsign ?? null, typeCode: e.info?.typeCode ?? null,
   }
 }
 
@@ -121,11 +146,24 @@ export interface FlightCardOpts {
   onChase(on: boolean): void // the Chase / Map button: into the 3-D chase view, or back to the top-down map
   photos?: PhotoCache
   lookup(hex: string, callsign: string | null): Lookup
+  /** A chase-traffic aircraft's card (flightCard.css places it apart): its pill always reads Chase, and a range line shows. */
+  traffic?: boolean
 }
 
 export interface FlightCardHandle {
-  /** hex: the selected aircraft (null: none, the card hides); the rest may be null while unknown. */
-  update(hex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, chasing: boolean): void
+  /**
+   * hex: the selected aircraft (null: none, the card hides); the rest may be null while unknown. range: a traffic
+   * aircraft's distance from the chased one (null while unknown).
+   */
+  update(
+    hex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, chasing: boolean,
+    range?: CardRange | null,
+  ): void
+  /**
+   * Keeps the shown card clear of (x, y) (viewport CSS px, padded by padPx; a clicked aircraft): where it covers it, it
+   * moves to the other end of its column (flightCard.css .fh-card-flip), if that clears it, until the next call.
+   */
+  keepClear(x: number, y: number, padPx: number): void
   destroy(): void
 }
 
@@ -151,9 +189,10 @@ function iconButton(name: Parameters<typeof icon>[0], label: string): HTMLButton
  * Values go in with textContent only: callsigns and photo credits come from upstream and are never parsed as HTML.
  */
 export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): FlightCardHandle {
-  const card = h('aside', 'fh-card fh-glass fh-blur')
+  const traffic = opts.traffic === true
+  const card = h('aside', traffic ? 'fh-card fh-tcard fh-glass fh-blur' : 'fh-card fh-glass fh-blur')
   card.hidden = true
-  card.setAttribute('aria-label', 'Selected aircraft')
+  card.setAttribute('aria-label', traffic ? 'Traffic aircraft' : 'Selected aircraft')
 
   const head = h('header', 'fh-card-head')
   const ident = h('div', 'fh-card-ident')
@@ -172,7 +211,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   sub.append(subText, noPhoto)
   ident.append(top, sub)
   const actions = h('div', 'fh-card-actions')
-  const linkBtn = iconButton('link', 'Copy a link to this view')
+  const linkBtn = iconButton('link', traffic ? 'Copy a link to chase this aircraft' : 'Copy a link to this view')
   const closeBtn = iconButton('x', 'Close (Esc)')
   actions.append(linkBtn, closeBtn)
   // Beside the status line, above what it opens.
@@ -182,6 +221,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   head.append(ident, actions)
 
   // The primary action: Chase (into the 3-D view) while focused; Map (back to top-down) while chasing, in the same place.
+  // A traffic aircraft's: Chase (it instead of the chased one).
   const chaseBtn = h('button', 'fh-pill')
   chaseBtn.type = 'button'
   const chaseIcon = h('span', 'fh-pill-icon')
@@ -192,8 +232,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (chaseShown === chasing) return
     chaseShown = chasing
     chaseIcon.replaceChildren(icon(chasing ? 'map' : 'plane', 16))
-    chaseText.textContent = chasing ? 'Map' : 'Chase in 3-D' // short: the status line and the toggle share the row
-    chaseBtn.title = chasing ? 'Back to the top-down map (Esc)' : 'Fly behind this aircraft in 3-D'
+    chaseText.textContent = chasing ? 'Map' : traffic ? 'Chase' : 'Chase in 3-D' // short: the status line and the toggle share the row
+    chaseBtn.title = chasing ? 'Back to the top-down map (Esc)' : traffic ? 'Fly behind this aircraft instead' : 'Fly behind this aircraft in 3-D'
     chaseBtn.classList.toggle('fh-pill-secondary', chasing)
   }
 
@@ -212,6 +252,13 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     stats.append(box)
     statEls.set(key, { value, unit, box })
   }
+
+  // A traffic aircraft's distance from the chased one, by the traffic brackets' mark.
+  const range = h('div', 'fh-card-range')
+  const rangeDist = h('span', 'fh-card-range-d fh-num')
+  const rangeFrom = h('span', 'fh-card-range-f')
+  range.append(icon('bracket', 14), rangeDist, rangeFrom)
+  range.hidden = true
 
   const statusRow = h('div', 'fh-card-status')
   const dot = h('span', 'fh-dot')
@@ -255,7 +302,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
 
   const foot = h('div', 'fh-card-foot')
   foot.append(statusRow, expandBtn, chaseBtn)
-  card.append(head, figure, stats, foot, more)
+  card.append(head, figure, stats, range, foot, more)
   root.append(card)
 
   let curHex: string | null = null
@@ -264,6 +311,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   let curInfo: AircraftInfo | null = null
   let curStatus: StatusBrief | null = null
   let curChasing = false
+  let curRange: CardRange | null = null
   let shown: string | null = null
   let selectedAtMs = 0
   let lastMs = -Infinity
@@ -341,7 +389,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       lk = opts.lookup(hex, cs)
       lkKey = key
     }
-    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing)
+    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange)
     paintChase(curChasing)
     set(flag, v.flag)
     set(callsign, v.callsign)
@@ -362,6 +410,11 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     spin.hidden = v.state !== 'locating'
     dot.hidden = v.state === 'locating'
     set(statusText, v.status)
+    range.hidden = v.range === null
+    if (v.range !== null) {
+      set(rangeDist, v.range.dist)
+      set(rangeFrom, v.range.from)
+    }
     if (statusRow.title !== v.status) statusRow.title = v.status // the whole line, should it not fit
     if (!expanded) return
     for (const sec of detailRows(curS, curRaw, curInfo, lk)) {
@@ -406,7 +459,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   })
 
   return {
-    update(hex0, s, raw, info, status, chasing) {
+    update(hex0, s, raw, info, status, chasing, range = null) {
       if (destroyed) return
       const modeChanged = chasing !== curChasing
       curChasing = chasing
@@ -415,12 +468,23 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       curRaw = raw
       curInfo = info
       curStatus = status
+      curRange = range
       const hex = hexOf()
       if (hex !== shown || modeChanged) return render() // selection or mode changed: at once
       if (hex === null) return
       const wait = lastMs + UPDATE_MS - Date.now()
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
+    },
+    keepClear(x, y, padPx) {
+      const covers = (): boolean => {
+        const r = card.getBoundingClientRect() // a layout read: a few per click
+        return x > r.left - padPx && x < r.right + padPx && y > r.top - padPx && y < r.bottom + padPx
+      }
+      card.classList.remove('fh-card-flip')
+      if (card.hidden || !covers()) return
+      card.classList.add('fh-card-flip')
+      if (covers()) card.classList.remove('fh-card-flip') // taller than the gap (a phone): no better there
     },
     destroy() {
       destroyed = true

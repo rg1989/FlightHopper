@@ -33,6 +33,9 @@ function vs(fpm: number): string {
   return `${v > 0 ? '+' : ''}${int(v)} fpm`
 }
 
+/** A chase-traffic aircraft's distance from the chased one (under its brackets, on its card): whole metres, "12,345 m". */
+export const formatDistanceM = (m: number): string => `${Math.round(m).toLocaleString('en-US')} m`
+
 export function isStale(s: RenderState): boolean {
   return s.mode === 'stale' || s.ageS > STALE_AGE_S
 }
