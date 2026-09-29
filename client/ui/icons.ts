@@ -9,6 +9,10 @@ const P: Record<string, string> = {
   list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
   // Stacked sheets: the scene layers.
   layers: 'M12 3 2.5 8 12 13l9.5-5L12 3ZM2.5 12.5 12 17.5l9.5-5M2.5 16.5 12 21.5l9.5-5',
+  // A cloud: the weather.
+  cloud: 'M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.5 9.6 4.5 4.5 0 0 0 7 18.5Z',
+  // A road running into the distance: roads and places.
+  road: 'M9.5 3.5 5 20.5M14.5 3.5l4.5 17M12 5v2.5M12 11v2.5M12 17v3',
   // Two peaks: 3-D terrain.
   mountain: 'M2.5 19.5 9 8l4 7 2.5-4 6 8.5h-19Z',
   // A sun with rays.

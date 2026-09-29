@@ -77,8 +77,21 @@
   pointer-events: auto;
 }
 
+/* A panel's button of its own under the rail (rail.ts: under items; rail.ts sets its top). On phones at the top right,
+   the corner buttons under it. */
+.fh-under {
+  position: absolute;
+  z-index: 20;
+  top: var(--fh-top);
+  right: calc(12px + var(--fh-right));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* Tooltips to the left of the rail and the corner buttons, only while no panel is open (they would cover it). */
 .fh-rail .fh-ibtn[data-tip]:hover::after,
+.fh-under .fh-ibtn[data-tip]:hover::after,
 .fh-corner .fh-ibtn[data-tip]:hover::after {
   content: attr(data-tip);
   position: absolute;
@@ -97,6 +110,7 @@
 }
 
 .fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after,
+.fh-rail.fh-has-open ~ .fh-under .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-corner .fh-ibtn[data-tip]:hover::after {
   display: none;
 }
@@ -203,6 +217,7 @@
 /* Touch screens (a phone on its side, a tablet): finger-sized rail buttons, the panel beside them. */
 @media (pointer: coarse) {
   .fh-rail .fh-ibtn,
+  .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
     width: 44px;
     height: 44px;
@@ -216,8 +231,15 @@
 /* A phone on its side in a browser (280-340 px left under the toolbars): the 44 px rail would run off the bottom. */
 @media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
   .fh-rail .fh-ibtn,
+  .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
     height: 38px;
+  }
+
+  /* No room under the rail: left of its head. */
+  .fh-under {
+    top: var(--fh-top) !important;
+    right: calc(72px + var(--fh-right));
   }
 
   .fh-rail-sep {

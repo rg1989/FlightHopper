@@ -33,6 +33,10 @@ class El {
   set className(v: string) {
     this.classes = new Set(v.split(' ').filter(Boolean))
   }
+  replaceChildren(...cs: El[]): void {
+    this.children = []
+    this.append(...cs)
+  }
   append(...cs: El[]): void {
     for (const c of cs) {
       c.parent = this
@@ -83,6 +87,24 @@ test('mountRail: a corner item is a button of its own in the corner, not on the 
   assert.equal(find(corner, (e) => e.classes.has('fh-ibtn-label')).length, 0, 'no tab-bar label: they are not tabs')
   ;(rail.button('fullscreen') as unknown as El).click()
   assert.equal(full, 1)
+  rail.destroy()
+  assert.equal(root.children.length, 0)
+})
+
+test('mountRail: an under item is a panel button in a square of its own under the rail; it opens its panel', () => {
+  const root = new El('div')
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', under: true, panel: { title: 'Layers', mount: () => {} } },
+  ])
+  const [nav] = find(root, (e) => e.tagName === 'nav')
+  const [under] = find(root, (e) => e.classes.has('fh-under'))
+  assert.deepEqual(ids(nav), ['status'], 'not on the rail')
+  assert.deepEqual(ids(under), ['scene'])
+  assert.ok(under.children[0].classes.has('fh-glass'))
+  ;(rail.button('scene') as unknown as El).click()
+  assert.equal(rail.openId, 'scene')
+  assert.equal((rail.button('scene') as unknown as El).attrs['aria-expanded'], 'true')
   rail.destroy()
   assert.equal(root.children.length, 0)
 })

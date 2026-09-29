@@ -8,7 +8,7 @@
 // (2) never bulk-download or prefetch. Cesium requests only the tiles in view, and a hidden layer loads none, so chase
 // mode costs OSM nothing. Do not set a no-referrer Referrer-Policy on the page. Access is best-effort and can be
 // withdrawn: pass another tile server's URL (the policy asks that the URL can be changed without a code change).
-import { Credit, OpenStreetMapImageryProvider } from 'cesium'
+import { Credit, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
 import type { Viewer } from 'cesium'
 
 export const OSM_URL = 'https://tile.openstreetmap.org/'
@@ -41,6 +41,36 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): MapLayer {
     },
     destroy(): void {
       viewer.imageryLayers.remove(layer, true) // a second call finds nothing to remove
+    },
+  }
+}
+
+// Roads and place names over the satellite: Esri's two reference overlays (transparent PNG), keyless on
+// services.arcgisonline.com with CORS * (checked 2026-09-30; the keyed ibasemaps endpoint has no reference layers).
+// Their detail follows the zoom: motorways and countries far out, every street and neighbourhood up close.
+// Copyright (their MapServer?f=json): Esri, HERE, Garmin, (c) OpenStreetMap contributors. No credit on screen (the user's call).
+export const ROADS_URLS = [
+  'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+  'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+]
+const ROADS_MAX_ZOOM = 19 // street detail ends here; Cesium upsamples past it
+
+/** The roads-and-places overlay, on top of every imagery layer added before it. Starts hidden (a hidden layer loads nothing). */
+export function makeRoadsLayer(viewer: Viewer): MapLayer {
+  const layers = ROADS_URLS.map((url) => {
+    const l = viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url, maximumLevel: ROADS_MAX_ZOOM }))
+    l.show = false
+    return l
+  })
+  return {
+    get show(): boolean {
+      return layers[0].show
+    },
+    set show(v: boolean) {
+      for (const l of layers) l.show = v
+    },
+    destroy(): void {
+      for (const l of layers) viewer.imageryLayers.remove(l, true)
     },
   }
 }

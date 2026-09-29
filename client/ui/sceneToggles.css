@@ -98,3 +98,126 @@
     font-size: 13px;
   }
 }
+
+/* Section heads (Map, 3-D scene), the base picker (Map | Satellite, for the view on screen) and the weather extras. */
+.fh-scene + .fh-scene {
+  border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-scene-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px 4px;
+}
+
+.fh-scene-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fh-muted);
+  font: 600 11px/1 var(--fh-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fh-scene-view {
+  color: var(--fh-muted);
+  font-size: 12px;
+}
+
+.fh-seg {
+  display: flex;
+  margin: 4px 14px 8px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fh-seg-b {
+  flex: 1;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fh-muted);
+  font: 600 13px/1 var(--fh-font);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease), color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-seg-b:hover {
+  color: var(--fh-text);
+}
+
+.fh-seg-b[aria-pressed='true'] {
+  background: var(--fh-accent-soft);
+  color: var(--fh-text);
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.35);
+}
+
+.fh-wx-more {
+  padding: 0 14px 10px 58px;
+}
+
+.fh-wx-more[hidden],
+.fh-wx-line[hidden] {
+  display: none;
+}
+
+.fh-wx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font: 600 11px/1 var(--fh-font);
+  color: var(--fh-muted);
+}
+
+.fh-wx-cat::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--c);
+  vertical-align: -1px;
+}
+
+.fh-wx-line {
+  margin: 6px 0 0;
+  color: var(--fh-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .fh-seg-b {
+    height: 40px;
+    font-size: 14px;
+  }
+
+  .fh-wx-line {
+    font-size: 13px;
+  }
+}
+
+/* The weather layer's readout (client/scene/weather.ts): a METAR or SIGMET under the pointer, as reported. */
+.fh-wx-tip {
+  position: absolute;
+  z-index: 15;
+  top: 0;
+  left: 0;
+  max-width: min(360px, calc(100% - 16px));
+  padding: 8px 10px;
+  border-radius: var(--fh-radius-sm);
+  color: var(--fh-text);
+  font: 12px/1.45 ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: pre-wrap;
+  pointer-events: none;
+  box-shadow: var(--fh-shadow);
+}
+
+.fh-wx-tip[hidden] {
+  display: none;
+}

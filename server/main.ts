@@ -4,6 +4,7 @@
 //   GET /api/view?lat&lon&nm&since      samples in a circle received after `since` (server-clock rxMs), + the info the client lacks
 //   GET /api/chase?hex&since            one aircraft's samples received after `since`, + its newest full object and info
 //   GET /api/status                     the poller's StatusReport
+//   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes.
 import { readFile, stat } from 'node:fs/promises'
@@ -25,6 +26,7 @@ import { RouteFetcher } from './routes.ts'
 import { makeSource, userAgent } from './sources/index.ts'
 import type { Source } from './sources/types.ts'
 import { SampleStore } from './store.ts'
+import { WxError, makeWx } from './wx.ts'
 
 // ponytail: loopback only. Cloudflare Tunnel and the Vite dev proxy both connect locally, but other machines on the
 // LAN cannot. Add a HOST variable when one needs to.
@@ -187,7 +189,7 @@ async function serveStatic(root: string, pathname: string, range: string | undef
  */
 export function createServer(
   cfg: ServerConfig,
-  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch } = {},
+  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch } = {},
 ): { listen(port: number): Promise<string>; close(): Promise<void>; poller: Poller; info: InfoStore } {
   const nowMs = deps.nowMs ?? Date.now
   const source = deps.source ?? makeSource(cfg)
@@ -205,6 +207,7 @@ export function createServer(
       : null
   let routeTimer: ReturnType<typeof setInterval> | null = null
   const root = resolve(cfg.staticDir)
+  const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch })
 
   /**
    * The AircraftInfo this client lacks for the aircraft in a view answer. since = 0: all of them. Otherwise an
@@ -282,13 +285,16 @@ export function createServer(
     let status = 200
     let body: unknown
     try {
-      if (url.pathname === '/api/view') body = view(url.searchParams)
+      if (url.pathname === '/api/wx/metar') body = await wx.metars(url.searchParams.get('bbox'))
+      else if (url.pathname === '/api/wx/sigmet') body = await wx.sigmets()
+      else if (url.pathname === '/api/view') body = view(url.searchParams)
       else if (url.pathname === '/api/chase') body = chase(url.searchParams)
       else if (url.pathname === '/api/status') body = poller.report()
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
-      if (!(e instanceof BadRequest)) throw e
-      ;[status, body] = [400, { error: e.message }]
+      if (e instanceof WxError) [status, body] = [e.status, { error: e.message }]
+      else if (!(e instanceof BadRequest)) throw e
+      else [status, body] = [400, { error: e.message }]
     }
     return sendJson(req, res, status, body)
   }

@@ -167,11 +167,15 @@ export interface FleetEntry {
   att?: { headingDeg: number; pitchDeg: number; rollDeg: number } | null
 }
 
-/** The user’s scene toggles (design D11). Persisted: URL > localStorage > defaults (both on). */
+/** The user’s scene toggles (design D11) and map layers (the Layers button). Persisted: URL > localStorage > defaults. */
 export interface ScenePrefs {
   topo: boolean                                 // 3-D terrain: exaggeration TOPO_ON, else flat (0) around relH
   light: boolean                                // sun lighting in chase (browse stays unlit)
   glass: boolean                                // 3-D buildings see-through (translucent) instead of solid
+  mapTop: boolean                               // the top-down view shows the street map (else the satellite imagery)
+  mapChase: boolean                             // the chase view shows the street map (else the satellite imagery)
+  roads: boolean                                // roads and place names over the satellite imagery
+  wx: boolean                                   // aviation weather on the top-down map: radar, METARs, SIGMETs
 }
 
 /**

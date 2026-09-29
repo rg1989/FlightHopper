@@ -9,6 +9,15 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Map layers on local `main` (2026-09-30, not pushed).** The Scene panel left the rail: it is "Layers", a panel
+  button in a glass square of its own under the rail (rail.ts `under` items; on phones at the top right, the corner
+  buttons below it). Map: Map | Satellite for the view on screen (M; `mapTop` default map, `mapChase` default
+  satellite), Roads & places over the satellite (R; Esri's keyless World_Transportation + World_Boundaries_and_Places
+  overlays), Weather (W) on the top-down map only: RainViewer radar (z ≤ 7), METAR dots in flight-rules colours with
+  wind barbs (hover or tap for the METAR), SIGMET areas (hover for the text) — `client/scene/weather.ts`, served by
+  `/api/wx/metar?bbox=` and `/api/wx/sigmet` (`server/wx.ts`: aviationweather.gov has no CORS; cached 5/10 min).
+  Then the 3-D scene switches (T, L, X). All seven prefs persist (URL > localStorage > defaults). **Deferred (user):**
+  real 3-D weather in the chase (cloud types and heights drawn as clouds). `npm run check` 1255/1255.
 - **Corner buttons and a Controls panel on local `main` as `b32d62b` (2026-09-30, not pushed).** The instrument-layout
   and full-screen buttons left the rail: each is a button of its own in a glass square at the bottom right (on phones
   the top right; rail.ts `corner` items). "Controls and credits" is now "Controls" (map, 3-D chase, keys, scenario;

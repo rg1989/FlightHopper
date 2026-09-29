@@ -4,7 +4,8 @@
 // while they are closed. The app routes Esc here first (close()), then to leaving chase. On phones (rail.css) the rail
 // is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
 // a panel is a sheet above it that a downward swipe on its header closes. A corner item is not on the rail: it is a
-// button of its own, in a glass square, at the bottom right (on phones the top right).
+// button of its own, in a glass square, at the bottom right (on phones the top right). An under item is a panel's button
+// in a glass square of its own just under the rail (on phones at the top right, above the corner buttons).
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -17,6 +18,7 @@ export interface RailItem {
   /** Opens a panel titled `title`; mount() fills its body (and may add controls to its header) once, at start. */
   panel?: { title: string; wide?: boolean; mount(body: HTMLElement, head: HTMLElement): void }
   corner?: boolean // a button of its own in the corner, not on the rail (an action, never a panel)
+  under?: boolean // a panel's button of its own, in a square under the rail, not on it
   action?(): void
 }
 
@@ -60,6 +62,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   panel.append(head, bodies)
 
   const corner = el('div', 'fh-corner')
+  const under = el('div', 'fh-under')
   const buttons = new Map<string, HTMLButtonElement>()
   const panes = new Map<string, { body: HTMLElement; extras: HTMLElement; item: RailItem }>()
   const badges = new Map<string, HTMLElement>()
@@ -67,7 +70,8 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   let lastGroup = items[0]?.group ?? 0
 
   for (const item of items) {
-    if (!item.corner && (item.group ?? 0) !== lastGroup) {
+    const own = item.corner === true || item.under === true // a button of its own, not on the rail
+    if (!own && (item.group ?? 0) !== lastGroup) {
       rail.append(el('span', 'fh-rail-sep'))
       lastGroup = item.group ?? 0
     }
@@ -77,14 +81,14 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     b.dataset.tip = item.label
     b.dataset.id = item.id
     b.append(icon(item.icon))
-    if (!item.corner) b.append(el('span', 'fh-ibtn-label', item.short))
+    if (!own) b.append(el('span', 'fh-ibtn-label', item.short))
     if (item.panel) b.setAttribute('aria-expanded', 'false')
     b.addEventListener('click', () => (item.panel ? api.open(openId === item.id ? null : item.id) : item.action?.()))
-    if (item.corner) {
+    if (own) {
       const square = el('div', 'fh-corner-b fh-glass fh-blur')
       square.dataset.id = item.id
       square.append(b)
-      corner.append(square)
+      ;(item.under ? under : corner).append(square)
     } else rail.append(b)
     buttons.set(item.id, b)
     if (item.panel) {
@@ -99,7 +103,16 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     }
   }
   close.addEventListener('click', () => api.open(null))
-  root.append(rail, panel, corner)
+  root.append(rail, panel, under, corner)
+
+  // The under squares sit 8 px below the rail's foot; on phones (the rail a bottom tab bar) at the top right, with the
+  // corner buttons 8 px below them. A sideways phone's full-height rail leaves no room below it: rail.css places them.
+  const place = (): void => {
+    const phone = matchMedia(SHEET_MEDIA).matches
+    const has = under.childElementCount > 0
+    under.style.top = phone || !has ? '' : `${rail.offsetTop + rail.offsetHeight + 8}px`
+    corner.style.top = phone && has ? `${under.offsetTop + under.offsetHeight + 8}px` : ''
+  }
 
   // Phone tab bar: where it scrolls, a fade on each side that has more tabs (rail.css). Re-read on a scroll, a resize,
   // and a tab shown or hidden (its size changes).
@@ -108,8 +121,12 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     rail.classList.toggle('fh-more-end', rail.scrollLeft < rail.scrollWidth - rail.clientWidth - 1)
   }
   rail.addEventListener('scroll', edges, { passive: true })
-  const resized = new ResizeObserver(edges)
+  const resized = new ResizeObserver(() => {
+    edges()
+    place()
+  })
   resized.observe(rail)
+  resized.observe(under)
   for (const b of buttons.values()) resized.observe(b)
 
   // Phone sheet: drag the header down to close (past SWIPE_PX), else it springs back. Clicks on its buttons stay clicks.
@@ -203,6 +220,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       resized.disconnect()
       rail.remove()
       panel.remove()
+      under.remove()
       corner.remove()
     },
   }

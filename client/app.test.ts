@@ -119,6 +119,9 @@ test('scene keys: T topography and L sun, either case; not with a modifier, on a
   assert.equal(sceneKey(press('L')), 'light')
   assert.equal(sceneKey(press('x')), 'glass')
   assert.equal(sceneKey(press('X')), 'glass')
+  assert.equal(sceneKey(press('m')), 'base') // map or satellite, for the view on screen
+  assert.equal(sceneKey(press('R')), 'roads')
+  assert.equal(sceneKey(press('w')), 'wx')
   assert.equal(sceneKey(press('b')), null)
   assert.equal(sceneKey(press('Escape')), null)
   for (const m of ['metaKey', 'ctrlKey', 'altKey', 'repeat']) assert.equal(sceneKey(press('l', { [m]: true })), null, m) // Cmd+L, Ctrl+T: the browser's

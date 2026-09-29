@@ -31,7 +31,8 @@ import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './scene/flightFrame.ts'
-import { makeMapLayer } from './scene/mapLayer.ts'
+import { makeMapLayer, makeRoadsLayer } from './scene/mapLayer.ts'
+import { Weather } from './scene/weather.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { liveryCode, liveryFromSpec } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
@@ -65,7 +66,7 @@ import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel
 import { mountSettings } from './ui/settings.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { FRAME_PREFS_KEY, readFramePrefs, writeFramePrefs } from './ui/framePrefs.ts'
-import { mountSceneToggles } from './ui/sceneToggles.ts'
+import { baseKey, mountSceneToggles } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
 import { mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readScenario, readView, writeUrl, type Orbit } from './ui/urlState.ts'
@@ -209,12 +210,12 @@ const TYPING = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
  * The scene toggle a keydown asks for (design D11): T topography, L sun, X see-through buildings. null with a modifier (Cmd/Ctrl+L and Ctrl+T are
  * the browser's), on auto-repeat and while typing in a field.
  */
-export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; repeat: boolean; target: unknown }): keyof ScenePrefs | null {
+export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; repeat: boolean; target: unknown }): keyof ScenePrefs | 'base' | null {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return null
   const t = e.target as { tagName?: string; isContentEditable?: boolean } | null
   if (t?.isContentEditable || TYPING.has(t?.tagName ?? '')) return null
   const k = e.key.toLowerCase()
-  return k === 't' ? 'topo' : k === 'l' ? 'light' : k === 'x' ? 'glass' : null
+  return ({ t: 'topo', l: 'light', x: 'glass', m: 'base', r: 'roads', w: 'wx' } as const)[k as 't'] ?? null
 }
 
 export interface AppParams {
@@ -294,7 +295,8 @@ function div(className: string, parent: HTMLElement): HTMLDivElement {
  *   frame); Fleet → FleetLayer and table (all aircraft, dead-reckoned to server now); RenderClock → the selected
  *   aircraft's state → model, chase camera; the Sun (clock and light) and the runways; HUD, detail panel, banner, bench.
  * A table row or a click on an icon selects; Esc or the panel's × goes back to browse over the last chased position.
- * The scene toggles (buttons, keys T and L) apply in chase and persist: URL > localStorage > defaults (both on).
+ * The scene toggles (Layers panel, keys T, L, X) apply in chase; the map layers (M, R, W) as applyLayers says. All
+ * persist: URL > localStorage > defaults (scenePrefs.ts).
  * Runways and the model are optional: if their files fail to load, the app runs without them. createViewer failing
  * (terrain unreachable) rejects.
  */
@@ -414,8 +416,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       title: 'Aircraft', wide: true,
       mount: (b, head) => (table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })),
     } },
-    { id: 'scene', icon: 'layers', label: 'Scene: terrain, sun, buildings', short: 'Scene', group: 1, panel: {
-      title: 'Scene', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
+    // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
+    { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', under: true, panel: {
+      title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
     } },
     { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
@@ -506,6 +509,18 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // VITE_MAP_URL: another tile server ({z}/{x}/{y}.png is appended), as the OpenStreetMap tile policy asks to allow.
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
+  const roads = makeRoadsLayer(viewer) // over the map, the satellite and the night lights
+  const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text))
+  /** The layers the prefs and the view ask for: the street map or the satellite, roads over the satellite, weather top-down. */
+  const applyLayers = (): void => {
+    const onMap = prefs[baseKey(chasing)]
+    map.show = onMap
+    roads.show = prefs.roads && !onMap
+    weather.show = prefs.wx && !chasing
+    if (chasing && prefs.wx) toggles.setWeather('On the top-down map, for now')
+    else if (!prefs.wx) toggles.setWeather(null)
+  }
+  applyLayers()
   const fleetLayer = new FleetLayer(viewer)
   const pendingLayer = makePendingLayer(viewer) // the view's areas not loaded yet, veiled on the map
   const globe = viewer.scene.globe
@@ -547,7 +562,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const start = urlView.at ?? homeBox ?? (home ? { lat: home.lat, lon: home.lon, heightKm: BROWSE_HEIGHT_M / 1000 } : null)
   if (!chasing) enterBrowse(viewer, start, { flyS: 0, heightM: start === null ? undefined : start.heightKm * 1000 })
   else {
-    map.show = false
+    applyLayers()
     // Over the chased aircraft's last position (?at=) so the first view poll already holds it and its traffic.
     if (start) viewer.camera.setView({ destination: Cartesian3.fromDegrees(start.lon, start.lat, urlView.at ? Math.max(START_HEIGHT_M / 6, start.heightKm * 1000) : START_HEIGHT_M) })
     if (urlView.cam) chaseCam.orbit.set(urlView.cam.headingDeg, urlView.cam.pitchDeg, urlView.cam.rangeM)
@@ -619,12 +634,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (on) {
       browseHeightM = viewer.camera.positionCartographic.height // the map's zoom, for coming back
       exitBrowse(viewer) // restores tilt and zoom limits
-      map.show = false
+      applyLayers()
       relatchPending = true
       acGround.ok = camGround.ok = false
       arrivalAgesS.length = 0 // a focus asked rarely: its arrival ages say nothing about the chase's
     } else {
-      map.show = true
+      applyLayers()
       const e = selected === null ? undefined : fleet.get(selected)
       // Over the aircraft (else where the camera is), at the zoom the map had before the chase (a chased reload: the default).
       enterBrowse(viewer, chased ?? (e === undefined ? null : e), { heightM: browseHeightM ?? undefined })
@@ -640,6 +655,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     prefs = next
     sun.setEnabled(chasing && next.light)
     buildings.setGlass(next.glass)
+    applyLayers()
     writeScenePrefs(next, store)
     toggles.update(next)
   }
@@ -677,7 +693,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     chaseCam.release() // the first frame puts the camera behind the aircraft
     if (o.cam) chaseCam.orbit.set(o.cam.headingDeg, o.cam.pitchDeg, o.cam.rangeM)
     chasing = true
-    map.show = false
+    applyLayers()
     relatchPending = true
     chased = null
     groundM = null
@@ -723,7 +739,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     endRun()
     chasing = false
     chaseCam.release()
-    map.show = true
+    applyLayers()
     enterBrowse(viewer, chased, { heightM: browseHeightM ?? undefined })
     chased = null
     groundM = null
@@ -1076,8 +1092,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       }
     } else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
     else {
-      const k = sceneKey(e) // T, L, X: they apply in the chase view (D9, D11), and can be set beforehand
-      if (k !== null) setPrefs({ ...prefs, [k]: !prefs[k] })
+      // T, L, X: they apply in the chase view (D9, D11), and can be set beforehand. M: map or satellite, for the view on
+      // screen. R: roads and places. W: weather.
+      const k = sceneKey(e)
+      const key = k === 'base' ? baseKey(chasing) : k
+      if (key !== null) setPrefs({ ...prefs, [key]: !prefs[key] })
     }
   }
   window.addEventListener('keydown', onKey)
@@ -1115,6 +1134,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       fleetLayer.destroy()
       pendingLayer.destroy()
       map.destroy()
+      roads.destroy()
+      weather.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()
       airfield?.destroy()

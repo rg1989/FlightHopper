@@ -7,7 +7,7 @@
 // (t: the scenario clock in whole seconds since its local midnight, as in the package files, so a link survives a
 // package whose start moves) and keeps ?cam=. Other parameters (?bench, ?sun, ?airport, ?scenarioBase) are kept as they
 // are. Pure: the app passes location.search and writes the result with history.replaceState.
-import { DEFAULT_PREFS } from './scenePrefs.ts'
+import { DEFAULT_PREFS, PREF_KEYS } from './scenePrefs.ts'
 import type { ScenePrefs } from '../types.ts'
 
 export interface ViewAt {
@@ -68,7 +68,7 @@ export function readScenario(search: string): { id: string; t: number | null } |
 /** The search string for s, keeping every parameter this module does not own. Rounded so small moves do not churn history. */
 export function writeUrl(search: string, s: UrlState): string {
   const q = new URLSearchParams(search)
-  for (const k of ['at', 'hex', 'chase', 'cam', 'scenario', 't', 'topo', 'light', 'glass']) q.delete(k)
+  for (const k of ['at', 'hex', 'chase', 'cam', 'scenario', 't', ...PREF_KEYS]) q.delete(k)
   const cam = s.cam && `${Math.round(s.cam.headingDeg)},${Math.round(s.cam.pitchDeg)},${Math.round(s.cam.rangeM)}`
   if (s.scenario) {
     q.set('scenario', s.scenario.id)
@@ -80,7 +80,7 @@ export function writeUrl(search: string, s: UrlState): string {
     if (s.hex && s.chase) q.set('chase', '1')
     if (s.hex && s.chase && cam) q.set('cam', cam)
   }
-  for (const k of ['topo', 'light', 'glass'] as const) if (s.prefs[k] !== DEFAULT_PREFS[k]) q.set(k, s.prefs[k] ? '1' : '0')
+  for (const k of PREF_KEYS) if (s.prefs[k] !== DEFAULT_PREFS[k]) q.set(k, s.prefs[k] ? '1' : '0')
   const out = q.toString().replaceAll('%2C', ',')
   return out === '' ? '' : `?${out}`
 }
