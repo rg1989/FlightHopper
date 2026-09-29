@@ -10,10 +10,11 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 ## Where things stand
 
 - **Trackpad gestures on local `main` as `d99bb4d` (2026-09-29, not pushed).** A pinch zooms (Chromium sends it as
-  ctrl + wheel, which Cesium dropped) and two fingers moving pan the top-down map or orbit the chase camera, where they
-  used to zoom; a mouse wheel's notches still zoom through Cesium (`client/scene/trackpad.ts`, `browseDrag`,
+  ctrl + wheel, which Cesium dropped) and two fingers moving pan the top-down map, where they used to zoom; in the chase
+  two fingers only zoom (`OrbitControl.trackpad`; the user tried orbiting and rejected it: a pinch's drifting fingers
+  turned the view). A mouse wheel's notches still zoom through Cesium (`client/scene/trackpad.ts`, `browseDrag`,
   `browsePinch`). Open: a Windows/Linux wheel notch (±100 px) reads as a scroll and pans; Safari's pinch (gesture events)
-  and a two-finger touch drag are not handled. `npm run check` 1249/1249.
+  and a two-finger touch drag are not handled. `npm run check` 1250/1250.
 - **Livery pipeline merged into local `main` as `fa013e8` (2026-09-29, not pushed).** Airline liveries are designs drawn
   with a kit (`client/livery/`) onto each model's measured side profile and projected by the paint shader; guide in
   `docs/liveries.md`, design in `.planning/livery-pipeline-design.md`, dossiers in `.planning/liveries/`. New models
