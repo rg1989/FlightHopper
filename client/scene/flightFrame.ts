@@ -258,10 +258,13 @@ export function frameLayout(
  * the aircraft; at most the largest side at which every block, on the side and in the variant it has round `least`,
  * only moves straight out with the square's edge, so that zoomed in they stop, over the aircraft if need be, instead of
  * going to other sides, sliding past each other or hiding; the aircraft's own in between. So zooming moves the blocks
- * continuously and never to another side. Where round `least` a tape would leave its side of the aircraft (a phone held
- * upright) or a block have no place, less: the largest side at which they do not. Beyond the aircraft's own, whole px,
- * so each frame finds the same side. The automatic arrangement only: the cards the viewer moved (edit mode) are placed at
- * offsets from this side, so they must not change it (a drop would land elsewhere, and move every other moved card).
+ * continuously and never to another side. Less than `least` only where the view itself (view: the canvas less its edge,
+ * not what covers it) has no room for the tapes beside the aircraft round it (a phone held upright): the largest side at
+ * which it has. What covers the view (the flight card and its photo, a panel) never closes the blocks in on the
+ * aircraft: they take smaller variants or other sides (frameLayout); only where even that leaves one with no place, the
+ * largest side at which each has one. Beyond the aircraft's own, whole px, so each frame finds the same side. The
+ * automatic arrangement only: the cards the viewer moved (edit mode) are placed at offsets from this side, so they must
+ * not change it (a drop would land elsewhere, and move every other moved card).
  */
 export function layoutSide(
   sq: Square,
@@ -270,17 +273,18 @@ export function layoutSide(
   safe: Rect,
   gap = 10,
   prev?: Partial<Record<BlockId, Placed | null>>,
+  view: Rect = safe,
 ): number {
-  const at = (side: number): Record<BlockId, Placed | null> => frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, safe, gap, prev)
-  // Every block has a place and, with flank, the tapes are beside the aircraft (their readouts level with it).
-  const fits = (side: number, flank: boolean): boolean => {
-    const p = at(side)
-    return IDS.every((id) => {
+  const at = (side: number, room = safe, p = prev): Record<BlockId, Placed | null> =>
+    frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, room, gap, p)
+  // Every block with something to show has a place (with flank, the tapes are beside the aircraft too: their readouts
+  // level with it).
+  const fits = (p: Record<BlockId, Placed | null>, flank: boolean): boolean =>
+    IDS.every((id) => {
       const q = p[id]
       if (q === null) return variantsOf(sizes[id]).length === 0
       return !flank || q.side === id || id === 'top' || id === 'bottom'
     })
-  }
   // The largest whole side in (a, b) at which ok holds, given it holds at a and not at b; a when none.
   const largest = (a: number, b: number, ok: (side: number) => boolean): number => {
     for (let m = Math.floor((a + b) / 2); m > a && m < b; m = Math.floor((a + b) / 2)) {
@@ -289,15 +293,14 @@ export function layoutSide(
     }
     return a
   }
-  // `least`, or the largest side under it that has the tapes beside the aircraft, else one that has every block placed.
   let lo = Math.max(0, Math.round(least))
-  for (const flank of [true, false]) {
-    if (fits(lo, flank)) break
-    const s = largest(0, lo, (side) => fits(side, flank))
-    if (s > 0) {
-      lo = s
-      break
-    }
+  if (!fits(at(lo, view, undefined), true)) {
+    const s = largest(0, lo, (side) => fits(at(side, view, undefined), true))
+    if (s > 0) lo = s
+  }
+  if (!fits(at(lo), false)) {
+    const s = largest(0, lo, (side) => fits(at(side), false))
+    if (s > 0) lo = s
   }
   if (!(sq.side > lo)) return lo
   const p0 = at(lo)
@@ -494,6 +497,7 @@ export const eprText = (e: number): string => e.toFixed(2)
 // ---- DOM ------------------------------------------------------------------------------------------------------------
 
 const GAP = 10 // between the square and a block, and between blocks
+const EDGE = 8 // the blocks from the view's edges (app.ts safeArea's pad)
 const PAD = 10 // a moved card from the view's edges and from what covers it: room for its edit controls, over its edges
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
@@ -818,7 +822,8 @@ export class FlightFrame {
     // (and of the toolbar while editing); a dragged one where the pointer holds it.
     const sizes = this.#sizes
     const want = { ...sq, side: Math.max(sq.side, this.#own), head }
-    const ls = layoutSide(want, LEAST_SIDE * Math.min(this.#view.w, this.#view.h), sizes, safe, GAP, this.#auto)
+    const view = { x: EDGE, y: EDGE, w: this.#view.w - 2 * EDGE, h: this.#view.h - 2 * EDGE } // what covers it aside
+    const ls = layoutSide(want, LEAST_SIDE * Math.min(this.#view.w, this.#view.h), sizes, safe, GAP, this.#auto, view)
     const lsq = (this.#lsq = { x: sq.x, y: sq.y, side: ls, head })
     const area = (this.#area = { x: PAD, y: PAD, w: this.#view.w - 2 * PAD, h: this.#view.h - 2 * PAD })
     const avoid = (this.#avoid = this.#editing && this.#bar0 !== null ? [...room.covers, this.#bar0] : room.covers)

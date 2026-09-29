@@ -432,6 +432,30 @@ test('layoutSide: a phone: less than the least side where a tape would leave its
   assert.equal(small, 160)
 })
 
+test('layoutSide: what covers the view sends a tape to another side, never closes the side in on the aircraft', () => {
+  for (const [name, view, safe, sq, least] of [
+    // 1024 × 768, the flight card with its photo down the left: the room is right of it
+    ['1024 × 768, a photo', { x: 8, y: 8, w: 1008, h: 752 }, { x: 340, y: 8, w: 616, h: 752 }, { x: 512, y: 347, side: 252 }, 322],
+    // 1440 × 900 with the Aircraft panel open beside the rail: the room is left of it, under the flight card
+    ['1440 × 900, a panel', { x: 8, y: 8, w: 1424, h: 884 }, { x: 8, y: 178, w: 848, h: 714 }, { x: 720, y: 421, side: 300 }, 378],
+  ] as const) {
+    for (const side of [40, sq.side]) {
+      const s = layoutSide({ ...sq, side }, least, DESK_SIZES, safe, 10, undefined, view)
+      assert.equal(s, least, `${name}, ${side} px: the least side, not less`)
+      const p = frameLayout({ ...sq, side: s }, DESK_SIZES, safe)
+      for (const id of IDS) assert.notEqual(p[id], null, `${name}: ${id} has a place`)
+      inside(p, DESK_SIZES, safe, name)
+      apart(p, DESK_SIZES, { ...sq, side: s }, 10, name)
+    }
+  }
+  // Where even other sides leave a block no place (the room far too small), the largest side at which each has one.
+  const tiny: Rect = { x: 340, y: 8, w: 400, h: 400 }
+  const s = layoutSide({ x: 540, y: 208, side: 40 }, 322, DESK_SIZES, tiny, 10, undefined, { x: 8, y: 8, w: 1008, h: 752 })
+  assert.ok(s < 322, String(s))
+  const p = frameLayout({ x: 540, y: 208, side: s }, DESK_SIZES, tiny)
+  for (const id of IDS) assert.notEqual(p[id], null, `tiny: ${id} has a place`)
+})
+
 test('layoutSide: where no side has the tapes beside the aircraft (the flight card open on a small window), the least side stands', () => {
   const safe: Rect = { x: 340, y: 8, w: 388, h: 584 }
   const sizes: Sizes = { left: { w: 104, h: 196 }, right: { w: 104, h: 196 }, top: { w: 290, h: 56 }, bottom: { w: 260, h: 112 } }
