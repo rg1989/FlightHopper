@@ -759,3 +759,22 @@ test('frameView: gear up and flaps up show no annunciators; a block with nothing
   assert.deepEqual(blocksShown(frameView({ ...NONE, windFromDeg: 90, windKt: 12 })), { left: false, right: false, top: true, bottom: false })
   assert.equal(frameView({ ...NONE, epr: [] }).epr, null)
 })
+
+test('snapSpan: the nearest line within reach moves the span onto it: edges, middles, gaps; none too far', async () => {
+  const { snapSpan, snapEdge, SNAP_PX } = await import('./flightFrame.ts')
+  const lines = { edges: [100, 300], middles: [500], after: [310], before: [90] }
+  assert.deepEqual(snapSpan(104, 50, lines), { d: -4, at: 100 }) // its left edge onto 100
+  assert.deepEqual(snapSpan(47, 50, lines), { d: 3, at: 100 }) // its right edge (97) onto 100
+  assert.deepEqual(snapSpan(473, 50, lines), { d: 2, at: 500 }) // its middle (498) onto 500
+  assert.deepEqual(snapSpan(313, 50, lines), { d: -3, at: 310 }) // a gap after the card ending at 300
+  assert.equal(snapSpan(200, 50, lines), null)
+  assert.equal(snapSpan(100 + SNAP_PX + 1, 50, lines), null)
+  assert.equal(snapEdge(94, true, lines), 90) // a high edge to a gap before…
+  assert.equal(snapEdge(94, false, lines), 100) // …a low one ignores it
+})
+
+test('scaledSizes: size and anchors grow with the scale; 1 keeps them', async () => {
+  const { scaledSizes } = await import('./flightFrame.ts')
+  assert.deepEqual(scaledSizes([{ w: 100, h: 50, ay: 20 }], 1.5), [{ w: 150, h: 75, ay: 30 }])
+  assert.deepEqual(scaledSizes([{ w: 100, h: 50, ax: 40 }], 1), [{ w: 100, h: 50, ax: 40 }])
+})

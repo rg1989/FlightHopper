@@ -16,9 +16,15 @@ import type { Model, PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import { trueAirspeedKt } from '../track/airspeed.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
-import { NO_FRAME_PREFS, type FramePrefs, type Offset } from '../ui/framePrefs.ts'
+import { NO_FRAME_PREFS, clampScale, type FramePrefs, type Offset } from '../ui/framePrefs.ts'
 import { icon } from '../ui/icons.ts'
-import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
+import {
+  ALT_TAPE, ALT_TAPE_M, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, SPEED_TAPE_KMH, SPEED_TAPE_MPH, Tape, Vsi, WindDial, h, move,
+  say, show, type TapeSpec,
+} from '../ui/instruments.ts'
+import {
+  ALT_UNITS, KMH_PER_KT, MS_PER_FPM, M_PER_FT, SPEED_UNITS, UNIT_NAME, VS_UNITS, altIn, altLabel, speedIn, speedLabel, vsLabel, type Units,
+} from '../ui/units.ts'
 import { defaultRangeM } from './chaseCamera.ts'
 import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
@@ -503,6 +509,55 @@ export function gText(g: number): string {
 /** Engine pressure ratio to 0.01. */
 export const eprText = (e: number): string => e.toFixed(2)
 
+// ---- snapping (edit mode) ------------------------------------------------------------------------------------------
+
+export const SNAP_PX = 7 // a card's edge or middle this close to a line snaps onto it
+
+/**
+ * The lines a card snaps to along one axis, as a window on the Mac does to its neighbours: edges (a card's either
+ * edge lines up with them), middles (its middle does), and gaps (its low edge a gap past another's high edge: `after`;
+ * its high edge a gap before another's low edge: `before`).
+ */
+export interface SnapLines { edges: number[]; middles: number[]; after: number[]; before: number[] }
+
+/**
+ * The nudge that snaps the span lo…lo + len onto the nearest line within px, and the line (where its guide goes); null
+ * when none is that close.
+ */
+export function snapSpan(lo: number, len: number, lines: SnapLines, px = SNAP_PX): { d: number; at: number } | null {
+  const hi = lo + len
+  const mid = lo + len / 2
+  let best: { d: number; at: number } | null = null
+  const consider = (mine: number, at: number): void => {
+    const d = at - mine
+    if (Math.abs(d) <= px && (best === null || Math.abs(d) < Math.abs(best.d))) best = { d, at }
+  }
+  for (const e of lines.edges) {
+    consider(lo, e)
+    consider(hi, e)
+  }
+  for (const m of lines.middles) consider(mid, m)
+  for (const a of lines.after) consider(lo, a)
+  for (const b of lines.before) consider(hi, b)
+  return best
+}
+
+/** The line within px of one moving edge (a resize), low (`lo`: it lines up with edges and `after`) or high; null when none. */
+export function snapEdge(v: number, high: boolean, lines: SnapLines, px = SNAP_PX): number | null {
+  let best: number | null = null
+  for (const at of [...lines.edges, ...(high ? lines.before : lines.after)]) {
+    if (Math.abs(at - v) <= px && (best === null || Math.abs(at - v) < Math.abs(best - v))) best = at
+  }
+  return best
+}
+
+/** A card's sizes at scale k (its measured ones are at 1). */
+export const scaledSizes = (bs: readonly BlockSize[], k: number): BlockSize[] =>
+  k === 1 ? [...bs] : bs.map((b) => ({
+    w: Math.ceil(b.w * k), h: Math.ceil(b.h * k),
+    ...(b.ax !== undefined ? { ax: Math.round(b.ax * k) } : {}), ...(b.ay !== undefined ? { ay: Math.round(b.ay * k) } : {}),
+  }))
+
 // ---- DOM ------------------------------------------------------------------------------------------------------------
 
 const GAP = 10 // between the square and a block, and between blocks
@@ -549,12 +604,25 @@ function head(...kids: HTMLElement[]): HTMLDivElement {
 }
 
 /** A figure on a line with its label and unit: "AGL 1,700 ft". */
-function line(cls: string, name: string, unit: string): { el: HTMLDivElement; value: HTMLSpanElement } {
+function line(cls: string, name: string, unit: string): { el: HTMLDivElement; value: HTMLSpanElement; unit: HTMLSpanElement } {
   const el = h('div', `fh-line ${cls}`)
   const value = h('span', 'fh-v')
-  el.append(h('span', 'fh-l', name), value, h('span', 'fh-u', unit))
-  return { el, value }
+  const u = h('span', 'fh-u', unit)
+  el.append(h('span', 'fh-l', name), value, u)
+  return { el, value, unit: u }
 }
+
+/** The tape for a unit: the altitude's in feet or metres, the speed's in knots, km/h or mph. */
+const altTape = (u: Units): TapeSpec => (u.alt === 'm' ? ALT_TAPE_M : ALT_TAPE)
+const speedTape = (u: Units): TapeSpec => (u.speed === 'kmh' ? SPEED_TAPE_KMH : u.speed === 'mph' ? SPEED_TAPE_MPH : SPEED_TAPE)
+/** Vertical speed in ft/min (vsText) or m/s to 0.1, with its arrow. */
+function vsTextIn(fpm: number, ms: boolean): { arrow: '↑' | '↓' | ''; text: string } {
+  const t = vsText(fpm)
+  if (!ms || t.arrow === '') return t
+  return { arrow: t.arrow, text: Math.abs(fpm * MS_PER_FPM).toFixed(1) }
+}
+/** An altitude figure in its unit: feet to 10 ft, metres whole. */
+const altTextIn = (ft: number, u: Units): string => (u.alt === 'm' ? num(ft * M_PER_FT) : altText(ft))
 
 /** A figure under its label: "BANK / 13° R". */
 function stat(cls: string, name: string): { el: HTMLDivElement; value: HTMLSpanElement } {
@@ -591,19 +659,22 @@ export class FlightFrame {
   readonly #id = h('span', 'fh-bracket-id') // the flight ID over the brackets
   readonly #blocks: Record<BlockId, HTMLDivElement>
   // Left: the altitude tape and the vertical-speed scale; under them the vertical speed and the height above the ground.
-  readonly #alt = new Tape(ALT_TAPE, 'alt')
+  #alt = new Tape(ALT_TAPE, 'alt')
   readonly #vsi = new Vsi()
   readonly #altRow = h('div', 'fh-brow')
   readonly #vs = line('fh-vsl', 'V/S', 'ft/min')
   readonly #agl = line('fh-agl', 'AGL', 'ft')
+  readonly #alt2 = line('fh-dual', '', 'm') // "both" units: the altitude in metres under the tape
+  readonly #altHead = label('Alt', 'ft')
   // Right: the speed tape (airspeed, else ground speed); under it the true airspeed, level with the V/S, and the ground
   // speed: the three speeds, each named (a dive's V/S and TAS both grow, the one in ft/min, the other in kt).
-  readonly #spd = new Tape(SPEED_TAPE, 'spd')
+  #spd = new Tape(SPEED_TAPE, 'spd')
   readonly #spdKind = h('span', 'fh-k')
   readonly #spdHead = head(label(this.#spdKind, 'kt'))
   readonly #spdRow = h('div', 'fh-brow')
   readonly #tas = line('fh-tas', 'TAS', 'kt')
   readonly #gs = line('fh-gs', 'GS', 'kt')
+  readonly #spd2 = line('fh-dual', '', 'km/h') // "both" units: the speed in km/h under the tape
   // Top: the wind, the heading tape.
   readonly #wind = h('div', 'fh-wind')
   readonly #wdial = new WindDial()
@@ -644,7 +715,8 @@ export class FlightFrame {
   #trendOn = false
   #dataT: number | null = null
   readonly #phone: MediaQueryList | null
-  readonly #sizes: Record<BlockId, BlockSize[]> = { left: [], right: [], top: [], bottom: [] }
+  readonly #sizes: Record<BlockId, BlockSize[]> = { left: [], right: [], top: [], bottom: [] } // at the card's scale
+  readonly #base: Record<BlockId, BlockSize[]> = { left: [], right: [], top: [], bottom: [] } // as measured, at scale 1
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
   #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
   #placed: Partial<Record<BlockId, Placed | null>> = {}
@@ -665,7 +737,7 @@ export class FlightFrame {
   // Edit mode: the viewer's layout, its toolbar and each card's eye, the card being dragged (pointer and grip in client
   // px, the layer's origin), and this frame's square and safe area to drag in.
   readonly #layer: HTMLElement
-  #prefs: { moved: Partial<Record<BlockId, Offset>>; hidden: BlockId[]; order: BlockId[] }
+  #prefs: { moved: Partial<Record<BlockId, Offset>>; hidden: BlockId[]; order: BlockId[]; scale: Partial<Record<BlockId, number>>; units: Units }
   readonly #onPrefs: (prefs: FramePrefs) => void
   readonly #onEdit: (on: boolean) => void
   #editing = false
@@ -674,19 +746,29 @@ export class FlightFrame {
   readonly #eyes = {} as Record<BlockId, HTMLButtonElement>
   #drag: {
     id: BlockId; pointer: number; press: { x: number; y: number }; x: number; y: number; gx: number; gy: number; ox: number; oy: number
-    v?: number; on: boolean
+    v?: number; on: boolean; alt?: boolean; sx?: number; sy?: number // alt: Alt held (no snapping); sx, sy: where it snapped
   } | null = null
   #lsq: Square = { x: 0, y: 0, side: 0 }
   #area: Rect = { x: 0, y: 0, w: 0, h: 0 } // the view inside PAD: where a moved card may go
   #avoid: readonly Rect[] = [] // what a moved card keeps clear of: the covers, and the toolbar while editing
   #bar0: Rect | null = null // the toolbar's place this edit session (null: not placed yet)
+  // A card being resized by a bottom corner: the corner, its box when pressed (layer px) and scale, where the pointer pressed.
+  #rs: { id: BlockId; corner: 'bl' | 'br'; pointer: number; k0: number; x0: number; y0: number; w0: number; h0: number; px: number; py: number; v?: number } | null = null
+  readonly #guideV = h('div', 'fh-fguide fh-fguide-v') // the lines a moved or resized card snapped to
+  readonly #guideH = h('div', 'fh-fguide fh-fguide-h')
+  readonly #faintLayer = h('div', 'fh-fguides') // while a card moves or sizes: every line it can snap to, faint
+  readonly #unitsBtn = h('button', 'fh-fbar-b fh-fbar-units')
+  readonly #unitsMenu = h('div', 'fh-funits')
+  readonly #unitBtns: HTMLButtonElement[] = []
 
   constructor(layer: HTMLElement, opts: FrameOpts = {}) {
     this.#phone = typeof matchMedia === 'function' ? matchMedia(PHONE) : null
     this.#layer = layer
     this.#bracket.append(this.#id)
     const p = opts.prefs ?? NO_FRAME_PREFS
-    this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden], order: [...p.order] }
+    this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden], order: [...p.order], scale: { ...(p.scale ?? {}) }, units: { ...p.units } }
+    this.#alt = new Tape(altTape(p.units), 'alt')
+    this.#spd = new Tape(speedTape(p.units), 'spd')
     this.#onPrefs = opts.onPrefs ?? ((): void => {})
     this.#onEdit = opts.onEdit ?? ((): void => {})
     this.#bracket.hidden = true
@@ -706,10 +788,10 @@ export class FlightFrame {
       eye.addEventListener('click', () => this.#toggle(id))
     }
     this.#altRow.append(this.#alt.el, this.#vsi.el)
-    blocks.left.append(head(label('Alt', 'ft')), this.#altRow, this.#vs.el, this.#agl.el)
+    blocks.left.append(head(this.#altHead), this.#altRow, this.#alt2.el, this.#vs.el, this.#agl.el)
 
     this.#spdRow.append(this.#spd.el)
-    blocks.right.append(this.#spdHead, this.#spdRow, this.#tas.el, this.#gs.el)
+    blocks.right.append(this.#spdHead, this.#spdRow, this.#spd2.el, this.#tas.el, this.#gs.el)
 
     const windRow = h('div', 'fh-wind-row')
     windRow.append(this.#wdial.el, this.#windText, this.#windUnit)
@@ -734,10 +816,17 @@ export class FlightFrame {
     blocks.bottom.append(att, this.#thrust)
 
     this.#blocks = blocks
-    // Each card's edit controls, over its content: a grip (the whole card drags) and the eye.
+    // Each card's edit controls, over its content: a grip (the whole card drags), the eye, and a handle on each bottom
+    // corner that sizes it.
     for (const id of IDS) {
-      blocks[id].append(h('span', 'fh-fgrip'), this.#eyes[id])
+      const bl = h('span', 'fh-fsize')
+      bl.dataset.corner = 'bl'
+      const br = h('span', 'fh-fsize')
+      br.dataset.corner = 'br'
+      bl.title = br.title = `Resize the ${CARD[id]} card`
+      blocks[id].append(h('span', 'fh-fgrip'), this.#eyes[id], bl, br)
       this.#paint(id)
+      this.#applyScale(id)
     }
     const title = h('span', 'fh-fbar-t')
     title.append(icon('layout', 16), h('b', '', 'Edit layout'), h('span', 'fh-fbar-hint', 'drag the cards'))
@@ -751,9 +840,17 @@ export class FlightFrame {
     this.#bar.hidden = true
     this.#bar.setAttribute('role', 'toolbar')
     this.#bar.setAttribute('aria-label', 'Instrument layout')
-    this.#bar.append(title, this.#reset, done)
+    this.#unitsBtn.type = 'button'
+    this.#unitsBtn.textContent = 'Units'
+    this.#unitsBtn.setAttribute('aria-haspopup', 'true')
+    this.#unitsBtn.setAttribute('aria-expanded', 'false')
+    this.#unitsBtn.addEventListener('click', () => this.#menu(this.#unitsMenu.hidden === true))
+    this.#buildUnits()
+    this.#bar.append(title, this.#unitsBtn, this.#reset, done, this.#unitsMenu)
     this.#reset.disabled = this.#plain()
-    layer.append(this.#bracket, ...IDS.map((id) => blocks[id]), this.#bar)
+    this.#guideV.hidden = this.#guideH.hidden = true
+    layer.append(this.#bracket, ...IDS.map((id) => blocks[id]), this.#faintLayer, this.#guideV, this.#guideH, this.#bar)
+    this.#labels()
     this.#stack()
     // Read when the view resizes, not in every frame (a layout read).
     this.#resize = new ResizeObserver(([e]) => {
@@ -811,6 +908,13 @@ export class FlightFrame {
       this.#blocks[d.id].classList.remove('fh-dragging')
       if (d.on) this.#changed() // ended mid-drag: the card stays where it was drawn last
     }
+    if (this.#rs !== null) {
+      this.#blocks[this.#rs.id].classList.remove('fh-dragging')
+      this.#rs = null
+      this.#changed()
+    }
+    this.#guides(null, null)
+    this.#menu(false)
     this.#onEdit(on)
   }
 
@@ -856,7 +960,12 @@ export class FlightFrame {
     const area = (this.#area = { x: PAD, y: PAD, w: this.#view.w - 2 * PAD, h: this.#view.h - 2 * PAD })
     const avoid = (this.#avoid = this.#editing && this.#bar0 !== null ? [...room.covers, this.#bar0] : room.covers)
     const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
-    if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], lsq, area, avoid, d.v)
+    if (d !== null) {
+      const p = this.#snapMove(d.id, d.x - d.ox - d.gx, d.y - d.oy - d.gy, d.alt === true)
+      d.sx = p.x
+      d.sy = p.y
+      this.#prefs.moved[d.id] = offsetAt(p.x, p.y, sizes[d.id], lsq, area, avoid, d.v)
+    }
     const moved = this.#prefs.moved
     const fixed: Partial<Record<BlockId, Fixed>> = {}
     for (const id of IDS) {
@@ -878,7 +987,9 @@ export class FlightFrame {
         if (id === 'right') this.#spd.resized()
       }
       const w = (this.#px[id] = { x: wholePx(p.x, this.#px[id]?.x), y: wholePx(p.y, this.#px[id]?.y) })
-      move(b, `translate3d(${w.x}px,${w.y}px,0)`) // whole px: crisp text
+      const k = this.#k(id)
+      move(b, k === 1 ? `translate3d(${w.x}px,${w.y}px,0)` : `translate3d(${w.x}px,${w.y}px,0) scale(${k})`) // whole px: crisp text
+      if (b.dataset.k !== String(k)) b.dataset.k = String(k)
     }
     this.#placed = at
     const underCard = (x0: number, y0: number, x1: number, y1: number): boolean =>
@@ -916,18 +1027,32 @@ export class FlightFrame {
 
   /** Edit mode: a press on a card (not on its eye) takes it; the canvas never sees the pointer, so the camera stays. */
   #grab(id: BlockId, e: PointerEvent): void {
-    if (!this.#editing || this.#drag !== null || e.button !== 0 || (e.target as Element).closest('.fh-feye') !== null) return
+    if (!this.#editing || this.#drag !== null || this.#rs !== null || e.button !== 0 || (e.target as Element).closest('.fh-feye') !== null) return
     e.preventDefault()
     const b = this.#blocks[id]
     b.setPointerCapture(e.pointerId)
+    const handle = (e.target as Element).closest<HTMLElement>('.fh-fsize')
+    const p = this.#placed[id]
+    if (handle !== null && p != null) {
+      const sz = this.#sizes[id][p.v]
+      this.#rs = {
+        id, corner: handle.dataset.corner === 'bl' ? 'bl' : 'br', pointer: e.pointerId, k0: this.#k(id), x0: p.x, y0: p.y, w0: sz.w, h0: sz.h,
+        px: e.clientX, py: e.clientY, v: p.v,
+      }
+      b.classList.add('fh-dragging')
+      this.#pin()
+      this.#toTop(id)
+      return
+    }
     const r = b.getBoundingClientRect()
     const o = this.#layer.getBoundingClientRect()
     const v = this.#placed[id]?.v // the variant it keeps
     const press = { x: e.clientX, y: e.clientY }
-    this.#drag = { id, pointer: e.pointerId, press, ...press, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false }
+    this.#drag = { id, pointer: e.pointerId, press, ...press, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false, alt: e.altKey }
   }
 
   #carry(e: PointerEvent): void {
+    if (this.#rs !== null && e.pointerId === this.#rs.pointer) return this.#resizeTo(e)
     const d = this.#drag
     if (d === null || e.pointerId !== d.pointer) return
     if (!d.on && dragStarted(d.press, { x: e.clientX, y: e.clientY })) {
@@ -937,19 +1062,231 @@ export class FlightFrame {
     }
     d.x = e.clientX
     d.y = e.clientY
+    d.alt = e.altKey
   }
 
   /** The drop: the card's offset from where the pointer let go (draw() has it a frame late), kept. */
   #drop(e: PointerEvent): void {
+    const r = this.#rs
+    if (r !== null && e.pointerId === r.pointer) {
+      this.#rs = null
+      this.#blocks[r.id].classList.remove('fh-dragging')
+      this.#guides(null, null)
+      this.#changed()
+      return
+    }
     const d = this.#drag
     if (d === null || e.pointerId !== d.pointer) return
     this.#drag = null
     this.#blocks[d.id].classList.remove('fh-dragging')
+    this.#guides(null, null)
     if (!d.on || this.#sizes[d.id].length === 0) return
-    this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid, d.v)
-    this.#prefs.order = [...this.#prefs.order.filter((id) => id !== d.id), d.id]
-    this.#stack()
+    const x = d.sx ?? d.x - d.ox - d.gx
+    const y = d.sy ?? d.y - d.oy - d.gy
+    this.#prefs.moved[d.id] = offsetAt(x, y, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid, d.v)
+    this.#toTop(d.id)
     this.#changed()
+  }
+
+  /** The card on top of the others (the last moved or resized). */
+  #toTop(id: BlockId): void {
+    this.#prefs.order = [...this.#prefs.order.filter((x) => x !== id), id]
+    this.#stack()
+  }
+
+  /** A card's scale (1: as designed). */
+  #k(id: BlockId): number {
+    return this.#prefs.scale[id] ?? 1
+  }
+
+  /** A card's sizes at its scale, and its edit controls kept their own size (flightFrame.css --fh-k). */
+  #applyScale(id: BlockId): void {
+    const k = this.#k(id)
+    this.#sizes[id] = scaledSizes(this.#base[id], k)
+    this.#blocks[id].style.setProperty('--fh-k', String(k))
+  }
+
+  /**
+   * A bottom corner pulled: the card scales about its opposite top corner, to the pointer (the mean of the width's and
+   * the height's stretch), its moving edges snapped to the lines near them (Alt: none).
+   */
+  #resizeTo(e: PointerEvent): void {
+    const r = this.#rs!
+    const dx = e.clientX - r.px
+    const dy = e.clientY - r.py
+    const wide = r.corner === 'br' ? r.w0 + dx : r.w0 - dx
+    let q = clampScale(r.k0 * ((wide / r.w0 + (r.h0 + dy) / r.h0) / 2)) / r.k0
+    let gx: number | null = null
+    let gy: number | null = null
+    this.#faint(e.altKey ? null : this.#targets(r.id))
+    if (!e.altKey) {
+      const t = this.#targets(r.id)
+      const edgeX = r.corner === 'br' ? r.x0 + r.w0 * q : r.x0 + r.w0 - r.w0 * q
+      const sx = snapEdge(edgeX, r.corner === 'br', t.x)
+      const sy = snapEdge(r.y0 + r.h0 * q, true, t.y)
+      const qx = sx === null ? null : r.corner === 'br' ? (sx - r.x0) / r.w0 : (r.x0 + r.w0 - sx) / r.w0
+      const qy = sy === null ? null : (sy - r.y0) / r.h0
+      // The nearer snap wins; the other line shows too when it still lies on its edge.
+      const nx = qx === null ? Infinity : Math.abs(qx - q) * r.w0
+      const ny = qy === null ? Infinity : Math.abs(qy - q) * r.h0
+      if (nx <= ny && qx !== null) q = clampScale(r.k0 * qx) / r.k0
+      else if (qy !== null) q = clampScale(r.k0 * qy) / r.k0
+      const ex = r.corner === 'br' ? r.x0 + r.w0 * q : r.x0 + r.w0 - r.w0 * q
+      if (sx !== null && Math.abs(sx - ex) < 0.5) gx = sx
+      if (sy !== null && Math.abs(sy - (r.y0 + r.h0 * q)) < 0.5) gy = sy
+    }
+    const k = r.k0 * q
+    if (Math.abs(k - 1) < 0.02) delete this.#prefs.scale[r.id]
+    else this.#prefs.scale[r.id] = k
+    this.#applyScale(r.id)
+    const x = r.corner === 'br' ? r.x0 : r.x0 + r.w0 - r.w0 * q
+    this.#prefs.moved[r.id] = offsetAt(x, r.y0, this.#sizes[r.id], this.#lsq, this.#area, this.#avoid, r.v)
+    this.#guides(gx, gy)
+  }
+
+  /** The lines a card lines up with: the other cards' edges, middles and gaps, the aircraft's middle, the view's edges. */
+  #targets(id: BlockId): { x: SnapLines; y: SnapLines } {
+    const a = this.#area
+    const x: SnapLines = { edges: [a.x, a.x + a.w], middles: [this.#lsq.x, a.x + a.w / 2], after: [], before: [] }
+    const y: SnapLines = { edges: [a.y, a.y + a.h], middles: [this.#lsq.y], after: [], before: [] }
+    for (const k of IDS) {
+      const p = this.#placed[k]
+      if (k === id || p == null || this.#blocks[k].hidden) continue
+      const b = this.#sizes[k][p.v]
+      if (b === undefined) continue
+      x.edges.push(p.x, p.x + b.w)
+      x.middles.push(p.x + b.w / 2)
+      x.after.push(p.x + b.w + GAP)
+      x.before.push(p.x - GAP)
+      y.edges.push(p.y, p.y + b.h)
+      y.middles.push(p.y + b.h / 2)
+      y.after.push(p.y + b.h + GAP)
+      y.before.push(p.y - GAP)
+    }
+    return { x, y }
+  }
+
+  /** Where a dragged card goes: the pointer's place, snapped on each axis to the nearest line (Alt: none), its guides shown. */
+  #snapMove(id: BlockId, x: number, y: number, off: boolean): { x: number; y: number } {
+    const p = this.#placed[id]
+    const b = p == null ? undefined : this.#sizes[id][p.v]
+    if (off || b === undefined) {
+      this.#guides(null, null)
+      this.#faint(null)
+      return { x, y }
+    }
+    const t = this.#targets(id)
+    this.#faint(t)
+    const sx = snapSpan(x, b.w, t.x)
+    const sy = snapSpan(y, b.h, t.y)
+    this.#guides(sx?.at ?? null, sy?.at ?? null)
+    return { x: x + (sx?.d ?? 0), y: y + (sy?.d ?? 0) }
+  }
+
+  /**
+   * The lines a moving card can snap to, faint across the view (the other cards' edges and middles, the aircraft's
+   * middle); null: none. The line it snapped to shows bright over them (#guides).
+   */
+  #faint(t: { x: SnapLines; y: SnapLines } | null): void {
+    const L = this.#faintLayer
+    if (t === null) {
+      if (L.childElementCount > 0) L.replaceChildren()
+      return
+    }
+    const a = this.#area
+    const onView = (v: number, lo: number, len: number): boolean => v > lo + 0.5 && v < lo + len - 0.5 // not the view's own edges
+    const xs = [...new Set([...t.x.edges, ...t.x.middles].filter((v) => onView(v, a.x, a.w)).map(Math.round))]
+    const ys = [...new Set([...t.y.edges, ...t.y.middles].filter((v) => onView(v, a.y, a.h)).map(Math.round))]
+    const key = `${xs.join()}|${ys.join()}`
+    if (L.dataset.key === key) return
+    L.dataset.key = key
+    L.replaceChildren(
+      ...xs.map((x) => {
+        const g = h('div', 'fh-fguide-f fh-fguide-v')
+        g.style.transform = `translate3d(${x}px,0,0)`
+        return g
+      }),
+      ...ys.map((y) => {
+        const g = h('div', 'fh-fguide-f fh-fguide-h')
+        g.style.transform = `translate3d(0,${y}px,0)`
+        return g
+      }),
+    )
+  }
+
+  /** The snap guides: a vertical line at x and a horizontal one at y across the view (null: none). */
+  #guides(x: number | null, y: number | null): void {
+    if (x === null && y === null && this.#drag === null && this.#rs === null) this.#faint(null)
+    show(this.#guideV, x !== null)
+    show(this.#guideH, y !== null)
+    if (x !== null) move(this.#guideV, `translate3d(${Math.round(x)}px,0,0)`)
+    if (y !== null) move(this.#guideH, `translate3d(0,${Math.round(y)}px,0)`)
+  }
+
+  /** The Units menu, under the toolbar: one row of choices each for altitude, speed and vertical speed. */
+  #buildUnits(): void {
+    const m = this.#unitsMenu
+    m.hidden = true
+    m.setAttribute('role', 'group')
+    m.setAttribute('aria-label', 'Units')
+    const row = <K extends keyof Units>(key: K, name: string, all: readonly Units[K][]): void => {
+      const r = h('div', 'fh-funits-row')
+      const seg = h('div', 'fh-funits-seg')
+      for (const u of all) {
+        const b = h('button', 'fh-funits-b', UNIT_NAME[u])
+        b.type = 'button'
+        b.dataset.key = key
+        b.dataset.unit = u
+        b.addEventListener('click', () => this.#setUnits({ ...this.#prefs.units, [key]: u }))
+        seg.append(b)
+        this.#unitBtns.push(b)
+      }
+      r.append(h('span', 'fh-funits-l', name), seg)
+      m.append(r)
+    }
+    row('alt', 'Altitude', ALT_UNITS)
+    row('speed', 'Speed', SPEED_UNITS)
+    row('vs', 'Vertical speed', VS_UNITS)
+  }
+
+  #menu(open: boolean): void {
+    this.#unitsMenu.hidden = !open
+    this.#unitsBtn.setAttribute('aria-expanded', String(open))
+  }
+
+  /** New units: the tapes redrawn in them where they changed, every label, and the cards measured again. */
+  #setUnits(u: Units): void {
+    const was = this.#prefs.units
+    this.#prefs.units = u
+    if (altTape(u) !== altTape(was)) {
+      const t = new Tape(altTape(u), 'alt')
+      this.#alt.el.replaceWith(t.el)
+      this.#alt = t
+    }
+    if (speedTape(u) !== speedTape(was)) {
+      const t = new Tape(speedTape(u), 'spd')
+      this.#spd.el.replaceWith(t.el)
+      this.#spd = t
+    }
+    this.#labels()
+    for (const id of IDS) this.#keys[id] = '' // measured again at the next figures
+    this.#textAt = -Infinity
+    this.#changed()
+  }
+
+  /** The unit labels and the Units menu's pressed choices, as the prefs have them. */
+  #labels(): void {
+    const u = this.#prefs.units
+    say(this.#altHead.querySelector('.fh-u')!, altLabel(u.alt))
+    say(this.#agl.unit, altLabel(u.alt))
+    say(this.#vs.unit, vsLabel(u.vs))
+    this.#vsi.units(u.vs === 'ms')
+    const sl = speedLabel(u.speed)
+    say(this.#spdHead.querySelector('.fh-u')!, sl)
+    say(this.#tas.unit, sl)
+    say(this.#gs.unit, sl)
+    say(this.#windUnit, sl)
+    for (const b of this.#unitBtns) b.setAttribute('aria-pressed', String(u[b.dataset.key as keyof Units] === b.dataset.unit))
   }
 
   /** The cards stacked in the layer as prefs.order has them, the last moved on top (the default order first); under the toolbar. */
@@ -1002,24 +1339,28 @@ export class FlightFrame {
     this.#changed()
   }
 
-  /** Every card back in its place, shown. */
+  /** Every card back in its place, shown, at its own size (the units stay: a preference, not the layout). */
   #resetPrefs(): void {
-    this.#prefs = { moved: {}, hidden: [], order: [] }
+    this.#prefs = { moved: {}, hidden: [], order: [], scale: {}, units: this.#prefs.units }
     this.#stack()
     this.#placed = {} // laid out afresh: no hysteresis from where the viewer had them
     this.#auto = {}
-    for (const id of IDS) this.#paint(id)
+    for (const id of IDS) {
+      this.#paint(id)
+      this.#applyScale(id)
+    }
     this.#changed()
   }
 
   #changed(): void {
     this.#reset.disabled = this.#plain()
-    this.#onPrefs({ moved: { ...this.#prefs.moved }, hidden: [...this.#prefs.hidden], order: [...this.#prefs.order] })
+    const p = this.#prefs
+    this.#onPrefs({ moved: { ...p.moved }, hidden: [...p.hidden], order: [...p.order], scale: { ...p.scale }, units: { ...p.units } })
   }
 
   /** Whether every card is in its place and shown. */
   #plain(): boolean {
-    return this.#prefs.hidden.length === 0 && Object.keys(this.#prefs.moved).length === 0
+    return this.#prefs.hidden.length === 0 && Object.keys(this.#prefs.moved).length === 0 && Object.keys(this.#prefs.scale).length === 0
   }
 
   /** A card's eye and look: shown, or hidden (ghosted while editing). */
@@ -1079,7 +1420,8 @@ export class FlightFrame {
     const gl = this.#gl
     const dpr = globalThis.devicePixelRatio || 1
     const alt = gl.alt.step(v.alt?.value ?? null, dt)
-    if (alt !== null) this.#alt.set(alt, dpr)
+    const u = this.#prefs.units
+    if (alt !== null) this.#alt.set(altIn(alt, u.alt), dpr)
     const vs = gl.vs.step(v.vs?.value ?? null, dt)
     if (vs !== null) this.#vsi.set(vs)
     const src = v.speed?.kind ?? null
@@ -1089,10 +1431,10 @@ export class FlightFrame {
       this.#spdSrc = src
     }
     const spd = gl.spd.step(v.speed?.value ?? null, dt)
-    if (spd !== null) this.#spd.set(spd, dpr)
+    if (spd !== null) this.#spd.set(speedIn(spd, u.speed), dpr)
     const rate = this.#trend.step(v.speed?.value ?? null, dataDt) // the data's own rate, not the glide's
     this.#trendOn = rate !== null && trendShown(this.#trendOn, rate * TREND_S)
-    this.#spd.trend(this.#trendOn ? rate! * TREND_S : null, dpr)
+    this.#spd.trend(this.#trendOn ? speedIn(rate! * TREND_S, u.speed) : null, dpr)
     gl.tas.step(v.tas?.value ?? null, dt)
     gl.gs.step(v.gs?.value ?? null, dt)
     const hdg = gl.hdg.step(v.hdg?.value ?? null, dt)
@@ -1112,22 +1454,25 @@ export class FlightFrame {
   /** At most every TEXT_MS: the figures (from the glided values), which parts show, the dimming; then new sizes. */
   #text(v: FrameView): void {
     const gl = this.#gl
+    const u = this.#prefs.units
     // Left.
     show(this.#alt.el, v.alt !== null)
     if (v.alt !== null) dim(this.#alt.el, v.alt.est)
     show(this.#vsi.el, v.vs !== null)
     show(this.#vs.el, v.vs !== null)
     if (v.vs !== null && gl.vs.value !== null) {
-      const t = vsText(gl.vs.value)
+      const t = vsTextIn(gl.vs.value, u.vs === 'ms')
       say(this.#vs.value, t.arrow === '' ? t.text : `${t.arrow} ${t.text}`)
       this.#vs.el.dataset.dir = t.arrow === '↑' ? 'up' : t.arrow === '↓' ? 'down' : 'level'
       dim(this.#vsi.el, v.vs.est)
       dim(this.#vs.el, v.vs.est)
     }
     show(this.#altRow, v.alt !== null || v.vs !== null)
+    show(this.#alt2.el, u.alt === 'ft+m' && v.alt !== null)
+    if (u.alt === 'ft+m' && gl.alt.value !== null) say(this.#alt2.value, num(gl.alt.value * M_PER_FT))
     show(this.#agl.el, v.agl !== null)
     if (v.agl !== null) {
-      say(this.#agl.value, altText(v.agl.value))
+      say(this.#agl.value, altTextIn(v.agl.value, u))
       dim(this.#agl.el, v.agl.est)
     }
     // Right.
@@ -1137,14 +1482,16 @@ export class FlightFrame {
       say(this.#spdKind, v.speed.kind)
       dim(this.#spd.el, v.speed.est)
     }
+    show(this.#spd2.el, u.speed === 'kt+kmh' && v.speed !== null)
+    if (u.speed === 'kt+kmh' && gl.spd.value !== null) say(this.#spd2.value, num(gl.spd.value * KMH_PER_KT))
     show(this.#tas.el, v.tas !== null)
     if (v.tas !== null && gl.tas.value !== null) {
-      say(this.#tas.value, speedText(gl.tas.value))
+      say(this.#tas.value, speedText(speedIn(gl.tas.value, u.speed)))
       dim(this.#tas.el, v.tas.est)
     }
     show(this.#gs.el, v.gs !== null)
     if (v.gs !== null && gl.gs.value !== null) {
-      say(this.#gs.value, speedText(gl.gs.value))
+      say(this.#gs.value, speedText(speedIn(gl.gs.value, u.speed)))
       dim(this.#gs.el, v.gs.est)
     }
     show(this.#thrust, v.epr !== null)
@@ -1161,7 +1508,7 @@ export class FlightFrame {
     }
     show(this.#wind, v.wind !== null)
     if (v.wind !== null) {
-      const t = windText(v.wind.fromDeg, v.wind.kt)
+      const t = windText(v.wind.fromDeg, speedIn(v.wind.kt, u.speed))
       say(this.#windText, t)
       show(this.#windUnit, t !== 'Calm')
       show(this.#wdial.el, v.wind.rel !== null)
@@ -1198,7 +1545,7 @@ export class FlightFrame {
     // What sets a block's size: which parts it shows, their labels and the length of their figures (the readouts are
     // sized for the usual lengths, so this rarely changes), and the phone layout. Values and dimming do not.
     this.#has = blocksShown(v)
-    const phone = this.#phone?.matches ?? false
+    const phone = [this.#phone?.matches ?? false, u.alt, u.speed, u.vs].join('/') // the units change sizes too
     const len = (el: Element): number => el.textContent?.length ?? 0
     const keys: Record<BlockId, string> = {
       left: [phone, v.alt !== null, v.vs !== null, v.agl !== null, this.#alt.leadLength, len(this.#vs.value), len(this.#agl.value)].join(),
@@ -1228,21 +1575,23 @@ export class FlightFrame {
     const was = b.dataset.v
     b.hidden = false
     const out: BlockSize[] = []
+    const k = Number(b.dataset.k ?? 1) || 1 // the scale it is drawn at: its size at 1 is what it measures over that
     for (const variant of ['0', '1']) {
       b.dataset.v = variant
       const r = b.getBoundingClientRect()
-      const s: BlockSize = { w: Math.ceil(r.width), h: Math.ceil(r.height) }
+      const s: BlockSize = { w: Math.ceil(r.width / k), h: Math.ceil(r.height / k) }
       const a = this.#anchor(id)
       if (a !== null) {
         const ar = a.getBoundingClientRect()
-        if (id === 'left' || id === 'right') s.ay = Math.round(ar.top + ar.height / 2 - r.top)
-        else s.ax = Math.round(ar.left + ar.width / 2 - r.left)
+        if (id === 'left' || id === 'right') s.ay = Math.round((ar.top + ar.height / 2 - r.top) / k)
+        else s.ax = Math.round((ar.left + ar.width / 2 - r.left) / k)
       }
       out.push(s)
     }
     b.dataset.v = was
     b.hidden = hidden
-    this.#sizes[id] = out
+    this.#base[id] = out
+    this.#applyScale(id)
   }
 
   /** The part a block lines up with the aircraft: the tapes' middles, the heading index, the attitude indicator. */

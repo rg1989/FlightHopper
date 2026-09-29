@@ -70,7 +70,13 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   -webkit-font-smoothing: antialiased;
+  transform-origin: 0 0; /* a card scaled (edit mode's corner handles) grows from its top-left, where it is placed */
   will-change: transform;
+}
+
+/* Scaled: drawn again at its size, not a stretched picture of itself (a will-change layer keeps its first raster). */
+.fh-fblock[data-k]:not([data-k='1']) {
+  will-change: auto;
 }
 
 /* A card's heading line: small caps labels spread across it ("ALT ft … ↓ 750"). */
@@ -1017,8 +1023,109 @@
 }
 
 .fh-fgrip,
-.fh-feye {
+.fh-feye,
+.fh-fsize {
   display: none;
+}
+
+/* The edit controls keep their size on a scaled card (FlightFrame sets --fh-k). */
+.fh-frame[data-edit] .fh-fgrip,
+.fh-frame[data-edit] .fh-feye,
+.fh-frame[data-edit] .fh-fsize {
+  scale: calc(1 / var(--fh-k, 1));
+}
+
+/* A handle on each bottom corner: pull it to size the card (its opposite top corner stays). A 44 px target. */
+.fh-frame[data-edit] .fh-fsize {
+  position: absolute;
+  bottom: -7px;
+  z-index: 1;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2.5px solid var(--fh-accent);
+  border-radius: 3px;
+  background: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  touch-action: none;
+}
+
+.fh-frame[data-edit] .fh-fsize[data-corner='bl'] {
+  left: -7px;
+  border-top: 0;
+  border-right: 0;
+  cursor: nesw-resize;
+  transform-origin: 0 100%;
+}
+
+.fh-frame[data-edit] .fh-fsize[data-corner='br'] {
+  right: -7px;
+  border-top: 0;
+  border-left: 0;
+  cursor: nwse-resize;
+  transform-origin: 100% 100%;
+}
+
+.fh-frame[data-edit] .fh-fsize::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+}
+
+.fh-frame[data-edit] .fh-fsize:hover {
+  border-color: #9ccbff;
+}
+
+/* While a card moves or sizes: every line it can snap to, faint and dashed across the view (FlightFrame #faint). */
+.fh-fguides {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.fh-fguide-f {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0.55;
+}
+
+.fh-fguide-f.fh-fguide-v {
+  width: 1px;
+  height: 100%;
+  background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.5) 0 4px, transparent 4px 9px);
+}
+
+.fh-fguide-f.fh-fguide-h {
+  width: 100%;
+  height: 1px;
+  background: repeating-linear-gradient(to right, rgba(255, 255, 255, 0.5) 0 4px, transparent 4px 9px);
+}
+
+/* The lines a moved or sized card snapped to: across the whole view, as the Mac's alignment guides. */
+.fh-fguide {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  background: #ff5fd2;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.fh-fguide[hidden] {
+  display: none;
+}
+
+.fh-fguide-v {
+  width: 1px;
+  height: 100%;
+}
+
+.fh-fguide-h {
+  width: 100%;
+  height: 1px;
 }
 
 /* Every card editable: a dashed accent outline and a grab cursor. It takes the pointer, so the camera stays put. */
@@ -1228,5 +1335,96 @@
 @media (max-width: 480px) {
   .fh-fbar-hint {
     display: none;
+  }
+}
+
+/* The toolbar's Units menu: a row of choices for altitude, speed and vertical speed, under the toolbar. */
+.fh-fbar-units[aria-expanded='true'] {
+  background: var(--fh-accent-soft);
+  color: #cfe4ff;
+}
+
+.fh-funits {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: var(--fh-radius);
+  background: var(--fh-glass-strong);
+  box-shadow: var(--fh-shadow);
+  animation: fh-fbar-in var(--fh-fast) var(--fh-ease);
+}
+
+.fh-funits[hidden] {
+  display: none;
+}
+
+.fh-funits-row {
+  display: grid;
+  grid-template-columns: 104px auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.fh-funits-l {
+  color: var(--fh-muted);
+  font-size: 12px;
+}
+
+.fh-funits-seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fh-funits-b {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fh-muted);
+  font: 600 12px/1 var(--fh-font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fh-funits-b:hover {
+  color: var(--fh-text);
+}
+
+.fh-funits-b[aria-pressed='true'] {
+  background: var(--fh-accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.35);
+  color: var(--fh-text);
+}
+
+/* The second unit's readout under a tape ("both" units): smaller, muted. */
+.fh-line.fh-dual {
+  justify-content: flex-end;
+  opacity: 0.8;
+  font-size: 0.92em;
+}
+
+@media (max-width: 640px) {
+  .fh-funits {
+    right: auto;
+    left: 0;
+    max-width: calc(100vw - 24px);
+  }
+
+  .fh-funits-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .fh-funits-b {
+    height: 40px;
+    font-size: 13px;
   }
 }

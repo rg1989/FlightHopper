@@ -79,6 +79,16 @@ export const SPEED_TAPE: TapeSpec = {
   read: { unit: 10, step: 1, digits: 1 },
 }
 
+/** Altitude in metres (units.ts): the feet tape's px per foot, a mark every 50 m, a label every 100 m; the tens roll in 10s. */
+export const ALT_TAPE_M: TapeSpec = {
+  ...ALT_TAPE, ppu: 0.11 / 0.3048, minor: 50, major: 100, halfSpan: 600, window: 232,
+  read: { unit: 100, step: 10, digits: 2 },
+}
+/** Speed in km/h: the knot tape's px per knot, a mark every 20 km/h, a label every 40. */
+export const SPEED_TAPE_KMH: TapeSpec = { ...SPEED_TAPE, ppu: 1.4 / 1.852, minor: 20, major: 40, halfSpan: 260, window: 120 }
+/** Speed in mph: a mark every 10 mph, a label every 20. */
+export const SPEED_TAPE_MPH: TapeSpec = { ...SPEED_TAPE, ppu: 1.4 / 1.150779, halfSpan: 160, window: 74 }
+
 const TREND_HEAD = 6 // the trend arrow's head, px; the arrow stops this far inside the tape's end
 const DRUM_CELL_EM = 1.15 // a drum cell's height: at rest the window (the readout box) shows none of the neighbours' ink
 
@@ -206,6 +216,7 @@ export class Vsi {
   readonly el = h('div', 'fh-vsi')
   readonly #bar = h('div', 'fh-vsi-bar')
   readonly #ptr = h('div', 'fh-vsi-ptr')
+  readonly #labels: { el: HTMLSpanElement; fpm: number }[] = []
 
   constructor() {
     const scale = h('div', 'fh-vsi-scale')
@@ -220,11 +231,17 @@ export class Vsi {
           const l = h('span', 'fh-vsi-l', String(m / 1_000))
           l.style.top = top
           scale.append(l)
+          this.#labels.push({ el: l, fpm: m })
         }
       }
     }
     scale.append(h('div', 'fh-vsi-zero'))
     this.el.append(scale, this.#bar, this.#ptr)
+  }
+
+  /** The scale's figures: thousands of ft/min (1 2 6), or m/s (5 10 30: the same marks, rounded). */
+  units(ms: boolean): void {
+    for (const { el, fpm } of this.#labels) el.textContent = ms ? String(Math.round((fpm * 0.00508) / 5) * 5) : String(fpm / 1_000)
   }
 
   /** Every frame. */
