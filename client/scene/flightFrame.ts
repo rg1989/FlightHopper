@@ -746,6 +746,11 @@ export class FlightFrame {
     return this.#editing
   }
 
+  /** The chased aircraft's flight ID as drawn (layer px, the canvas's): the traffic's labels keep off it. null: not shown. */
+  get idRect(): Rect | null {
+    return this.#idRect
+  }
+
   /** What the frame shows (layer px): its cards, the chased aircraft's brackets and flight ID. The traffic card keeps off it. */
   occupied(): Rect[] {
     if (!this.#shown) return []

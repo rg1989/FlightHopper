@@ -71,6 +71,9 @@ export function squarePx(rM: number, depthM: number, fovyRad: number, viewHeight
  */
 export interface Box { hex: string; x: number; y: number; side: number; depthM: number; label: string; distM: number }
 
+/** A screen rectangle, canvas CSS px from its top-left. */
+export interface Rect { x: number; y: number; w: number; h: number }
+
 /**
  * Whether a traffic model is hidden: the scene's depth under its square's centre (hitDistM from the camera; undefined:
  * sky) lies nearer than the model's near side (centreDistM − rM). A hit on the model itself or behind it is not.
@@ -95,6 +98,7 @@ const ID_H_PX = 12
 const DIST_H_PX = 11
 const ID_CHAR_PX = 9 // bold 11 px capitals with 0.08em spacing (phones' 12 px run a little wider)
 const DIST_CHAR_PX = 7 // 10 px digits
+const KEEP_OFF_PX = 6 // round the chased aircraft's flight ID: another label beside it does not run into it
 
 /** The label lines of square b as [centre x, centre y, width, height] × 2 (ID, then distance), written into out. */
 function labelLines(b: Box, distChars: number, out: number[]): number[] {
@@ -125,18 +129,24 @@ function linesClash(a: number[], b: number[]): boolean {
  * Which labels show (out[i] for the first n boxes; a square's ID and distance show or hide together): nearest first,
  * and a square whose label lines would touch lines already shown loses them, so a distant airport's crowd reads as
  * brackets with a few labels instead of a smear of text. Brackets all stay. firstHex (the aircraft whose card is open)
- * goes before the nearest: its labels always show.
+ * goes before the nearest: its labels always show. keepOff (the chased aircraft's flight ID, FlightFrame.idRect): no
+ * other label goes over it.
  * ponytail: widths estimated from the character count; upgrade: measure each label text once.
  */
-export function shownLabels(boxes: readonly Box[], n: number, out: boolean[], firstHex: string | null = null): boolean[] {
+export function shownLabels(
+  boxes: readonly Box[], n: number, out: boolean[], firstHex: string | null = null, keepOff: Rect | null = null,
+): boolean[] {
   out.length = n
   const rank = (i: number): number => (boxes[i].hex === firstHex ? -Infinity : boxes[i].depthM)
   const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => rank(a) - rank(b))
   const distChars = boxes.slice(0, n).map((b) => formatDistanceM(b.distM).length)
+  const c = keepOff === null ? null
+    : [keepOff.x + keepOff.w / 2, keepOff.y + keepOff.h / 2, keepOff.w + 2 * KEEP_OFF_PX, keepOff.h + 2 * KEEP_OFF_PX]
+  const off = c === null ? null : [...c, ...c] // as a square's two lines (linesClash compares two a side)
   for (let k = 0; k < n; k++) {
     const i = order[k]
     labelLines(boxes[i], distChars[i], la)
-    let clear = true
+    let clear = off === null || boxes[i].hex === firstHex || !linesClash(la, off)
     for (let q = 0; q < k && clear; q++) {
       const j = order[q]
       if (out[j]) clear = !linesClash(la, labelLines(boxes[j], distChars[j], lb))
@@ -257,6 +267,8 @@ export class Traffic {
   #destroyed = false
   #openHex: string | null = null
   #openDistM: number | null = null
+  /** The chased aircraft's flight ID (canvas px; FlightFrame.idRect): no traffic label goes over it. */
+  keepOff: Rect | null = null
 
   constructor(viewer: Viewer, pick: ModelPicker, layer: HTMLElement, opts: TrafficOpts = {}) {
     this.#viewer = viewer
@@ -367,7 +379,7 @@ export class Traffic {
       n++
     }
     n = this.#dropOccluded(n)
-    shownLabels(this.#boxes, n, this.#labelShown, this.#openHex)
+    shownLabels(this.#boxes, n, this.#labelShown, this.#openHex, this.keepOff)
     for (let i = 0; i < n; i++) this.#place(i, this.#boxes[i], this.#labelShown[i])
     this.#hideBoxes(n)
     // Drawn or not (occluded, behind the camera, no model free yet), the open aircraft's card shows its distance.

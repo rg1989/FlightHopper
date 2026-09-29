@@ -847,7 +847,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const aim = model === null ? undefined : boxCentre(model.model.modelMatrix, model.entry, aimAt)
       clearanceM = chaseCam.update(placed, dtS, aim).clearanceM
       sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt) // the chased aircraft
-      // After the camera, so the brackets match this frame; sunWC gives the distances under them.
+      // After the camera, so the brackets match this frame; sunWC gives the distances under them. Their labels keep off
+      // the chased aircraft's flight ID (as drawn last frame).
+      if (traffic !== null) traffic.keepOff = flightFrame.idRect
       traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, dtS, sunWC)
       traffic?.forEachDrawn(lights.forTraffic)
       if (model !== null) {

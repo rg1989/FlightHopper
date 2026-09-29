@@ -120,6 +120,21 @@ test('shownLabels: the open aircraft (its card showing) keeps its labels over a 
   assert.deepEqual(shownLabels(boxes, 2, [], 'gone'), [true, false], 'an open aircraft not drawn changes nothing')
 })
 
+test("shownLabels: no label over the chased aircraft's flight ID (keepOff); the open aircraft's still show", () => {
+  const box = (hex: string, x: number, y: number): Box => ({ hex, x, y, side: 24, depthM: 3_000, label: 'UAL1561', distM: 0 })
+  const id = { x: 273, y: 133, w: 54, h: 12 } // the chased aircraft's "UAL123", centred on (300, 139)
+  const on = box('on', 310, 139 + 23) // its ID line (23 px over its centre) on the chased one's
+  const under = box('under', 300, 139 - 22.5) // its distance line (22.5 px under its centre) on it
+  const apart = box('apart', 400, 139 + 23)
+  const beside = box('beside', 300 + 27 + 3 + 32, 139 + 23) // its ID (63 px wide) starts 3 px past the chased one's end
+  assert.deepEqual(shownLabels([on], 1, []), [true], 'nothing to keep off')
+  assert.deepEqual(shownLabels([on], 1, [], null, id), [false])
+  assert.deepEqual(shownLabels([under], 1, [], null, id), [false])
+  assert.deepEqual(shownLabels([apart], 1, [], null, id), [true])
+  assert.deepEqual(shownLabels([beside], 1, [], null, id), [false], 'touching it: kept a few px off')
+  assert.deepEqual(shownLabels([on], 1, [], 'on', id), [true], 'the open one keeps its labels')
+})
+
 test('traffic model: nose along the track, pitched with the climb, wings level, wheels at the placed height', () => {
   const pos = Cartesian3.fromDegrees(-0.1, 51.5, 5_000)
   for (const trk of [0, 90, 237, 359]) {
