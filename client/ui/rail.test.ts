@@ -39,6 +39,8 @@ class El {
   }
   append(...cs: El[]): void {
     for (const c of cs) {
+      const at = c.parent?.children.indexOf(c) ?? -1
+      if (at >= 0) c.parent!.children.splice(at, 1) // moved, as the DOM does
       c.parent = this
       this.children.push(c)
     }
@@ -59,6 +61,15 @@ class El {
 }
 const g = globalThis as Record<string, unknown>
 g.document = { createElement: (t: string) => new El(t), createElementNS: (_ns: string, t: string) => new El(t) }
+let phone = false
+const phoneListeners: (() => void)[] = []
+g.matchMedia = () => ({
+  get matches() {
+    return phone
+  },
+  addEventListener: (_t: string, f: () => void) => phoneListeners.push(f),
+  removeEventListener: () => {},
+})
 g.ResizeObserver = class {
   observe(): void {}
   disconnect(): void {}
@@ -84,7 +95,7 @@ test('mountRail: a corner item is a button of its own in the corner, not on the 
   assert.equal(corner.children.length, 2, 'each in a glass square of its own')
   assert.ok(corner.children.every((c) => c.classes.has('fh-glass')))
   assert.equal(find(nav, (e) => e.classes.has('fh-rail-sep')).length, 1, 'the rail\'s dividers as if the corner items were not there')
-  assert.equal(find(corner, (e) => e.classes.has('fh-ibtn-label')).length, 0, 'no tab-bar label: they are not tabs')
+  assert.ok(find(corner, (e) => e.classes.has('fh-ibtn-label')).length > 0, 'a label for the phone strip (hidden here by rail.css)')
   ;(rail.button('fullscreen') as unknown as El).click()
   assert.equal(full, 1)
   rail.destroy()
@@ -125,4 +136,26 @@ test('mountRail: left and bottom spots; a left item panel opens beside it (fh-pa
   assert.ok(!panel.classes.has('fh-panel-left'))
   rail.destroy()
   assert.equal(root.children.length, 0)
+})
+
+test('mountRail: on phones every button is a tab in the one strip, in item order; wider, back in their squares', () => {
+  const root = new El('div')
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', spot: 'under', panel: { title: 'Layers', mount: () => {} } },
+    { id: 'aircraft', icon: 'list', label: 'Aircraft', short: 'Aircraft', group: 1, panel: { title: 'Aircraft', mount: () => {} } },
+    { id: 'scenarios', icon: 'film', label: 'Scenarios', short: 'Scenes', spot: 'left', panel: { title: 'Scenarios', mount: () => {} } },
+    { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', spot: 'corner', action: () => {} },
+  ])
+  const [nav] = find(root, (e) => e.tagName === 'nav')
+  assert.deepEqual(ids(nav), ['status', 'aircraft'])
+  phone = true
+  for (const f of phoneListeners) f()
+  assert.deepEqual(ids(nav), ['status', 'scene', 'aircraft', 'scenarios', 'settings'])
+  phone = false
+  for (const f of phoneListeners) f()
+  assert.deepEqual(ids(nav), ['status', 'aircraft'])
+  assert.equal(find(nav, (e) => e.classes.has('fh-rail-sep')).length, 1)
+  assert.deepEqual(ids(find(root, (e) => e.classes.has('fh-spot-left'))[0]), ['scenarios'])
+  rail.destroy()
 })

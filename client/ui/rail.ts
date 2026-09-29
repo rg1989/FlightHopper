@@ -5,8 +5,8 @@
 // is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
 // a panel is a sheet above it that a downward swipe on its header closes. An item with a spot is not on the rail: it is
 // a button of its own, in a glass square, at that spot (rail.css): 'under' just under the rail, 'corner' at the bottom
-// right, 'left' at the top left (its panel opens beside it), 'bottom' at the bottom centre. On phones 'under' and
-// 'corner' stack at the top right, 'left' and 'bottom' at the top left.
+// right, 'left' at the top left (its panel opens beside it), 'bottom' at the bottom centre. On phones there is no
+// room for them: every button is a tab in the one bottom strip, in item order (it scrolls sideways when they do not fit).
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -69,11 +69,15 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   const badges = new Map<string, HTMLElement>()
   let openId: string | null = null
   let lastGroup = items[0]?.group ?? 0
+  const railKids: HTMLElement[] = [] // the rail's own buttons and dividers, as a wide screen shows them
+  const owned: { b: HTMLButtonElement; square: HTMLElement }[] = []
 
   for (const item of items) {
     const own = item.spot !== undefined // a button of its own, not on the rail
     if (!own && (item.group ?? 0) !== lastGroup) {
-      rail.append(el('span', 'fh-rail-sep'))
+      const sep = el('span', 'fh-rail-sep')
+      rail.append(sep)
+      railKids.push(sep)
       lastGroup = item.group ?? 0
     }
     const b = el('button', 'fh-ibtn')
@@ -82,7 +86,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     b.dataset.tip = item.label
     b.dataset.id = item.id
     b.append(icon(item.icon))
-    if (!own) b.append(el('span', 'fh-ibtn-label', item.short))
+    b.append(el('span', 'fh-ibtn-label', item.short)) // shown in the phone tab strip only (rail.css)
     if (item.panel) b.setAttribute('aria-expanded', 'false')
     b.addEventListener('click', () => (item.panel ? api.open(openId === item.id ? null : item.id) : item.action?.()))
     if (own) {
@@ -90,7 +94,11 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       square.dataset.id = item.id
       square.append(b)
       spots[item.spot!].append(square)
-    } else rail.append(b)
+      owned.push({ b, square })
+    } else {
+      rail.append(b)
+      railKids.push(b)
+    }
     buttons.set(item.id, b)
     if (item.panel) {
       const body = el('div', 'fh-panel-body')
@@ -108,12 +116,20 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
 
   // The under squares sit 8 px below the rail's foot; on phones (the rail a bottom tab bar) at the top right, with the
   // corner buttons 8 px below them. A sideways phone's full-height rail leaves no room below it: rail.css places them.
+  const phone = matchMedia(SHEET_MEDIA)
   const place = (): void => {
-    const phone = matchMedia(SHEET_MEDIA).matches
-    const has = under.childElementCount > 0
-    under.style.top = phone || !has ? '' : `${rail.offsetTop + rail.offsetHeight + 8}px`
-    corner.style.top = phone && has ? `${under.offsetTop + under.offsetHeight + 8}px` : ''
+    under.style.top = phone.matches || under.childElementCount === 0 ? '' : `${rail.offsetTop + rail.offsetHeight + 8}px`
   }
+  // Phones: every button a tab in the strip, in item order; wider: the spot buttons back in their squares.
+  const arrange = (): void => {
+    if (phone.matches) for (const item of items) rail.append(buttons.get(item.id)!)
+    else {
+      rail.replaceChildren(...railKids)
+      for (const o of owned) o.square.append(o.b)
+    }
+  }
+  arrange()
+  phone.addEventListener('change', arrange)
 
   // Phone tab bar: where it scrolls, a fade on each side that has more tabs (rail.css). Re-read on a scroll, a resize,
   // and a tab shown or hidden (its size changes).
@@ -220,6 +236,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     },
     destroy() {
       resized.disconnect()
+      phone.removeEventListener('change', arrange)
       rail.remove()
       panel.remove()
       for (const e of Object.values(spots)) e.remove()

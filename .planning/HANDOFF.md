@@ -13,7 +13,11 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
   'left' | 'bottom'` (was `corner`/`under` booleans). Scenarios is a square at the top left (its panel opens beside it,
   `.fh-panel-left`; the flight card moved right by `--fh-spot`), the instrument layout a square at the bottom centre
   (chase only; over the play bar's left end in a scenario), Settings joined full screen in the bottom-right corner. On
-  phones: Scenarios and layout stack at the top left, Layers, Settings, full screen at the top right; sheets go over them.
+  phones every button is a tab in the one bottom strip (rail.ts `arrange`, item order; it scrolls sideways), no squares.
+- **Night: loading ground stays dark (local `main`, 2026-09-30).** Lamp tiles still loading used to be stood in for by
+  much coarser ones: a pale wash with glowing roads over km (worst from the street map into the chase). `lampsWait`
+  (nightLights.ts, an endUpdate wrap like imageryFade's) drops the lamps from a tile whose stand-in is > 2 levels
+  coarser, or a tile shallower than 12 past 4× the SSE. Open: why some areas load slowly at all (user: a separate issue).
 - **Map layers on local `main` (2026-09-30, not pushed).** The Scene panel left the rail: it is "Layers", a panel
   button in a glass square of its own under the rail (rail.ts `under` items; on phones at the top right, the corner
   buttons below it). Map: Map | Satellite for the view on screen (M; `mapTop` default map, `mapChase` default

@@ -449,25 +449,17 @@
     display: none;
   }
 
-  /* The bottom is the tab bar's and the flight card's: the corner buttons go to the top right, the bottom one to the top
-     left under Scenarios. */
-  .fh-corner {
-    top: var(--fh-top);
-    bottom: auto;
-  }
-
-  .fh-spot-bottom,
-  .fh-ui[data-scenario] .fh-spot-bottom {
-    top: calc(var(--fh-top) + var(--fh-spot) - 4px);
-    bottom: auto;
-    left: var(--fh-left);
-    transform: none;
+  /* Every button is a tab in the strip (rail.ts arrange): the squares stay empty. */
+  .fh-under,
+  .fh-corner,
+  .fh-spot-left,
+  .fh-spot-bottom {
+    display: none;
   }
 
   .fh-panel,
   .fh-panel.fh-wide,
   .fh-panel.fh-panel-left {
-    z-index: 21; /* a tall sheet goes over the squares at the top (rail.ts spots) */
     top: auto;
     right: 0;
     bottom: var(--fh-tabbar-h);
