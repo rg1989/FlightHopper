@@ -10,6 +10,8 @@ export type Side = 'left' | 'right'
 export type Region = 'skin' | 'nacelle' | 'tip'
 /** A CSS colour (sRGB). */
 export type Color = string
+/** A colour or a gradient in metres: linear from (z0, y0) to (z1, y1), or radial around (z, y); stops 0 … 1. */
+export type Fill = Color | { linear: [z0: number, y0: number, z1: number, y1: number]; stops: Array<[number, Color]> } | { radial: [z: number, y: number, r: number]; stops: Array<[number, Color]> }
 /** A point [z, y] in metres. */
 export type Pt = [z: number, y: number]
 /** A height on the fuselage as a fraction of its local height (0 keel … 1 crown), fixed or varying along z. */
@@ -40,8 +42,11 @@ export interface ImageOpts {
 }
 
 export type Op =
-  | { k: 'fill'; color: Color }
-  | { k: 'path'; d: Seg[]; color: Color }
+  | { k: 'fill'; color: Fill }
+  | { k: 'path'; d: Seg[]; color: Fill }
+  | { k: 'stroke'; d: Seg[]; color: Fill; widthM: number }
+  | { k: 'clip'; d: Seg[] }
+  | { k: 'unclip' }
   | ({ k: 'text'; text: string } & Required<Omit<TextOpts, 'font'>> & { font: string })
   | ({ k: 'image'; src: string } & ImageOpts)
   | { k: 'wrap'; src: string; box: [zNose: number, zTail: number, yBottom: number, yTop: number] }
@@ -164,21 +169,50 @@ export class Kit {
   }
 
   /** Fills the whole region. */
-  fill(color: Color): this {
+  fill(color: Fill): this {
     this.ops.push({ k: 'fill', color })
     return this
   }
 
-  poly(pts: Pt[], color: Color): this {
+  poly(pts: Pt[], color: Fill): this {
     if (pts.length < 3) return this
-    const d: Seg[] = [['M', pts[0][0], pts[0][1]], ...pts.slice(1).map(([z, y]): Seg => ['L', z, y]), ['Z']]
+    this.ops.push({ k: 'path', d: segs(pts, true), color })
+    return this
+  }
+
+  path(d: Seg[], color: Fill): this {
     this.ops.push({ k: 'path', d, color })
     return this
   }
 
-  path(d: Seg[], color: Color): this {
-    this.ops.push({ k: 'path', d, color })
+  /** A line along a path or through points, widthM metres wide on the aircraft. */
+  stroke(d: Seg[] | Pt[], widthM: number, color: Fill): this {
+    this.ops.push({ k: 'stroke', d: isSegs(d) ? d : segs(d, false), color, widthM })
     return this
+  }
+
+  /** A disc of radius r metres (dots, roundels). */
+  circle(z: number, y: number, r: number, color: Fill): this {
+    const k = 0.5523 * r // four cubic quarter-arcs
+    return this.path([['M', z + r, y], ['C', z + r, y + k, z + k, y + r, z, y + r], ['C', z - k, y + r, z - r, y + k, z - r, y],
+      ['C', z - r, y - k, z - k, y - r, z, y - r], ['C', z + k, y - r, z + r, y - k, z + r, y], ['Z']], color)
+  }
+
+  /** Draws only inside a shape: 'fin' (its measured outline, a little into the fuselage), points, or a path. */
+  clip(shape: 'fin' | Pt[] | Seg[], draw: () => void): this {
+    const d = shape === 'fin' ? segs(this.finOutline(0.05), true) : isSegs(shape) ? shape : segs(shape, true)
+    this.ops.push({ k: 'clip', d })
+    draw()
+    this.ops.push({ k: 'unclip' })
+    return this
+  }
+
+  /** The fin's outline (measured, else from the root and tip chords), reaching `down` metres below its root. */
+  finOutline(down = 0): Pt[] {
+    const pts: Pt[] = this.p.fin.length >= 3 ? [...this.p.fin] : [this.fin(0, 0), this.fin(0, 1), this.fin(1, 1), this.fin(1, 0)]
+    if (down <= 0) return pts
+    const [y0, le0, te0] = this.a.finRoot
+    return [[le0, y0 - down], ...pts, [Math.min(te0, this.a.tail) - 0.5, y0 - down]]
   }
 
   /** The z stations from `from` to `to` (fore to aft), every step metres, both ends included. */
@@ -191,7 +225,7 @@ export class Kit {
    * A band between two contour fractions (f0 below f1), from z `from` to `to` (default: past the nose to past the
    * tail). Fractions below 0 or above 1 reach past the keel or the crown (e.g. −0.3 … 0.35: the whole belly).
    */
-  band(f0: Frac, f1: Frac, color: Color, o: { from?: number; to?: number } = {}): this {
+  band(f0: Frac, f1: Frac, color: Fill, o: { from?: number; to?: number } = {}): this {
     const from = o.from ?? this.a.nose + 0.5
     const to = o.to ?? this.a.tail - 0.5
     const zs = this.stations(from, to)
@@ -201,17 +235,17 @@ export class Kit {
   }
 
   /** Everything below fraction f (the belly), past the keel. */
-  below(f: Frac, color: Color, o: { from?: number; to?: number } = {}): this {
+  below(f: Frac, color: Fill, o: { from?: number; to?: number } = {}): this {
     return this.band(-0.6, f, color, o)
   }
 
   /** Everything above fraction f up to past the crown (the fin is drawn over it, or not, by the design's order). */
-  above(f: Frac, color: Color, o: { from?: number; to?: number } = {}): this {
+  above(f: Frac, color: Fill, o: { from?: number; to?: number } = {}): this {
     return this.band(f, 1.6, color, o)
   }
 
   /** A stripe of constant width (metres) centred on fraction f. */
-  stripe(f: Frac, widthM: number, color: Color, o: { from?: number; to?: number } = {}): this {
+  stripe(f: Frac, widthM: number, color: Fill, o: { from?: number; to?: number } = {}): this {
     const from = o.from ?? this.a.nose + 0.5
     const to = o.to ?? this.a.tail - 0.5
     const zs = this.stations(from, to)
@@ -222,17 +256,16 @@ export class Kit {
   }
 
   /** The fin (its measured outline), reaching `down` metres into the fuselage below its root. */
-  finFill(color: Color, o: { down?: number } = {}): this {
+  finFill(color: Fill, o: { down?: number } = {}): this {
     const down = o.down ?? 0.15
     const [y0, le0, te0] = this.a.finRoot
-    const pts: Pt[] = this.p.fin.length >= 3 ? [...this.p.fin] : [this.fin(0, 0), this.fin(0, 1), this.fin(1, 1), this.fin(1, 0)]
-    this.poly(pts, color)
+    this.poly(this.finOutline(), color)
     // the root strip: from under the leading edge root to under the trailing edge root, past the tail
     return this.poly([[le0, y0 + 0.05], [le0, y0 - down], [Math.min(te0, this.a.tail) - 0.5, y0 - down], [Math.min(te0, this.a.tail) - 0.5, y0 + 0.05]], color)
   }
 
   /** A polygon in fin coordinates [u, h] (chord fraction, height fraction); may overshoot the outline. */
-  finPoly(pts: Array<[u: number, h: number]>, color: Color): this {
+  finPoly(pts: Array<[u: number, h: number]>, color: Fill): this {
     return this.poly(pts.map(([u, h]) => this.fin(u, h)), color)
   }
 
@@ -255,6 +288,9 @@ export class Kit {
     return this
   }
 }
+
+const isSegs = (d: Seg[] | Pt[]): d is Seg[] => d.length > 0 && typeof d[0][0] === 'string'
+const segs = (pts: Pt[], closed: boolean): Seg[] => [['M', pts[0][0], pts[0][1]], ...pts.slice(1).map(([z, y]): Seg => ['L', z, y]), ...(closed ? [['Z'] as Seg] : [])]
 
 /** A region's ops for both sides. */
 export interface RegionOps {

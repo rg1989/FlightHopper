@@ -16,7 +16,7 @@ const a320 = manifest.models.find((m) => m.id === 'a320')!
 /** The ops a livery code draws on a model's left side. */
 const leftOps = (code: string | null, m: ModelManifestEntry = a320): Op[] =>
   drawDesign(liveryOf(code).design, { id: m.id, profile: profileOf(m)!, paint: m.paint }).skin.left
-const colours = (ops: Op[]): string[] => ops.flatMap((o) => (o.k === 'fill' || o.k === 'path' ? [o.color] : []))
+const colours = (ops: Op[]): string[] => ops.flatMap((o) => ((o.k === 'fill' || o.k === 'path') && typeof o.color === 'string' ? [o.color] : []))
 const images = (ops: Op[]): string[] => ops.flatMap((o) => (o.k === 'image' || o.k === 'wrap' ? [o.src] : []))
 
 test('livery code: the operator, its brand for a subsidiary or single-partner regional, else null (plain white)', () => {

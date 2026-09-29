@@ -23,14 +23,14 @@ test('every design is registered under its own code and names its sources', () =
 
 test('every design draws on every painted model with finite coordinates, valid colours and existing images', () => {
   const nums = (op: Op): number[] =>
-    op.k === 'path' ? op.d.flatMap((s) => s.slice(1) as number[]) : op.k === 'text' ? [op.z, op.y, op.capM, op.tracking] : op.k === 'image' ? [op.z, op.y, op.w ?? 1, op.h ?? 1] : op.k === 'wrap' ? op.box : []
+    op.k === 'path' || op.k === 'stroke' || op.k === 'clip' ? op.d.flatMap((s) => s.slice(1) as number[]) : op.k === 'text' ? [op.z, op.y, op.capM, op.tracking] : op.k === 'image' ? [op.z, op.y, op.w ?? 1, op.h ?? 1] : op.k === 'wrap' ? op.box : []
   for (const [code, d] of Object.entries(DESIGNS)) {
     for (const m of manifest.models.filter((e) => e.paint)) {
       const ops = drawDesign(d, { id: m.id, profile: profileOf(m)!, paint: m.paint })
       for (const r of [ops.skin, ops.nacelle, ops.tip]) {
         for (const op of r ? [...r.left, ...r.right] : []) {
           for (const n of nums(op)) assert.ok(Number.isFinite(n), `${code} on ${m.id}: ${JSON.stringify(op).slice(0, 120)}`)
-          if ('color' in op) assert.match(op.color, COLOUR, `${code} on ${m.id}`)
+          if ('color' in op) for (const c of typeof op.color === 'string' ? [op.color] : op.color.stops.map((st) => st[1])) assert.match(c, COLOUR, `${code} on ${m.id}`)
           if (op.k === 'image' || op.k === 'wrap') {
             assert.ok(op.src.startsWith('/'), `${code}: ${op.src} is a public path`)
             assert.ok(existsSync(new URL(`public${op.src}`, root)), `${code}: ${op.src} exists`)

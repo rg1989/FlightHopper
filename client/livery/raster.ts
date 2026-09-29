@@ -4,7 +4,7 @@
 // side box mapped onto each half inside a margin. Shapes land identically on both halves; text and images are flipped
 // on the right half so they read correctly from the right (unless mirror). Browser only (canvas, fonts, images).
 import { drawDesign, imagesOf } from './kit.ts'
-import type { Design, Op, RegionOps, Target } from './kit.ts'
+import type { Design, Fill, Op, RegionOps, Seg, Target } from './kit.ts'
 
 export interface Atlas {
   data: Uint8Array // RGBA rows, top row first (the shader's t = 0)
@@ -100,13 +100,38 @@ function region(r: RegionOps, size: readonly [number, number], img: Map<string, 
 
 const REF_PX = 200 // text is measured at this font size, then scaled to its cap height
 
-/** One side into rows [top, top + h): z → x with the nose at the left, y → rows (up at the top). */
+/** A path in metres (drawn under the half's metric transform). */
+function pathOf(d: Seg[]): Path2D {
+  const p = new Path2D()
+  for (const s of d) {
+    if (s[0] === 'M') p.moveTo(s[1], s[2])
+    else if (s[0] === 'L') p.lineTo(s[1], s[2])
+    else if (s[0] === 'Q') p.quadraticCurveTo(s[1], s[2], s[3], s[4])
+    else if (s[0] === 'C') p.bezierCurveTo(s[1], s[2], s[3], s[4], s[5], s[6])
+    else p.closePath()
+  }
+  return p
+}
+
+/** A colour or a gradient in metres (made under the metric transform, so it is laid out in metres too). */
+function paintOf(ctx: CanvasRenderingContext2D, f: Fill): string | CanvasGradient {
+  if (typeof f === 'string') return f
+  const g = 'linear' in f ? ctx.createLinearGradient(...f.linear) : ctx.createRadialGradient(f.radial[0], f.radial[1], 0, f.radial[0], f.radial[1], f.radial[2])
+  for (const [at, c] of f.stops) g.addColorStop(at, c)
+  return g
+}
+
+/**
+ * One side into rows [top, top + h): z → x with the nose at the left, y → rows (up at the top). Shapes are drawn in
+ * metres under a metric transform (so stroke widths and gradients are in metres too); text and images get their own.
+ */
 function half(ctx: CanvasRenderingContext2D, box: RegionOps['box'], ops: Op[], top: number, w: number, h: number, right: boolean, img: Map<string, HTMLImageElement | null>): void {
   const [zMin, zMax, yMin, yMax] = box
   const sx = w / (zMax - zMin)
   const sy = (h - 2 * MARGIN) / (yMax - yMin)
   const X = (z: number): number => (zMax - z) * sx
   const Y = (y: number): number => top + MARGIN + (yMax - y) * sy
+  const metric = (): void => ctx.setTransform(-sx, 0, 0, -sy, zMax * sx, top + MARGIN + yMax * sy)
   ctx.save()
   ctx.beginPath()
   ctx.rect(0, top, w, h)
@@ -115,19 +140,26 @@ function half(ctx: CanvasRenderingContext2D, box: RegionOps['box'], ops: Op[], t
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.globalAlpha = 1
     if (op.k === 'fill') {
-      ctx.fillStyle = op.color
-      ctx.fillRect(0, top, w, h)
+      metric()
+      ctx.fillStyle = paintOf(ctx, op.color)
+      ctx.fillRect(zMin - 1000, yMin - 1000, zMax - zMin + 2000, yMax - yMin + 2000)
     } else if (op.k === 'path') {
-      const p = new Path2D()
-      for (const s of op.d) {
-        if (s[0] === 'M') p.moveTo(X(s[1]), Y(s[2]))
-        else if (s[0] === 'L') p.lineTo(X(s[1]), Y(s[2]))
-        else if (s[0] === 'Q') p.quadraticCurveTo(X(s[1]), Y(s[2]), X(s[3]), Y(s[4]))
-        else if (s[0] === 'C') p.bezierCurveTo(X(s[1]), Y(s[2]), X(s[3]), Y(s[4]), X(s[5]), Y(s[6]))
-        else p.closePath()
-      }
-      ctx.fillStyle = op.color
-      ctx.fill(p)
+      metric()
+      ctx.fillStyle = paintOf(ctx, op.color)
+      ctx.fill(pathOf(op.d))
+    } else if (op.k === 'stroke') {
+      metric()
+      ctx.strokeStyle = paintOf(ctx, op.color)
+      ctx.lineWidth = op.widthM
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.stroke(pathOf(op.d))
+    } else if (op.k === 'clip') {
+      ctx.save()
+      metric()
+      ctx.clip(pathOf(op.d))
+    } else if (op.k === 'unclip') {
+      ctx.restore()
     } else if (op.k === 'text') {
       ctx.font = `${op.italic ? 'italic ' : ''}${op.weight} ${REF_PX}px ${op.font}`
       ctx.letterSpacing = `${op.tracking * REF_PX}px`
@@ -152,7 +184,7 @@ function half(ctx: CanvasRenderingContext2D, box: RegionOps['box'], ops: Op[], t
       ctx.globalAlpha = op.opacity ?? 1
       ctx.setTransform(flip * sx, 0, 0, sy, X(flip === 1 ? op.z + bw / 2 : op.z - bw / 2), Y(op.y + bh / 2))
       ctx.drawImage(im, 0, 0, bw, bh)
-    } else {
+    } else if (op.k === 'wrap') {
       const im = img.get(op.src)
       if (!im) continue
       const [zNose, zTail, yBottom, yTop] = op.box

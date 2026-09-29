@@ -84,3 +84,15 @@ test('the rough profile of an old paint map is a closed, ordered stand-in', () =
   for (const [, b, t] of p.body) assert.ok(t > b)
   assert.ok(p.box[3] > p.finRoot[0] && p.finTip[0] > p.finRoot[0])
 })
+
+test('stroke, circle and clip record their ops; clip wraps what it draws', () => {
+  const k = kit()
+  k.stroke([[0, 0], [-2, 1]], 0.2, '#123456')
+  k.circle(1, 2, 0.5, { radial: [1, 2, 0.5], stops: [[0, '#ffffff'], [1, '#000000']] })
+  k.clip('fin', () => k.fill('#ff0000'))
+  assert.deepEqual(k.ops[0], { k: 'stroke', d: [['M', 0, 0], ['L', -2, 1]], color: '#123456', widthM: 0.2 })
+  assert.equal(k.ops[1].k, 'path')
+  assert.deepEqual(k.ops.slice(2).map((o) => o.k), ['clip', 'fill', 'unclip'])
+  const clip = k.ops[2] as Extract<Op, { k: 'clip' }>
+  assert.deepEqual(clip.d[0], ['M', -6, 0.95], 'the fin outline starts 5 cm under the leading-edge root')
+})
