@@ -511,7 +511,11 @@ const EDGE = 8 // the blocks from the view's edges (app.ts safeArea's pad)
 // card pinned where that put it stays there; its edit controls reach this far over its edges (flightFrame.css).
 const PAD = 8
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
-const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
+const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far from it (a shorter one is a click)
+
+/** Whether a press on a card (at press) has become a drag: the pointer is DRAG_PX from where it pressed, however slowly. */
+export const dragStarted = (press: { x: number; y: number }, at: { x: number; y: number }): boolean =>
+  Math.hypot(at.x - press.x, at.y - press.y) >= DRAG_PX
 const BAR_EDGE = 12 // the edit toolbar from the view's edges
 const HOLD_PX = 0.75 // a block drawn at a whole px stays there until its place is this far off it
 
@@ -668,7 +672,10 @@ export class FlightFrame {
   readonly #bar = h('div', 'fh-fbar')
   readonly #reset = h('button', 'fh-fbar-b')
   readonly #eyes = {} as Record<BlockId, HTMLButtonElement>
-  #drag: { id: BlockId; pointer: number; x: number; y: number; gx: number; gy: number; ox: number; oy: number; v?: number; on: boolean } | null = null
+  #drag: {
+    id: BlockId; pointer: number; press: { x: number; y: number }; x: number; y: number; gx: number; gy: number; ox: number; oy: number
+    v?: number; on: boolean
+  } | null = null
   #lsq: Square = { x: 0, y: 0, side: 0 }
   #area: Rect = { x: 0, y: 0, w: 0, h: 0 } // the view inside PAD: where a moved card may go
   #avoid: readonly Rect[] = [] // what a moved card keeps clear of: the covers, and the toolbar while editing
@@ -915,13 +922,14 @@ export class FlightFrame {
     const r = b.getBoundingClientRect()
     const o = this.#layer.getBoundingClientRect()
     const v = this.#placed[id]?.v // the variant it keeps
-    this.#drag = { id, pointer: e.pointerId, x: e.clientX, y: e.clientY, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false }
+    const press = { x: e.clientX, y: e.clientY }
+    this.#drag = { id, pointer: e.pointerId, press, ...press, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false }
   }
 
   #carry(e: PointerEvent): void {
     const d = this.#drag
     if (d === null || e.pointerId !== d.pointer) return
-    if (!d.on && Math.hypot(e.clientX - d.x, e.clientY - d.y) >= DRAG_PX) {
+    if (!d.on && dragStarted(d.press, { x: e.clientX, y: e.clientY })) {
       d.on = true
       this.#blocks[d.id].classList.add('fh-dragging')
       this.#pin()

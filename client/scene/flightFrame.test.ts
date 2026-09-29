@@ -17,7 +17,7 @@ registerHooks({
 })
 const {
   HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, freeSpot, gText, layoutSide,
-  liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, wholePx, windText,
+  dragStarted, liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, wholePx, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -342,6 +342,14 @@ test('movedTo, offsetAt: every card pinned where the automatic layout put it sta
   for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(after, id), at(auto, id), `${id} stays`)
   // A variant that no longer fits the view (a stored layout on a smaller screen): the largest that does.
   assert.equal(movedTo({ x: 0, y: 0, v: 0 }, sizes.top, sq, { x: 8, y: 8, w: 200, h: 400 }, [])!.v, 1)
+})
+
+test('dragStarted: a press becomes a drag once the pointer is 4 px from where it pressed, however slowly it got there', () => {
+  const press = { x: 100, y: 100 }
+  const moves = [1, 2, 3, 3.9, 4, 5].map((d) => dragStarted(press, { x: 100 + d, y: 100 }))
+  assert.deepEqual(moves, [false, false, false, false, true, true], '1 px at a time: the fourth px starts it')
+  assert.equal(dragStarted(press, { x: 103, y: 103 }), true, 'diagonally')
+  assert.equal(dragStarted(press, { x: 98, y: 101 }), false)
 })
 
 test('wholePx: a whole px, held where it was drawn until the place is 0.75 px off it (no 1 px flicker round a half)', () => {
