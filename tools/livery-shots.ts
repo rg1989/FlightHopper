@@ -4,7 +4,7 @@
 // its own PNG, for a person or an agent to compare with the photos. Headless Chrome over CDP, frame-capped.
 //
 //   node tools/livery-shots.ts [--host http://localhost:5182] [--out data/livery-refs/shots] [--views refs|all|a,b]
-//        [--port 9352] a21n:WZZ b738:ELY …
+//        [--port 9352] [--size 1200x675] a21n:WZZ b738:ELY~B …
 // Needs the vite dev server (npx vite, or the liveries-*-client launch config). Writes <out>/<model>-<CODE>/sheet.png
 // and <view>.png, and prints each folder.
 import { spawn } from 'node:child_process'
@@ -25,11 +25,13 @@ export function parsePair(s: string): [model: string, livery: string | null] {
   return [model, scheme === undefined ? code.toUpperCase() : `${code.toUpperCase()}~${scheme}`]
 }
 
-/** The lab URL for one pair. */
-export function labUrl(host: string, model: string, livery: string | null, views: string): string {
+/** The lab URL for one pair; size "1200x675" sets the view tiles' size. */
+export function labUrl(host: string, model: string, livery: string | null, views: string, size?: string): string {
   const q = new URLSearchParams({ model })
   if (livery) q.set('livery', livery)
   if (views !== 'all') q.set('views', views)
+  const m = size?.match(/^(\d+)x(\d+)$/)
+  if (m) { q.set('w', m[1]); q.set('h', m[2]) }
   return `${host.replace(/\/$/, '')}/tools/livery-lab/?${q}`
 }
 
@@ -80,6 +82,7 @@ async function main(): Promise<void> {
       out: { type: 'string', default: 'data/livery-refs/shots' },
       views: { type: 'string', default: 'all' },
       port: { type: 'string', default: '9352' }, // other sessions' headless Chromes use 9334–9351
+      size: { type: 'string' }, // view tiles, e.g. 1200x675 (default: the lab's 800x450)
     },
   })
   if (positionals.length === 0) throw new Error('usage: node tools/livery-shots.ts [--host …] [--views refs|all|a,b] model:LIVERY …')
@@ -93,7 +96,7 @@ async function main(): Promise<void> {
       const [model, livery] = parsePair(pair)
       const dir = join(values.out, `${model}-${livery ?? 'WHITE'}`)
       mkdirSync(dir, { recursive: true })
-      await cdp.send('Page.navigate', { url: labUrl(values.host, model, livery, values.views) })
+      await cdp.send('Page.navigate', { url: labUrl(values.host, model, livery, values.views, values.size) })
       let lab: { done: boolean; errors: string[]; tiles: Array<{ view: string; dataUrl: string }> } | null = null
       for (let i = 0; i < 240; i++) { // 2 minutes
         await sleep(500)
