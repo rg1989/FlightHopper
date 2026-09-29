@@ -484,9 +484,15 @@
   }
 }
 
-/* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both). */
+/* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both), and
+   the chased card's photo (half the screen with it: the card rose over the aircraft and the flight-data frame's cards;
+   the map shows it). */
 @media (max-width: 640px) {
   .fh-ui[data-mode='chase'] .fh-card-sub {
+    display: none;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card:not(.fh-tcard) .fh-card-photo {
     display: none;
   }
 }
