@@ -47,10 +47,10 @@
   letter-spacing: 0.005em;
 }
 
-/* Phones: across the top, above the view. */
+/* Phones: across the top, above the view, short of the corner buttons (rail.css). */
 @media (max-width: 640px) {
   .fh-story {
-    right: var(--fh-left);
+    right: calc(var(--fh-left) + 62px);
     width: auto;
     padding: 10px 14px 11px;
   }

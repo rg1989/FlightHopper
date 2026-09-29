@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { AIRLINES_CREDIT, airlineOf, operatorOf } from './airlines.ts'
+import { airlineOf, operatorOf } from './airlines.ts'
 
 test('airlineOf: ICAO designator + flight number → airline name', () => {
   assert.equal(airlineOf('ELY5450'), 'El Al Israel Airlines')
@@ -31,11 +31,6 @@ test('airlineOf: readsb padding and lower case are tolerated', () => {
 
 test('airlineOf: no flight number, letter-first suffix, too long or unknown designator → null', () => {
   for (const cs of ['ELY', 'ELYA12', 'ELY 12', 'ELY123456', 'XXX123', 'EL5450']) assert.equal(airlineOf(cs), null, cs)
-})
-
-test('credit line names the source and its licence', () => {
-  assert.match(AIRLINES_CREDIT, /OpenFlights/)
-  assert.match(AIRLINES_CREDIT, /ODbL/)
 })
 
 test('airlines.json: sorted 3-letter keys, trimmed non-empty names, about a thousand entries', () => {

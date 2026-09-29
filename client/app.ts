@@ -16,13 +16,13 @@
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import type { Viewer } from 'cesium'
-import { AIRLINES_CREDIT, airlineOf } from '../shared/airlines.ts'
+import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
 import type { ChaseResponse, StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf, flagEmoji } from '../shared/icaoCountry.ts'
 import type { AircraftInfo } from '../shared/info.ts'
-import type { ReadsbAircraft, Sample, SourceKind } from '../shared/types.ts'
+import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
 import { Fleet } from './browse/fleet.ts'
@@ -38,26 +38,26 @@ import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
 import { Traffic } from './scene/traffic.ts'
 import { AircraftLights } from './scene/aircraftLights.ts'
-import { STREETS_CREDIT, makeNightLayer } from './scene/nightLights.ts'
-import { BUILDINGS_CREDIT, Buildings } from './scene/buildings.ts'
+import { makeNightLayer } from './scene/nightLights.ts'
+import { Buildings } from './scene/buildings.ts'
 import { addRunways } from './scene/runways.ts'
 import { FlatTerrainProvider, areasFor, stripsFor, type AirfieldAirport } from './scene/flatTerrain.ts'
 import { gearWanted } from './scene/gear.ts'
 import { Sun, parseSunParam, sunTimeMs } from './scene/sun.ts'
 import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
-import { eoxOnEsriFailure, imageryCredits, imageryStatus } from './scene/imagery.ts'
+import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
 import { listScenarios, loadScenario } from './scenario/format.ts'
-import { Dresser, ScenarioRun, scenarioCredits } from './scenario/run.ts'
+import { Dresser, ScenarioRun } from './scenario/run.ts'
 import type { Scenario } from './scenario/types.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
-import type { ClientConfig, FleetEntry, ModelManifest, ModelManifestEntry, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
+import type { ClientConfig, FleetEntry, ModelManifest, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { mountBanner } from './ui/banner.ts'
 import type { Lookup } from './ui/detail.ts'
 import { entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
-import { mountInfoPanel, type InfoPanelHandle } from './ui/info.ts'
+import { mountInfoPanel } from './ui/info.ts'
 import { mountLegend } from './ui/legend.ts'
 import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
@@ -67,7 +67,7 @@ import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { FRAME_PREFS_KEY, readFramePrefs, writeFramePrefs } from './ui/framePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
-import { flightCredit, mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
+import { mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readScenario, readView, writeUrl, type Orbit } from './ui/urlState.ts'
 import { mountTable, type TableHandle } from './ui/table.ts'
 import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
@@ -105,7 +105,7 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
-const FRAME_COVERS = '.fh-rail, .fh-panel, .fh-card:not(.fh-tcard), .fh-toast, .fh-playbar, .fh-captions'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-toast, .fh-playbar, .fh-captions'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -228,29 +228,6 @@ export function readParams(search: string): AppParams {
   const hex = (q.get('hex') ?? '').trim().toLowerCase()
   const airport = (q.get('airport') ?? '').trim().toUpperCase()
   return { hex: HEX.test(hex) ? hex : null, bench: q.get('bench') === '1', airport: airport === '' ? null : airport }
-}
-
-/**
- * Credit lines for the About panel (a personal-use app: no credit bar or disclaimer on the map, viewer.ts). The flight
- * card credits each photo ("© name", linked to its page on planespotters.net).
- */
-export function attributionFor(model: ModelManifestEntry | null, source: SourceKind | null = 'adsblol', imagery: ClientConfig['imagery'] = 'eox'): string[] {
-  const lines = [
-    ...(source === null ? [] : [flightCredit(source)]), // null until the server says which source it is
-    'Airports: OurAirports (public domain)',
-    AIRLINES_CREDIT,
-    'Map: © OpenStreetMap contributors, ODbL',
-    ...imageryCredits(imagery),
-    'Photos: planespotters.net, © each photographer',
-    'Night lights: NASA GIBS, VIIRS Black Marble', // D13; the short form of NIGHT_CREDIT (nightLights.ts)
-    STREETS_CREDIT,
-    BUILDINGS_CREDIT,
-    'Aircraft models: FlightGear community via FlightAirMap, Flightradar24 and livetaiwan, GPL (source in the repo)',
-    'Airline logos: Wikimedia Commons, public domain; trademarks of their airlines',
-  ]
-  // Manifest licences read "<SPDX id>: <note>"; the id is enough on screen.
-  if (model) lines.push(`3D model: ${model.author}, ${model.license.split(':')[0].trim()}`)
-  return lines
 }
 
 /**
@@ -412,7 +389,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root), { openLayer: div('fh-traffic fh-traffic-open', root) }) : null
   const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
-  // Its cards as the viewer arranged them (edit mode: the rail's layout button), kept in this browser.
+  // Its cards as the viewer arranged them (edit mode: the layout button in the corner), kept in this browser.
   const frameLayer = div('fh-frame', root)
   const flightFrame = new FlightFrame(frameLayer, {
     prefs: readFramePrefs(storedFrame),
@@ -421,11 +398,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   })
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
-  // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
+  // Every tool sits behind a small icon on the rail (right edge), full screen and the instrument layout on buttons of
+  // their own in the corner; all panels start closed. layout.css places the rest.
   let toggles!: SceneTogglesHandle
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
-  let info!: InfoPanelHandle
   let legend!: { destroy(): void }
   let scenarioPanel!: ScenarioPanelHandle
   // The Scenarios panel asks for its list at mount; it gets it once the panel is first opened, not at start.
@@ -443,7 +420,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
     // A traffic aircraft's card closes too (it and its brackets would sit over the cards), and none opens while editing.
-    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', group: 1, action: () => {
+    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', corner: true, action: () => {
       if (!flightFrame.editing) rail.close()
       if (!flightFrame.editing) traffic?.close()
       flightFrame.edit(!flightFrame.editing)
@@ -455,9 +432,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         onPlay: (id) => void startScenario(id, { play: true }),
       })),
     } },
-    { id: 'info', icon: 'info', label: 'Controls and credits', short: 'About', group: 2, panel: { title: 'About', mount: (b) => (info = mountInfoPanel(b)) } },
+    { id: 'controls', icon: 'keyboard', label: 'Controls', short: 'Controls', group: 2, panel: { title: 'Controls', mount: (b) => mountInfoPanel(b) } },
     // Not where the page cannot go full screen (iPhone Safari).
-    ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', group: 2, action: () => toggleFullscreen() } as const] : []),
+    ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', corner: true, action: () => toggleFullscreen() } as const] : []),
     { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', group: 3, action: () => settings.open() },
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
@@ -488,8 +465,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (hex !== null) select(hex)
   }
   const banner = mountBanner(ui)
-  let creditSource: SourceKind | null = null
-  info.setCredits(attributionFor(entry, null, cfg.imagery))
   let firstData = false
   let lastBadgeMs = -Infinity
   const toggleFullscreen = (): void => {
@@ -720,7 +695,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     ui.dataset.scenario = scn.id
     scenarioPanel.setPlaying(scn.id)
     rail.close()
-    info.setCredits([...attributionFor(e, null, cfg.imagery), ...scenarioCredits(scn)])
     if (!firstData) {
       firstData = true
       hooks.onFirstData?.()
@@ -740,7 +714,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (model) Dresser.undress(model)
     delete ui.dataset.scenario
     scenarioPanel.setPlaying(null)
-    info.setCredits(attributionFor(entry, creditSource, cfg.imagery))
   }
 
   /** Esc, the play bar's exit or the ending's Close: back to the top-down map over the aircraft, live data again. */
@@ -1019,7 +992,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
-    if (status.source !== creditSource) info.setCredits(attributionFor(entry, (creditSource = status.source), cfg.imagery))
     if (ok) failedPolls = 0
     else if (failedPolls++ === 0) console.warn('FlightHopper: poll failed:', (view as PromiseRejectedResult).reason)
     if (api.ready) {

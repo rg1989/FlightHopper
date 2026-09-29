@@ -5,9 +5,6 @@ import names from './airlines.json' with { type: 'json' }
 
 const NAMES: Readonly<Record<string, string>> = names
 
-/** Attribution line for the UI credits (ODbL requires it wherever airline names are shown). */
-export const AIRLINES_CREDIT = 'Airline names: OpenFlights (ODbL)'
-
 /**
  * ICAO flight identification: a 3-letter operator designator, then a flight number that starts with a digit
  * (ELY5450, UAE954, EZY84TL), at most 8 characters as ADS-B carries. Registrations flown as callsigns (N123AB, GABCD,

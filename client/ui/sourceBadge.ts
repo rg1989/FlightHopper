@@ -5,17 +5,12 @@ import type { StatusBrief } from '../../shared/api.ts'
 import type { SourceKind } from '../../shared/types.ts'
 import './sourceBadge.css'
 
-const SOURCES: Record<SourceKind, { name: string; href: string | null; credit: string }> = {
-  adsbfi: { name: 'adsb.fi', href: 'https://adsb.fi', credit: 'Flight data: adsb.fi, non-commercial use' }, // one line on a phone
-  adsblol: { name: 'adsb.lol', href: 'https://adsb.lol', credit: 'Flight data © adsb.lol contributors, ODbL 1.0' },
-  readsb: { name: 'own receiver', href: null, credit: 'Flight data: own receiver (readsb)' },
+const SOURCES: Record<SourceKind, { name: string; href: string | null }> = {
+  adsbfi: { name: 'adsb.fi', href: 'https://adsb.fi' },
+  adsblol: { name: 'adsb.lol', href: 'https://adsb.lol' },
+  readsb: { name: 'own receiver', href: null },
   // A recording holds what its source answered: the recorder polls adsb.lol; a live server with RECORD_DIR records its own.
-  replay: { name: 'recording', href: null, credit: 'Flight data: a recording (adsb.lol contributors, ODbL 1.0, or adsb.fi)' },
-}
-
-/** The flight-data line of the credit box for this source. */
-export function flightCredit(source: SourceKind): string {
-  return SOURCES[source].credit
+  replay: { name: 'recording', href: null },
 }
 
 export interface SourceView {

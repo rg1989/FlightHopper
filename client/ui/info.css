@@ -15,9 +15,10 @@
   text-transform: uppercase;
 }
 
+/* What you do (up to 45 % of the width, wrapping), then what it does. */
 .fh-info-keys {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: fit-content(45%) 1fr;
   gap: 7px 14px;
   margin: 0;
   font-size: 12px;
@@ -27,22 +28,13 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
   color: var(--fh-text);
-  white-space: nowrap;
 }
 
 .fh-info-keys dd {
   margin: 0;
   color: var(--fh-muted);
-}
-
-.fh-info-credits {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--fh-muted);
-  font-size: 11px;
-  line-height: 1.6;
 }
 
 /* Phones: larger type. */
@@ -53,9 +45,5 @@
 
   .fh-info-keys {
     font-size: 14px;
-  }
-
-  .fh-info-credits {
-    font-size: 13px;
   }
 }

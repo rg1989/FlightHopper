@@ -1010,8 +1010,8 @@
 
 /* ---- edit mode (FlightFrame.edit): drag a card, hide or show it; a toolbar on top ---------------------------------- */
 
-/* The rail's button for it: the chase view only, where the frame is. */
-.fh-ui:not([data-mode='chase']) .fh-ibtn[data-id='layout'] {
+/* Its button in the corner (rail.css): the chase view only, where the frame is. */
+.fh-ui:not([data-mode='chase']) .fh-corner-b[data-id='layout'] {
   display: none;
 }
 

@@ -1,5 +1,5 @@
 /* client/ui/rail.css */
-/* The tool rail (right edge) and its panel (beside it; a bottom sheet on phones). */
+/* The tool rail (right edge) and its panel (beside it; a bottom sheet on phones), and the corner buttons (below). */
 .fh-rail {
   position: absolute;
   z-index: 20;
@@ -59,8 +59,27 @@
   to { --fh-sweep: 360deg; }
 }
 
-/* Tooltips to the left of the rail, only while no panel is open (they would cover it). */
-.fh-rail .fh-ibtn[data-tip]:hover::after {
+/* Buttons of their own (rail.ts: corner items), each in a glass square as wide as the rail, stacked in its column at the
+   bottom right: full screen, and in the chase the instrument layout above it (flightFrame.css hides it elsewhere). The
+   play bar and the captions stop short of this column. */
+.fh-corner {
+  position: absolute;
+  z-index: 20;
+  right: calc(12px + var(--fh-right));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fh-corner-b {
+  padding: 4px;
+  pointer-events: auto;
+}
+
+/* Tooltips to the left of the rail and the corner buttons, only while no panel is open (they would cover it). */
+.fh-rail .fh-ibtn[data-tip]:hover::after,
+.fh-corner .fh-ibtn[data-tip]:hover::after {
   content: attr(data-tip);
   position: absolute;
   right: calc(100% + 10px);
@@ -77,7 +96,8 @@
   box-shadow: var(--fh-shadow);
 }
 
-.fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after {
+.fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after,
+.fh-rail.fh-has-open ~ .fh-corner .fh-ibtn[data-tip]:hover::after {
   display: none;
 }
 
@@ -182,7 +202,8 @@
 
 /* Touch screens (a phone on its side, a tablet): finger-sized rail buttons, the panel beside them. */
 @media (pointer: coarse) {
-  .fh-rail .fh-ibtn {
+  .fh-rail .fh-ibtn,
+  .fh-corner .fh-ibtn {
     width: 44px;
     height: 44px;
   }
@@ -194,12 +215,23 @@
 
 /* A phone on its side in a browser (280-340 px left under the toolbars): the 44 px rail would run off the bottom. */
 @media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
-  .fh-rail .fh-ibtn {
+  .fh-rail .fh-ibtn,
+  .fh-corner .fh-ibtn {
     height: 38px;
   }
 
   .fh-rail-sep {
     margin: 1px 0;
+  }
+
+  /* The rail takes the whole height: the corner buttons go in a row left of its foot, above a scenario's play bar. */
+  .fh-corner {
+    flex-direction: row;
+    right: calc(72px + var(--fh-right));
+  }
+
+  .fh-ui[data-scenario] .fh-corner {
+    bottom: calc(var(--fh-playbar-space) + 8px);
   }
 }
 
@@ -332,6 +364,12 @@
 
   .fh-rail .fh-ibtn[data-tip]:hover::after {
     display: none;
+  }
+
+  /* The bottom is the tab bar's and the flight card's: the corner buttons go to the top right. */
+  .fh-corner {
+    top: var(--fh-top);
+    bottom: auto;
   }
 
   .fh-panel,

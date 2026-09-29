@@ -36,7 +36,6 @@ const MIN_HEIGHT_M = 2 // walls, sheds and carports mapped as buildings
 const FLAT_HIDE_F = 0.02 // below this factor the relief is (nearly) flat: nothing to stand up
 export const OPENFREEMAP_TILEJSON = 'https://tiles.openfreemap.org/planet'
 const OPENFREEMAP_ORIGIN = 'https://tiles.openfreemap.org'
-export const BUILDINGS_CREDIT = 'Buildings: OpenFreeMap, © OpenMapTiles, data © OpenStreetMap contributors'
 
 const n2 = (): number => 2 ** BUILDINGS_Z
 /** The z14 slippy-map tile [x, y] of a point (Web Mercator, y down from the north). */

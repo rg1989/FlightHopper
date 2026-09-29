@@ -8,7 +8,7 @@ import type { StatusBrief } from '../../shared/api.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { flightCredit, sourceView } = await import('./sourceBadge.ts')
+const { sourceView } = await import('./sourceBadge.ts')
 
 const st = (o: Partial<StatusBrief>): StatusBrief => ({ source: 'adsbfi', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null, ...o })
 
@@ -27,9 +27,4 @@ test('replay: says REPLAY with the recording time, never LIVE', () => {
   assert.equal(v.text, 'REPLAY · 2026-09-23 06:12 UTC')
   assert.equal(v.state, 'replay')
   assert.equal(sourceView(st({ source: 'replay' }), null).text, 'REPLAY')
-})
-
-test('credit line per source', () => {
-  assert.match(flightCredit('adsbfi'), /adsb\.fi/)
-  assert.match(flightCredit('adsblol'), /adsb\.lol.*ODbL/)
 })

@@ -197,7 +197,6 @@ word. When the record gives only the minute, say so in the source note.
   `maxZoom` tiles.
 - Check the coverage before you send it. Request a few tiles at the corners of `rect` and at each end of the zoom
   range. Keep `rect` inside the area that returns tiles (a missing tile returns HTTP 404).
-- The About panel lists `credit` while the scenario plays.
 - Use only imagery whose terms allow this use. Name the terms in the source note.
 
 ### 1.8 ending
@@ -243,7 +242,6 @@ word. When the record gives only the minute, say so in the source note.
 - Say in `note` which page numbers you use: the printed numbers or the PDF page numbers. Scanned attachments often
   restart their printed numbers.
 - One id per document. If a report is published in parts, give each part its own id (JAL 123: `R05`, `R10`, `R11`).
-- The About panel lists the source titles while the scenario plays.
 
 ### 1.11 Quality flags
 

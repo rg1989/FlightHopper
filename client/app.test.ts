@@ -7,14 +7,14 @@ import type { Airport } from '../shared/airports.ts'
 import type { StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf } from '../shared/icaoCountry.ts'
-import type { FleetEntry, ModelManifestEntry } from './types.ts'
+import type { FleetEntry } from './types.ts'
 
 // app.ts imports viewer.ts, the ui/ modules and layout.css, which import CSS for Vite. Node cannot load CSS, so this file
 // loads every .css as an empty module. The hook lives only in this test's process: node --test runs each file in its own.
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { attributionFor, browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm } =
+const { browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm } =
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
@@ -102,31 +102,6 @@ test('URL parameters: ?hex= (lower-cased, validated), ?bench=1, ?airport=', () =
   assert.deepEqual(readParams(''), { hex: null, bench: false, airport: null })
 })
 
-test('attribution: adsb.lol ODbL, OurAirports, OpenFlights ODbL, OpenStreetMap, planespotters, the model licence', () => {
-  const m: ModelManifestEntry = {
-    id: 'cesium-air',
-    uri: 'models/Cesium_Air.glb',
-    license: 'Apache-2.0: CesiumJS repository LICENSE.md',
-    author: 'CesiumJS Contributors (Cesium GS, Inc.)',
-    source: 'https://github.com/CesiumGS/cesium',
-    forwardAxisFix: { headingDeg: -90, pitchDeg: 0, rollDeg: 0 },
-    gearHeightM: 4.03,
-    lengthM: 37.57,
-    scale: 1.7555,
-  }
-  const lines = attributionFor(m)
-  assert.ok(lines.some((l) => /adsb\.lol/.test(l) && /ODbL/.test(l)), lines.join(' | '))
-  assert.ok(lines.some((l) => /OurAirports/.test(l)))
-  assert.ok(lines.includes('Airline names: OpenFlights (ODbL)'), lines.join(' | ')) // ODbL requires the credit
-  assert.ok(lines.some((l) => /OpenStreetMap contributors/.test(l) && /ODbL/.test(l)), lines.join(' | '))
-  assert.ok(lines.some((l) => /planespotters\.net/.test(l)), lines.join(' | '))
-  assert.ok(lines.includes('3D model: CesiumJS Contributors (Cesium GS, Inc.), Apache-2.0'), lines.join(' | '))
-  assert.ok(lines.some((l) => /FlightGear/.test(l) && /GPL/.test(l)), 'the GPL aircraft models are credited')
-  assert.ok(lines.some((l) => /Wikimedia Commons/.test(l)), 'the logo decals are credited')
-  assert.equal(attributionFor(null).length, lines.length - 1)
-  assert.equal(attributionFor(m, null).length, lines.length - 1, 'no flight-data credit before the source is known')
-})
-
 test('status shown: 3 failed polls in a row read as "upstream-down"; fewer change nothing', () => {
   const ok: StatusBrief = { source: 'replay', degraded: null, cellPeriodP95S: null, chasePeriodP95S: null }
   assert.equal(statusShown(ok, 0), ok)
@@ -161,21 +136,6 @@ test('flat plane (design D4): a hero airport within 30 km gives its runway heigh
   assert.equal(relHFor(zugspitze, 2950, 627.72, heroes), 2950) // flatten from rest: the drawn ground is the true one
   assert.equal(relHFor(zugspitze, null, 627.72, heroes), 627.72) // ground unknown, or a new selection while flat: keep the plane
   assert.equal(relHFor(null, 2950, 56.57, heroes), 56.57) // no aircraft drawn yet
-})
-
-test('attribution: the satellite imagery in use, as plain source lines (Esri keyed also lists its EOX fallback)', () => {
-  const eox = attributionFor(null, null, 'eox').filter((l) => l.startsWith('Satellite imagery'))
-  assert.deepEqual(eox.length, 1)
-  assert.match(eox[0], /EOX IT Services GmbH, CC BY-NC-SA 4\.0/)
-  const esri = attributionFor(null, null, 'esri').filter((l) => l.startsWith('Satellite imagery'))
-  assert.equal(esri.length, 2)
-  assert.match(esri[0], /^Satellite imagery: Esri World Imagery \(Esri, Vantor, .*GIS User Community\)$/)
-  assert.ok(!esri.some((l) => /Powered by/.test(l)), 'no "Powered by" text (the user removed it)')
-})
-
-test('attribution: the night lights credit NASA GIBS (design D13)', () => {
-  assert.ok(attributionFor(null).includes('Night lights: NASA GIBS, VIIRS Black Marble'))
-  assert.ok(attributionFor(null).includes('Street lights: OpenFreeMap, © OpenMapTiles, data © OpenStreetMap contributors'))
 })
 
 test('safeArea (the flight-data frame): the canvas minus its covers, each cut from the side that keeps the most room', () => {

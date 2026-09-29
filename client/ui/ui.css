@@ -1,6 +1,7 @@
 /* client/ui/ui.css */
 /* The toast (provider trouble only). Bottom centre, where nothing else sits (card top-left, rail and panels on the
-   right); on phones, where the card and the tab bar take the bottom, top centre under the status bar. */
+   right); on phones, where the card and the tab bar take the bottom, top centre under the status bar, clear of the
+   corner buttons (rail.css) on either side. */
 .fh-toast {
   position: absolute;
   z-index: 21;
@@ -30,7 +31,7 @@
   .fh-toast {
     top: calc(8px + env(safe-area-inset-top, 0px));
     bottom: auto;
-    max-width: calc(100% - 24px);
+    max-width: calc(100% - 148px);
     font-size: 13px;
     animation-name: fh-toast-down;
   }

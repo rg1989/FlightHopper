@@ -15,7 +15,7 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const { clockToS, parseScenario } = await import('./format.ts')
-const { Dresser, JUMP_S, ScenarioPlayer, captionView, eraLayerOptions, scenarioCredits, scenarioKey, stopOf } = await import('./run.ts')
+const { Dresser, JUMP_S, ScenarioPlayer, captionView, eraLayerOptions, scenarioKey, stopOf } = await import('./run.ts')
 
 const T = clockToS
 
@@ -200,12 +200,6 @@ test('captionView: speaker names from the scenario, the record quality as marks,
   assert.equal(u.unintelligible, true)
   assert.equal(u.text, '[unintelligible]')
   assert.equal(captionView({ ...cleared, speaker: 'XX' }, 0, s.speakers).who, 'XX', 'an unknown code shows as itself')
-})
-
-test('scenarioCredits: the scenario, its sources and its imagery for the About panel', () => {
-  const lines = scenarioCredits(scenario())
-  assert.deepEqual(lines, ['Scenario Tiny, sources: The report (1987); A study', 'Scenario imagery: Old photos'])
-  assert.deepEqual(scenarioCredits(scenario({ imagery: [] })), ['Scenario Tiny, sources: The report (1987); A study'])
 })
 
 test('eraLayerOptions: the template, its rectangle in radians, the zoom levels and the credit', () => {

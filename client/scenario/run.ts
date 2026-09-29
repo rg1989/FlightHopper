@@ -140,13 +140,6 @@ export function captionView(l: Line, i: number, speakers: Readonly<Record<string
   }
 }
 
-/** The About panel's lines for a running scenario: its sources and its imagery. */
-export function scenarioCredits(s: Pick<Scenario, 'title' | 'sources' | 'imagery'>): string[] {
-  const lines = [`Scenario ${s.title}, sources: ${s.sources.map((r) => r.title).join('; ')}`]
-  if (s.imagery.length > 0) lines.push(`Scenario imagery: ${s.imagery.map((i) => i.credit).join('; ')}`)
-  return lines
-}
-
 /**
  * Where an era layer's pixels are black in every channel (below this, 0–1), they are no data and show the base imagery
  * through. Old aerial mosaics fill what was never photographed (the sea, beyond a strip's edge) with black, and Cesium
