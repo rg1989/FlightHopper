@@ -9,7 +9,8 @@
 // (liveFlightData: what ADS-B broadcasts and the drawn state) and scenarios (the track's FlightData). Every instrument
 // moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS, but the tapes' readouts roll
 // every frame, and the speed tape's trend arrow points at the speed 10 s ahead. frameLayout (pure) places the blocks
-// round the aircraft, never over it.
+// round a square on the aircraft, never over it; layoutSide (pure) sizes that square: the default framing's when zoomed
+// out, and zoomed in no larger than the blocks' arrangement fits, so there they stop, over the aircraft.
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
 import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
@@ -62,6 +63,10 @@ const AWAY_ORDER: readonly BlockId[] = ['left', 'right', 'bottom', 'top'] // alt
 const VARIANT_PX = 60 // away from home, a smaller variant is charged as this much detour
 const SLIDE_COST = 1.5 // a px along the side (out of line with the aircraft) costs this much more than a px out from it
 const STAY_PX = 30 // away from home, the place it had last frame is kept over one up to this much better
+
+/** A block's variants that take room, each with its index (0 × 0, or none: the block is hidden). */
+const variantsOf = (s: BlockSize | readonly BlockSize[]): Array<{ b: BlockSize; v: number }> =>
+  (Array.isArray(s) ? (s as readonly BlockSize[]) : [s as BlockSize]).map((b, v) => ({ b, v })).filter(({ b }) => b.w > 0 && b.h > 0)
 
 /** The position nearest pref of a segment len long in [lo, hi], clear of every blocked (open) interval; null: none. */
 function slide(pref: number, len: number, lo: number, hi: number, blocked: ReadonlyArray<readonly [number, number]>): number | null {
@@ -140,11 +145,7 @@ export function frameLayout(
   const S: Box = { x0: sq.x - r, y0: sq.y - r, x1: sq.x + r, y1: sq.y + r }
   const out: Record<BlockId, Placed | null> = { left: null, right: null, top: null, bottom: null }
   const taken: Box[] = []
-  const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => {
-    const s = sizes[id]
-    const list: readonly BlockSize[] = Array.isArray(s) ? s : [s as BlockSize]
-    return list.map((b, v) => ({ b, v })).filter(({ b }) => b.w > 0 && b.h > 0)
-  }
+  const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => variantsOf(sizes[id])
   const put = (id: BlockId, c: Cand, side: BlockId, v: number, b: BlockSize): void => {
     out[id] = { x: c.x, y: c.y, side, v }
     taken.push({ x0: c.x, y0: c.y, x1: c.x + b.w, y1: c.y + b.h })
@@ -177,6 +178,71 @@ export function frameLayout(
     if (best !== null) put(id, best.c, best.side, best.v, best.b)
   }
   return out
+}
+
+/**
+ * The side of the square the blocks go round (frameLayout, centred on the aircraft) for the aircraft's own square sq: at
+ * least `least` (the default framing's), so that zoomed out the blocks keep their distances instead of closing in on
+ * the aircraft; at most the largest side at which every block, on the side and in the variant it has round `least`,
+ * only moves straight out with the square's edge, so that zoomed in they stop, over the aircraft if need be, instead of
+ * going to other sides, sliding past each other or hiding; the aircraft's own in between. So zooming moves the blocks
+ * continuously and never to another side. Where round `least` a tape would leave its side of the aircraft (a phone held
+ * upright) or a block have no place, less: the largest side at which they do not. Beyond the aircraft's own, whole px,
+ * so each frame finds the same side.
+ */
+export function layoutSide(
+  sq: Square,
+  least: number,
+  sizes: Record<BlockId, BlockSize | readonly BlockSize[]>,
+  safe: Rect,
+  gap = 10,
+  prev?: Partial<Record<BlockId, Placed | null>>,
+): number {
+  const at = (side: number): Record<BlockId, Placed | null> => frameLayout({ x: sq.x, y: sq.y, side }, sizes, safe, gap, prev)
+  // Every block has a place and, with flank, the tapes are beside the aircraft (their readouts level with it).
+  const fits = (side: number, flank: boolean): boolean => {
+    const p = at(side)
+    return IDS.every((id) => {
+      const q = p[id]
+      if (q === null) return variantsOf(sizes[id]).length === 0
+      return !flank || q.side === id || id === 'top' || id === 'bottom'
+    })
+  }
+  // The largest whole side in (a, b) at which ok holds, given it holds at a and not at b; a when none.
+  const largest = (a: number, b: number, ok: (side: number) => boolean): number => {
+    for (let m = Math.floor((a + b) / 2); m > a && m < b; m = Math.floor((a + b) / 2)) {
+      if (ok(m)) a = m
+      else b = m
+    }
+    return a
+  }
+  // `least`, or the largest side under it that has the tapes beside the aircraft, else one that has every block placed.
+  let lo = Math.max(0, Math.round(least))
+  for (const flank of [true, false]) {
+    if (fits(lo, flank)) break
+    const s = largest(0, lo, (side) => fits(side, flank))
+    if (s > 0) {
+      lo = s
+      break
+    }
+  }
+  if (!(sq.side > lo)) return lo
+  const p0 = at(lo)
+  // Each block as round `lo`: on the same side in the same variant, moved straight out with the square's edge (none
+  // slides along its side, or stacks otherwise).
+  const same = (side: number): boolean => {
+    const p = at(side)
+    const d = (side - lo) / 2
+    return IDS.every((id) => {
+      const a = p0[id]
+      const b = p[id]
+      if (a === null || b === null) return a === b
+      const dx = a.side === 'left' ? -d : a.side === 'right' ? d : 0
+      const dy = a.side === 'top' ? -d : a.side === 'bottom' ? d : 0
+      return b.side === a.side && b.v === a.v && Math.abs(b.x - a.x - dx) < 0.5 && Math.abs(b.y - a.y - dy) < 0.5
+    })
+  }
+  return same(sq.side) ? sq.side : largest(lo, sq.side, same)
 }
 
 // ---- data -----------------------------------------------------------------------------------------------------------
@@ -347,6 +413,9 @@ export const eprText = (e: number): string => e.toFixed(2)
 
 const GAP = 10 // between the square and a block, and between blocks
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
+// The least side of the square the blocks go round (layoutSide), of the view's smaller dimension: an airliner's at the
+// chase camera's default range (150 m) in a desktop window.
+const LEAST_SIDE = 0.42
 
 /** A small caps label with its unit: "ALT ft". */
 function label(text: string | HTMLElement, unit = ''): HTMLSpanElement {
@@ -454,6 +523,8 @@ export class FlightFrame {
   #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
   #placed: Partial<Record<BlockId, Placed | null>> = {}
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
+  readonly #resize: ResizeObserver
+  #view = 0 // the layer's smaller side (the view's), px
   readonly #c = new Cartesian3()
   readonly #v = new Cartesian3()
   readonly #bc = new Cartesian3()
@@ -502,6 +573,9 @@ export class FlightFrame {
 
     this.#blocks = blocks
     layer.append(this.#bracket, ...IDS.map((id) => blocks[id]))
+    // Read when the view resizes, not in every frame (a layout read).
+    this.#resize = new ResizeObserver(([e]) => (this.#view = Math.min(e.contentRect.width, e.contentRect.height)))
+    this.#resize.observe(layer)
   }
 
   /**
@@ -539,7 +613,8 @@ export class FlightFrame {
     if (br.style.width !== px) br.style.width = br.style.height = px
     move(br, `translate3d(${(sq.x - side / 2).toFixed(1)}px, ${(sq.y - side / 2).toFixed(1)}px, 0)`)
     show(br, true)
-    const at = frameLayout(sq, this.#sizes, safe, GAP, this.#placed)
+    const ls = layoutSide(sq, LEAST_SIDE * this.#view, this.#sizes, safe, GAP, this.#placed)
+    const at = frameLayout({ x: sq.x, y: sq.y, side: ls }, this.#sizes, safe, GAP, this.#placed)
     for (const id of IDS) {
       const b = this.#blocks[id]
       const p = at[id]
@@ -556,6 +631,7 @@ export class FlightFrame {
   }
 
   destroy(): void {
+    this.#resize.disconnect()
     this.#bracket.remove()
     for (const id of IDS) this.#blocks[id].remove()
     this.#shown = false

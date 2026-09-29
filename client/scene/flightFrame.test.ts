@@ -13,8 +13,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const {
-  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, liveFlightData, pitchText, speedText,
-  vsText, windText,
+  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData, pitchText,
+  speedText, vsText, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -225,6 +225,110 @@ test('frameLayout: 300 random cases: every block inside the safe area, clear of 
     apart(p, sizes, sq, gap, ctx)
     prev = p
   }
+})
+
+// ---- layoutSide -----------------------------------------------------------------------------------------------------
+
+// 1440 × 900 in chase: the flight card cuts the safe area's top, the rail its right; the aircraft a little above the
+// middle. The blocks' full and compact variants as the app measures them; at the default range the heading goes under
+// the attitude (no room above).
+const DESK: Rect = { x: 8, y: 178, w: 1366, h: 714 }
+const DESK_SIZES = {
+  left: [{ w: 121, h: 227, ay: 114 }, { w: 104, h: 178, ay: 89 }],
+  right: [{ w: 84, h: 187, ay: 100 }, { w: 72, h: 142, ay: 77 }],
+  top: [{ w: 271, h: 72 }, { w: 221, h: 69 }],
+  bottom: [{ w: 271, h: 119 }, { w: 232, h: 95 }],
+}
+const LEAST = 378 // 0.42 of the view's smaller side: an airliner's square at the chase camera's default range
+const arrangement = (p: Layout): string => IDS.map((id) => (p[id] === null ? `${id}:-` : `${id}:${p[id]!.side}/${p[id]!.v}`)).join(' ')
+
+test('layoutSide: zoomed out, the least side: the blocks keep the default framing\'s distances round a small aircraft', () => {
+  for (const side of [MIN_PX, 60, 200, LEAST - 1]) assert.equal(layoutSide({ x: 720, y: 421, side }, LEAST, DESK_SIZES, DESK), LEAST, String(side))
+  const far = frameLayout({ x: 720, y: 421, side: LEAST }, DESK_SIZES, DESK)
+  assert.equal(arrangement(far), 'left:left/0 right:right/0 top:bottom/0 bottom:bottom/0', 'the heading under the attitude, as at the default range')
+})
+
+test('layoutSide: between the least side and the largest the arrangement fits, the aircraft\'s own', () => {
+  for (const side of [LEAST, 420, 500]) assert.equal(layoutSide({ x: 720, y: 421, side }, LEAST, DESK_SIZES, DESK), side, String(side))
+})
+
+test('layoutSide: zoomed in, the largest side at which every block keeps its side and variant: none moves away or hides', () => {
+  const sq: Square = { x: 720, y: 421, side: 2400 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  assert.ok(Number.isInteger(s) && s > 500 && s < 2400, String(s))
+  const want = arrangement(frameLayout({ ...sq, side: LEAST }, DESK_SIZES, DESK))
+  assert.equal(arrangement(frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)), want)
+  assert.notEqual(arrangement(frameLayout({ ...sq, side: s + 1 }, DESK_SIZES, DESK)), want, 'one px more and a block would move')
+  assert.equal(layoutSide({ ...sq, side: s + 300 }, LEAST, DESK_SIZES, DESK), s, 'the same answer however far in')
+})
+
+test('layoutSide: a block that would slide along its side, not straight out, has moved too: the side stops before it', () => {
+  // The aircraft high on screen: past some side the heading has no room left under the attitude but still some beside it,
+  // on the same side, in the same variant.
+  const sq: Square = { x: 720, y: 201, side: 1663 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)
+  const least = frameLayout({ ...sq, side: LEAST }, DESK_SIZES, DESK)
+  assert.equal(p.top!.x, least.top!.x, 'the heading still under the attitude, not beside it')
+  assert.ok(Math.abs(p.top!.y - least.top!.y - (s - LEAST) / 2) < 1e-6)
+  assert.ok(s > LEAST + 100, String(s))
+})
+
+test('layoutSide: from far out to close in, no block ever changes side or variant, and none jumps', () => {
+  for (const [name, safe, least, x, y] of [
+    ['desktop', DESK, LEAST, 720, 421],
+    ['a scenario, no card', { x: 8, y: 8, w: 1366, h: 800 }, LEAST, 720, 421],
+    ['1280 × 720', { x: 8, y: 178, w: 1206, h: 534 }, 302, 640, 312],
+  ] as const) {
+    let prev: Layout | undefined
+    let prevSide = 0
+    for (let side = MIN_PX; side < 4000; side *= 1.02) {
+      const sq: Square = { x, y, side }
+      const s = layoutSide(sq, least, DESK_SIZES, safe, 10, prev)
+      const p = frameLayout({ ...sq, side: s }, DESK_SIZES, safe, 10, prev)
+      if (prev !== undefined) {
+        assert.equal(arrangement(p), arrangement(prev), `${name}: ${Math.round(side)} px`)
+        for (const id of IDS) {
+          if (p[id] === null) continue
+          const d = Math.hypot(p[id]!.x - prev[id]!.x, p[id]!.y - prev[id]!.y)
+          assert.ok(d <= Math.abs(s - prevSide) / 2 + 1e-6, `${name}: ${id} jumped ${d.toFixed(1)} px at ${Math.round(side)} px`)
+        }
+      }
+      inside(p, DESK_SIZES, safe, name)
+      for (const id of IDS) assert.notEqual(p[id], null, `${name}: ${id} shown`)
+      prev = p
+      prevSide = s
+    }
+  }
+})
+
+test('layoutSide: a phone: less than the least side where a tape would leave its side of the aircraft; compact variants still come', () => {
+  // 390 × 844: the flight card and the tab bar take the bottom; the phone's blocks as the app measures them.
+  const safe: Rect = { x: 8, y: 8, w: 374, h: 581 }
+  const sizes = {
+    left: [{ w: 101, h: 161, ay: 80 }, { w: 97, h: 139, ay: 69 }],
+    right: [{ w: 68, h: 144, ay: 72 }, { w: 66, h: 122, ay: 61 }],
+    top: [{ w: 209, h: 67 }, { w: 184, h: 69 }],
+    bottom: [{ w: 209, h: 91 }, { w: 184, h: 78 }],
+  }
+  const sq: Square = { x: 195, y: 391, side: 26 } // zoomed out
+  // Round 164 px even the compact altitude card misses the room left of the aircraft by 2 px: it would go above the heading.
+  assert.equal(frameLayout({ ...sq, side: 164 }, sizes, safe).left!.side, 'top')
+  const s = layoutSide(sq, 164, sizes, safe)
+  assert.equal(s, 160)
+  const p = frameLayout({ ...sq, side: s }, sizes, safe)
+  for (const id of IDS) assert.equal(p[id]!.side, id, `${id} on its own side`)
+  assert.equal(p.left!.v, 1, 'the altitude compact: its full card has no room')
+  assert.equal(layoutSide({ ...sq, side: 210 }, 164, sizes, safe), 160, 'the default range: the tapes stay beside the aircraft, over its wingtips')
+  // A least side far too large for the screen: less, down to where the tapes are beside the aircraft again.
+  const small = layoutSide(sq, 400, sizes, safe)
+  assert.equal(small, 160)
+})
+
+test('layoutSide: where no side has the tapes beside the aircraft (the flight card open on a small window), the least side stands', () => {
+  const safe: Rect = { x: 340, y: 8, w: 388, h: 584 }
+  const sizes: Sizes = { left: { w: 104, h: 196 }, right: { w: 104, h: 196 }, top: { w: 290, h: 56 }, bottom: { w: 260, h: 112 } }
+  assert.equal(layoutSide({ x: 400, y: 300, side: 40 }, 128, sizes, safe), 128)
 })
 
 // ---- liveFlightData -------------------------------------------------------------------------------------------------
