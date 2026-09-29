@@ -30,7 +30,7 @@ import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, heightToFit, isB
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
-import { FlightFrame, liveFlightData, type Rect } from './scene/flightFrame.ts'
+import { FlightFrame, boxCentre, liveFlightData, type Rect } from './scene/flightFrame.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { liveryCode, liveryFromSpec } from './scene/livery.ts'
@@ -388,6 +388,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let lastFrameMs: number | null = null
   const carto = new Cartographic()
   const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
+  const aimAt = new Cartesian3() // the chased aircraft's middle, where the chase camera looks
   const onScreen: FleetEntry[] = [] // reused every frame
   // A scenario playing (run) or being fetched (loadingScenario): either way the polls wait.
   let run: ScenarioRun | null = null
@@ -799,7 +800,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       model?.update(placed, dtS)
       if (model !== null) lights.forChase(model.model, model.entry, placed, sf?.event.damage.has('fin') ?? false)
       if (sf?.jumped) chaseCam.snapHeading() // a seek: behind the aircraft at once, not a swing round to it
-      clearanceM = chaseCam.update(placed, dtS).clearanceM
+      // The camera orbits the aircraft's middle, not its wheels: at any range it keeps its place on screen, and so do the
+      // frame's cards round it.
+      const aim = model === null ? undefined : boxCentre(model.model.modelMatrix, model.entry, aimAt)
+      clearanceM = chaseCam.update(placed, dtS, aim).clearanceM
       sunWC = Cartesian3.fromDegrees(placed.lon, placed.lat, placed.hM, Ellipsoid.WGS84, sunAt) // the chased aircraft
       // After the camera, so the brackets match this frame; sunWC gives the distances under them.
       traffic?.update(fleetLayer, model?.model.imageBasedLighting.imageBasedLightingFactor, dtS, sunWC)

@@ -103,6 +103,27 @@ test('heading is damped exponentially (tau 1 s) and wraps through north, not the
   near(lookHeadingDeg(camera), 10, 0.01)
 })
 
+test('aim: the camera orbits the point given (the aircraft\'s middle) at the range, not the wheels', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const mid = Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1006)
+  new ChaseCamera(viewer).update(st({ hM: 1000 }), 0.016, mid)
+  near(Cartesian3.distance(camera.positionWC, mid), 150, 1e-6)
+  near(camera.positionCartographic.height, 1006 + 150 * Math.sin(12 / DEG), 0.01)
+})
+
+test('the view\'s middle a little under the aimed point: the aircraft sits above the middle of the view by the same angle at every range', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const mid = Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1006)
+  const cc = new ChaseCamera(viewer)
+  for (const r of [25, 150, 3000]) {
+    cc.orbit.set(0, -12, r)
+    cc.update(st({ hM: 1000 }), 0.016, mid)
+    const to = Cartesian3.normalize(Cartesian3.subtract(mid, camera.positionWC, new Cartesian3()), new Cartesian3())
+    near(Math.acos(Cartesian3.dot(to, camera.directionWC)) * DEG, 2.4, 1e-6, `${r} m`)
+    assert.ok(Cartesian3.dot(to, camera.upWC) > 0, `${r} m: above the middle`)
+  }
+})
+
 test('headingTauS option: a slower camera turns less in the same time', () => {
   const a = fakeViewer(() => 0)
   const b = fakeViewer(() => 0)

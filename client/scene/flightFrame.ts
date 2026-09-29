@@ -245,6 +245,11 @@ export function layoutSide(
   return same(sq.side) ? sq.side : largest(lo, sq.side, same)
 }
 
+/** The aircraft's middle in world coordinates: its bracket box's centre (the manifest's box, else Cesium_Air's) through modelMatrix. */
+export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3): Cartesian3 {
+  return Matrix4.multiplyByPoint(modelMatrix, entry.box ? Cartesian3.fromArray(entry.box.centre, 0, out) : BOX_CENTRE, out)
+}
+
 // ---- data -----------------------------------------------------------------------------------------------------------
 
 const LIVE_DERIVED: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg'])
@@ -527,7 +532,6 @@ export class FlightFrame {
   #view = 0 // the layer's smaller side (the view's), px
   readonly #c = new Cartesian3()
   readonly #v = new Cartesian3()
-  readonly #bc = new Cartesian3()
   readonly #w = new Cartesian2()
   #textAt = -Infinity
   #lastMs = 0
@@ -657,8 +661,7 @@ export class FlightFrame {
     const scene = viewer.scene
     const cam = scene.camera
     const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
-    const bc = entry.box ? Cartesian3.fromArray(entry.box.centre, 0, this.#bc) : BOX_CENTRE
-    const c = Matrix4.multiplyByPoint(modelMatrix, bc, this.#c)
+    const c = boxCentre(modelMatrix, entry, this.#c)
     const depthM = Cartesian3.dot(Cartesian3.subtract(c, cam.positionWC, this.#v), cam.directionWC)
     if (!(depthM > 1)) return null // behind the camera
     const w = SceneTransforms.worldToWindowCoordinates(scene, c, this.#w)
