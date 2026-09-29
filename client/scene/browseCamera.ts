@@ -1,8 +1,10 @@
 // client/scene/browseCamera.ts
 // Browse mode's camera: a north-up, straight-down view like a slippy map. Tilt and free-look are locked so the map stays
-// flat; Cesium's own controls still pan (drag) and zoom (wheel, right-drag), within MIN_ZOOM_M … MAX_ZOOM_M.
+// flat; Cesium's own controls still pan (drag) and zoom (wheel, right-drag), within MIN_ZOOM_M … MAX_ZOOM_M. On a
+// trackpad, two fingers pan (browseDrag) and a pinch zooms (browsePinch).
 import { Cartesian3, Ellipsoid, Math as CesiumMath, Matrix4, Rectangle } from 'cesium'
 import type { ScreenSpaceCameraController, Viewer } from 'cesium'
+import { attachTrackpad } from './trackpad.ts'
 
 export const BROWSE_HEIGHT_M = 300_000 // ≈ 189 nm across the wider canvas axis (viewWidthM)
 export const BROWSE_FLY_S = 1.2
@@ -13,6 +15,8 @@ export const CESIUM_FOV_RAD = Math.PI / 3
 // ponytail: the helpers treat the Earth as a sphere of the WGS84 equatorial radius: exact east-west along the equator,
 // ≤ 0.34 % off elsewhere. Upgrade: pick the camera's rays against Ellipsoid.WGS84 (viewRectangleDeg already does).
 const EARTH_R = 6_378_137
+const TOP_DOWN = { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 }
+const MAX_DRAG_LAT = CesiumMath.toRadians(89) // a drag stops short of the pole, where north-up has no meaning
 
 /** Visible ground rectangle in degrees. west > east when it spans the antimeridian. */
 export interface RectDeg {
@@ -63,8 +67,8 @@ export function containsDeg(r: RectDeg, lat: number, lon: number): boolean {
 }
 
 type Saved = Pick<ScreenSpaceCameraController, 'enableTilt' | 'enableLook' | 'minimumZoomDistance' | 'maximumZoomDistance'>
-/** The controller settings from before browse, keyed by controller; present = browsing. */
-const saved = new WeakMap<object, Saved>()
+/** Keyed by controller, present = browsing: its settings from before browse, and the detach of browse's trackpad. */
+const saved = new WeakMap<object, { before: Saved; detach: () => void }>()
 
 export function isBrowsing(viewer: Viewer): boolean {
   return saved.has(viewer.scene.screenSpaceCameraController)
@@ -80,7 +84,11 @@ export function enterBrowse(viewer: Viewer, center: { lat: number; lon: number }
   const sscc = viewer.scene.screenSpaceCameraController
   if (!saved.has(sscc)) {
     const { enableTilt, enableLook, minimumZoomDistance, maximumZoomDistance } = sscc
-    saved.set(sscc, { enableTilt, enableLook, minimumZoomDistance, maximumZoomDistance })
+    const detach = attachTrackpad(viewer.scene.canvas, {
+      drag: (dx, dy) => browseDrag(viewer, dx, dy),
+      pinch: (ratio, x, y) => browsePinch(viewer, ratio, x, y),
+    })
+    saved.set(sscc, { before: { enableTilt, enableLook, minimumZoomDistance, maximumZoomDistance }, detach })
   }
   sscc.enableTilt = false
   sscc.enableLook = false
@@ -94,20 +102,53 @@ export function enterBrowse(viewer: Viewer, center: { lat: number; lon: number }
   const lon = center ? center.lon : CesiumMath.toDegrees(under.longitude)
   const heightM = CesiumMath.clamp(opts.heightM ?? BROWSE_HEIGHT_M, MIN_ZOOM_M, MAX_ZOOM_M)
   const destination = Cartesian3.fromDegrees(lon, lat, heightM)
-  const orientation = { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 }
   const flyS = Math.max(0, opts.flyS ?? BROWSE_FLY_S)
-  if (flyS === 0) camera.setView({ destination, orientation })
-  else camera.flyTo({ destination, orientation, duration: flyS })
+  if (flyS === 0) camera.setView({ destination, orientation: TOP_DOWN })
+  else camera.flyTo({ destination, orientation: TOP_DOWN, duration: flyS })
 }
 
 /** Leave browse: stop a browse flight still under way (it would fight the chase camera) and restore the controller settings. */
 export function exitBrowse(viewer: Viewer): void {
   const sscc = viewer.scene.screenSpaceCameraController
-  const before = saved.get(sscc)
-  if (!before) return
+  const s = saved.get(sscc)
+  if (!s) return
   viewer.camera.cancelFlight()
-  Object.assign(sscc, before)
+  s.detach()
+  Object.assign(sscc, s.before)
   saved.delete(sscc)
+}
+
+/** Browse: the map follows two fingers moving (dxPx, dyPx) (right, down) on a trackpad. */
+export function browseDrag(viewer: Viewer, dxPx: number, dyPx: number): void {
+  moveTopDown(viewer, dxPx, dyPx)
+}
+
+/**
+ * Browse: two fingers spread by ratio around (xPx, yPx) (CSS px from the canvas's top-left). The camera comes that much
+ * closer, no lower than MIN_ZOOM_M over the ground (where Cesium would lift it) and no higher than MAX_ZOOM_M, and the
+ * ground under the fingers stays under them.
+ */
+export function browsePinch(viewer: Viewer, ratio: number, xPx: number, yPx: number): void {
+  const c = viewer.camera.positionCartographic
+  const canvas = viewer.scene.canvas
+  const heightM = CesiumMath.clamp(c.height / ratio, (viewer.scene.globe.getHeight(c) ?? 0) + MIN_ZOOM_M, MAX_ZOOM_M)
+  const k = 1 - heightM / c.height // the share of the way to the fingers that the middle moves
+  moveTopDown(viewer, (canvas.clientWidth / 2 - xPx) * k, (canvas.clientHeight / 2 - yPx) * k, heightM)
+}
+
+/**
+ * Moves the top-down view so the ground follows a drag of (dxPx, dyPx), at the middle's scale (a pinhole camera over
+ * flat ground: exact there, and close enough across the view), then puts the camera heightM up. North up, straight down.
+ */
+function moveTopDown(viewer: Viewer, dxPx: number, dyPx: number, heightM?: number): void {
+  const camera = viewer.camera
+  const c = camera.positionCartographic
+  const canvas = viewer.scene.canvas
+  const mPerPx = (2 * c.height * Math.tan(CESIUM_FOV_RAD / 2)) / Math.max(canvas.clientWidth, canvas.clientHeight)
+  const lat = CesiumMath.clamp(c.latitude + (dyPx * mPerPx) / EARTH_R, -MAX_DRAG_LAT, MAX_DRAG_LAT)
+  const lon = c.longitude - (dxPx * mPerPx) / (EARTH_R * Math.cos(c.latitude))
+  camera.cancelFlight() // the fingers win over a flight still under way
+  camera.setView({ destination: Cartesian3.fromRadians(lon, lat, heightM ?? c.height), orientation: TOP_DOWN })
 }
 
 const scratchRect = new Rectangle()

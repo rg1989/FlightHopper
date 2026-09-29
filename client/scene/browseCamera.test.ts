@@ -6,7 +6,7 @@ import { Camera, Cartesian2, Cartesian3, Ellipsoid, GeographicProjection, Headin
 import type { Viewer } from 'cesium'
 import {
   BROWSE_FLY_S, BROWSE_HEIGHT_M, MAX_ZOOM_M, MIN_ZOOM_M,
-  containsDeg, enterBrowse, exitBrowse, heightForViewWidthM, heightToFit, isBrowsing, viewRectangleDeg, viewWidthM,
+  browseDrag, browsePinch, containsDeg, enterBrowse, exitBrowse, heightForViewWidthM, heightToFit, isBrowsing, viewRectangleDeg, viewWidthM,
 } from './browseCamera.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
@@ -237,4 +237,61 @@ test('heightToFit: the whole box shows on either axis, wide or tall canvas, with
     near(viewWidthM(hM, fovY), nsM * 1.05, 1) // north–south decides: it fills the vertical axis
   }
   assert.ok(heightToFit(israel, 1600, 900) > heightToFit(israel, 390, 844), 'a landscape canvas needs more height')
+})
+
+const groundUnder = (camera: Camera, x: number, y: number): Cartesian3 => camera.pickEllipsoid(new Cartesian2(x, y), Ellipsoid.WGS84) as Cartesian3
+const PX_AT_50KM = (2 * 50_000 * Math.tan(Math.PI / 6)) / 800 // metres of ground per pixel straight down from 50 km (≈ 72)
+const topDown = (camera: Camera): void => {
+  near(Math.min(headingDeg(camera), 360 - headingDeg(camera)), 0, 1e-6, 'north up')
+  near(camera.pitch * DEG, -90, 1e-6, 'straight down')
+}
+
+test('browseDrag: the map follows two fingers (the ground under them moves with them); north up, straight down, same height', () => {
+  const { camera, viewer } = fakeViewer()
+  enterBrowse(viewer, LLBG, { flyS: 0, heightM: 50_000 })
+  const g = groundUnder(camera, 300, 200)
+  browseDrag(viewer, 120, -80)
+  const d = Cartesian3.distance(groundUnder(camera, 420, 120), g)
+  assert.ok(d < PX_AT_50KM / 2, `${d} m`)
+  near(latLonH(camera).h, 50_000, 1e-3)
+  topDown(camera)
+})
+
+test('browseDrag near a pole stops short of it instead of turning the map over', () => {
+  const { camera, viewer } = fakeViewer()
+  enterBrowse(viewer, { lat: 88, lon: 20 }, { flyS: 0 })
+  browseDrag(viewer, 300, 5_000) // dragging the map down moves the view north
+  const p = latLonH(camera)
+  assert.ok(p.lat > 88 && p.lat < 90 && Number.isFinite(p.lon), JSON.stringify(p))
+  topDown(camera)
+})
+
+test('browsePinch: the camera comes as much closer as the fingers spread; the ground under them stays put', () => {
+  const { camera, viewer } = fakeViewer()
+  enterBrowse(viewer, LLBG, { flyS: 0, heightM: 50_000 })
+  const g = groundUnder(camera, 650, 120)
+  browsePinch(viewer, 2, 650, 120)
+  near(latLonH(camera).h, 25_000, 1e-3)
+  const d = Cartesian3.distance(groundUnder(camera, 650, 120), g)
+  assert.ok(d < PX_AT_50KM / 2, `${d} m`)
+  topDown(camera)
+  const mid = latLonH(camera)
+  browsePinch(viewer, 0.5, 400, 300) // closing them over the middle: back up, over the same point
+  const p = latLonH(camera)
+  near(p.h, 50_000, 1e-3)
+  near(p.lat, mid.lat, 1e-9)
+  near(p.lon, mid.lon, 1e-9)
+})
+
+test('browsePinch: no closer than MIN_ZOOM_M above the ground under the camera, no farther than MAX_ZOOM_M', () => {
+  const { camera, viewer } = fakeViewer()
+  enterBrowse(viewer, LLBG, { flyS: 0, heightM: 5_000 })
+  browsePinch(viewer, 100, 400, 300)
+  near(latLonH(camera).h, MIN_ZOOM_M, 1e-3)
+  ;(viewer.scene.globe as unknown as { getHeight: () => number }).getHeight = () => 800 // hills: Cesium would lift the camera to here
+  browsePinch(viewer, 100, 400, 300)
+  near(latLonH(camera).h, 800 + MIN_ZOOM_M, 1e-3)
+  browsePinch(viewer, 1e-6, 400, 300)
+  near(latLonH(camera).h, MAX_ZOOM_M, 1e-2)
+  topDown(camera)
 })

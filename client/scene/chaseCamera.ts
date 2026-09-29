@@ -2,6 +2,7 @@
 import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
 import type { Camera, Cartesian2, Scene, Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
+import { attachTrackpad } from './trackpad.ts'
 
 const RAD = Math.PI / 180
 const STEEPEST_DEG = -89 // looking straight down makes lookAt's heading degenerate
@@ -103,7 +104,8 @@ export interface ChaseCameraOpts {
 
 /**
  * Third-person camera on one aircraft, heading-damped, kept ≥ minClearanceM above the loaded terrain.
- * While chasing, mouse input orbits (drag), zooms (wheel) and resets (double-click) instead of moving the globe.
+ * While chasing, mouse input orbits (drag, or two fingers on a trackpad), zooms (wheel, pinch) and resets (double-click)
+ * instead of moving the globe.
  */
 export class ChaseCamera {
   readonly orbit: OrbitControl
@@ -111,6 +113,7 @@ export class ChaseCamera {
   #scene: Scene
   #groundAt: (c: Cartographic) => number | null
   #input: ScreenSpaceEventHandler | null = null
+  #detachTrackpad: (() => void) | null = null
   #minClearanceM: number
   #tauS: number
   #headingDeg: number | null = null
@@ -164,6 +167,8 @@ export class ChaseCamera {
     this.orbit.headingOffsetDeg = 0
     this.#input?.destroy()
     this.#input = null
+    this.#detachTrackpad?.()
+    this.#detachTrackpad = null
     this.#scene.screenSpaceCameraController.enableInputs = true
   }
 
@@ -176,8 +181,9 @@ export class ChaseCamera {
   }
 
   /**
-   * First chased frame: route the mouse and touch to the orbit instead of Cesium's globe controls: drag (one finger)
-   * orbits, wheel or pinch zooms, a double click or double tap goes back behind the aircraft. No-op without a DOM canvas.
+   * First chased frame: route the mouse, touch and trackpad to the orbit instead of Cesium's globe controls: drag (one
+   * finger; two on a trackpad) orbits, wheel or pinch zooms, a double click or double tap goes back behind the aircraft.
+   * No-op without a DOM canvas.
    */
   #attachInput(): void {
     if (this.#input || typeof (this.#scene.canvas as { addEventListener?: unknown }).addEventListener !== 'function') return
@@ -195,6 +201,10 @@ export class ChaseCamera {
     type Pinch = { distance: { startPosition: Cartesian2; endPosition: Cartesian2 } }
     const onPinch = (m: Pinch): void => this.orbit.pinch(m.distance.endPosition.y / m.distance.startPosition.y)
     h.setInputAction(onPinch as unknown as ScreenSpaceEventHandler.TwoPointMotionEventCallback, ScreenSpaceEventType.PINCH_MOVE)
+    this.#detachTrackpad = attachTrackpad(this.#scene.canvas, {
+      drag: (dx, dy) => this.orbit.drag(dx, dy),
+      pinch: (ratio) => this.orbit.pinch(ratio),
+    })
     // Two clicks close in time and place: Cesium sends no double click for a double tap, so both come this way.
     let lastClick: { ms: number; x: number; y: number } | null = null
     h.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
