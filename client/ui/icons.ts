@@ -43,6 +43,15 @@ const P: Record<string, string> = {
   // Media controls (the scenario play bar fills them).
   play: 'M7.5 5.2v13.6L18.8 12 7.5 5.2Z',
   pause: 'M7 5.5h3v13H7zM14 5.5h3v13h-3z',
+  // A gear with eight teeth round a hub: the settings.
+  settings: 'M10.16 5.14L10.53 2.72L13.47 2.72L13.84 5.14A7.1 7.1 0 0 1 15.55 5.85L17.53 4.4L19.6 6.47L18.15 8.45A7.1 7.1 0 0 1 18.86 10.16L21.28 10.53L21.28 13.47L18.86 13.84A7.1 7.1 0 0 1 18.15 15.55L19.6 17.53L17.53 19.6L15.55 18.15A7.1 7.1 0 0 1 13.84 18.86L13.47 21.28L10.53 21.28L10.16 18.86A7.1 7.1 0 0 1 8.45 18.15L6.47 19.6L4.4 17.53L5.85 15.55A7.1 7.1 0 0 1 5.14 13.84L2.72 13.47L2.72 10.53L5.14 10.16A7.1 7.1 0 0 1 5.85 8.45L4.4 6.47L6.47 4.4L8.45 5.85A7.1 7.1 0 0 1 10.16 5.14ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  // An eye, open and struck through: show or hide a secret.
+  eye: 'M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+  eyeOff: 'M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3.5 3.5l17 17',
+  // A box with an arrow leaving it: opens another site.
+  external: 'M13.5 4.5h6v6M19.5 4.5 11 13M17 14v4.5a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H10',
+  // A triangle with an exclamation mark: a warning.
+  alert: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4.5M12 17h.01',
   // A speaker with its sound, and silenced.
   volume: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM15.5 9.2a4 4 0 0 1 0 5.6M18.3 6.5a7.8 7.8 0 0 1 0 11',
   muted: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM16 9.5l5 5M21 9.5l-5 5',

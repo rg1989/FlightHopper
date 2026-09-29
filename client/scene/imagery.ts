@@ -10,6 +10,7 @@ import {
   type TileProviderError,
 } from 'cesium'
 import type { ClientConfig } from '../types.ts'
+import { ionWhy } from './terrain.ts'
 
 // EOxCloudless (Sentinel-2 cloudless) by EOX: keyless WMTS in WebMercator (tile matrix set 'g').
 // Layers and attribution text: https://tiles.maps.eox.at/wmts/1.0.0/WMTSCapabilities.xml (checked 2026-09-22).
@@ -91,12 +92,20 @@ export function eoxOnEsriFailure(layers: ImageryLayerCollection, esri: ImageryLa
 
 /**
  * Base imagery for the configured source, or null for none.
- * ion = Bing Maps Aerial via ion (Community plan: 1,000 imagery sessions/month).
+ * ion = Bing Maps Aerial via ion (Community plan: 1,000 imagery sessions/month). ion failing (a token refused, or ion
+ * down) falls back to EOX, and onFallback hears why.
  */
-export async function makeImagery(cfg: ClientConfig): Promise<ImageryProvider | null> {
+export async function makeImagery(cfg: ClientConfig, onFallback?: (why: string) => void): Promise<ImageryProvider | null> {
   if (cfg.imagery === 'ion') {
     if (cfg.ionToken) Ion.defaultAccessToken = cfg.ionToken
-    return createWorldImageryAsync()
+    try {
+      return await createWorldImageryAsync()
+    } catch (e) {
+      const why = ionWhy(e)
+      console.warn(`FlightHopper: ion imagery unavailable (${why}); using EOX imagery`)
+      onFallback?.(why)
+      return eoxProvider()
+    }
   }
   if (cfg.imagery === 'esri') {
     const p = new UrlTemplateImageryProvider({

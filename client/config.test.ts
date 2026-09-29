@@ -1,8 +1,8 @@
 // client/config.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CesiumTerrainProvider, EllipsoidTerrainProvider, ImageryLayer, ImageryLayerCollection, Ion, Resource, UrlTemplateImageryProvider } from 'cesium'
-import { readConfig } from './config.ts'
+import { CesiumTerrainProvider, EllipsoidTerrainProvider, ImageryLayer, ImageryLayerCollection, Ion, IonImageryProvider, Resource, UrlTemplateImageryProvider } from 'cesium'
+import { KEYS_KEY, keySources, readConfig, readSavedKeys, writeSavedKeys } from './config.ts'
 import { ESRI_URL, EOX_ATTRIBUTION, EOX_URL, eoxOnEsriFailure, imageryStatus, makeImagery } from './scene/imagery.ts'
 import { REEARTH_TERRAIN_URL, makeTerrain } from './scene/terrain.ts'
 
@@ -48,6 +48,52 @@ test('invalid values throw and name the variable', () => {
 test('ion without a token throws instead of silently using the Cesium evaluation token', () => {
   assert.throws(() => readConfig({ VITE_TERRAIN: 'ion' }), /VITE_CESIUM_ION_TOKEN/)
   assert.throws(() => readConfig({ VITE_IMAGERY: 'ion' }), /VITE_CESIUM_ION_TOKEN/)
+})
+
+test('saved keys (Settings) win over the env, key by key: saved > env > keyless', () => {
+  const env = { VITE_ARCGIS_KEY: 'env-arcgis', VITE_CESIUM_ION_TOKEN: 'env-ion' }
+  assert.deepEqual(readConfig(env, { arcgisKey: 'saved-arcgis', ionToken: 'saved-ion' }), {
+    terrain: 'ion', imagery: 'esri', ionToken: 'saved-ion', arcgisKey: 'saved-arcgis', apiBase: '/api',
+  })
+  const one = readConfig(env, { ionToken: 'saved-ion' }) // the other key still comes from the env
+  assert.deepEqual([one.arcgisKey, one.ionToken], ['env-arcgis', 'saved-ion'])
+  assert.deepEqual(readConfig(env, {}), readConfig(env), 'none saved: the env as before')
+  assert.deepEqual(readConfig({}, {}), readConfig({}), 'neither: keyless (Re:Earth terrain, EOX imagery)')
+  assert.deepEqual(readConfig(env, { arcgisKey: '  ', ionToken: '' }), readConfig(env), 'blank saved values are unset')
+})
+
+test('a saved key alone switches the defaults as an env key would; explicit choices still win', () => {
+  assert.deepEqual(readConfig({}, { arcgisKey: 'k' }), { terrain: 'reearth', imagery: 'esri', ionToken: null, arcgisKey: 'k', apiBase: '/api' })
+  assert.deepEqual(readConfig({}, { ionToken: 't' }), { terrain: 'ion', imagery: 'ion', ionToken: 't', arcgisKey: null, apiBase: '/api' })
+  assert.equal(readConfig({ VITE_IMAGERY: 'eox' }, { arcgisKey: 'k' }).imagery, 'eox')
+  assert.equal(readConfig({ VITE_TERRAIN: 'ion' }, { ionToken: 't' }).terrain, 'ion', 'a saved token satisfies VITE_TERRAIN=ion')
+})
+
+test('keySources: where each key comes from, for the Settings dialog (saved > env > none)', () => {
+  const env = { VITE_ARCGIS_KEY: 'env-arcgis', VITE_CESIUM_ION_TOKEN: ' ' }
+  assert.deepEqual(keySources(env, {}), { arcgis: 'env', ion: 'none' })
+  assert.deepEqual(keySources(env, { arcgisKey: 'a', ionToken: 't' }), { arcgis: 'saved', ion: 'saved' })
+  assert.deepEqual(keySources({}, {}), { arcgis: 'none', ion: 'none' })
+})
+
+test('readSavedKeys: the stored JSON; corrupt, missing, blank or non-string values are unset, never a throw', () => {
+  assert.deepEqual(readSavedKeys(JSON.stringify({ arcgisKey: ' a ', ionToken: 't' })), { arcgisKey: 'a', ionToken: 't' })
+  assert.deepEqual(readSavedKeys(JSON.stringify({ arcgisKey: 'a' })), { arcgisKey: 'a' })
+  for (const bad of [null, '', '{', 'null', '5', '"x"', '[1]', JSON.stringify({ arcgisKey: 7, ionToken: '  ' })]) {
+    assert.deepEqual(readSavedKeys(bad), {}, String(bad))
+  }
+})
+
+test('writeSavedKeys: JSON under fh.keys.v1, the entry removed when none is left; false where storage throws or is absent', () => {
+  const store = new Map<string, string>()
+  const storage = { setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) }
+  assert.equal(writeSavedKeys({ arcgisKey: 'a' }, storage), true)
+  assert.deepEqual(readSavedKeys(store.get(KEYS_KEY) ?? null), { arcgisKey: 'a' })
+  assert.equal(writeSavedKeys({}, storage), true)
+  assert.equal(store.has(KEYS_KEY), false)
+  const blocked = { setItem: () => { throw new Error('SecurityError') }, removeItem: () => { throw new Error('SecurityError') } }
+  assert.equal(writeSavedKeys({ ionToken: 't' }, blocked), false)
+  assert.equal(writeSavedKeys({ ionToken: 't' }, null), false)
 })
 
 test('apiBase: custom value kept, trailing slashes dropped', () => {
@@ -171,3 +217,35 @@ test('ion terrain: Cesium World Terrain (asset 1) with vertex normals and no wat
   assert.equal(options?.requestVertexNormals, true)
   assert.equal(options?.requestWaterMask, false)
 })
+
+test('ion terrain refused (a bad saved token) or unreachable: Re:Earth in its place, the reason told, the token never logged', async (t) => {
+  const fake = new EllipsoidTerrainProvider()
+  t.mock.method(CesiumTerrainProvider, 'fromIonAssetId', async () => Promise.reject(Object.assign(new Error('ion'), { statusCode: 401 })))
+  const fromUrl = t.mock.method(CesiumTerrainProvider, 'fromUrl', async () => fake)
+  const warn = t.mock.method(console, 'warn', () => {})
+  const token = Ion.defaultAccessToken
+  t.after(() => void (Ion.defaultAccessToken = token))
+  const why: string[] = []
+  assert.equal(await makeTerrain(readConfig({}, { ionToken: 'test-invalid-ion-token-000' }), (w) => why.push(w)), fake)
+  assert.equal((fromUrl.mock.calls[0].arguments[0] as Resource).url, `${REEARTH_TERRAIN_URL}?extensions=octvertexnormals`)
+  assert.deepEqual(why, ['ion HTTP 401'])
+  assert.match(String(warn.mock.calls[0].arguments[0]), /Cesium World Terrain unavailable \(ion HTTP 401\); using Re:Earth terrain/)
+  assert.doesNotMatch(String(warn.mock.calls[0].arguments[0]), /test-invalid-ion-token-000/)
+  t.mock.method(CesiumTerrainProvider, 'fromIonAssetId', async () => Promise.reject(new TypeError('Failed to fetch')))
+  await makeTerrain(readConfig({}, { ionToken: 'test-invalid-ion-token-000' }), (w) => why.push(w))
+  assert.equal(why[1], 'ion unreachable')
+})
+
+test('ion imagery refused: EOX in its place, the reason told', async (t) => {
+  t.mock.method(IonImageryProvider, 'fromAssetId', async () => Promise.reject(Object.assign(new Error('ion'), { statusCode: 401 })))
+  const warn = t.mock.method(console, 'warn', () => {})
+  const token = Ion.defaultAccessToken
+  t.after(() => void (Ion.defaultAccessToken = token))
+  let why = ''
+  const p = await makeImagery(readConfig({}, { ionToken: 'test-invalid-ion-token-000' }), (w) => (why = w))
+  assert.ok(p instanceof UrlTemplateImageryProvider)
+  assert.equal(p.url, EOX_URL)
+  assert.equal(why, 'ion HTTP 401')
+  assert.doesNotMatch(String(warn.mock.calls[0].arguments[0]), /test-invalid-ion-token-000/)
+})
+

@@ -62,6 +62,7 @@ import { mountLegend } from './ui/legend.ts'
 import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel.ts'
+import { mountSettings } from './ui/settings.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
@@ -339,8 +340,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const urlScenario = readScenario(location.search) // ?scenario=<id>&t=<s>: that scenario, paused at t, once loaded
   // Topography takes the scene in the task that builds the viewer, before its first frame: moving the factor off 1
   // with tiles loaded rebuilds every tile (PoC: up to 2 s).
+  let ionFailed = null as string | null // Cesium ion failed at start (the keyless terrain or imagery in its place): why
   const viewerWithTopography = async (): Promise<[Viewer, Topography]> => {
-    const v = await createViewer(root, cfg)
+    const v = await createViewer(root, cfg, { onIonFallback: (_what, why) => (ionFailed = why) })
     return [v, new Topography(v.scene, prefs.topo)]
   }
   const [[viewer, topo], airports, manifest] = await Promise.all([
@@ -437,12 +439,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     { id: 'info', icon: 'info', label: 'Controls and credits', short: 'About', group: 2, panel: { title: 'About', mount: (b) => (info = mountInfoPanel(b)) } },
     // Not where the page cannot go full screen (iPhone Safari).
     ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', group: 2, action: () => toggleFullscreen() } as const] : []),
+    { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', group: 3, action: () => settings.open() },
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
     if (id === 'scenarios') openedScenarios()
   })
   const imagery0 = badgeView(imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
+  // The API keys (the rail's gear): saved in this browser, they win over .env.local at the next load.
+  const settings = mountSettings(ui, { env: import.meta.env, store })
+  rail.button('settings').setAttribute('aria-haspopup', 'dialog')
+  if (ionFailed !== null) settings.setFallback('ion', ionFailed)
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
   const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor })
   // A click in a traffic aircraft's brackets opens its card: live from the fleet, its full object asked for as a focused
@@ -494,6 +501,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       sun.setDay(eox)
       const v = badgeView({ source: 'eox', fallback: why })
       statusPanel.setImagery(v.text, v.state)
+      settings.setFallback('arcgis', why)
     })
   }
   sun.attachModel(model?.model ?? null)
@@ -1082,6 +1090,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       banner.destroy()
       card.destroy()
       trafficCard.destroy()
+      settings.destroy()
       table.destroy()
       legend.destroy()
       rail.destroy()

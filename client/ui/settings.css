@@ -1,0 +1,339 @@
+/* client/ui/settings.css */
+/* The Settings dialog (settings.ts): a native modal <dialog> in the top layer over a dimmed page, the panels' dark glass
+   (opaque enough to need no blur, which would cost a GPU pass on every globe frame). Its keys are cards: title and link,
+   a line on what the key unlocks, the masked field, the status with Clear and Save, the provider's answer. */
+/* Anchored near the top, not centred: a message appearing under a key grows it downwards instead of shifting it. */
+.fh-settings {
+  width: min(480px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - max(24px, 10dvh) - 24px);
+  margin: max(24px, 10dvh) auto auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 16px;
+  background: var(--fh-glass-strong);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+  color: var(--fh-text);
+  pointer-events: auto; /* the overlay layer (.fh-ui) passes none down */
+}
+
+.fh-settings[open] {
+  display: flex;
+  animation: fh-settings-in 180ms var(--fh-ease);
+}
+
+.fh-settings::backdrop {
+  background: rgba(4, 7, 12, 0.6);
+}
+
+@keyframes fh-settings-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+}
+
+.fh-settings-box {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fh-settings-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--fh-hairline);
+}
+
+.fh-settings-icon {
+  display: grid;
+  color: var(--fh-accent);
+}
+
+.fh-settings-title {
+  flex: 1;
+  margin: 0;
+  font: 600 15px/1 var(--fh-font);
+  letter-spacing: 0.01em;
+}
+
+.fh-settings-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.fh-settings-section-t {
+  margin: 0 0 6px;
+  color: var(--fh-faint);
+  font: 600 10.5px/1.2 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fh-settings-intro {
+  margin: 0;
+  color: var(--fh-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.fh-key {
+  margin: 14px 0 0;
+  padding: 13px 14px 14px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.fh-key-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fh-key-title {
+  font: 600 13.5px/1.3 var(--fh-font);
+}
+
+.fh-key-link {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--fh-accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.fh-key-link:hover {
+  text-decoration: underline;
+}
+
+.fh-key-link:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 2px;
+}
+
+.fh-key-about {
+  margin: 4px 0 10px;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fh-key-field {
+  position: relative;
+}
+
+/* Monospaced: a revealed key reads character by character. */
+.fh-key-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 40px 0 11px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: var(--fh-radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--fh-text);
+  font: 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  outline: none;
+  transition: border-color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-key-input::placeholder {
+  color: var(--fh-faint);
+  font-family: var(--fh-font);
+}
+
+.fh-key-input:focus-visible {
+  border-color: var(--fh-accent);
+  box-shadow: 0 0 0 1px var(--fh-accent);
+}
+
+.fh-key-input:read-only {
+  opacity: 0.6;
+}
+
+.fh-ibtn.fh-key-eye {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.fh-key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.fh-key-status {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fh-key-status .fh-dot {
+  position: relative;
+  top: -1px;
+}
+
+.fh-key-status[data-tone='ok'] .fh-dot {
+  background: var(--fh-ok);
+}
+
+.fh-key-status[data-tone='warn'] {
+  color: #f5d38a;
+}
+
+.fh-key-status[data-tone='warn'] .fh-dot {
+  background: var(--fh-warn);
+}
+
+.fh-key-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.fh-key-actions .fh-pill {
+  padding: 0 14px;
+}
+
+.fh-key-actions .fh-pill .fh-spin {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+  border-top-color: #06111f;
+}
+
+.fh-key-actions .fh-spin[hidden] {
+  display: none;
+}
+
+.fh-settings .fh-pill:disabled {
+  cursor: default;
+  opacity: 0.4;
+  filter: none;
+}
+
+/* The provider's answer: accepted, refused, or a warning. */
+.fh-key-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fh-key-msg[hidden] {
+  display: none;
+}
+
+.fh-key-msg .fh-icon {
+  flex: none;
+  margin-top: 1.5px;
+}
+
+.fh-key-msg[data-tone='ok'] {
+  color: #8ee6ae;
+}
+
+.fh-key-msg[data-tone='err'] {
+  color: #ffb4b4;
+}
+
+.fh-key-msg[data-tone='warn'] {
+  color: #f5d38a;
+}
+
+.fh-settings-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border-top: 1px solid var(--fh-hairline);
+  background: rgba(90, 169, 255, 0.06);
+}
+
+.fh-settings-foot[hidden] {
+  display: none;
+}
+
+.fh-settings-foot-t {
+  flex: 1;
+  margin: 0;
+  color: var(--fh-muted);
+  font-size: 12.5px;
+}
+
+/* Touch screens: a finger-sized field (the eye is a 44 px target there, theme.css), in 16 px type: iOS zooms into
+   anything smaller. */
+@media (pointer: coarse), (max-width: 640px) {
+  .fh-key-input {
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .fh-ibtn.fh-key-eye {
+    top: 0;
+    right: 0;
+  }
+}
+
+/* Phones: nearly the full screen, larger type; the status on its own line, Clear and Save sharing the next. */
+@media (max-width: 640px) {
+  .fh-settings {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px));
+    margin-top: calc(12px + env(safe-area-inset-top, 0px));
+  }
+
+  .fh-settings-title {
+    font-size: 17px;
+  }
+
+  .fh-settings-intro,
+  .fh-key-about,
+  .fh-key-status,
+  .fh-key-msg {
+    font-size: 13.5px;
+  }
+
+  .fh-key-title {
+    font-size: 15px;
+  }
+
+  .fh-key-row {
+    flex-wrap: wrap;
+  }
+
+  .fh-key-status {
+    flex-basis: 100%;
+  }
+
+  .fh-key-actions {
+    flex: 1;
+  }
+
+  .fh-key-actions .fh-pill {
+    flex: 1;
+    justify-content: center;
+  }
+}
