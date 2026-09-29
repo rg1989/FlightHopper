@@ -1,6 +1,8 @@
 # FlightHopper — Handoff
 
-**Updated:** 2026-09-29 (the Air Astana 1388 scenario and the E190 model), after 2026-09-28 late (tape polish, moonlit
+**Updated:** 2026-09-29 morning (the chase HUD suite: proportional cards, layout edit mode, the chased aircraft's
+bracket, a clicked aircraft's full card, a Settings dialog for API keys), after 2026-09-29 (the Air Astana 1388 scenario
+and the E190 model) and 2026-09-28 late (tape polish, moonlit
 runways, threshold markers, the KZR livery). Earlier on 2026-09-28: flight physics, glass-cockpit instruments, aircraft lights, flat runways in the terrain,
 painted runways, landing gear. The previous handoff (UI revamp, live data on adsb.fi, polling, URL state, data-source
 options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from it.
@@ -11,12 +13,31 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
   (`feat/flight-physics`, `worktree-kc1388-airspeed`, `build/mvp`, `feat/traffic-id`) has no commit outside `main`, and
   the main checkout has no uncommitted work. The voice-over/playbar work that sat uncommitted since 2026-09-23 is
   `42a01d9`; `feat/traffic-id` (traffic flight IDs, distances, a popup with Chase) is merged as `94988fe`.
-  `npm run check`: `tsc` clean, 1159/1159. `vite build` works (the usual chunk-size warning only).
-- **Worktrees still on disk:** `../FlightHopper-physics` (`feat/flight-physics` = `main`), `../FlightHopper-build`
-  (`build/mvp`, old), `.claude/worktrees/kc1388-airspeed` (another session's). Work in a worktree and fast-forward `main`.
-- **Pushed:** `origin/main` is `d0f8158`; the 14 commits since (the KC1388 physics and TAS display, the live attitude
-  envelope `804aa69`, the lit-streets night `865f6e8`, the voice-over, the traffic-id merge) are local. A push needs the
-  user's OK.
+  The HUD suite is merged as `f4b8412` (below). `npm run check`: `tsc` clean, 1207/1207. `vite build` works (the usual
+  chunk-size warning only).
+- **Worktrees:** none besides the main checkout (`git worktree list`). Work in a sibling `../FlightHopper-<name>` worktree
+  (never under `.claude/`) and merge into `main`.
+- **Pushed:** `origin/main` is `3d64639`; the wind-card fix `9e356e5`, the HUD-suite merge `f4b8412` and this handoff
+  are local. A push needs the user's OK.
+
+### What the morning of 2026-09-29 added: the chase HUD suite (merged `f4b8412`, all on `main`)
+
+Built by subagents in worktrees, each feature judged by an independent critic from headless-Chrome screenshots over
+three rounds until it passed.
+
+| What | Where |
+|---|---|
+| **Proportional cards at every zoom.** The four HUD cards go round a layout square clamped between a minimum (the larger of 0.42 × the view's shorter side and the aircraft's own square at the default range) and the largest square the default arrangement fits, so zoomed out they keep the default distances and zoomed in they stay, over the aircraft. Short room (a photo card at 1024 px, an open panel) takes compact cards or another side instead of shrinking the square. Transient overlays (scenario captions, a traffic card) never move the cards: captions keep a fixed two-line band. The chase camera orbits the aircraft's middle (it aimed at the wheels, so the aircraft drifted on screen when zooming), and the default range on tall screens is 150 m × height/width. Figures (V/S, AGL, TAS, GS) have fixed widths. | `client/scene/flightFrame.ts` (`frameLayout`, layout side), `client/scene/chaseCamera.ts` (`b0b32a0`) |
+| **Layout edit mode.** A rail button (chase only; disabled while no cards are drawn): drag cards (mouse/touch; the camera stays still), hide/show each (ghosted while editing), Reset to defaults, Done/Esc. Moving one card pins the others where they are; the last moved card stays on top. Offsets are in layout-side units, so a custom layout keeps its proportions when zooming. Saved per browser (`fh.hudLayout.v1`). | `client/ui/framePrefs.ts`, `client/scene/flightFrame.ts`, `client/ui/flightFrame.css` |
+| **The chased aircraft's brackets** in the traffic's style, with its callsign (no distance); traffic labels keep 6 px clear of it. The bracket uses Cesium's drawn model scale (far models are drawn larger than true). | `client/ui/layout.css`, `client/ui/theme.css`, `client/scene/traffic.ts` |
+| **A clicked traffic aircraft gets the chased aircraft's card** (photo with credit or the no-photo icon, stats, status, details, "N m from <chased>", Chase, close) at the first free place (top-right, bottom-right, or the chased card's slot); its bracket is highlighted above the HUD. On phones in chase both cards show a 72×48 photo thumbnail. Esc steps back: panel → traffic card → edit mode → scenario/chase. | `client/ui/flightCard.ts/.css`, `client/scene/traffic.ts`, `client/app.ts` |
+| **Settings dialog (gear, bottom of the rail):** the ArcGIS key and the Cesium ion token, masked with show/hide, checked with their own provider (key in a header) on Save, saved in the browser, overriding `.env.local` after a reload; a key that fails at runtime falls back to Re:Earth terrain / EOX imagery and its status says so. The phone tab bar scrolls sideways with snap when its tabs don't fit. | `client/ui/settings.ts/.css`, `client/config.ts` (stored > env > keyless), `client/scene/{terrain,imagery,viewer}.ts`, `client/main.ts` |
+
+Known limits: at 390×844 an open traffic card covers the bottom 16 px of the attitude card; a card dragged into the
+flight card's area stops there (cards keep clear of covers); dragging has no keyboard alternative; Esri tile URLs and
+ion requests carry their keys (the providers' design); the photo service refuses headless Chrome (403), so photos were
+checked with stubs; three or four real Escape presses in browse mode freeze *headless* Chrome, on the old `main` too
+(in-page key events are fine) — worth one look in a real browser.
 
 ### What 2026-09-29 added (all on `main`)
 
