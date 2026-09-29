@@ -235,6 +235,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       msg.replaceChildren(mark, h('span', '', text))
       msg.dataset.tone = tone
       msg.hidden = false
+      msg.scrollIntoView?.({ block: 'nearest' }) // a phone's dialog scrolls: the answer below the fold comes into view
     }
 
     block.append(top, h('p', 'fh-key-about', spec.about), field, row, msg)
