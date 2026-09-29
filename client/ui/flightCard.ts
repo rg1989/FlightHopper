@@ -285,12 +285,17 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   img.hidden = true
   imgLink.append(img)
   const credit = h('a', 'fh-card-credit')
-  credit.hidden = true
-  for (const a of [imgLink, credit]) {
+  // The same credit as a line under the callsign, where the photo is a thumbnail beside it (a phone in the chase:
+  // flightCard.css); the terms want it shown with any thumbnail.
+  const creditLine = h('a', 'fh-card-credit-line')
+  const credits = [credit, creditLine]
+  for (const a of [imgLink, ...credits]) {
     a.target = '_blank'
     a.rel = 'noopener'
   }
+  for (const c of credits) c.hidden = true
   figure.append(imgLink, h('span', 'fh-spin'), credit)
+  ident.append(creditLine)
   figure.hidden = opts.photos === undefined
 
   // Expanded: the detail sections.
@@ -379,7 +384,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (opts.photos === undefined) return
     img.hidden = true
     img.removeAttribute('src')
-    credit.hidden = true
+    for (const c of credits) c.hidden = true
     figure.hidden = false
     noPhoto.hidden = true
     syncSub()
@@ -389,18 +394,20 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       if (p === null) return noPhotoFor(opts.photos?.failed(hex) ? 'Photo unavailable (could not load it)' : 'No photo available')
       img.src = p.thumbUrl
       imgLink.href = p.link
-      credit.href = p.link
-      credit.textContent = `© ${p.photographer}`
+      for (const c of credits) {
+        c.href = p.link
+        c.textContent = `© ${p.photographer}`
+      }
     })
   }
   img.addEventListener('load', () => {
     figure.classList.remove('fh-skel')
     img.hidden = false
-    credit.hidden = false
+    for (const c of credits) c.hidden = false
   })
   img.addEventListener('error', () => {
     img.hidden = true
-    credit.hidden = true
+    for (const c of credits) c.hidden = true
     noPhotoFor('Photo unavailable (could not load it)')
   })
 

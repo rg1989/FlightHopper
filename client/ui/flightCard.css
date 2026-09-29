@@ -484,16 +484,74 @@
   }
 }
 
+/* The photo's credit as a line under the callsign (flightCard.ts): only where the photo is a thumbnail (below). */
+.fh-card-credit-line {
+  display: none;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--fh-muted);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both), and
-   the chased card's photo (half the screen with it: the card rose over the aircraft and the flight-data frame's cards;
-   the map shows it). */
+   the photo is a thumbnail beside the callsign, its credit a line under it (full width, the card took half the screen,
+   over the aircraft and the flight-data frame's cards). Both cards: the chased one and a traffic aircraft's. */
 @media (max-width: 640px) {
   .fh-ui[data-mode='chase'] .fh-card-sub {
     display: none;
   }
 
-  .fh-ui[data-mode='chase'] .fh-card:not(.fh-tcard) .fh-card-photo {
+  .fh-ui[data-mode='chase'] .fh-card:not([hidden]) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > * {
+    grid-column: 1 / -1;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-photo {
+    grid-row: 1;
+    grid-column: 1;
+    width: 72px;
+    max-height: none;
+    margin: 12px 0 0 10px;
+    border-radius: 7px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-head {
+    grid-row: 1;
+    grid-column: 2;
+    padding-left: 10px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-photo .fh-card-credit {
     display: none;
+  }
+
+  /* Its line kept from the start (empty until the photo arrives): the card does not grow after keepClear placed it. */
+  .fh-ui[data-mode='chase'] .fh-card-credit-line {
+    display: block;
+    min-height: 1lh;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-credit-line[hidden] {
+    visibility: hidden;
+  }
+}
+
+/* The narrowest phones: a smaller thumbnail and callsign, so the callsign, its type and the buttons still fit a line. */
+@media (max-width: 380px) {
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-photo {
+    width: 56px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-callsign {
+    font-size: 18px;
   }
 }
 

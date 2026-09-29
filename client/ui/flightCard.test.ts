@@ -389,11 +389,16 @@ test('mountFlightCard: the photo sits above the stats, collapsed or not, asked f
   assert.equal(credit.textContent, '© A. Spotter')
   assert.equal(credit.href, 'https://www.planespotters.net/photo/1/sx-dnd')
   assert.equal(img.hidden, true, 'shown once it loads')
+  // The same credit, linked, as a line under the callsign: where the photo is a thumbnail (a phone in the chase: CSS).
+  const line = byClass(card, 'fh-card-credit-line')
+  assert.equal(line.parent, byClass(card, 'fh-card-ident'))
+  assert.deepEqual([line.textContent, line.href, line.hidden], ['© A. Spotter', 'https://www.planespotters.net/photo/1/sx-dnd', true])
   img.fire('load')
   assert.deepEqual([img.hidden, credit.hidden, byClass(card, 'fh-card-photo').classList.contains('fh-skel')], [false, false, false])
+  assert.equal(line.hidden, false)
   assert.equal(byClass(card, 'fh-card-nophoto').hidden, true)
   img.fire('error') // the CDN image fails: no orphan credit, no empty box; the camera mark says so
-  assert.deepEqual([img.hidden, credit.hidden, photo.hidden], [true, true, true])
+  assert.deepEqual([img.hidden, credit.hidden, line.hidden, photo.hidden], [true, true, true, true])
   assert.equal(byClass(card, 'fh-card-nophoto').title, 'Photo unavailable (could not load it)')
   c.destroy()
 })
