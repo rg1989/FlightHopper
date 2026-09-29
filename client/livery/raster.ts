@@ -69,9 +69,9 @@ function loadFonts(d: Design): Promise<unknown> {
 }
 
 /** Draws design d on model m: the three atlases (null where the model has no nacelles or wingtip devices). */
-export async function rasterize(d: Design, m: Target, detail = 1): Promise<Atlases> {
+export async function rasterize(d: Design, m: Target, detail = 1, variant: string | null = null): Promise<Atlases> {
   const size = sizesAt(detail)
-  const ops = drawDesign(d, m)
+  const ops = drawDesign(d, m, variant)
   const srcs = imagesOf(ops)
   const [loaded] = await Promise.all([Promise.all(srcs.map(loadImage)), loadFonts(d)])
   const img = new Map(srcs.map((s, i) => [s, loaded[i]]))

@@ -20,7 +20,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export function parsePair(s: string): [model: string, livery: string | null] {
   const [model, livery] = s.split(':')
   if (!model) throw new Error(`not model:LIVERY: ${s}`)
-  return [model, livery ? livery.toUpperCase() : null]
+  if (!livery) return [model, null]
+  const [code, scheme] = livery.split('~') // CODE~scheme: a design's scheme keeps its case
+  return [model, scheme === undefined ? code.toUpperCase() : `${code.toUpperCase()}~${scheme}`]
 }
 
 /** The lab URL for one pair. */

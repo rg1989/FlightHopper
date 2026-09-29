@@ -74,6 +74,19 @@ export interface Design {
   wing?: Color // wings (default: light grey)
   stab?: Color // horizontal tailplane (default: wing)
   fonts?: Array<{ family: string; src: string; weight?: string; style?: string }> // web fonts to load (public/ paths)
+  /**
+   * Schemes in service at once (an old and a new livery, a sub-fleet in other colours): scheme name → registrations.
+   * The design draws the one in k.variant. An aircraft in no list gets defaultVariant (else k.variant is null).
+   */
+  variants?: Record<string, string[]>
+  defaultVariant?: string
+}
+
+/** The scheme a registration wears in a design (variants), or null. */
+export function variantOf(d: Design, reg: string | null): string | null {
+  const r = reg?.trim().toUpperCase()
+  if (r) for (const [name, regs] of Object.entries(d.variants ?? {})) if (regs.includes(r)) return name
+  return d.defaultVariant ?? null
 }
 
 /** A public/ file's URL (logos, fonts), under the app's base path. */
@@ -132,12 +145,14 @@ export class Kit {
   readonly model: string // manifest id, for the rare per-model tweak
   readonly region: Region
   readonly paint: Paint | undefined // the model's paint map (old-style liveries place their decals by it)
-  constructor(o: { profile: ModelProfile; side: Side; model: string; region?: Region; paint?: Paint }) {
+  readonly variant: string | null // the scheme to draw (Design.variants), null: the design's only one
+  constructor(o: { profile: ModelProfile; side: Side; model: string; region?: Region; paint?: Paint; variant?: string | null }) {
     const p = (this.p = o.profile)
     this.side = o.side
     this.model = o.model
     const region = (this.region = o.region ?? 'skin')
     this.paint = o.paint
+    this.variant = o.variant ?? null
     const windowY = o.paint?.windows?.[0]
     const nose = p.body.length ? p.body[0][0] : p.box[1]
     const tail = p.body.length ? p.body[p.body.length - 1][0] : p.box[0]
@@ -323,12 +338,12 @@ export interface Target {
   paint?: Paint
 }
 
-/** Runs a design on a model: the draw ops of each region and side. */
-export function drawDesign(d: Design, m: Target): DesignOps {
+/** Runs a design (in one of its schemes) on a model: the draw ops of each region and side. */
+export function drawDesign(d: Design, m: Target, variant: string | null = null): DesignOps {
   const p = m.profile
   const run = (region: Region, draw: (k: Kit) => void): RegionOps => {
-    const left = new Kit({ profile: p, side: 'left', model: m.id, region, paint: m.paint })
-    const right = new Kit({ profile: p, side: 'right', model: m.id, region, paint: m.paint })
+    const left = new Kit({ profile: p, side: 'left', model: m.id, region, paint: m.paint, variant })
+    const right = new Kit({ profile: p, side: 'right', model: m.id, region, paint: m.paint, variant })
     draw(left)
     draw(right)
     return { box: left.a.box, left: left.ops, right: right.ops }

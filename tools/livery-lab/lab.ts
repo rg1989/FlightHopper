@@ -2,7 +2,7 @@
 // The livery lab (livery-pipeline-design.md §8): one model in one livery, drawn by the app's own ChaseModel and paint
 // shader, from the views reference photos are taken from, next to those photos, with the atlases the design drew.
 // Dev only: `npx vite` in the repo, then /tools/livery-lab/?model=a21n&livery=WZZ
-//   model   manifest id (default a320)          livery  livery code (default: the model's first design, else none)
+//   model   manifest id (default a320)          livery  livery code, or CODE~scheme for one of a design's schemes
 //   views   comma list of VIEWS keys (default: every one; `refs` = only those the reference photos show)
 //   gear    0 to draw it retracted              refs    0 to leave out the reference photos
 //   w, h    tile size in px (default 800 × 450)
@@ -206,7 +206,7 @@ async function main(): Promise<void> {
   }
 
   // the atlases, as drawn (images are cached by the raster module)
-  const ops = drawDesign(livery.design, { id: m.id, profile, paint: m.paint })
+  const ops = drawDesign(livery.design, { id: m.id, profile, paint: m.paint }, livery.variant ?? null)
   const imgs = new Map<string, HTMLImageElement | null>()
   for (const r of [ops.skin, ops.nacelle, ops.tip, ops.belly]) {
     for (const op of r ? [...r.left, ...r.right] : []) {

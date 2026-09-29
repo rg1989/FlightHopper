@@ -1,7 +1,7 @@
 // client/livery/kit.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { contourAt, drawDesign, imagesOf, Kit, roughProfile } from './kit.ts'
+import { contourAt, drawDesign, imagesOf, Kit, roughProfile, variantOf } from './kit.ts'
 import type { Design, Op } from './kit.ts'
 import type { ModelProfile } from '../types.ts'
 
@@ -104,4 +104,18 @@ test('belly: a plan view across the fuselage, drawn only when the design has one
   const d = drawDesign({ code: 'B', name: 'b', side: (k) => k.fill('#ffffff'), belly: (k) => k.text('B', { z: 0, y: 0, capM: 1, color: '#000000' }) }, { id: 'tube', profile: P, paint })
   assert.deepEqual(d.belly!.box, [-10.1, 10.1, -2.1, 2.1])
   assert.equal(d.belly!.left[0].k, 'text')
+})
+
+test('schemes: a registration picks its scheme, others the default; the kit draws the one asked for', () => {
+  const d: Design = {
+    code: 'ELY', name: 'two schemes', variants: { A1: ['4X-EHA', '4X-EKA'], B: ['4X-EKF'] }, defaultVariant: 'B',
+    side: (k) => k.fill(k.variant === 'A1' ? '#262d70' : '#0556a6'),
+  }
+  assert.equal(variantOf(d, '4x-eha '), 'A1')
+  assert.equal(variantOf(d, '4X-EKF'), 'B')
+  assert.equal(variantOf(d, '4X-XXX'), 'B')
+  assert.equal(variantOf(d, null), 'B')
+  assert.equal(variantOf({ ...d, defaultVariant: undefined }, null), null)
+  assert.deepEqual(drawDesign(d, { id: 'tube', profile: P }, 'A1').skin.left, [{ k: 'fill', color: '#262d70' }])
+  assert.deepEqual(drawDesign(d, { id: 'tube', profile: P }).skin.left, [{ k: 'fill', color: '#0556a6' }])
 })

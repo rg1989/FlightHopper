@@ -8,7 +8,7 @@
 import { Cartesian3, Cartesian4, Color, CustomShader, CustomShaderMode, TextureMinificationFilter, TextureUniform, UniformType, VaryingType } from 'cesium'
 import { operatorOf } from '../../shared/airlines.ts'
 import { DESIGNS } from '../livery/designs/index.ts'
-import { WHITE as WHITE_HEX, WING, bellyHalf, profileOf } from '../livery/kit.ts'
+import { WHITE as WHITE_HEX, WING, bellyHalf, profileOf, variantOf } from '../livery/kit.ts'
 import type { Design, Target } from '../livery/kit.ts'
 import { specDesign, tableDesign } from '../livery/legacy.ts'
 import type { LiveryEntry } from '../livery/legacy.ts'
@@ -20,10 +20,11 @@ import table from './liveries.json' with { type: 'json' }
 
 export type { LiveryEntry }
 
-/** A resolved livery: code keys the shader cache (null: plain white). */
+/** A resolved livery: code keys the shader cache (null: plain white; "ELY~B": a design in one of its schemes). */
 export interface Livery {
   code: string | null
   design: Design
+  variant?: string | null
 }
 
 export const TABLE = table as { aliases: Record<string, string>; liveries: Record<string, LiveryEntry>; logos: Record<string, string> }
@@ -33,19 +34,26 @@ export const WHITE: Livery = { code: null, design: WHITE_DESIGN }
 
 const known = (code: string): boolean => code in DESIGNS || code in TABLE.liveries
 
-/** The livery a callsign flies in: its operator, or the brand a subsidiary or single-partner regional flies as; null (plain white) when not in the table. */
-export function liveryCode(callsign: string | null): string | null {
+/**
+ * The livery a callsign flies in: its operator, or the brand a subsidiary or single-partner regional flies as; null
+ * (plain white) when not in the table. Where the design has schemes by registration (Design.variants), "CODE~scheme".
+ */
+export function liveryCode(callsign: string | null, reg: string | null = null): string | null {
   const op = operatorOf(callsign)
   if (op === null) return null
   const code = TABLE.aliases[op] ?? op
-  return known(code) ? code : null
+  if (!known(code)) return null
+  const d = DESIGNS[code]
+  const v = d?.variants ? variantOf(d, reg) : null
+  return v === null ? code : `${code}~${v}`
 }
 
-/** A code's design: drawn with the kit (designs/), else its colours entry, else plain white. */
-export function liveryOf(code: string | null): Livery {
-  if (code === null) return WHITE
+/** A code's design: drawn with the kit (designs/), else its colours entry, else plain white. "CODE~scheme" picks a scheme. */
+export function liveryOf(key: string | null): Livery {
+  if (key === null) return WHITE
+  const [code, variant = null] = key.split('~')
   const d = DESIGNS[code]
-  if (d !== undefined) return { code, design: d }
+  if (d !== undefined) return { code: key, design: d, variant }
   const l = TABLE.liveries[code]
   return l === undefined ? WHITE : { code, design: tableDesign(code, l, import.meta.env?.BASE_URL ?? '/') }
 }
@@ -302,7 +310,8 @@ export class LiveryShaders {
     const key = code ?? ''
     let s = this.#cache.get(key)
     if (s === undefined) {
-      s = this.#make(liveryOf(code).design)
+      const l = liveryOf(code)
+      s = this.#make(l.design, l.variant ?? null)
       this.#cache.set(key, s)
     }
     return s
@@ -313,13 +322,13 @@ export class LiveryShaders {
     const key = livery.code ?? ''
     let s = this.#custom.get(key)
     if (s === undefined) {
-      s = this.#make(livery.design)
+      s = this.#make(livery.design, livery.variant ?? null)
       this.#custom.set(key, s)
     }
     return s
   }
 
-  #make(d: Design): CustomShader {
+  #make(d: Design, variant: string | null): CustomShader {
     const off = (): { type: UniformType; value: Cartesian4 } => ({ type: UniformType.VEC4, value: new Cartesian4() })
     const p = this.#target.profile
     const s = new CustomShader({
@@ -345,7 +354,7 @@ export class LiveryShaders {
     made.add(s)
     if (typeof document !== 'undefined') {
       later(async () => {
-        const a = await rasterize(d, this.#target, this.#detail)
+        const a = await rasterize(d, this.#target, this.#detail, variant)
         s.setUniform('u_skin', texture(a.skin))
         if (a.nacelle && p.engines) s.setUniform('u_nacelle', texture(a.nacelle))
         if (a.tip && p.winglet) s.setUniform('u_tip', texture(a.tip))
