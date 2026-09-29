@@ -1,0 +1,26 @@
+{
+  "flag.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Flag_of_Jordan.svg",
+    "licence": "Public domain (PD-Jordan, PD-ineligible); unchanged copy"
+  },
+  "title-ar.svg": {
+    "source": "FlightHopper typesetting of the Arabic title \"الملكية الأردنية\" in Aref Ruqaa Regular (public/fonts/ArefRuqaa-Regular.ttf), shaped with HarfBuzz and outlined in gold #d2aa63: glyphs widened 1.15x and thickened by a 40-unit stroke, the kaf and the nun drawn out along the baseline by 1550 and 600 font units, 1900 units extra word space. Not Royal Jordanian's artwork.",
+    "licence": "SIL Open Font License 1.1 (font outlines; public/fonts/ArefRuqaa-OFL.txt)"
+  },
+  "emblem.svg": {
+    "source": "FlightHopper typesetting of the word \"عالية\" (Alia) in Aref Ruqaa Regular (public/fonts/ArefRuqaa-Regular.ttf), shaped with HarfBuzz, glyphs narrowed to 0.62x into a compact block, gold #d2aa63 with a 12-unit stroke. It stands in for the calligraphic monogram beside door 1, which has no free file; it is not a copy of it.",
+    "licence": "SIL Open Font License 1.1 (font outlines; public/fonts/ArefRuqaa-OFL.txt)"
+  },
+  "oneworld-roundel.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Oneworld_Logo.svg (sphere, white ring and letter paths unchanged; the radial gradient darkened to the roundel painted on JY-RAK, #b9b7e8 to #2b2690, and the logo squashed to 0.92 of its height so it reads round on the fuselage's curve in side elevation)",
+    "licence": "Public domain (PD-textlogo; trademarked)"
+  },
+  "oneworld-wordmark.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Oneworld_Logo.svg (only the eight white \"oneworld\" letter paths, recoloured #d4d4d4, spaced out and widened 1.08x to the wordmark painted on JY-RAK)",
+    "licence": "Public domain (PD-textlogo; trademarked)"
+  },
+  "member-of.svg": {
+    "source": "FlightHopper typesetting of \"member of\" in Montserrat (variable font at wght 500, https://github.com/google/fonts/tree/main/ofl/montserrat), outlined, #d4d4d4",
+    "licence": "SIL Open Font License 1.1 (font outlines; public/fonts/Montserrat-OFL.txt)"
+  }
+}

@@ -343,7 +343,7 @@ export class Traffic {
       const e = s.e
       if (e.trackDeg !== null) s.headingDeg = e.trackDeg
       const m = s.m
-      const livery = liveryCode(e.info?.callsign ?? null) // the callsign can arrive after the aircraft does
+      const livery = liveryCode(e.info?.callsign ?? null, e.info?.reg ?? null) // the callsign can arrive after the aircraft does
       if (m.paint && s.livery !== livery) {
         s.livery = livery
         s.model.customShader = this.#shaders(m).for(livery)
@@ -506,7 +506,7 @@ export class Traffic {
 
   #shaders(m: ModelManifestEntry): LiveryShaders {
     let p = this.#paint.get(m.id)
-    if (p === undefined) this.#paint.set(m.id, (p = new LiveryShaders(m.paint!)))
+    if (p === undefined) this.#paint.set(m.id, (p = new LiveryShaders(m, 0.5))) // small on screen: half-size atlases
     return p
   }
 

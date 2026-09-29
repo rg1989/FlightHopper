@@ -52,12 +52,6 @@
    "engine": "#0a2d5e",
    "title": true
   },
-  "ELY": {
-   "base": "#f7f7f7",
-   "fin": "#f7f7f7",
-   "fin2": "#0b2e6b",
-   "title": true
-  },
   "DAL": {
    "base": "#f7f7f7",
    "belly": "#0b1f41",
@@ -108,22 +102,9 @@
    "title": true,
    "finLogo": true
   },
-  "WZZ": {
-   "base": "#f7f7f7",
-   "fin": "#c6007e",
-   "fin2": "#3a1e6e",
-   "engine": "#c6007e",
-   "title": true
-  },
   "THY": {
    "base": "#f7f7f7",
    "fin": "#c8102e"
-  },
-  "ISR": {
-   "base": "#f7f7f7",
-   "fin": "#1f5fae",
-   "engine": "#1f5fae",
-   "title": true
   },
   "UAE": {
    "base": "#f7f7f7",
@@ -273,7 +254,6 @@
   "BAW-title.png": "https://commons.wikimedia.org/wiki/File:BRITISH_AIRWAYS_logo.svg",
   "DLH-title.png": "https://commons.wikimedia.org/wiki/File:Lufthansa_Logo_2018.svg",
   "DLH-fin.png": "https://commons.wikimedia.org/wiki/File:Lufthansa_Logo_2018_crane.svg",
-  "ELY-title.png": "https://commons.wikimedia.org/wiki/File:El_Al_logo_wordmark.svg",
   "ETD-title.png": "https://commons.wikimedia.org/wiki/File:Etihad-airways-logo.svg",
   "EWG-title.png": "https://commons.wikimedia.org/wiki/File:Eurowings_Logo_2026.svg",
   "EXS-title.png": "https://commons.wikimedia.org/wiki/File:Jet2Logo.svg",
@@ -281,7 +261,6 @@
   "EZY-fin.png": "https://commons.wikimedia.org/wiki/File:EasyJet_logo.svg",
   "FFT-title.png": "https://commons.wikimedia.org/wiki/File:Frontier_Airlines_logo.svg",
   "IGO-title.png": "https://commons.wikimedia.org/wiki/File:IndiGo_Airlines_logo.svg",
-  "ISR-title.png": "https://commons.wikimedia.org/wiki/File:Israir_Airlines_Logo.svg",
   "JBU-title.png": "https://commons.wikimedia.org/wiki/File:JetBlue_Airways_Logo.svg",
   "KLM-title.png": "https://commons.wikimedia.org/wiki/File:KLM_logo.svg",
   "KLM-fin.png": "https://commons.wikimedia.org/wiki/File:KLM_logo.svg",
@@ -292,7 +271,6 @@
   "SWR-title.png": "https://commons.wikimedia.org/wiki/File:Swiss_new.svg",
   "SWR-fin.png": "FlightHopper drawing of the Swiss flag cross (national flag)",
   "TVF-title.png": "https://commons.wikimedia.org/wiki/File:Transavia_2025_logo.svg",
-  "UAE-title.png": "https://commons.wikimedia.org/wiki/File:Emirates_logo.svg",
-  "WZZ-title.png": "https://commons.wikimedia.org/wiki/File:Wizz_Air_logo.svg"
+  "UAE-title.png": "https://commons.wikimedia.org/wiki/File:Emirates_logo.svg"
  }
 }

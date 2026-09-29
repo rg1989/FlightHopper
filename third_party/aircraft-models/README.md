@@ -1,8 +1,8 @@
 # Aircraft models: GPL corresponding source
 
-This folder is the corresponding source for 15 aircraft models in `public/models/`:
+This folder is the corresponding source for 18 aircraft models in `public/models/`:
 
-`a320.glb`, `a321.glb`, `a333.glb`, `a359.glb`, `at75.glb`, `b738.glb`, `b744.glb`, `b773.glb`, `b789.glb`, `c182.glb`, `c550.glb`, `crj9.glb`, `e190.glb`, `e75l.glb`, `ec135.glb`.
+`a320.glb`, `a321.glb`, `a333.glb`, `a359.glb`, `at75.glb`, `b738.glb`, `b744.glb`, `b773.glb`, `b789.glb`, `c182.glb`, `c550.glb`, `crj9.glb`, `e190.glb`, `e75l.glb`, `ec135.glb`, and `a20n.glb`, `a21n.glb`, `b38m.glb`, which FlightHopper derived from three of them (see [Modified](#modified)).
 
 The models are GPL-licensed. The GPL says that whoever distributes the models must also make the source available. This folder keeps that source in this repository, next to the models, so FlightHopper meets that obligation itself.
 
@@ -46,6 +46,9 @@ Upstream commits:
 | `b744.glb` | `models/fr24/b744.glb` | FR24 `source/b744/747.blend` (FGMEMBERS/747-400) | GPL-2.0-only | Gijs de Rooy and the 747-400 authors |
 | `c550.glb` | `models/fr24/citation.glb` | FR24 `source/citation/citation.blend` (FGMEMBERS/Citation) | GPL-2.0-only | Curtis L. Olson, Ludovic Brenta, chris_blues |
 | `ec135.glb` | `models/fr24/ec135.glb` | FR24 `source/ec135/ec135.blend` (FGMEMBERS/ec135) | GPL-2.0-only | Heiko Schulz (3D) and the ec135 authors |
+| `a20n.glb` | none: FlightHopper derived it from `a320.glb` (see [Modified](#modified)) | as `a320.glb` | GPL-2.0-only | as `a320.glb` |
+| `a21n.glb` | none: FlightHopper derived it from `a321.glb` | as `a321.glb` | GPL-2.0-only | as `a321.glb` |
+| `b38m.glb` | none: FlightHopper derived it from `b738.glb` | as `b738.glb` | GPL-2.0-only | as `b738.glb` |
 
 Authors come from the `AUTHORS`, `README` or `-set.xml` files of each FGMEMBERS repository.
 
@@ -78,6 +81,16 @@ These models are modified versions of the upstream files.
   6. Added a `COLOR_0` shade attribute from the vertex normals.
 - **FlightHopper (2026-09-23)** copied the 14 files unchanged from livetaiwan commit `00d6a934`. Only the file names changed (for example, `A350.glb` became `a359.glb` and `citation.glb` became `c550.glb`).
 - **FlightHopper (2026-09-28)** built `e190.glb` itself from FAM `E190.glb`, because livetaiwan has no E190. It used the pipeline in [How to rebuild](#how-to-rebuild) with Blender 5.2.2, so the file has the same 6 changes as the others. The only difference is the `asset.copyright` string (see above). The same commands rebuild `e75l.glb` from `E75L.glb` byte for byte. We checked this, so the process is the one livetaiwan used.
+
+- **FlightHopper (2026-09-29)** derived three type models from three of these files, by the recipes in `tools/models/variants.json`, with `tools/models/variants.ts` (the recipes and the tool are the corresponding source of the change):
+
+  | Modified file | Derived from | Recipe | The change |
+  |---|---|---|---|
+  | `a20n.glb` (A320neo) | `a320.glb` | `a20n` | The wing cut 0.76 m inboard of its tip and a sharklet lofted on (2.4 m tall, 6° cant); the nacelles 24 % wider, 11 % taller and 15 % longer about their axis, 0.05 m forward. |
+  | `a21n.glb` (A321neo) | `a321.glb` | `a21n` | The same sharklets and nacelles, 0.06 m forward. |
+  | `b38m.glb` (737 MAX 8) | `b738.glb` | `b38m` | The blended winglet removed and an AT winglet lofted on (an upper blade 2.1 m tall canted 29° outboard, a lower blade 1.25 m long 32° down); the nacelles 16 % wider, 17 % taller and 17 % longer, 0.36 m forward and 0.2 m up. |
+
+  The new parts are closed meshes with normals from their faces and the `COLOR_0` shade livetaiwan's `canonicalise.py` computes from the normals. Each file's `asset.copyright` says what it was derived from, and that FlightHopper modified it, when and by which recipe. The sources of each recipe's dimensions (Airbus and Boeing airport planning documents) are in `tools/models/variants.json`.
 
 ## How to rebuild
 
@@ -117,6 +130,14 @@ cp models/E190.glb ../../public/models/e190.glb
 ```
 
 The last Python command uses `embed_copyright.py` unchanged, with the correct licence string for this file.
+
+`a20n.glb`, `a21n.glb` and `b38m.glb` are rebuilt from `a320.glb`, `a321.glb` and `b738.glb` in `public/models/`, from the repository root (Node.js 24):
+
+```bash
+node tools/models/variants.ts
+```
+
+It writes the three files and their entries in `public/models/manifest.json`. `tools/models/variants.test.ts` checks that the files are up to date.
 
 `scripts/contact_sheet.py` draws a preview image of the models. It needs `numpy` and `Pillow`. The other scripts need only Python 3 or Blender.
 

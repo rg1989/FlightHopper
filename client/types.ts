@@ -77,6 +77,25 @@ export interface ModelManifestEntry {
   // GLB's leg nodes (tools/models/gear-glb.ts), each swung upDeg about axis (body frame: nose +X, left +Y, up +Z) to retract.
   gear?: { uri: string; heightM: number; legs?: Array<{ node: string; axis: [number, number, number]; upDeg: number }> }
   lights?: LightAnchors                         // exterior lights (aircraftLights.ts); absent: none drawn
+  profile?: ModelProfile                        // side geometry the livery artwork is drawn on (tools/models/profile.ts)
+}
+
+/**
+ * A model's side geometry, measured from its mesh by tools/models/profile.ts, in the paint frame (Paint: turned, +z
+ * nose, +y up, +x left wing), mesh metres. The livery kit (client/livery/kit.ts) draws airline artwork onto it.
+ */
+export interface ModelProfile {
+  box: [zMin: number, zMax: number, yMin: number, yMax: number] // the body atlas box: tail … nose, keel … fin tip, padded
+  body: Array<[z: number, yBottom: number, yTop: number]>      // fuselage side outline nose → tail every 0.25 m (fairing in; fin, wings out)
+  fin: Array<[z: number, y: number]>                            // the fin's side outline above the fuselage, closed, leading-edge root first
+  finRoot: [y: number, le: number, te: number]                  // fin leading and trailing edge z where it meets the fuselage
+  finTip: [y: number, le: number, te: number]                   // …and at its tip
+  wing: [rootLe: number, rootTe: number, rootY: number, tipX: number, tipY: number] // root chord at the fuselage side; the tip
+  engines: [xMin: number, xMax: number, zMin: number, zMax: number, yMin: number, yMax: number] | null // nacelles and pylons
+  winglet: [xMin: number, xMax: number, zMin: number, zMax: number, yMin: number, yMax: number] | null // wingtip device above the wing
+  stab: [zMin: number, zMax: number, halfSpan: number] | null   // horizontal tailplane
+  doors: number[]                                               // z of the left passenger door centres, nose → tail (may be empty)
+  cockpit: number                                               // z of the cockpit windows' aft edge
 }
 
 /**
