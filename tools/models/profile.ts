@@ -147,12 +147,16 @@ function widths(s: Seg): { vTop: number; vBottom: number; w: Float64Array } {
 }
 
 /**
- * How far in from the end of w a narrow blade stands on the section (a fin, a mast, an antenna): 0 unless its end part,
+ * How far in from the end of w a narrow blade stands on the section (a fin, a mast, an antenna): an antenna's height
+ * (a sliver under 0.08 m wide on skin much wider); else 0 unless its end part,
  * over minTall, is narrower than 0.6 of the widest and than maxHalf (a round top is not, over 0.3 m); else the first step past 0.35 m at which the
  * section is 0.06 m wider than 0.3 m before and, within 0.6 m below, twice as wide (the fuselage, not a step in the
  * fin's own skin).
  */
 function bladeEnd(w: Float64Array, minTall: number, maxHalf: number): number {
+  let a = 0 // an antenna: a sliver at least 6 cm tall, on skin three times as wide 10 cm below it
+  while (a < w.length && w[a] < 0.08) a++
+  if (a * STEP >= 0.06 && a + 10 < w.length && w[a + 10] > 0.24) return a
   let W = 0
   for (const x of w) W = Math.max(W, x)
   let h = 0
