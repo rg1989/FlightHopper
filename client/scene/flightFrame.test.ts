@@ -281,7 +281,7 @@ test('offsetAt: the offset that puts a dragged card\'s top-left where the pointe
     assert.deepEqual(at(p, 'right'), { x: Math.min(Math.max(x, 0), 1280 - 88), y: Math.min(Math.max(y, 0), 800 - 64) }, `${x},${y}`)
   }
   const o = offsetAt(640 - 44, 400 - 32, SIZES.right, sq, SAFE, [])
-  assert.deepEqual(o, { x: 0, y: 0 }, 'centred on the aircraft: no offset')
+  assert.deepEqual(o, { x: 0, y: 0, v: 0 }, 'centred on the aircraft: no offset, the full card')
 })
 
 test('freeSpot: the nearest place inside the view and clear of what covers it, not only below a band as wide as the view', () => {
@@ -309,10 +309,39 @@ test('movedTo, offsetAt: a moved card where its offset puts it, kept in the view
     assert.deepEqual(movedTo(o, DESK_SIZES.right, sq, view, [card]), { x, y, v: 0 }, `${x},${y}`)
   }
   const nearRight = offsetAt(300, 50, DESK_SIZES.right, sq, view, [card])
-  assert.deepEqual(movedTo(nearRight, DESK_SIZES.right, sq, view, [card]), { x: 342, y: 50, v: 0 }, 'dropped on the flight card\'s right: beside it')
+  assert.deepEqual(movedTo(nearRight, DESK_SIZES.right, sq, view, [card]), { x: 340, y: 50, v: 0 }, 'dropped on the flight card\'s right: beside it')
   const nearBottom = offsetAt(100, 50, DESK_SIZES.right, sq, view, [card])
-  assert.deepEqual(movedTo(nearBottom, DESK_SIZES.right, sq, view, [card]), { x: 100, y: 180, v: 0 }, 'further in: below it, the nearer way out')
+  assert.deepEqual(movedTo(nearBottom, DESK_SIZES.right, sq, view, [card]), { x: 100, y: 178, v: 0 }, 'further in: below it, the nearer way out')
   assert.equal(movedTo({ x: 0, y: 0 }, [], sq, view, []), null, 'a card with nothing to show has no place')
+})
+
+test('movedTo, offsetAt: every card pinned where the automatic layout put it stays exactly there, in the variant it had', () => {
+  // A phone, 390 × 844: the altitude card compact (v 1) against the view's left edge; the flight card and tab bar below.
+  const view: Rect = { x: 8, y: 8, w: 374, h: 828 }
+  const covers: Rect[] = [{ x: 8, y: 597, w: 374, h: 178 }, { x: 0, y: 783, w: 390, h: 61 }]
+  const safe: Rect = { x: 8, y: 8, w: 374, h: 581 }
+  const sizes = {
+    left: [{ w: 101, h: 161, ay: 80 }, { w: 97, h: 139, ay: 69 }],
+    right: [{ w: 68, h: 144, ay: 72 }, { w: 66, h: 122, ay: 61 }],
+    top: [{ w: 209, h: 67 }, { w: 184, h: 69 }],
+    bottom: [{ w: 209, h: 91 }, { w: 184, h: 78 }],
+  }
+  const sq: Square = { x: 195, y: 391, side: 160 }
+  const auto = frameLayout(sq, sizes, safe)
+  assert.equal(auto.left!.v, 1)
+  const pinned: Partial<Record<BlockId, Offset>> = {}
+  for (const id of IDS) pinned[id] = offsetAt(auto[id]!.x, auto[id]!.y, sizes[id], sq, view, covers, auto[id]!.v)
+  for (const id of IDS) {
+    assert.deepEqual(movedTo(pinned[id]!, sizes[id], sq, view, covers), { x: auto[id]!.x, y: auto[id]!.y, v: auto[id]!.v }, id)
+  }
+  // One of them dropped onto another's place: it lands exactly there, in its variant; no other moves.
+  const drop = offsetAt(auto.bottom!.x + 20, auto.bottom!.y - 60, sizes.left, sq, view, covers, 1)
+  assert.deepEqual(movedTo(drop, sizes.left, sq, view, covers), { x: auto.bottom!.x + 20, y: auto.bottom!.y - 60, v: 1 })
+  const fixed = Object.fromEntries(IDS.map((id) => [id, movedTo(id === 'left' ? drop : pinned[id]!, sizes[id], sq, view, covers)!]))
+  const after = frameLayout(sq, sizes, safe, 10, undefined, fixed)
+  for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(after, id), at(auto, id), `${id} stays`)
+  // A variant that no longer fits the view (a stored layout on a smaller screen): the largest that does.
+  assert.equal(movedTo({ x: 0, y: 0, v: 0 }, sizes.top, sq, { x: 8, y: 8, w: 200, h: 400 }, [])!.v, 1)
 })
 
 // ---- layoutSide -----------------------------------------------------------------------------------------------------

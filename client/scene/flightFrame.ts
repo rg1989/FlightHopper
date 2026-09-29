@@ -108,9 +108,12 @@ export function freeSpot(x: number, y: number, w: number, h: number, view: Rect,
   return best ?? { x: inX(x), y: inY(y) }
 }
 
-/** The variant a moved block takes: its largest that fits the view, else its smallest. */
-const movedVariant = (vs: ReadonlyArray<{ b: BlockSize; v: number }>, view: Rect): { b: BlockSize; v: number } =>
-  vs.find(({ b }) => b.w <= view.w && b.h <= view.h) ?? vs[vs.length - 1]
+/** The variant a moved block takes: the one it keeps (want) while it fits the view, else its largest that does, else its smallest. */
+const movedVariant = (vs: ReadonlyArray<{ b: BlockSize; v: number }>, view: Rect, want?: number): { b: BlockSize; v: number } => {
+  const fits = ({ b }: { b: BlockSize }): boolean => b.w <= view.w && b.h <= view.h
+  const kept = vs.find(({ v }) => v === want)
+  return kept !== undefined && fits(kept) ? kept : (vs.find(fits) ?? vs[vs.length - 1])
+}
 
 /**
  * Where a block the viewer moved goes round sq: its anchor at its offset × the side from the centre, in movedVariant, in
@@ -119,16 +122,22 @@ const movedVariant = (vs: ReadonlyArray<{ b: BlockSize; v: number }>, view: Rect
 export function movedTo(o: Offset, s: BlockSize | readonly BlockSize[], sq: Square, view: Rect, covers: readonly Rect[]): Fixed | null {
   const vs = variantsOf(s)
   if (vs.length === 0) return null
-  const { b, v } = movedVariant(vs, view)
+  const { b, v } = movedVariant(vs, view, o.v)
   const p = freeSpot(sq.x + o.x * sq.side - (b.ax ?? b.w / 2), sq.y + o.y * sq.side - (b.ay ?? b.h / 2), b.w, b.h, view, covers, PAD)
   return { x: p.x, y: p.y, v }
 }
 
-/** The offset at which movedTo puts a block (one with a variant) with its top-left at (x, y), or at the free spot nearest it. */
-export function offsetAt(x: number, y: number, s: BlockSize | readonly BlockSize[], sq: Square, view: Rect, covers: readonly Rect[]): Offset {
-  const { b } = movedVariant(variantsOf(s), view)
+/**
+ * The offset at which movedTo puts a block (one with a variant) in variant v (as movedVariant has it) with its top-left
+ * at (x, y), or at the free spot nearest it.
+ */
+export function offsetAt(
+  x: number, y: number, s: BlockSize | readonly BlockSize[], sq: Square, view: Rect, covers: readonly Rect[], v?: number,
+): Offset {
+  const m = movedVariant(variantsOf(s), view, v)
+  const b = m.b
   const p = freeSpot(x, y, b.w, b.h, view, covers, PAD)
-  return { x: (p.x + (b.ax ?? b.w / 2) - sq.x) / sq.side, y: (p.y + (b.ay ?? b.h / 2) - sq.y) / sq.side }
+  return { x: (p.x + (b.ax ?? b.w / 2) - sq.x) / sq.side, y: (p.y + (b.ay ?? b.h / 2) - sq.y) / sq.side, v: m.v }
 }
 
 /** The position nearest pref of a segment len long in [lo, hi], clear of every blocked (open) interval; null: none. */
@@ -498,7 +507,9 @@ export const eprText = (e: number): string => e.toFixed(2)
 
 const GAP = 10 // between the square and a block, and between blocks
 const EDGE = 8 // the blocks from the view's edges (app.ts safeArea's pad)
-const PAD = 10 // a moved card from the view's edges and from what covers it: room for its edit controls, over its edges
+// A moved card from the view's edges and from what covers it: the automatic layout's own margin (app.ts safeArea), so a
+// card pinned where that put it stays there; its edit controls reach this far over its edges (flightFrame.css).
+const PAD = 8
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
 // The flight ID over the brackets, as the traffic's (layout.css): 12 px high, 5 px over the square, 9 px a character.
@@ -648,7 +659,7 @@ export class FlightFrame {
   readonly #bar = h('div', 'fh-fbar')
   readonly #reset = h('button', 'fh-fbar-b')
   readonly #eyes = {} as Record<BlockId, HTMLButtonElement>
-  #drag: { id: BlockId; pointer: number; x: number; y: number; gx: number; gy: number; ox: number; oy: number; on: boolean } | null = null
+  #drag: { id: BlockId; pointer: number; x: number; y: number; gx: number; gy: number; ox: number; oy: number; v?: number; on: boolean } | null = null
   #lsq: Square = { x: 0, y: 0, side: 0 }
   #area: Rect = { x: 0, y: 0, w: 0, h: 0 } // the view inside PAD: where a moved card may go
   #avoid: readonly Rect[] = [] // what a moved card keeps clear of: the covers, and the toolbar while editing
@@ -828,7 +839,7 @@ export class FlightFrame {
     const area = (this.#area = { x: PAD, y: PAD, w: this.#view.w - 2 * PAD, h: this.#view.h - 2 * PAD })
     const avoid = (this.#avoid = this.#editing && this.#bar0 !== null ? [...room.covers, this.#bar0] : room.covers)
     const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
-    if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], lsq, area, avoid)
+    if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], lsq, area, avoid, d.v)
     const moved = this.#prefs.moved
     const fixed: Partial<Record<BlockId, Fixed>> = {}
     for (const id of IDS) {
@@ -893,7 +904,8 @@ export class FlightFrame {
     b.setPointerCapture(e.pointerId)
     const r = b.getBoundingClientRect()
     const o = this.#layer.getBoundingClientRect()
-    this.#drag = { id, pointer: e.pointerId, x: e.clientX, y: e.clientY, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, on: false }
+    const v = this.#placed[id]?.v // the variant it keeps
+    this.#drag = { id, pointer: e.pointerId, x: e.clientX, y: e.clientY, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false }
   }
 
   #carry(e: PointerEvent): void {
@@ -902,6 +914,7 @@ export class FlightFrame {
     if (!d.on && Math.hypot(e.clientX - d.x, e.clientY - d.y) >= DRAG_PX) {
       d.on = true
       this.#blocks[d.id].classList.add('fh-dragging')
+      this.#pin()
     }
     d.x = e.clientX
     d.y = e.clientY
@@ -914,8 +927,20 @@ export class FlightFrame {
     this.#drag = null
     this.#blocks[d.id].classList.remove('fh-dragging')
     if (!d.on || this.#sizes[d.id].length === 0) return
-    this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid)
+    this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid, d.v)
     this.#changed()
+  }
+
+  /**
+   * A card starts to move: every other one stays where it is (none makes way for it, nor for any later one), each pinned
+   * at its offset from the aircraft in the variant it has, so zooming keeps the proportions. Reset lays them out again.
+   */
+  #pin(): void {
+    for (const id of IDS) {
+      const p = this.#placed[id]
+      if (p == null || this.#prefs.moved[id] !== undefined) continue
+      this.#prefs.moved[id] = offsetAt(p.x, p.y, this.#sizes[id], this.#lsq, this.#area, this.#avoid, p.v)
+    }
   }
 
   /**

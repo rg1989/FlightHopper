@@ -9,8 +9,11 @@ import type { BlockId } from '../scene/flightFrame.ts'
 
 export const FRAME_PREFS_KEY = 'fh.hudLayout.v1'
 
-/** Where a moved card's anchor is: its offset from the aircraft's middle, x right and y down, in layout sides. */
-export interface Offset { x: number; y: number }
+/**
+ * Where a moved card's anchor is: its offset from the aircraft's middle, x right and y down, in layout sides; v: the
+ * variant it keeps (its index: the full card, then smaller ones), the one it had when it was moved.
+ */
+export interface Offset { x: number; y: number; v?: number }
 export interface FramePrefs { moved: Partial<Record<BlockId, Offset>>; hidden: readonly BlockId[] }
 
 export const NO_FRAME_PREFS: FramePrefs = Object.freeze({ moved: Object.freeze({}), hidden: Object.freeze([]) })
@@ -18,10 +21,13 @@ export const NO_FRAME_PREFS: FramePrefs = Object.freeze({ moved: Object.freeze({
 const CARDS: readonly BlockId[] = ['left', 'right', 'top', 'bottom']
 const REACH = 10 // sides: farther than any screen reaches, so a larger offset is a corrupt one
 
-const offset = (v: unknown): Offset | null => {
-  const { x, y } = (v ?? {}) as Record<string, unknown>
+const VARIANTS = 4 // more than any card has: a larger index is a corrupt one
+
+const offset = (o: unknown): Offset | null => {
+  const { x, y, v } = (o ?? {}) as Record<string, unknown>
   const ok = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= REACH
-  return ok(x) && ok(y) ? { x, y } : null
+  if (!ok(x) || !ok(y)) return null
+  return Number.isInteger(v) && (v as number) >= 0 && (v as number) < VARIANTS ? { x, y, v: v as number } : { x, y }
 }
 
 /** The stored layout; corrupt or foreign values fall back card by card (to its place, shown). Never throws. */

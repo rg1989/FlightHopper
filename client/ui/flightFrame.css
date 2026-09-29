@@ -1059,11 +1059,12 @@
   pointer-events: none;
 }
 
-/* The eye on the card's corner: hide it, or show it again. A 44 px target round the small button. */
+/* The eye on the card's corner: hide it, or show it again. A 44 px target round the small button. Over the card's edges by
+   the 8 px a card keeps from the view's (FlightFrame PAD), so at the edge it shows whole. */
 .fh-frame[data-edit] .fh-feye {
   position: absolute;
-  top: -10px;
-  right: -10px;
+  top: -8px;
+  right: -8px;
   z-index: 1;
   display: grid;
   place-items: center;

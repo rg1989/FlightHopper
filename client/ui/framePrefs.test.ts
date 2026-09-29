@@ -15,6 +15,14 @@ test('the stored layout reads back: the moved cards\' offsets and the hidden car
   assert.deepEqual(p, { moved: { left: { x: -0.9, y: 0.25 }, top: { x: 0, y: 1.4 } }, hidden: ['bottom'] })
 })
 
+test('a moved card keeps the variant it had (v, its index); a foreign one is dropped, the offset kept', () => {
+  const p = readFramePrefs('{"moved":{"left":{"x":-0.9,"y":0.25,"v":1},"right":{"x":1,"y":0,"v":0}}}')
+  assert.deepEqual(p.moved, { left: { x: -0.9, y: 0.25, v: 1 }, right: { x: 1, y: 0, v: 0 } })
+  for (const v of [-1, 1.5, 9, '1', null]) {
+    assert.deepEqual(readFramePrefs(JSON.stringify({ moved: { top: { x: 0, y: 1, v } } })).moved, { top: { x: 0, y: 1 } }, String(v))
+  }
+})
+
 test('corrupt or foreign values fall back card by card, never throw', () => {
   for (const bad of ['', 'not json', '{"moved":', 'null', '42', '"left"', '[]', '{}', '{"moved":[],"hidden":{}}']) {
     assert.deepEqual(readFramePrefs(bad), { moved: {}, hidden: [] }, bad)
