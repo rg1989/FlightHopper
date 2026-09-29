@@ -19,6 +19,11 @@ const P: Record<string, string> = {
   altitude: 'M4 20V15M9.3 20V11M14.7 20V7M20 20V3.5',
   // i in a circle.
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 11v5.5M12 7.5h.01',
+  // Four cards of different sizes: a layout (the flight-data frame's), to edit.
+  layout: 'M3.5 3.5h7v9h-7zM13.5 3.5h7v5h-7zM13.5 11.5h7v9h-7zM3.5 15.5h7v5h-7z',
+  // An eye, open and struck through: shown, hidden.
+  eye: 'M2.5 12c2.2-4.3 5.6-6.5 9.5-6.5s7.3 2.2 9.5 6.5c-2.2 4.3-5.6 6.5-9.5 6.5S4.7 16.3 2.5 12ZM12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z',
+  eyeOff: 'M2.5 12c2.2-4.3 5.6-6.5 9.5-6.5s7.3 2.2 9.5 6.5c-2.2 4.3-5.6 6.5-9.5 6.5S4.7 16.3 2.5 12ZM12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5ZM4 4l16 16',
   // Four corners out / in.
   maximize: 'M8 3.5H3.5V8M16 3.5h4.5V8M20.5 16v4.5H16M3.5 16v4.5H8',
   minimize: 'M8 3.5V8H3.5M16 3.5V8h4.5M20.5 16H16v4.5M3.5 16H8v4.5',

@@ -13,8 +13,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const {
-  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData, pitchText,
-  speedText, vsText, windText,
+  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData, offsetAt,
+  pitchText, speedText, vsText, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -227,6 +227,48 @@ test('frameLayout: 300 random cases: every block inside the safe area, clear of 
   }
 })
 
+test('frameLayout: a moved card goes where the viewer put it, its anchor its offset × the side from the centre; the rest avoid it', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const far = frameLayout(sq, SIZES, SAFE, 10, undefined, { left: { x: -3, y: -2 } })
+  assert.deepEqual(at(far, 'left'), { x: 640 - 360 - 48, y: 400 - 240 - 29 })
+  assert.deepEqual([far.left!.side, far.left!.v], ['left', 0])
+  for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(far, id), at(frameLayout(sq, SIZES, SAFE), id), `${id} where it was`)
+  const there = frameLayout(sq, SIZES, SAFE, 10, undefined, { left: { x: 1.5, y: 0 } }) // on the speed's place
+  assert.deepEqual(at(there, 'left'), { x: 640 + 180 - 48, y: 400 - 29 })
+  apart(there, SIZES, sq, 10)
+})
+
+test('frameLayout: a tape moved away frees its side, but the heading stays under the attitude: beside the aircraft is the tapes\' place', () => {
+  const sq: Square = { x: 720, y: 421, side: 378 }
+  const before = frameLayout(sq, DESK_SIZES, DESK)
+  assert.equal(before.top!.side, 'bottom')
+  const after = frameLayout(sq, DESK_SIZES, DESK, 10, undefined, { right: { x: 0.9, y: -0.55 } })
+  assert.deepEqual(at(after, 'top'), at(before, 'top'))
+  const noTapes = frameLayout(sq, { ...DESK_SIZES, left: [], right: [] }, DESK)
+  assert.deepEqual(at(noTapes, 'top'), at(before, 'top'), 'nor with no tapes at all')
+})
+
+test('frameLayout: a moved card may cover the aircraft, stays inside the safe area, and takes the largest variant that fits there', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const over = frameLayout(sq, SIZES, SAFE, 10, undefined, { bottom: { x: 0, y: 0 } })
+  assert.deepEqual(at(over, 'bottom'), { x: 640 - 98, y: 400 - 22 }, 'on the aircraft: the viewer put it there')
+  const edge = frameLayout(sq, SIZES, SAFE, 10, undefined, { right: { x: 9, y: -9 } })
+  assert.deepEqual(at(edge, 'right'), { x: 1280 - 88, y: 0 }, 'pushed back inside')
+  const small: Rect = { x: 0, y: 0, w: 150, h: 800 }
+  const sizes = { ...SIZES, bottom: [{ w: 196, h: 44 }, { w: 140, h: 40 }] }
+  assert.equal(frameLayout({ x: 75, y: 400, side: 40 }, sizes, small, 10, undefined, { bottom: { x: 0, y: 2 } }).bottom!.v, 1)
+})
+
+test('offsetAt: the offset that puts a dragged card\'s top-left where the pointer holds it, or as near as the safe area allows', () => {
+  const sq: Square = { x: 640, y: 400, side: 150 }
+  for (const [x, y] of [[100, 120], [700, 380], [1250, 790], [-40, -30]]) {
+    const p = frameLayout(sq, SIZES, SAFE, 10, undefined, { right: offsetAt(x, y, SIZES.right, sq, SAFE) })
+    assert.deepEqual(at(p, 'right'), { x: Math.min(Math.max(x, 0), 1280 - 88), y: Math.min(Math.max(y, 0), 800 - 64) }, `${x},${y}`)
+  }
+  const o = offsetAt(640 - 44, 400 - 32, SIZES.right, sq, SAFE)
+  assert.deepEqual(o, { x: 0, y: 0 }, 'centred on the aircraft: no offset')
+})
+
 // ---- layoutSide -----------------------------------------------------------------------------------------------------
 
 // 1440 × 900 in chase: the flight card cuts the safe area's top, the rail its right; the aircraft a little above the
@@ -272,6 +314,17 @@ test('layoutSide: a block that would slide along its side, not straight out, has
   assert.equal(p.top!.x, least.top!.x, 'the heading still under the attitude, not beside it')
   assert.ok(Math.abs(p.top!.y - least.top!.y - (s - LEAST) / 2) < 1e-6)
   assert.ok(s > LEAST + 100, String(s))
+})
+
+test('layoutSide: a moved card keeps its offset in sides, so it spreads with the square; the side stops before it leaves the safe area', () => {
+  const moved = { top: { x: -1.2, y: -0.5 } } // the heading up and left of the aircraft
+  const sq: Square = { x: 720, y: 421, side: 2400 }
+  assert.equal(layoutSide({ ...sq, side: 60 }, LEAST, DESK_SIZES, DESK, 10, undefined, moved), LEAST, 'zoomed out: where it was put')
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK, 10, undefined, moved)
+  assert.equal(s, Math.floor((421 - 36 - 178) / 0.5), 'its top edge at the safe area\'s')
+  const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK, 10, undefined, moved)
+  assert.ok(Math.abs(p.top!.y + 36 - (421 - 0.5 * s)) < 1e-9, 'not pushed back: in proportion')
+  assert.ok(Math.abs(p.top!.x + 135.5 - (720 - 1.2 * s)) < 1e-9)
 })
 
 test('layoutSide: from far out to close in, no block ever changes side or variant, and none jumps', () => {

@@ -63,6 +63,7 @@ import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
+import { FRAME_PREFS_KEY, readFramePrefs, writeFramePrefs } from './ui/framePrefs.ts'
 import { mountSceneToggles } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
 import { flightCredit, mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
@@ -323,9 +324,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // The localStorage getter and getItem both throw where storage is blocked: then only the URL and the defaults count.
   let store: Storage | null = null
   let stored: string | null = null
+  let storedFrame: string | null = null
   try {
     store = window.localStorage
     stored = store.getItem(PREFS_KEY)
+    storedFrame = store.getItem(FRAME_PREFS_KEY)
   } catch {
     // blocked: nothing stored, nothing kept
   }
@@ -404,8 +407,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root), { flagOf, onChase: (hex) => select(hex) }) : null
   const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
+  // Its cards as the viewer arranged them (edit mode: the rail's layout button), kept in this browser.
   const frameLayer = div('fh-frame', root)
-  const flightFrame = new FlightFrame(frameLayer)
+  const flightFrame = new FlightFrame(frameLayer, {
+    prefs: readFramePrefs(storedFrame),
+    onPrefs: (p) => writeFramePrefs(p, store),
+    onEdit: (on) => rail.button('layout').setAttribute('aria-pressed', String(on)),
+  })
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
   // Every tool sits behind a small icon on the rail (right edge); all panels start closed. layout.css places the rest.
@@ -428,6 +436,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       title: 'Scene', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
     } },
     { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
+    // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
+    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', group: 1, action: () => {
+      if (!flightFrame.editing) rail.close()
+      flightFrame.edit(!flightFrame.editing)
+    } },
     { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', group: 2, panel: {
       title: 'Scenarios',
       mount: (b) => (scenarioPanel = mountScenarioPanel(b, {
@@ -442,6 +455,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
     if (id === 'scenarios') openedScenarios()
   })
+  rail.button('layout').setAttribute('aria-pressed', 'false') // a toggle: edit mode
   const imagery0 = badgeView(imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
   const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos: new PhotoCache(), lookup: lookupFor })
@@ -612,6 +626,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       enterBrowse(viewer, chased ?? (e === undefined ? null : e), { heightM: browseHeightM ?? undefined })
     }
     sun.setEnabled(on && prefs.light) // chase only (D9): browse stays the unlit street map
+    if (!on) flightFrame.edit(false)
     ui.dataset.mode = on ? 'chase' : 'browse'
   }
 
@@ -711,6 +726,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     chased = null
     groundM = null
     sun.setEnabled(false)
+    flightFrame.edit(false)
     ui.dataset.mode = 'browse'
     lastUrlMs = -Infinity // the address bar drops the scenario at once
   }
@@ -1015,10 +1031,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   document.addEventListener('pointerdown', onPressOutside, true)
   const onKey = (e: KeyboardEvent): void => {
-    // Esc steps back one level: an open panel, then a scenario or the chase (to the map), then the focus.
+    // Esc steps back one level: an open panel, edit mode, then a scenario or the chase (to the map), then the focus.
     if (e.key === 'Escape') {
       if (!rail.close()) {
-        if (run !== null || loadingScenario !== null) exitScenario()
+        if (flightFrame.editing) flightFrame.edit(false)
+        else if (run !== null || loadingScenario !== null) exitScenario()
         else if (chasing) setChase(false)
         else select(null)
       }
