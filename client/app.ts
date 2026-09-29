@@ -442,8 +442,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     } },
     { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
+    // A traffic aircraft's card closes too (it and its brackets would sit over the cards), and none opens while editing.
     { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', group: 1, action: () => {
       if (!flightFrame.editing) rail.close()
+      if (!flightFrame.editing) traffic?.close()
       flightFrame.edit(!flightFrame.editing)
     } },
     { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', group: 2, panel: {
@@ -1046,8 +1048,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
     // Chase traffic first: a click in a model's bracket square opens its card (in place of another: one at most) and
-    // closes a panel, which would cover it; a click anywhere else closes an open one, and does nothing more.
-    if (traffic !== null) {
+    // closes a panel, which would cover it; a click anywhere else closes an open one, and does nothing more. Not while
+    // the frame's cards are being arranged.
+    if (traffic !== null && !flightFrame.editing) {
       const hit = traffic.hitAt(e.position.x, e.position.y)
       if (hit !== null) {
         if (hit !== traffic.openHex) trafficRaw = null // the last aircraft's object, until this one's arrives
@@ -1071,7 +1074,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     hoverTimer = null
     lastPickMs = performance.now()
     mapHover = fleetLayer.pick(mousePos)
-    const bracket = traffic?.hitAt(mousePos.x, mousePos.y) ?? null
+    const bracket = flightFrame.editing ? null : (traffic?.hitAt(mousePos.x, mousePos.y) ?? null)
     viewer.canvas.style.cursor = mapHover === null && bracket === null ? '' : 'pointer'
   }
   mouse.setInputAction((m: ScreenSpaceEventHandler.MotionEvent) => {
