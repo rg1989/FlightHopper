@@ -2,8 +2,8 @@
 // The tool rail: small square icon buttons down the right edge. A button opens its panel beside the rail (one panel at a
 // time; all start closed) or runs an action. Panel bodies are mounted once, at start, so their owners can update them
 // while they are closed. The app routes Esc here first (close()), then to leaving chase. On phones (rail.css) the rail
-// is a tab bar along the bottom with a short label under each icon, and a panel is a sheet above it that a downward
-// swipe on its header closes.
+// is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
+// a panel is a sheet above it that a downward swipe on its header closes.
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -91,6 +91,17 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   }
   close.addEventListener('click', () => api.open(null))
   root.append(rail, panel)
+
+  // Phone tab bar: where it scrolls, a fade on each side that has more tabs (rail.css). Re-read on a scroll, a resize,
+  // and a tab shown or hidden (its size changes).
+  const edges = (): void => {
+    rail.classList.toggle('fh-more-start', rail.scrollLeft > 1)
+    rail.classList.toggle('fh-more-end', rail.scrollLeft < rail.scrollWidth - rail.clientWidth - 1)
+  }
+  rail.addEventListener('scroll', edges, { passive: true })
+  const resized = new ResizeObserver(edges)
+  resized.observe(rail)
+  for (const b of buttons.values()) resized.observe(b)
 
   // Phone sheet: drag the header down to close (past SWIPE_PX), else it springs back. Clicks on its buttons stay clicks.
   const SWIPE_PX = 70
@@ -180,6 +191,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       if (d.dataset.state !== state) d.dataset.state = state
     },
     destroy() {
+      resized.disconnect()
       rail.remove()
       panel.remove()
     },

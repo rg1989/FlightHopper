@@ -302,6 +302,37 @@
 }
 
 
+/* A traffic aircraft's distance from the chased one: a line above the status, by the brackets' mark in their colour. */
+.fh-card-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 14px 0 12px;
+  color: var(--fh-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fh-card-range[hidden] {
+  display: none;
+}
+
+.fh-card-range .fh-icon {
+  flex: none;
+  color: var(--fh-traffic);
+}
+
+.fh-card-range-d {
+  color: var(--fh-text);
+  font-weight: 600;
+}
+
+.fh-card-range-f {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Status line, the expand toggle and the primary action (Chase / Map) side by side. */
 .fh-card-foot {
   display: flex;
@@ -453,13 +484,147 @@
   }
 }
 
-/* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both). */
+/* The photo's credit as a line under the callsign (flightCard.ts): only where the photo is a thumbnail (below). */
+.fh-card-credit-line {
+  display: none;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--fh-muted);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Phones in the chase: the view needs the room, so the airline and registration line goes (the details have both), and
+   the photo is a thumbnail beside the callsign, its credit a line under it (full width, the card took half the screen,
+   over the aircraft and the flight-data frame's cards). Both cards: the chased one and a traffic aircraft's. */
 @media (max-width: 640px) {
   .fh-ui[data-mode='chase'] .fh-card-sub {
     display: none;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card:not([hidden]) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > * {
+    grid-column: 1 / -1;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-photo {
+    grid-row: 1;
+    grid-column: 1;
+    width: 72px;
+    max-height: none;
+    margin: 12px 0 0 10px;
+    border-radius: 7px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-head {
+    grid-row: 1;
+    grid-column: 2;
+    padding-left: 10px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-photo .fh-card-credit {
+    display: none;
+  }
+
+  /* Its line kept from the start (empty until the photo arrives): the card does not grow after keepClear placed it. */
+  .fh-ui[data-mode='chase'] .fh-card-credit-line {
+    display: block;
+    min-height: 1lh;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-credit-line[hidden] {
+    visibility: hidden;
+  }
+}
+
+/* The narrowest phones: a smaller thumbnail and callsign, so the callsign, its type and the buttons still fit a line. */
+@media (max-width: 380px) {
+  .fh-ui[data-mode='chase'] .fh-card > .fh-card-photo {
+    width: 56px;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-card-callsign {
+    font-size: 18px;
   }
 }
 
 @keyframes fh-card-up {
   from { opacity: 0; transform: translateY(8px); }
+}
+
+/* A traffic aircraft's card (a click in its brackets in the chase): the chased one's card at the top right, beside the
+   rail where a panel opens, edged in the brackets' colour; at the bottom instead where it would cover that aircraft
+   (keepClear: .fh-card-flip). A panel opened over it hides it until it closes (app.ts closes the panel when a bracket
+   is clicked). */
+.fh-card.fh-tcard {
+  right: calc(70px + var(--fh-right)); /* 12 px clear of the rail (12 px from the edge, 46 px wide) */
+  left: auto;
+  border-color: rgb(255 210 63 / 0.42);
+}
+
+.fh-card.fh-tcard.fh-card-flip {
+  top: auto;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  animation-name: fh-card-up;
+}
+
+.fh-ui:has(.fh-panel:not([hidden])) .fh-tcard {
+  visibility: hidden;
+}
+
+@media (pointer: coarse) {
+  .fh-card.fh-tcard {
+    right: calc(78px + var(--fh-right)); /* the rail's 44 px buttons make it 54 px wide */
+  }
+}
+
+/* Where both ends of its column would cover the flight-data frame's cards (FlightCardHandle.keepClear, which the frame
+   does not make way for: they stay put), the chased card's place, which waits hidden. Narrower screens put it there
+   anyway (below). */
+@media (min-width: 861px) {
+  .fh-card.fh-tcard.fh-card-home {
+    right: auto;
+    left: var(--fh-left);
+  }
+
+  .fh-ui:has(.fh-tcard.fh-card-home:not([hidden])) .fh-card:not(.fh-tcard) {
+    visibility: hidden;
+  }
+}
+
+/* Narrow screens: no room for two cards side by side. It takes the chased card's place, which waits hidden; on phones
+   that is above the tab bar, and its airline, registration and photo mark stay (a card opened to be read). */
+@media (max-width: 860px) {
+  .fh-card.fh-tcard {
+    right: auto;
+    left: var(--fh-left);
+  }
+
+  .fh-ui:has(.fh-tcard:not([hidden])) .fh-card:not(.fh-tcard) {
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 640px) {
+  .fh-card.fh-tcard {
+    right: 8px;
+    left: 8px;
+  }
+
+  .fh-card.fh-tcard.fh-card-flip {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    animation-name: fh-card-in;
+  }
+
+  .fh-ui[data-mode='chase'] .fh-tcard .fh-card-sub:not([hidden]) {
+    display: flex;
+  }
 }

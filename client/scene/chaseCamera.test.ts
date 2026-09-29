@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Camera, Cartesian3, Cartographic, Ellipsoid, GeographicProjection, MapMode2D, Matrix4, SceneMode } from 'cesium'
 import type { Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
-import { chaseOffsetEnu, ChaseCamera, OrbitControl } from './chaseCamera.ts'
+import { chaseOffsetEnu, ChaseCamera, defaultRangeM, OrbitControl } from './chaseCamera.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
 const DEG = 180 / Math.PI
@@ -101,6 +101,37 @@ test('heading is damped exponentially (tau 1 s) and wraps through north, not the
   near(lookHeadingDeg(camera), (350 + 20 * (1 - Math.exp(-1))) % 360, 1e-6, 'dt 0 changes nothing')
   for (let i = 0; i < 100; i++) cc.update(st({ headingDeg: 10 }), 0.1)
   near(lookHeadingDeg(camera), 10, 0.01)
+})
+
+test('aim: the camera orbits the point given (the aircraft\'s middle) at the range, not the wheels', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const mid = Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1006)
+  new ChaseCamera(viewer).update(st({ hM: 1000 }), 0.016, mid)
+  near(Cartesian3.distance(camera.positionWC, mid), 150, 1e-6)
+  near(camera.positionCartographic.height, 1006 + 150 * Math.sin(12 / DEG), 0.01)
+})
+
+test('the view\'s middle a little under the aimed point: the aircraft sits above the middle of the view by the same angle at every range', () => {
+  const { camera, viewer } = fakeViewer(() => 0)
+  const mid = Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1006)
+  const cc = new ChaseCamera(viewer)
+  for (const r of [25, 150, 3000]) {
+    cc.orbit.set(0, -12, r)
+    cc.update(st({ hM: 1000 }), 0.016, mid)
+    const to = Cartesian3.normalize(Cartesian3.subtract(mid, camera.positionWC, new Cartesian3()), new Cartesian3())
+    near(Math.acos(Cartesian3.dot(to, camera.directionWC)) * DEG, 2.4, 1e-6, `${r} m`)
+    assert.ok(Cartesian3.dot(to, camera.upWC) > 0, `${r} m: above the middle`)
+  }
+})
+
+test('defaultRangeM: 150 m on a wide view; on a tall one farther, so the aircraft takes the share of the width it takes on a wide one', () => {
+  assert.equal(defaultRangeM(1440, 900), 150)
+  assert.equal(defaultRangeM(900, 900), 150)
+  near(defaultRangeM(390, 844), 150 * 844 / 390, 1e-9)
+  assert.equal(defaultRangeM(0, 0), 150, 'before layout: the plain default')
+  const tall = fakeViewer(() => 0)
+  ;(tall.viewer.scene.canvas as { clientWidth: number; clientHeight: number }) = { clientWidth: 390, clientHeight: 844 }
+  near(new ChaseCamera(tall.viewer).orbit.rangeM, 150 * 844 / 390, 1e-9, 'the camera starts there')
 })
 
 test('headingTauS option: a slower camera turns less in the same time', () => {

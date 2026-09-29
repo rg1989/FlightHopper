@@ -240,7 +240,7 @@ function render(nowMs: number): void {
   }
   const sq: Square = { x: state.x, y: state.y, side: state.side }
   const t = state.anim ? state.t + (nowMs - t0) / 1000 : state.t
-  frame.draw(sq, dataAt(state.data, t), safe, nowMs)
+  frame.draw(sq, dataAt(state.data, t), { safe, covers: boxes }, nowMs)
   // The stand-in's span is 93 % of the square's side, as a model's is of its box.
   place(plane, { x: sq.x - sq.side / 2, y: sq.y - sq.side / 4, w: sq.side, h: sq.side / 2 })
   place(safeEl, safe)

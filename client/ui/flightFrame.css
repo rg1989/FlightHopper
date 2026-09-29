@@ -4,7 +4,7 @@
    backdrop blur (a GPU pass every frame the globe redraws): a darker translucent fill, a hairline, a soft shadow. The
    moving parts are transformed only. Sizes are CSS variables: the full cards, a compact variant (data-v="1", when the full
    one has no room), and smaller ones on phones. Over the traffic brackets (z 5), under every panel (.fh-ui children from
-   z 18). Nothing here takes the pointer. */
+   z 18). Nothing here takes the pointer, but in edit mode the cards and the toolbar (the last section). */
 .fh-frame {
   position: absolute;
   inset: 0;
@@ -38,6 +38,12 @@
   --fh-read-fs: 15.5px;
   --fh-col-w: 66px;
   --fh-att-gap: 10px;
+}
+
+/* The chased aircraft's brackets (.fh-bracket, layout.css): a corner a card is over is not drawn (FlightFrame). */
+.fh-frame .fh-bracket.fh-cut-tr::before,
+.fh-frame .fh-bracket.fh-cut-bl::after {
+  display: none;
 }
 
 /* Cards, parts and glyphs with nothing to show (several are flex containers, which would override `hidden`). */
@@ -106,6 +112,23 @@
 .fh-line .fh-v {
   font: 650 12.5px/1.1 var(--fh-font);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Each figure has the room of its longest usual value, so a card's width never follows its numbers (the cards round the
+   aircraft would shift as a climb's V/S grows a digit): V/S to ↓ 9,950 (a dive's 5 digits still widen it), AGL to
+   14,990 (never shown above 15,000 ft), speeds to 3 digits. */
+.fh-vsl .fh-v {
+  min-width: 6.2ch;
+}
+
+.fh-agl .fh-v {
+  min-width: 5.6ch;
+}
+
+.fh-tas .fh-v,
+.fh-gs .fh-v {
+  min-width: 3ch;
 }
 
 .fh-line .fh-u {
@@ -965,6 +988,12 @@
     font-size: 11.5px;
   }
 
+  /* V/S without its unit: with it the line is wider than the altitude tape, and that card's width sets how close the
+     tapes come to the aircraft on a phone (the vertical speed reads in ft/min on the flight card too). */
+  .fh-vsl .fh-u {
+    display: none;
+  }
+
   .fh-read {
     padding: 0 5px;
   }
@@ -976,5 +1005,227 @@
   .fh-tape text,
   .fh-hdg-tape text {
     font-size: 10px;
+  }
+}
+
+/* ---- edit mode (FlightFrame.edit): drag a card, hide or show it; a toolbar on top ---------------------------------- */
+
+/* The rail's button for it: the chase view only, where the frame is. */
+.fh-ui:not([data-mode='chase']) .fh-ibtn[data-id='layout'] {
+  display: none;
+}
+
+.fh-fgrip,
+.fh-feye {
+  display: none;
+}
+
+/* Every card editable: a dashed accent outline and a grab cursor. It takes the pointer, so the camera stays put. */
+.fh-frame[data-edit] .fh-fblock {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  outline: 1.5px dashed rgba(90, 169, 255, 0.8);
+  outline-offset: 2px;
+}
+
+.fh-frame[data-edit] .fh-fblock:hover,
+.fh-frame[data-edit] .fh-fblock.fh-dragging {
+  outline-color: var(--fh-accent);
+}
+
+.fh-frame[data-edit] .fh-fblock.fh-dragging {
+  z-index: 2;
+  cursor: grabbing;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* The grip: a pill on the card's top edge. The whole card drags; this says so. */
+.fh-frame[data-edit] .fh-fgrip {
+  position: absolute;
+  top: -5px;
+  left: calc(50% - 13px);
+  display: block;
+  width: 26px;
+  height: 10px;
+  border-radius: 5px;
+  background:
+    linear-gradient(#07101c, #07101c) center 3px / 12px 1.25px no-repeat,
+    linear-gradient(#07101c, #07101c) center 5.75px / 12px 1.25px no-repeat,
+    var(--fh-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* The eye on the card's corner: hide it, or show it again. A 44 px target round the small button. Over the card's edges by
+   the 8 px a card keeps from the view's (FlightFrame PAD), so at the edge it shows whole. */
+.fh-frame[data-edit] .fh-feye {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--fh-accent);
+  border-radius: 50%;
+  background: #0d1119;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  color: var(--fh-text);
+  cursor: pointer;
+}
+
+.fh-frame[data-edit] .fh-feye::before {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+}
+
+.fh-frame[data-edit] .fh-feye:hover {
+  background: #15233a;
+}
+
+.fh-frame[data-edit] .fh-feye:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 2px;
+}
+
+/* A hidden card while editing: a striped ghost of itself, its eye struck through, to be shown again. */
+.fh-frame[data-edit] .fh-fblock.fh-off {
+  outline-color: rgba(142, 154, 171, 0.75);
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 6px, transparent 6px 12px), rgba(10, 14, 20, 0.5);
+  box-shadow: none;
+}
+
+.fh-frame[data-edit] .fh-fblock.fh-off > :not(.fh-fgrip, .fh-feye) {
+  opacity: 0.25;
+}
+
+.fh-frame[data-edit] .fh-fblock.fh-off .fh-fgrip {
+  background-color: var(--fh-muted);
+}
+
+.fh-frame[data-edit] .fh-fblock.fh-off .fh-feye {
+  border-color: var(--fh-muted);
+  color: var(--fh-muted);
+}
+
+/* The toolbar: what the mode does, a reset, Done. At the top, centred, or where FlightFrame finds room (left and top
+   set there); over the cards, under every panel. */
+.fh-fbar {
+  position: absolute;
+  z-index: 3;
+  top: var(--fh-top);
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 16px);
+  padding: 5px 5px 5px 12px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: var(--fh-radius);
+  background: var(--fh-glass-strong);
+  box-shadow: var(--fh-shadow);
+  color: var(--fh-text);
+  font: 13px/1.2 var(--fh-font);
+  white-space: nowrap;
+  -webkit-font-smoothing: antialiased;
+  pointer-events: auto;
+  animation: fh-fbar-in var(--fh-fast) var(--fh-ease);
+}
+
+@keyframes fh-fbar-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
+.fh-fbar-t {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 8px;
+}
+
+.fh-fbar-t .fh-icon {
+  flex: none;
+  color: var(--fh-accent);
+}
+
+.fh-fbar-t b {
+  font-weight: 650;
+}
+
+.fh-fbar-hint {
+  color: var(--fh-muted);
+}
+
+.fh-fbar-hint::before {
+  content: '— ';
+}
+
+.fh-fbar-b {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--fh-radius-sm);
+  background: var(--fh-hover);
+  color: var(--fh-text);
+  font: 600 12.5px/1 var(--fh-font);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-fbar-b:hover {
+  background: var(--fh-press);
+}
+
+.fh-fbar-b:disabled {
+  background: var(--fh-hover);
+  opacity: 0.4;
+  cursor: default;
+}
+
+.fh-fbar-b:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-fbar-done {
+  background: var(--fh-accent);
+  color: #06111f;
+}
+
+.fh-fbar-done:hover {
+  background: #7cbcff;
+}
+
+@media (max-width: 640px) {
+  .fh-fbar {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    max-width: calc(100% - 24px);
+    padding: 4px 4px 4px 12px;
+    font-size: 14px;
+  }
+
+  .fh-fbar-b {
+    height: 44px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+
+  .fh-fbar-more {
+    display: none;
+  }
+}
+
+/* A phone held upright: the title alone (the grips on the cards say how), so the toolbar keeps 12 px from each edge. */
+@media (max-width: 480px) {
+  .fh-fbar-hint {
+    display: none;
   }
 }

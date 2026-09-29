@@ -9,21 +9,30 @@
 // (liveFlightData: what ADS-B broadcasts and the drawn state) and scenarios (the track's FlightData). Every instrument
 // moves every frame, smoothly (transforms only); its figures change at most every TEXT_MS, but the tapes' readouts roll
 // every frame, and the speed tape's trend arrow points at the speed 10 s ahead. frameLayout (pure) places the blocks
-// round the aircraft, never over it.
+// round a square on the aircraft, never over it; layoutSide (pure) sizes that square: the default framing's when zoomed
+// out, and zoomed in no larger than the blocks' arrangement fits, so there they stop, over the aircraft.
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
-import type { PerspectiveFrustum, Viewer } from 'cesium'
+import type { Model, PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import { trueAirspeedKt } from '../track/airspeed.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
+import { NO_FRAME_PREFS, type FramePrefs, type Offset } from '../ui/framePrefs.ts'
+import { icon } from '../ui/icons.ts'
 import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
+import { defaultRangeM } from './chaseCamera.ts'
 import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
 import '../ui/flightFrame.css'
 
 /** A rectangle in CSS px from the canvas's top-left. */
 export interface Rect { x: number; y: number; w: number; h: number }
-/** The bracket square: centre and side, CSS px from the canvas's top-left. */
-export interface Square { x: number; y: number; side: number }
+/**
+ * Where the frame may go: the safe rectangle its automatic layout keeps to (the app's safeArea), and what covers the view
+ * (the rail, the flight card, the play bar…), which a card the viewer moved, and the edit toolbar, keep clear of instead.
+ */
+export interface Room { safe: Rect; covers: readonly Rect[] }
+/** The bracket square: centre and side, CSS px from the canvas's top-left; head: room kept clear over it too (px). */
+export interface Square { x: number; y: number; side: number; head?: number }
 export type BlockId = 'left' | 'right' | 'top' | 'bottom'
 
 export const TEXT_MS = 100 // figures at most 10 times a second: steadier to read (the instruments themselves move every frame)
@@ -45,23 +54,91 @@ const fin = (v: number | null | undefined): v is number => typeof v === 'number'
 export interface BlockSize { w: number; h: number; ax?: number; ay?: number }
 /** Where a block went: its top-left, the side of the square it is on (its own, or another), and which variant. */
 export interface Placed { x: number; y: number; side: BlockId; v: number }
+/** A block the viewer moved (edit mode), where it goes this frame (movedTo): its top-left and variant. */
+export interface Fixed { x: number; y: number; v: number }
 /** Coming home from another side, or growing back to a larger variant, takes this much room to spare: no flicker. */
 export const HYST_PX = 16
 
 interface Box { x0: number; y0: number; x1: number; y1: number }
 interface Cand { x: number; y: number; cost: number }
 const EPS = 1e-6
-// Where a block with no room on its own side goes, in order, and the detour (px) each is charged.
+// Where a block with no room on its own side goes, in order, and the detour (px) each is charged. Beside the aircraft is
+// the tapes' place: the heading or the attitude goes there only when the other side has no room even stacked (a tape
+// moved or hidden in edit mode leaves its side free, and the heading must not jump into it).
 const AWAY: Record<BlockId, ReadonlyArray<readonly [BlockId, number]>> = {
   left: [['right', 0], ['bottom', 40], ['top', 80]],
   right: [['left', 0], ['bottom', 40], ['top', 80]],
-  top: [['bottom', 0], ['right', 40], ['left', 40]],
-  bottom: [['top', 0], ['right', 40], ['left', 40]],
+  top: [['bottom', 0], ['right', 400], ['left', 400]],
+  bottom: [['top', 0], ['right', 400], ['left', 400]],
 }
 const AWAY_ORDER: readonly BlockId[] = ['left', 'right', 'bottom', 'top'] // altitude, speed, attitude, heading
 const VARIANT_PX = 60 // away from home, a smaller variant is charged as this much detour
 const SLIDE_COST = 1.5 // a px along the side (out of line with the aircraft) costs this much more than a px out from it
 const STAY_PX = 30 // away from home, the place it had last frame is kept over one up to this much better
+
+/** A block's variants that take room, each with its index (0 × 0, or none: the block is hidden). */
+const variantsOf = (s: BlockSize | readonly BlockSize[]): Array<{ b: BlockSize; v: number }> =>
+  (Array.isArray(s) ? (s as readonly BlockSize[]) : [s as BlockSize]).map((b, v) => ({ b, v })).filter(({ b }) => b.w > 0 && b.h > 0)
+
+/**
+ * The top-left nearest (x, y) at which a w × h box lies inside view and at least gap clear of every cover: the view less
+ * what covers it (a card beside the flight card may go as high as it), not only the safe rectangle. With none free,
+ * (x, y) kept inside view.
+ */
+export function freeSpot(x: number, y: number, w: number, h: number, view: Rect, covers: readonly Rect[], gap: number): { x: number; y: number } {
+  const cs = covers.filter((c) => c.w > 0 && c.h > 0)
+  const inX = (v: number): number => Math.min(Math.max(v, view.x), view.x + view.w - w)
+  const inY = (v: number): number => Math.min(Math.max(v, view.y), view.y + view.h - h)
+  const clear = (px: number, py: number): boolean =>
+    cs.every((c) => px + w + gap <= c.x + EPS || c.x + c.w + gap <= px + EPS || py + h + gap <= c.y + EPS || c.y + c.h + gap <= py + EPS)
+  // Every place against a cover's edge, or where it was put, in each axis.
+  const xs = [x, ...cs.flatMap((c) => [c.x - gap - w, c.x + c.w + gap])].map(inX)
+  const ys = [y, ...cs.flatMap((c) => [c.y - gap - h, c.y + c.h + gap])].map(inY)
+  let best: { x: number; y: number } | null = null
+  let d2 = Infinity
+  for (const px of xs) {
+    for (const py of ys) {
+      const d = (px - x) ** 2 + (py - y) ** 2
+      if (d < d2 - EPS && clear(px, py)) {
+        best = { x: px, y: py }
+        d2 = d
+      }
+    }
+  }
+  return best ?? { x: inX(x), y: inY(y) }
+}
+
+/** The variant a moved block takes: the one it keeps (want) while it fits the view, else its largest that does, else its smallest. */
+const movedVariant = (vs: ReadonlyArray<{ b: BlockSize; v: number }>, view: Rect, want?: number): { b: BlockSize; v: number } => {
+  const fits = ({ b }: { b: BlockSize }): boolean => b.w <= view.w && b.h <= view.h
+  const kept = vs.find(({ v }) => v === want)
+  return kept !== undefined && fits(kept) ? kept : (vs.find(fits) ?? vs[vs.length - 1])
+}
+
+/**
+ * Where a block the viewer moved goes round sq: its anchor at its offset × the side from the centre, in movedVariant, in
+ * the free spot nearest that (freeSpot); null when it has nothing to show.
+ */
+export function movedTo(o: Offset, s: BlockSize | readonly BlockSize[], sq: Square, view: Rect, covers: readonly Rect[]): Fixed | null {
+  const vs = variantsOf(s)
+  if (vs.length === 0) return null
+  const { b, v } = movedVariant(vs, view, o.v)
+  const p = freeSpot(sq.x + o.x * sq.side - (b.ax ?? b.w / 2), sq.y + o.y * sq.side - (b.ay ?? b.h / 2), b.w, b.h, view, covers, PAD)
+  return { x: p.x, y: p.y, v }
+}
+
+/**
+ * The offset at which movedTo puts a block (one with a variant) in variant v (as movedVariant has it) with its top-left
+ * at (x, y), or at the free spot nearest it.
+ */
+export function offsetAt(
+  x: number, y: number, s: BlockSize | readonly BlockSize[], sq: Square, view: Rect, covers: readonly Rect[], v?: number,
+): Offset {
+  const m = movedVariant(variantsOf(s), view, v)
+  const b = m.b
+  const p = freeSpot(x, y, b.w, b.h, view, covers, PAD)
+  return { x: (p.x + (b.ax ?? b.w / 2) - sq.x) / sq.side, y: (p.y + (b.ay ?? b.h / 2) - sq.y) / sq.side, v: m.v }
+}
 
 /** The position nearest pref of a segment len long in [lo, hi], clear of every blocked (open) interval; null: none. */
 function slide(pref: number, len: number, lo: number, hi: number, blocked: ReadonlyArray<readonly [number, number]>): number | null {
@@ -128,6 +205,8 @@ function onSide(side: BlockId, b: BlockSize, sq: Square, S: Box, taken: readonly
  * else goes to another side (the altitude beyond the speed, the heading under the attitude…), else it is hidden (null):
  * a square larger than the safe area hides them all. sizes: each block's variants (0 × 0, or none: hidden). prev: the
  * last frame's placement, for hysteresis: a block that went away comes home, or grows back, only with HYST_PX to spare.
+ * fixed: the blocks the viewer moved (edit mode), placed first where movedTo put them, over the aircraft if that is where
+ * they were put; the others go round them.
  */
 export function frameLayout(
   sq: Square,
@@ -135,22 +214,25 @@ export function frameLayout(
   safe: Rect,
   gap = 10,
   prev?: Partial<Record<BlockId, Placed | null>>,
+  fixed?: Partial<Record<BlockId, Fixed>>,
 ): Record<BlockId, Placed | null> {
   const r = sq.side / 2
-  const S: Box = { x0: sq.x - r, y0: sq.y - r, x1: sq.x + r, y1: sq.y + r }
+  const S: Box = { x0: sq.x - r, y0: sq.y - r - (sq.head ?? 0), x1: sq.x + r, y1: sq.y + r }
   const out: Record<BlockId, Placed | null> = { left: null, right: null, top: null, bottom: null }
   const taken: Box[] = []
-  const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => {
-    const s = sizes[id]
-    const list: readonly BlockSize[] = Array.isArray(s) ? s : [s as BlockSize]
-    return list.map((b, v) => ({ b, v })).filter(({ b }) => b.w > 0 && b.h > 0)
-  }
+  const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => variantsOf(sizes[id])
   const put = (id: BlockId, c: Cand, side: BlockId, v: number, b: BlockSize): void => {
     out[id] = { x: c.x, y: c.y, side, v }
     taken.push({ x0: c.x, y0: c.y, x1: c.x + b.w, y1: c.y + b.h })
   }
-  // Home first, every block, the largest variant that fits.
   for (const id of IDS) {
+    const f = fixed?.[id]
+    const b = f === undefined ? undefined : variants(id).find(({ v }) => v === f.v)?.b
+    if (f !== undefined && b !== undefined) put(id, { x: f.x, y: f.y, cost: 0 }, id, f.v, b)
+  }
+  // Home first, every other block, the largest variant that fits.
+  for (const id of IDS) {
+    if (out[id] !== null) continue
     const p = prev?.[id]
     for (const { b, v } of variants(id)) {
       const extra = p === null || (p !== undefined && (p.side !== id || v < p.v)) ? HYST_PX : 0
@@ -177,6 +259,84 @@ export function frameLayout(
     if (best !== null) put(id, best.c, best.side, best.v, best.b)
   }
   return out
+}
+
+/**
+ * The side of the square the blocks go round (frameLayout, centred on the aircraft) for the aircraft's own square sq: at
+ * least `least` (the default framing's), so that zoomed out the blocks keep their distances instead of closing in on
+ * the aircraft; at most the largest side at which every block, on the side and in the variant it has round `least`,
+ * only moves straight out with the square's edge, so that zoomed in they stop, over the aircraft if need be, instead of
+ * going to other sides, sliding past each other or hiding; the aircraft's own in between. So zooming moves the blocks
+ * continuously and never to another side. Less than `least` only where the view itself (view: the canvas less its edge,
+ * not what covers it) has no room for the tapes beside the aircraft round it (a phone held upright): the largest side at
+ * which it has. What covers the view (the flight card and its photo, a panel) never closes the blocks in on the
+ * aircraft: they take smaller variants or other sides (frameLayout); only where even that leaves one with no place, the
+ * largest side at which each has one. Beyond the aircraft's own, whole px, so each frame finds the same side. The
+ * automatic arrangement only: the cards the viewer moved (edit mode) are placed at offsets from this side, so they must
+ * not change it (a drop would land elsewhere, and move every other moved card).
+ */
+export function layoutSide(
+  sq: Square,
+  least: number,
+  sizes: Record<BlockId, BlockSize | readonly BlockSize[]>,
+  safe: Rect,
+  gap = 10,
+  prev?: Partial<Record<BlockId, Placed | null>>,
+  view: Rect = safe,
+): number {
+  const at = (side: number, room = safe, p = prev): Record<BlockId, Placed | null> =>
+    frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, room, gap, p)
+  // Every block with something to show has a place (with flank, the tapes are beside the aircraft too: their readouts
+  // level with it).
+  const fits = (p: Record<BlockId, Placed | null>, flank: boolean): boolean =>
+    IDS.every((id) => {
+      const q = p[id]
+      if (q === null) return variantsOf(sizes[id]).length === 0
+      return !flank || q.side === id || id === 'top' || id === 'bottom'
+    })
+  // The largest whole side in (a, b) at which ok holds, given it holds at a and not at b; a when none.
+  const largest = (a: number, b: number, ok: (side: number) => boolean): number => {
+    for (let m = Math.floor((a + b) / 2); m > a && m < b; m = Math.floor((a + b) / 2)) {
+      if (ok(m)) a = m
+      else b = m
+    }
+    return a
+  }
+  let lo = Math.max(0, Math.round(least))
+  if (!fits(at(lo, view, undefined), true)) {
+    const s = largest(0, lo, (side) => fits(at(side, view, undefined), true))
+    if (s > 0) lo = s
+  }
+  if (!fits(at(lo), false)) {
+    const s = largest(0, lo, (side) => fits(at(side), false))
+    if (s > 0) lo = s
+  }
+  if (!(sq.side > lo)) return lo
+  const p0 = at(lo)
+  // Each block as round `lo`: on the same side in the same variant, moved straight out with the square's edge (none
+  // slides along its side, or stacks otherwise).
+  const same = (side: number): boolean => {
+    const p = at(side)
+    const d = (side - lo) / 2
+    return IDS.every((id) => {
+      const a = p0[id]
+      const b = p[id]
+      if (a === null || b === null) return a === b
+      const dx = a.side === 'left' ? -d : a.side === 'right' ? d : 0
+      const dy = a.side === 'top' ? -d : a.side === 'bottom' ? d : 0
+      return b.side === a.side && b.v === a.v && Math.abs(b.x - a.x - dx) < 0.5 && Math.abs(b.y - a.y - dy) < 0.5
+    })
+  }
+  return same(sq.side) ? sq.side : largest(lo, sq.side, same)
+}
+
+/**
+ * The aircraft's middle in world coordinates: its bracket box's centre (the manifest's box, else Cesium_Air's) through
+ * modelMatrix; k: the scale the model is drawn at over that (Cesium's minimumPixelSize grows it about its origin).
+ */
+export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3, k = 1): Cartesian3 {
+  const bc = entry.box ? Cartesian3.fromArray(entry.box.centre, 0, out) : Cartesian3.clone(BOX_CENTRE, out)
+  return Matrix4.multiplyByPoint(modelMatrix, Cartesian3.multiplyByScalar(bc, k, out), out)
 }
 
 // ---- data -----------------------------------------------------------------------------------------------------------
@@ -346,7 +506,32 @@ export const eprText = (e: number): string => e.toFixed(2)
 // ---- DOM ------------------------------------------------------------------------------------------------------------
 
 const GAP = 10 // between the square and a block, and between blocks
+const EDGE = 8 // the blocks from the view's edges (app.ts safeArea's pad)
+// A moved card from the view's edges and from what covers it: the automatic layout's own margin (app.ts safeArea), so a
+// card pinned where that put it stays there; its edit controls reach this far over its edges (flightFrame.css).
+const PAD = 8
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
+const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far from it (a shorter one is a click)
+
+/** Whether a press on a card (at press) has become a drag: the pointer is DRAG_PX from where it pressed, however slowly. */
+export const dragStarted = (press: { x: number; y: number }, at: { x: number; y: number }): boolean =>
+  Math.hypot(at.x - press.x, at.y - press.y) >= DRAG_PX
+const BAR_EDGE = 12 // the edit toolbar from the view's edges
+const HOLD_PX = 0.75 // a block drawn at a whole px stays there until its place is this far off it
+
+/**
+ * A place rounded to a whole px (crisp text), held at the one drawn (was) until it is HOLD_PX off it: a place that
+ * wavers round a half px (a scenario's aircraft, a sub-px each frame) no longer steps a px every other frame.
+ */
+export const wholePx = (v: number, was?: number): number => (was !== undefined && Math.abs(v - was) < HOLD_PX ? was : Math.round(v))
+// The flight ID over the brackets, as the traffic's (layout.css): 12 px high, 5 px over the square, 9 px a character.
+const ID_H = 12
+const ID_GAP = 5
+const ID_CHAR = 9
+const CARD: Record<BlockId, string> = { left: 'altitude', right: 'speed', top: 'heading', bottom: 'attitude' } // for the controls
+// The least side of the square the blocks go round (layoutSide), of the view's smaller dimension: an airliner's at the
+// chase camera's default range (150 m) in a desktop window.
+const LEAST_SIDE = 0.42
 
 /** A small caps label with its unit: "ALT ft". */
 function label(text: string | HTMLElement, unit = ''): HTMLSpanElement {
@@ -383,17 +568,27 @@ const dim = (el: Element, on: boolean): void => {
   el.classList.toggle('fh-est', on)
 }
 
+export interface FrameOpts {
+  prefs?: FramePrefs // the cards as the viewer arranged them (framePrefs.ts); absent: each in its place, shown
+  onPrefs?(prefs: FramePrefs): void // the viewer moved, hid, showed or reset a card: to keep
+  onEdit?(on: boolean): void // edit mode began or ended
+}
+
 /**
  * The frame in the DOM, in layer (a .fh-frame div the app creates over the globe). update() each frame after the
  * camera moved; draw() is the same without Cesium (the harness drives it with a square of its own). Every frame each
  * instrument glides to its value (Glide) and moves by transforms only; at most every TEXT_MS the figures, which parts
  * show, and the dimming of estimates are written, and a block whose parts changed is measured again (its full and
  * compact variants, for frameLayout).
+ * Edit mode (edit()): each card takes the pointer; a drag moves it (pointer capture, so the camera never sees it), an eye
+ * hides or shows it (ghosted while editing), and a toolbar at the top resets them all or ends the mode. The viewer's
+ * layout (prefs) applies outside edit mode too: a moved card where it was put, a hidden one not drawn (its place kept).
  * ponytail: the frame does not hide when terrain hides the aircraft, only behind the camera (as the traffic brackets).
  * Upgrade: a depth test under the square's centre.
  */
 export class FlightFrame {
   readonly #bracket = h('div', 'fh-bracket')
+  readonly #id = h('span', 'fh-bracket-id') // the flight ID over the brackets
   readonly #blocks: Record<BlockId, HTMLDivElement>
   // Left: the altitude tape and the vertical-speed scale; under them the vertical speed and the height above the ground.
   readonly #alt = new Tape(ALT_TAPE, 'alt')
@@ -453,17 +648,47 @@ export class FlightFrame {
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
   #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
   #placed: Partial<Record<BlockId, Placed | null>> = {}
+  #auto: Partial<Record<BlockId, Placed | null>> = {} // the automatic arrangement last frame (layoutSide's hysteresis)
+  #px: Partial<Record<BlockId, { x: number; y: number }>> = {} // each block's whole-px place as drawn (wholePx)
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
+  #own = 0 // the aircraft's square at the chase camera's default range (update(); 0 for draw() alone)
+  readonly #resize: ResizeObserver
+  #view = { w: 0, h: 0 } // the layer's size (the view's), px
   readonly #c = new Cartesian3()
   readonly #v = new Cartesian3()
-  readonly #bc = new Cartesian3()
   readonly #w = new Cartesian2()
   #textAt = -Infinity
   #lastMs = 0
   #shown = false
+  #idRect: Rect | null = null // the flight ID as drawn (layer px); null when not shown
+  #brRect: Rect | null = null // the chased aircraft's brackets as drawn (layer px)
+  // Edit mode: the viewer's layout, its toolbar and each card's eye, the card being dragged (pointer and grip in client
+  // px, the layer's origin), and this frame's square and safe area to drag in.
+  readonly #layer: HTMLElement
+  #prefs: { moved: Partial<Record<BlockId, Offset>>; hidden: BlockId[]; order: BlockId[] }
+  readonly #onPrefs: (prefs: FramePrefs) => void
+  readonly #onEdit: (on: boolean) => void
+  #editing = false
+  readonly #bar = h('div', 'fh-fbar')
+  readonly #reset = h('button', 'fh-fbar-b')
+  readonly #eyes = {} as Record<BlockId, HTMLButtonElement>
+  #drag: {
+    id: BlockId; pointer: number; press: { x: number; y: number }; x: number; y: number; gx: number; gy: number; ox: number; oy: number
+    v?: number; on: boolean
+  } | null = null
+  #lsq: Square = { x: 0, y: 0, side: 0 }
+  #area: Rect = { x: 0, y: 0, w: 0, h: 0 } // the view inside PAD: where a moved card may go
+  #avoid: readonly Rect[] = [] // what a moved card keeps clear of: the covers, and the toolbar while editing
+  #bar0: Rect | null = null // the toolbar's place this edit session (null: not placed yet)
 
-  constructor(layer: HTMLElement) {
+  constructor(layer: HTMLElement, opts: FrameOpts = {}) {
     this.#phone = typeof matchMedia === 'function' ? matchMedia(PHONE) : null
+    this.#layer = layer
+    this.#bracket.append(this.#id)
+    const p = opts.prefs ?? NO_FRAME_PREFS
+    this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden], order: [...p.order] }
+    this.#onPrefs = opts.onPrefs ?? ((): void => {})
+    this.#onEdit = opts.onEdit ?? ((): void => {})
     this.#bracket.hidden = true
     const blocks = {} as Record<BlockId, HTMLDivElement>
     for (const id of IDS) {
@@ -471,6 +696,14 @@ export class FlightFrame {
       b.dataset.block = id
       b.dataset.v = '0'
       b.hidden = true
+      b.addEventListener('pointerdown', (e) => this.#grab(id, e))
+      b.addEventListener('pointermove', (e) => this.#carry(e))
+      b.addEventListener('pointerup', (e) => this.#drop(e))
+      b.addEventListener('pointercancel', (e) => this.#drop(e))
+      b.addEventListener('lostpointercapture', (e) => this.#drop(e)) // the card hid under the pointer
+      const eye = (this.#eyes[id] = h('button', 'fh-feye'))
+      eye.type = 'button'
+      eye.addEventListener('click', () => this.#toggle(id))
     }
     this.#altRow.append(this.#alt.el, this.#vsi.el)
     blocks.left.append(head(label('Alt', 'ft')), this.#altRow, this.#vs.el, this.#agl.el)
@@ -501,20 +734,89 @@ export class FlightFrame {
     blocks.bottom.append(att, this.#thrust)
 
     this.#blocks = blocks
-    layer.append(this.#bracket, ...IDS.map((id) => blocks[id]))
+    // Each card's edit controls, over its content: a grip (the whole card drags) and the eye.
+    for (const id of IDS) {
+      blocks[id].append(h('span', 'fh-fgrip'), this.#eyes[id])
+      this.#paint(id)
+    }
+    const title = h('span', 'fh-fbar-t')
+    title.append(icon('layout', 16), h('b', '', 'Edit layout'), h('span', 'fh-fbar-hint', 'drag the cards'))
+    this.#reset.type = 'button'
+    this.#reset.setAttribute('aria-label', 'Reset to defaults')
+    this.#reset.append('Reset', h('span', 'fh-fbar-more', ' to defaults'))
+    this.#reset.addEventListener('click', () => this.#resetPrefs())
+    const done = h('button', 'fh-fbar-b fh-fbar-done', 'Done')
+    done.type = 'button'
+    done.addEventListener('click', () => this.edit(false))
+    this.#bar.hidden = true
+    this.#bar.setAttribute('role', 'toolbar')
+    this.#bar.setAttribute('aria-label', 'Instrument layout')
+    this.#bar.append(title, this.#reset, done)
+    this.#reset.disabled = this.#plain()
+    layer.append(this.#bracket, ...IDS.map((id) => blocks[id]), this.#bar)
+    this.#stack()
+    // Read when the view resizes, not in every frame (a layout read).
+    this.#resize = new ResizeObserver(([e]) => {
+      this.#view = { w: e.contentRect.width, h: e.contentRect.height }
+      this.#bar0 = null
+    })
+    this.#resize.observe(layer)
   }
 
   /**
-   * The frame around the chased model this frame: its square from the manifest box through modelMatrix (which carries
-   * entry.scale), as Traffic.update projects a traffic model's. data null, or the model behind the camera: hidden.
-   * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live).
+   * The frame around the chased model this frame: its square from the manifest box through its modelMatrix (which
+   * carries entry.scale) at the scale Cesium draws it (a far one larger: minimumPixelSize), as Traffic.update projects a
+   * traffic model's. data null, or the model behind the camera: hidden.
+   * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live). flightId: over
+   * the brackets ('': none).
    */
-  update(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry, data: FlightData | null, safe: Rect, dataT?: number): void {
-    this.draw(data === null ? null : this.#square(viewer, modelMatrix, entry), data, safe, performance.now(), dataT)
+  update(viewer: Viewer, model: Model, entry: ModelManifestEntry, data: FlightData | null, room: Room, dataT?: number, flightId = ''): void {
+    this.draw(data === null ? null : this.#square(viewer, model, entry), data, room, performance.now(), dataT, flightId)
   }
 
-  /** The frame around sq (null: hidden) showing data, its blocks inside safe. Hidden too when sq is outside safe. */
-  draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now(), dataT?: number): void {
+  get editing(): boolean {
+    return this.#editing
+  }
+
+  /** The chased aircraft's flight ID as drawn (layer px, the canvas's): the traffic's labels keep off it. null: not shown. */
+  get idRect(): Rect | null {
+    return this.#idRect
+  }
+
+  /** What the frame shows (layer px): its cards, the chased aircraft's brackets and flight ID. The traffic card keeps off it. */
+  occupied(): Rect[] {
+    if (!this.#shown) return []
+    const out: Rect[] = []
+    for (const k of IDS) {
+      const p = this.#placed[k]
+      if (p == null || this.#blocks[k].hidden) continue
+      const b = this.#sizes[k][p.v]
+      out.push({ x: p.x, y: p.y, w: b.w, h: b.h })
+    }
+    if (this.#brRect !== null) out.push(this.#brRect)
+    if (this.#idRect !== null) out.push(this.#idRect)
+    return out
+  }
+
+  /** Edit mode on or off (the rail's button, Esc, the toolbar's Done). */
+  edit(on: boolean): void {
+    if (on === this.#editing) return
+    this.#editing = on
+    this.#layer.toggleAttribute('data-edit', on)
+    show(this.#bar, on && this.#shown)
+    this.#bar0 = null
+    const d = this.#drag
+    this.#drag = null
+    if (d !== null) {
+      this.#blocks[d.id].classList.remove('fh-dragging')
+      if (d.on) this.#changed() // ended mid-drag: the card stays where it was drawn last
+    }
+    this.#onEdit(on)
+  }
+
+  /** The frame around sq (null: hidden) showing data, its blocks in room. Hidden too when sq is outside the safe area. */
+  draw(sq: Square | null, data: FlightData | null, room: Room, nowMs = performance.now(), dataT?: number, flightId = ''): void {
+    const safe = room.safe
     const r = sq === null ? 0 : sq.side / 2
     if (sq === null || data === null || sq.x + r < safe.x || sq.x - r > safe.x + safe.w || sq.y + r < safe.y || sq.y - r > safe.y + safe.h) {
       if (this.#shown) this.#hide()
@@ -539,30 +841,202 @@ export class FlightFrame {
     if (br.style.width !== px) br.style.width = br.style.height = px
     move(br, `translate3d(${(sq.x - side / 2).toFixed(1)}px, ${(sq.y - side / 2).toFixed(1)}px, 0)`)
     show(br, true)
-    const at = frameLayout(sq, this.#sizes, safe, GAP, this.#placed)
+    this.#brRect = { x: sq.x - side / 2, y: sq.y - side / 2, w: side, h: side }
+    show(this.#bar, this.#editing)
+    // Over the square the cards go round, room for the flight ID: no card covers it.
+    const head = flightId === '' ? 0 : ID_GAP + ID_H + 1
+    // The side from the automatic arrangement alone, at least the aircraft's own at the default range (a wide body keeps
+    // its default spacing zoomed out). A moved card goes where its offset from it says, clear of what covers the view
+    // (and of the toolbar while editing); a dragged one where the pointer holds it.
+    const sizes = this.#sizes
+    const want = { ...sq, side: Math.max(sq.side, this.#own), head }
+    const view = { x: EDGE, y: EDGE, w: this.#view.w - 2 * EDGE, h: this.#view.h - 2 * EDGE } // what covers it aside
+    const ls = layoutSide(want, LEAST_SIDE * Math.min(this.#view.w, this.#view.h), sizes, safe, GAP, this.#auto, view)
+    const lsq = (this.#lsq = { x: sq.x, y: sq.y, side: ls, head })
+    const area = (this.#area = { x: PAD, y: PAD, w: this.#view.w - 2 * PAD, h: this.#view.h - 2 * PAD })
+    const avoid = (this.#avoid = this.#editing && this.#bar0 !== null ? [...room.covers, this.#bar0] : room.covers)
+    const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
+    if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], lsq, area, avoid, d.v)
+    const moved = this.#prefs.moved
+    const fixed: Partial<Record<BlockId, Fixed>> = {}
+    for (const id of IDS) {
+      const o = moved[id]
+      const f = o === undefined ? null : movedTo(o, sizes[id], lsq, area, avoid)
+      if (f !== null) fixed[id] = f
+    }
+    const at = frameLayout(lsq, sizes, safe, GAP, this.#placed, fixed)
+    this.#auto = Object.keys(fixed).length === 0 ? at : frameLayout(lsq, sizes, safe, GAP, this.#auto)
     for (const id of IDS) {
       const b = this.#blocks[id]
       const p = at[id]
-      show(b, p !== null)
+      // A hidden card keeps its place (hiding one moves no other), drawn only while editing: ghosted, to be shown again.
+      show(b, p !== null && (this.#editing || !this.#prefs.hidden.includes(id)))
       if (p === null) continue
       const variant = String(p.v)
       if (b.dataset.v !== variant) {
         b.dataset.v = variant
         if (id === 'right') this.#spd.resized()
       }
-      move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
+      const w = (this.#px[id] = { x: wholePx(p.x, this.#px[id]?.x), y: wholePx(p.y, this.#px[id]?.y) })
+      move(b, `translate3d(${w.x}px,${w.y}px,0)`) // whole px: crisp text
     }
     this.#placed = at
+    const underCard = (x0: number, y0: number, x1: number, y1: number): boolean =>
+      IDS.some((k) => {
+        const p = at[k]
+        if (p === null || this.#blocks[k].hidden) return false
+        const b = sizes[k][p.v]
+        return p.x < x1 && x0 < p.x + b.w && p.y < y1 && y0 < p.y + b.h
+      })
+    // A corner of the brackets a card is over (the aircraft outgrew the square the cards go round) is not drawn.
+    const arm = Math.min(Math.max(0.3 * side, 7), 20) // layout.css's corner
+    const bx = sq.x - side / 2
+    const by = sq.y - side / 2
+    br.classList.toggle('fh-cut-tr', underCard(bx + side - arm, by, bx + side, by + arm))
+    br.classList.toggle('fh-cut-bl', underCard(bx, by + side - arm, bx + arm, by + side))
+    // The flight ID over the brackets; zoomed in past the square the cards go round, over that one instead: in the room
+    // kept for it, on screen. A card the viewer moved over it hides it.
+    say(this.#id, flightId)
+    const idB = sq.y - Math.min(sq.side, ls) / 2 - ID_GAP
+    const w = flightId.length * ID_CHAR
+    const idShown = flightId !== '' && !underCard(sq.x - w / 2, idB - ID_H, sq.x + w / 2, idB)
+    show(this.#id, idShown)
+    this.#idRect = idShown ? { x: sq.x - w / 2, y: idB - ID_H, w, h: ID_H } : null
+    move(this.#id, `translate(-50%, ${Math.max(0, (sq.side - ls) / 2).toFixed(1)}px)`)
+    if (this.#editing && this.#bar0 === null) this.#placeBar([...room.covers, { x: sq.x - w / 2, y: idB - ID_H, w, h: ID_H }], at)
   }
 
   destroy(): void {
+    this.#resize.disconnect()
     this.#bracket.remove()
     for (const id of IDS) this.#blocks[id].remove()
+    this.#bar.remove()
     this.#shown = false
+  }
+
+  /** Edit mode: a press on a card (not on its eye) takes it; the canvas never sees the pointer, so the camera stays. */
+  #grab(id: BlockId, e: PointerEvent): void {
+    if (!this.#editing || this.#drag !== null || e.button !== 0 || (e.target as Element).closest('.fh-feye') !== null) return
+    e.preventDefault()
+    const b = this.#blocks[id]
+    b.setPointerCapture(e.pointerId)
+    const r = b.getBoundingClientRect()
+    const o = this.#layer.getBoundingClientRect()
+    const v = this.#placed[id]?.v // the variant it keeps
+    const press = { x: e.clientX, y: e.clientY }
+    this.#drag = { id, pointer: e.pointerId, press, ...press, gx: e.clientX - r.left, gy: e.clientY - r.top, ox: o.left, oy: o.top, v, on: false }
+  }
+
+  #carry(e: PointerEvent): void {
+    const d = this.#drag
+    if (d === null || e.pointerId !== d.pointer) return
+    if (!d.on && dragStarted(d.press, { x: e.clientX, y: e.clientY })) {
+      d.on = true
+      this.#blocks[d.id].classList.add('fh-dragging')
+      this.#pin()
+    }
+    d.x = e.clientX
+    d.y = e.clientY
+  }
+
+  /** The drop: the card's offset from where the pointer let go (draw() has it a frame late), kept. */
+  #drop(e: PointerEvent): void {
+    const d = this.#drag
+    if (d === null || e.pointerId !== d.pointer) return
+    this.#drag = null
+    this.#blocks[d.id].classList.remove('fh-dragging')
+    if (!d.on || this.#sizes[d.id].length === 0) return
+    this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid, d.v)
+    this.#prefs.order = [...this.#prefs.order.filter((id) => id !== d.id), d.id]
+    this.#stack()
+    this.#changed()
+  }
+
+  /** The cards stacked in the layer as prefs.order has them, the last moved on top (the default order first); under the toolbar. */
+  #stack(): void {
+    for (const id of [...IDS.filter((x) => !this.#prefs.order.includes(x)), ...this.#prefs.order]) {
+      const b = this.#blocks[id]
+      if (b.nextSibling !== this.#bar) this.#layer.insertBefore(b, this.#bar)
+    }
+  }
+
+  /**
+   * A card starts to move: every other one stays where it is (none makes way for it, nor for any later one), each pinned
+   * at its offset from the aircraft in the variant it has, so zooming keeps the proportions. Reset lays them out again.
+   */
+  #pin(): void {
+    for (const id of IDS) {
+      const p = this.#placed[id]
+      if (p == null || this.#prefs.moved[id] !== undefined) continue
+      this.#prefs.moved[id] = offsetAt(p.x, p.y, this.#sizes[id], this.#lsq, this.#area, this.#avoid, p.v)
+    }
+  }
+
+  /**
+   * The toolbar, once an edit session starts: at the top, centred, else in the free spot nearest there, clear of what
+   * covers the view (avoid: and the flight ID) and of the cards (between the flight card and the rail, or under the card
+   * on a narrow window).
+   */
+  #placeBar(avoid: readonly Rect[], at: Record<BlockId, Placed | null>): void {
+    const bar = this.#bar
+    bar.style.left = bar.style.top = ''
+    const w = bar.offsetWidth
+    const h = bar.offsetHeight
+    const cards = IDS.flatMap((id) => {
+      const p = at[id]
+      const b = p === null ? undefined : this.#sizes[id][p.v]
+      return p === null || b === undefined ? [] : [{ x: p.x, y: p.y, w: b.w, h: b.h }]
+    })
+    const room = { x: BAR_EDGE, y: BAR_EDGE, w: this.#view.w - 2 * BAR_EDGE, h: this.#view.h - 2 * BAR_EDGE }
+    const p = freeSpot(room.x + (room.w - w) / 2, bar.offsetTop, w, h, room, [...avoid, ...cards], PAD)
+    bar.style.left = `${Math.round(p.x)}px`
+    bar.style.top = `${Math.round(p.y)}px`
+    this.#bar0 = { x: p.x, y: p.y, w, h }
+  }
+
+  /** The eye: hides a card, or shows a hidden one again. */
+  #toggle(id: BlockId): void {
+    const hidden = this.#prefs.hidden
+    this.#prefs.hidden = hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id]
+    this.#paint(id)
+    this.#changed()
+  }
+
+  /** Every card back in its place, shown. */
+  #resetPrefs(): void {
+    this.#prefs = { moved: {}, hidden: [], order: [] }
+    this.#stack()
+    this.#placed = {} // laid out afresh: no hysteresis from where the viewer had them
+    this.#auto = {}
+    for (const id of IDS) this.#paint(id)
+    this.#changed()
+  }
+
+  #changed(): void {
+    this.#reset.disabled = this.#plain()
+    this.#onPrefs({ moved: { ...this.#prefs.moved }, hidden: [...this.#prefs.hidden], order: [...this.#prefs.order] })
+  }
+
+  /** Whether every card is in its place and shown. */
+  #plain(): boolean {
+    return this.#prefs.hidden.length === 0 && Object.keys(this.#prefs.moved).length === 0
+  }
+
+  /** A card's eye and look: shown, or hidden (ghosted while editing). */
+  #paint(id: BlockId): void {
+    const off = this.#prefs.hidden.includes(id)
+    const eye = this.#eyes[id]
+    const tip = `${off ? 'Show' : 'Hide'} the ${CARD[id]} card`
+    eye.replaceChildren(icon(off ? 'eyeOff' : 'eye', 14))
+    eye.setAttribute('aria-label', tip)
+    eye.title = tip
+    this.#blocks[id].classList.toggle('fh-off', off)
   }
 
   #hide(): void {
     this.#bracket.hidden = true
+    this.#brRect = this.#idRect = null
+    this.#bar.hidden = true
     for (const id of IDS) {
       this.#blocks[id].hidden = true
       this.#keys[id] = '' // shown again: measured again
@@ -574,22 +1048,29 @@ export class FlightFrame {
     this.#dataT = null
     this.#spdSrc = null
     this.#placed = {}
+    this.#auto = {}
+    this.#px = {}
     this.#shown = false
   }
 
-  #square(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry): Square | null {
+  #square(viewer: Viewer, model: Model, entry: ModelManifestEntry): Square | null {
     const scene = viewer.scene
     const cam = scene.camera
     const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
-    const bc = entry.box ? Cartesian3.fromArray(entry.box.centre, 0, this.#bc) : BOX_CENTRE
-    const c = Matrix4.multiplyByPoint(modelMatrix, bc, this.#c)
+    // The scale Cesium draws the model at over its matrix (last frame's: it is set as the scene renders). Not in its
+    // typings; the model drawn at 1 without it.
+    const k = (model as unknown as { computedScale?: number }).computedScale ?? 1
+    const c = boxCentre(model.modelMatrix, entry, this.#c, k)
     const depthM = Cartesian3.dot(Cartesian3.subtract(c, cam.positionWC, this.#v), cam.directionWC)
     if (!(depthM > 1)) return null // behind the camera
     const w = SceneTransforms.worldToWindowCoordinates(scene, c, this.#w)
     if (w === undefined) return null
     this.#sq.x = w.x
     this.#sq.y = w.y
-    this.#sq.side = squarePx((entry.box?.half ?? BOX_HALF) * entry.scale, depthM, fovy, scene.canvas.clientHeight)
+    const rM = (entry.box?.half ?? BOX_HALF) * entry.scale
+    const h = scene.canvas.clientHeight
+    this.#sq.side = squarePx(rM * k, depthM, fovy, h)
+    this.#own = squarePx(rM, defaultRangeM(scene.canvas.clientWidth, h), fovy, h)
     return this.#sq
   }
 

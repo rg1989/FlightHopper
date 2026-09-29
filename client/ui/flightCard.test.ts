@@ -5,7 +5,7 @@ import { registerHooks } from 'node:module'
 import type { StatusBrief } from '../../shared/api.ts'
 import { toInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
-import type { RenderState } from '../types.ts'
+import type { FleetEntry, RenderState } from '../types.ts'
 import type { Lookup } from './detail.ts'
 import { PhotoCache } from './photo.ts'
 
@@ -13,7 +13,7 @@ import { PhotoCache } from './photo.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { LOCATING_S, cardView, mountFlightCard } = await import('./flightCard.ts')
+const { LOCATING_S, cardView, entryState, mountFlightCard } = await import('./flightCard.ts')
 const { UPDATE_MS } = await import('./detail.ts')
 
 // An Aegean A320 descending towards Tel Aviv (trimmed from a real adsb.lol object, © adsb.lol contributors, ODbL 1.0).
@@ -71,8 +71,34 @@ test('cardView: only focused, Live until 2.5 view refreshes pass without a posit
   assert.equal(cardView('4691c4', { ...S, ageS: 11 }, RAW, INFO, LIVE, GR, 30, false).state, 'lost', 'never under 10 s')
 })
 
+test('cardView: the source comes from the aircraft\'s own object only; another\'s (the card just switched) is ignored', () => {
+  const mlat: ReadsbAircraft = { ...RAW, type: 'mlat' }
+  assert.equal(cardView('4691c4', S, mlat, INFO, LIVE, GR, 1).status, 'Live · MLAT')
+  const other: ReadsbAircraft = { ...mlat, hex: 'a1b2c3' }
+  assert.equal(cardView('4691c4', { ...S, quality: 'adsb01' }, other, INFO, LIVE, GR, 1).status, 'Live · ADS-B v0/1', 'its own quality, not "MLAT"')
+})
+
 test('cardView: on the ground reads GND with no unit', () => {
   assert.deepEqual(cardView('4691c4', { ...S, onGround: true }, RAW, INFO, LIVE, GR, 1).stats[0], { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: false })
+})
+
+// The same Aegean A320 as chase traffic: its fleet entry, smoothed by its own track.
+const ENTRY: FleetEntry = {
+  hex: '4691c4', lat: 32.371902, lon: 34.43291, hM: 2620, altFt: 7975, onGround: false, trackDeg: 101.81, gsKt: 337.1,
+  vsFpm: -951, ageS: 0.4, staleS: 60, gapS: 1, quality: 'adsb2', info: INFO, att: { headingDeg: 105.24, pitchDeg: -1.5, rollDeg: 0.5 },
+}
+
+test('cardView of a traffic aircraft (entryState): the chased card\'s texts from its fleet entry, and its range', () => {
+  const s = entryState(ENTRY)
+  assert.deepEqual([s.headingDeg, s.pitchDeg, s.rollDeg, s.altBaroFt, s.callsign, s.typeCode], [105.24, -1.5, 0.5, 7975, 'AEE4266', 'A320'])
+  const v = cardView('4691c4', s, null, INFO, LIVE, GR, 1, false, { distM: 7370.6, from: 'UAL2478' })
+  assert.deepEqual(stats(v), ['Alt 7,975 ft', 'Speed 337 kt', 'V/S -950 fpm', 'Track 102°'])
+  assert.deepEqual([v.callsign, v.sub, v.status], ['AEE4266', 'Aegean Airlines · SX-DND', 'Live · ADS-B v2'])
+  assert.deepEqual(v.range, { dist: '7,371 m', from: 'from UAL2478' })
+  assert.equal(cardView('4691c4', s, null, INFO, LIVE, GR, 1, false).range, null, 'none given (the chased card): none shown')
+  const bare = entryState({ ...ENTRY, att: null, info: null, trackDeg: null })
+  assert.deepEqual([bare.headingDeg, bare.pitchDeg, bare.callsign, bare.typeCode], [0, 0, null, null])
+  assert.equal(cardView('4691c4', entryState({ ...ENTRY, ageS: 14 }), null, INFO, LIVE, GR, 30, false).status, 'Signal lost 14 s ago')
 })
 
 // ---------- mountFlightCard on a minimal fake DOM (only what flightCard.ts and icons.ts use) ----------
@@ -130,6 +156,9 @@ class FakeEl {
   has(cls: string): boolean {
     return this.className.split(' ').includes(cls) || this.classList.contains(cls)
   }
+  getBoundingClientRect(): { left: number; top: number; right: number; bottom: number } {
+    return { left: 0, top: 0, right: 0, bottom: 0 }
+  }
 }
 
 const all = (el: FakeEl): FakeEl[] => [el, ...el.children.flatMap(all)]
@@ -155,7 +184,7 @@ const PHOTO_BODY = {
   }],
 }
 
-function setup(photoGate?: Promise<void>, photoStatus = 200) {
+function setup(photoGate?: Promise<void>, photoStatus = 200, traffic = false) {
   ;(globalThis as { document?: unknown }).document = {
     createElement: (tag: string) => new FakeEl(tag),
     createElementNS: (_ns: string, tag: string) => new FakeEl(tag),
@@ -171,6 +200,7 @@ function setup(photoGate?: Promise<void>, photoStatus = 200) {
   const chases: boolean[] = []
   let closed = 0
   const c = mountFlightCard(root as unknown as HTMLElement, {
+    traffic,
     onClose: () => closed++,
     onChase: (on) => chases.push(on),
     photos: new PhotoCache(fetchFn),
@@ -241,6 +271,104 @@ test('mountFlightCard: the pill says Chase on the map and Map in the chase, at o
   c.destroy()
 }))
 
+test('mountFlightCard, traffic: labelled so, its pill always Chase (asks to chase it), its range above the status', () => withClock(() => {
+  const { card, c, chases } = setup(undefined, 200, true)
+  assert.equal(card.props['aria-label'], 'Traffic aircraft')
+  assert.equal(card.has('fh-tcard'), true)
+  const range = byClass(card, 'fh-card-range')
+  assert.equal(card.children.indexOf(range) + 1, card.children.indexOf(byClass(card, 'fh-card-foot')), 'right above the status line')
+  c.update('4691c4', entryState(ENTRY), null, INFO, LIVE, false, { distM: 7370.6, from: 'UAL2478' })
+  assert.equal(pillText(card), 'Chase')
+  assert.deepEqual([range.hidden, byClass(card, 'fh-card-range-d').textContent, byClass(card, 'fh-card-range-f').textContent], [false, '7,371 m', 'from UAL2478'])
+  byClass(card, 'fh-pill').fire('click')
+  assert.deepEqual(chases, [true])
+  mock.timers.tick(300)
+  c.update('4691c4', entryState(ENTRY), null, INFO, LIVE, false, null) // its distance not known yet
+  assert.equal(range.hidden, true)
+  c.destroy()
+}))
+
+test('mountFlightCard: keepClear moves a shown card to the other end of its column only where that clears the point', () => withClock(() => {
+  const { card, c } = setup(undefined, 200, true)
+  const flipped = (): boolean => card.classList.contains('fh-card-flip')
+  // flightCard.css on a 1440 × 900 screen: top right, or flipped to the bottom right; on a 390 × 844 phone, with a photo,
+  // above the tab bar or flipped to the top
+  let phone = false
+  card.getBoundingClientRect = () => phone
+    ? (flipped() ? { left: 8, top: 8, right: 382, bottom: 449 } : { left: 8, top: 334, right: 382, bottom: 775 })
+    : (flipped() ? { left: 1056, top: 502, right: 1376, bottom: 888 } : { left: 1056, top: 12, right: 1376, bottom: 398 })
+  c.keepClear(1100, 300, 48) // hidden: nothing to move
+  assert.equal(flipped(), false)
+  c.update('4691c4', entryState(ENTRY), null, INFO, LIVE, false, null)
+  c.keepClear(1100, 300, 48) // the clicked aircraft is under it
+  assert.equal(flipped(), true)
+  c.keepClear(1030, 440, 48) // within the padding
+  assert.equal(flipped(), true)
+  c.keepClear(700, 450, 48) // clear of it: back where it belongs
+  assert.equal(flipped(), false)
+  phone = true
+  c.keepClear(200, 409, 48) // covered at both ends (a phone's tall card): it stays
+  assert.equal(flipped(), false)
+  c.keepClear(200, 700, 48) // low on the screen: the top clears it
+  assert.equal(flipped(), true)
+  c.destroy()
+}))
+
+test("mountFlightCard: keepClear keeps off the flight-data frame: its own place, the other end, the chased card's", () => withClock(() => {
+  const { card, c } = setup(undefined, 200, true)
+  const place = (): string => (card.classList.contains('fh-card-flip') ? 'flip' : card.classList.contains('fh-card-home') ? 'home' : 'own')
+  // flightCard.css on a 1024 × 768 screen, with a photo: top right, flipped to the bottom right, or the chased card's
+  card.getBoundingClientRect = () => ({
+    own: { left: 634, top: 12, right: 954, bottom: 398 },
+    flip: { left: 634, top: 370, right: 954, bottom: 756 },
+    home: { left: 12, top: 12, right: 332, bottom: 398 },
+  })[place()]!
+  const gs = { x: 556, y: 246, w: 84, h: 187 } // the speed tape, under the right edge of both right-hand places
+  const alt = { x: 340, y: 269, w: 127, h: 160 } // the altitude tape, just clear of the chased card's place
+  c.update('4691c4', entryState(ENTRY), null, INFO, LIVE, false, null)
+  c.keepClear(100, 700, 48, [])
+  assert.equal(place(), 'own', 'nothing in the way')
+  c.keepClear(100, 700, 48, [gs, alt])
+  assert.equal(place(), 'home')
+  c.keepClear(800, 200, 48, [{ x: 700, y: 300, w: 50, h: 50 }])
+  assert.equal(place(), 'flip', 'a card under its own place only: the other end')
+  c.keepClear(100, 100, 48, [gs, alt])
+  assert.equal(place(), 'flip', "none clears both: the least covering of those clear of the aircraft (in the chased card's place)")
+  c.keepClear(800, 200, 48, [gs, alt, { x: 20, y: 300, w: 50, h: 50 }])
+  assert.equal(place(), 'flip', 'none clears both, the aircraft under its own place: the other end covers less')
+  c.keepClear(800, 200, 48, [{ x: 20, y: 300, w: 50, h: 50 }, { x: 700, y: 500, w: 200, h: 200 }])
+  assert.equal(place(), 'home', 'the chased card\'s place covers less')
+  c.keepClear(800, 200, 48, [{ x: 0, y: 0, w: 1024, h: 768 }])
+  assert.equal(place(), 'flip', 'all covered alike: the first clear of the aircraft')
+  c.destroy()
+}))
+
+test('mountFlightCard: placed while its photo loads, a traffic card is placed again when none comes (shorter)', async () => {
+  const { card, c } = setup(undefined, 200, true)
+  const photo = byClass(card, 'fh-card-photo')
+  const place = (): string => (card.classList.contains('fh-card-flip') ? 'flip' : card.classList.contains('fh-card-home') ? 'home' : 'own')
+  // 1024 × 768: with the photo box it reaches down past the speed tape's top; without, it clears it
+  card.getBoundingClientRect = () => {
+    const h = photo.hidden ? 179 : 386
+    return place() === 'flip' ? { left: 634, top: 756 - h, right: 954, bottom: 756 } : { left: 634, top: 12, right: 954, bottom: 12 + h }
+  }
+  const frame = [{ x: 683, y: 246, w: 84, h: 187 }, { x: 377, y: 647, w: 271, h: 72 }] // speed tape, heading card
+  c.update('abc123', entryState({ ...ENTRY, hex: 'abc123' }), null, INFO, LIVE, false, null) // no photo of it
+  c.keepClear(520, 80, 48, frame)
+  assert.equal(place(), 'flip', 'the photo box would reach the speed tape: the bottom, the least covering')
+  await flush()
+  assert.equal(photo.hidden, true, 'none came')
+  assert.equal(place(), 'own', 'shorter: its own place clears the frame')
+  c.destroy()
+})
+
+test('mountFlightCard: the chased card has no range line and keeps its own labels', () => withClock(() => {
+  const { card, c } = setup()
+  c.update('4691c4', S, RAW, INFO, LIVE, true)
+  assert.deepEqual([card.props['aria-label'], card.has('fh-tcard'), byClass(card, 'fh-card-range').hidden], ['Selected aircraft', false, true])
+  c.destroy()
+}))
+
 test('mountFlightCard: the photo sits above the stats, collapsed or not, asked for once per selection; credit links to its page', async () => {
   const { card, c, fetches } = setup()
   const photo = byClass(card, 'fh-card-photo')
@@ -261,11 +389,16 @@ test('mountFlightCard: the photo sits above the stats, collapsed or not, asked f
   assert.equal(credit.textContent, '© A. Spotter')
   assert.equal(credit.href, 'https://www.planespotters.net/photo/1/sx-dnd')
   assert.equal(img.hidden, true, 'shown once it loads')
+  // The same credit, linked, as a line under the callsign: where the photo is a thumbnail (a phone in the chase: CSS).
+  const line = byClass(card, 'fh-card-credit-line')
+  assert.equal(line.parent, byClass(card, 'fh-card-ident'))
+  assert.deepEqual([line.textContent, line.href, line.hidden], ['© A. Spotter', 'https://www.planespotters.net/photo/1/sx-dnd', true])
   img.fire('load')
   assert.deepEqual([img.hidden, credit.hidden, byClass(card, 'fh-card-photo').classList.contains('fh-skel')], [false, false, false])
+  assert.equal(line.hidden, false)
   assert.equal(byClass(card, 'fh-card-nophoto').hidden, true)
   img.fire('error') // the CDN image fails: no orphan credit, no empty box; the camera mark says so
-  assert.deepEqual([img.hidden, credit.hidden, photo.hidden], [true, true, true])
+  assert.deepEqual([img.hidden, credit.hidden, line.hidden, photo.hidden], [true, true, true, true])
   assert.equal(byClass(card, 'fh-card-nophoto').title, 'Photo unavailable (could not load it)')
   c.destroy()
 })

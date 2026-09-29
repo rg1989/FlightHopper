@@ -5,7 +5,10 @@ import { registerHooks } from 'node:module'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, RenderState } from '../types.ts'
 import type { BlockId, BlockSize, Placed, Rect, Square } from './flightFrame.ts'
-import { MIN_PX } from './traffic.ts'
+import type { Offset } from '../ui/framePrefs.ts'
+import { Cartesian3, Matrix4 } from 'cesium'
+import type { ModelManifestEntry } from '../types.ts'
+import { BOX_CENTRE, MIN_PX } from './traffic.ts'
 import { trueAirspeedKt } from '../track/airspeed.ts'
 
 // flightFrame.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -13,8 +16,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const {
-  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, liveFlightData, pitchText, speedText,
-  vsText, windText,
+  HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, freeSpot, gText, layoutSide,
+  dragStarted, liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, wholePx, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -54,6 +57,9 @@ const apart = (p: Layout, sizes: Record<BlockId, BlockSize | readonly BlockSize[
   }
 }
 const at = (p: Layout, id: BlockId): { x: number; y: number } => ({ x: p[id]!.x, y: p[id]!.y })
+/** The moved blocks' places (movedTo) for their offsets round sq, in view with no covers. */
+const fixedAt = (moved: Partial<Record<BlockId, Offset>>, sq: Square, sizes: Record<BlockId, BlockSize | readonly BlockSize[]>, view: Rect) =>
+  Object.fromEntries(IDS.filter((id) => moved[id]).map((id) => [id, movedTo(moved[id]!, sizes[id], sq, view, [])!]))
 
 // ---- frameLayout ----------------------------------------------------------------------------------------------------
 
@@ -225,6 +231,294 @@ test('frameLayout: 300 random cases: every block inside the safe area, clear of 
     apart(p, sizes, sq, gap, ctx)
     prev = p
   }
+})
+
+test('frameLayout: room kept over the square (the flight ID over the brackets): the top block goes above it, the rest as before', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const p = frameLayout({ ...sq, head: 18 }, SIZES, SAFE)
+  assert.deepEqual(at(p, 'top'), { x: 640 - 85, y: 400 - 60 - 18 - 10 - 28 })
+  for (const id of ['left', 'right', 'bottom'] as const) assert.deepEqual(at(p, id), at(frameLayout(sq, SIZES, SAFE), id), id)
+  assert.equal(layoutSide({ ...sq, side: 2400, head: 18 }, 378, DESK_SIZES, DESK) <= layoutSide({ ...sq, side: 2400 }, 378, DESK_SIZES, DESK), true)
+})
+
+test('frameLayout: a moved card goes where the viewer put it, its anchor its offset × the side from the centre; the rest avoid it', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const far = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ left: { x: -3, y: -2 } }, sq, SIZES, SAFE))
+  assert.deepEqual(at(far, 'left'), { x: 640 - 360 - 48, y: 400 - 240 - 29 })
+  assert.deepEqual([far.left!.side, far.left!.v], ['left', 0])
+  for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(far, id), at(frameLayout(sq, SIZES, SAFE), id), `${id} where it was`)
+  const there = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ left: { x: 1.5, y: 0 } }, sq, SIZES, SAFE)) // on the speed's place
+  assert.deepEqual(at(there, 'left'), { x: 640 + 180 - 48, y: 400 - 29 })
+  apart(there, SIZES, sq, 10)
+})
+
+test('frameLayout: a tape moved away frees its side, but the heading stays under the attitude: beside the aircraft is the tapes\' place', () => {
+  const sq: Square = { x: 720, y: 421, side: 378 }
+  const before = frameLayout(sq, DESK_SIZES, DESK)
+  assert.equal(before.top!.side, 'bottom')
+  const after = frameLayout(sq, DESK_SIZES, DESK, 10, undefined, fixedAt({ right: { x: 0.9, y: -0.55 } }, sq, DESK_SIZES, DESK))
+  assert.deepEqual(at(after, 'top'), at(before, 'top'))
+  const noTapes = frameLayout(sq, { ...DESK_SIZES, left: [], right: [] }, DESK)
+  assert.deepEqual(at(noTapes, 'top'), at(before, 'top'), 'nor with no tapes at all')
+})
+
+test('frameLayout: a moved card may cover the aircraft, stays inside the view, and takes the largest variant that fits there', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const over = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ bottom: { x: 0, y: 0 } }, sq, SIZES, SAFE))
+  assert.deepEqual(at(over, 'bottom'), { x: 640 - 98, y: 400 - 22 }, 'on the aircraft: the viewer put it there')
+  const edge = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ right: { x: 9, y: -9 } }, sq, SIZES, SAFE))
+  assert.deepEqual(at(edge, 'right'), { x: 1280 - 88, y: 0 }, 'pushed back inside')
+  const small: Rect = { x: 0, y: 0, w: 150, h: 800 }
+  const sizes = { ...SIZES, bottom: [{ w: 196, h: 44 }, { w: 140, h: 40 }] }
+  const sqs: Square = { x: 75, y: 400, side: 40 }
+  assert.equal(frameLayout(sqs, sizes, small, 10, undefined, fixedAt({ bottom: { x: 0, y: 2 } }, sqs, sizes, small)).bottom!.v, 1)
+})
+
+test('offsetAt: the offset that puts a dragged card\'s top-left where the pointer holds it, or as near as the view allows', () => {
+  const sq: Square = { x: 640, y: 400, side: 150 }
+  for (const [x, y] of [[100, 120], [700, 380], [1250, 790], [-40, -30]]) {
+    const p = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ right: offsetAt(x, y, SIZES.right, sq, SAFE, []) }, sq, SIZES, SAFE))
+    assert.deepEqual(at(p, 'right'), { x: Math.min(Math.max(x, 0), 1280 - 88), y: Math.min(Math.max(y, 0), 800 - 64) }, `${x},${y}`)
+  }
+  const o = offsetAt(640 - 44, 400 - 32, SIZES.right, sq, SAFE, [])
+  assert.deepEqual(o, { x: 0, y: 0, v: 0 }, 'centred on the aircraft: no offset, the full card')
+})
+
+test('freeSpot: the nearest place inside the view and clear of what covers it, not only below a band as wide as the view', () => {
+  const view: Rect = { x: 8, y: 8, w: 1424, h: 884 }
+  const card: Rect = { x: 12, y: 12, w: 320, h: 158 } // the flight card, top-left
+  const rail: Rect = { x: 1382, y: 12, w: 46, h: 334 }
+  // The top right, beside neither: where it was put.
+  assert.deepEqual(freeSpot(1100, 20, 84, 187, view, [card, rail], 8), { x: 1100, y: 20 })
+  // Onto the flight card: out by its nearest edge (its right), not below the band the card's height makes.
+  assert.deepEqual(freeSpot(280, 40, 84, 60, view, [card, rail], 8), { x: 340, y: 40 })
+  // Into the corner between the rail and the view's edge: out of both.
+  const p = freeSpot(1400, 100, 84, 187, view, [card, rail], 8)
+  assert.ok(p.x + 84 + 8 <= rail.x || p.y >= rail.y + rail.h + 8, JSON.stringify(p))
+  assert.ok(p.x >= 8 && p.x + 84 <= 1432 && p.y >= 8 && p.y + 187 <= 892, JSON.stringify(p))
+  assert.deepEqual(freeSpot(-50, 2000, 84, 187, view, [], 8), { x: 8, y: 892 - 187 }, 'no covers: kept inside the view')
+  assert.deepEqual(freeSpot(100, 100, 50, 50, view, [{ x: 0, y: 0, w: 0, h: 0 }], 8), { x: 100, y: 100 }, 'a hidden cover (0 × 0) covers nothing')
+})
+
+test('movedTo, offsetAt: a moved card where its offset puts it, kept in the view clear of the covers; the offset of a drop gives the drop back', () => {
+  const view: Rect = { x: 8, y: 8, w: 1424, h: 884 }
+  const card: Rect = { x: 12, y: 12, w: 320, h: 158 }
+  const sq: Square = { x: 720, y: 421, side: 378 }
+  for (const [x, y] of [[1100, 20], [500, 300], [20, 700]]) {
+    const o = offsetAt(x, y, DESK_SIZES.right, sq, view, [card])
+    assert.deepEqual(movedTo(o, DESK_SIZES.right, sq, view, [card]), { x, y, v: 0 }, `${x},${y}`)
+  }
+  const nearRight = offsetAt(300, 50, DESK_SIZES.right, sq, view, [card])
+  assert.deepEqual(movedTo(nearRight, DESK_SIZES.right, sq, view, [card]), { x: 340, y: 50, v: 0 }, 'dropped on the flight card\'s right: beside it')
+  const nearBottom = offsetAt(100, 50, DESK_SIZES.right, sq, view, [card])
+  assert.deepEqual(movedTo(nearBottom, DESK_SIZES.right, sq, view, [card]), { x: 100, y: 178, v: 0 }, 'further in: below it, the nearer way out')
+  assert.equal(movedTo({ x: 0, y: 0 }, [], sq, view, []), null, 'a card with nothing to show has no place')
+})
+
+test('movedTo, offsetAt: every card pinned where the automatic layout put it stays exactly there, in the variant it had', () => {
+  // A phone, 390 × 844: the altitude card compact (v 1) against the view's left edge; the flight card and tab bar below.
+  const view: Rect = { x: 8, y: 8, w: 374, h: 828 }
+  const covers: Rect[] = [{ x: 8, y: 597, w: 374, h: 178 }, { x: 0, y: 783, w: 390, h: 61 }]
+  const safe: Rect = { x: 8, y: 8, w: 374, h: 581 }
+  const sizes = {
+    left: [{ w: 101, h: 161, ay: 80 }, { w: 97, h: 139, ay: 69 }],
+    right: [{ w: 68, h: 144, ay: 72 }, { w: 66, h: 122, ay: 61 }],
+    top: [{ w: 209, h: 67 }, { w: 184, h: 69 }],
+    bottom: [{ w: 209, h: 91 }, { w: 184, h: 78 }],
+  }
+  const sq: Square = { x: 195, y: 391, side: 160 }
+  const auto = frameLayout(sq, sizes, safe)
+  assert.equal(auto.left!.v, 1)
+  const pinned: Partial<Record<BlockId, Offset>> = {}
+  for (const id of IDS) pinned[id] = offsetAt(auto[id]!.x, auto[id]!.y, sizes[id], sq, view, covers, auto[id]!.v)
+  for (const id of IDS) {
+    assert.deepEqual(movedTo(pinned[id]!, sizes[id], sq, view, covers), { x: auto[id]!.x, y: auto[id]!.y, v: auto[id]!.v }, id)
+  }
+  // One of them dropped onto another's place: it lands exactly there, in its variant; no other moves.
+  const drop = offsetAt(auto.bottom!.x + 20, auto.bottom!.y - 60, sizes.left, sq, view, covers, 1)
+  assert.deepEqual(movedTo(drop, sizes.left, sq, view, covers), { x: auto.bottom!.x + 20, y: auto.bottom!.y - 60, v: 1 })
+  const fixed = Object.fromEntries(IDS.map((id) => [id, movedTo(id === 'left' ? drop : pinned[id]!, sizes[id], sq, view, covers)!]))
+  const after = frameLayout(sq, sizes, safe, 10, undefined, fixed)
+  for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(after, id), at(auto, id), `${id} stays`)
+  // A variant that no longer fits the view (a stored layout on a smaller screen): the largest that does.
+  assert.equal(movedTo({ x: 0, y: 0, v: 0 }, sizes.top, sq, { x: 8, y: 8, w: 200, h: 400 }, [])!.v, 1)
+})
+
+test('dragStarted: a press becomes a drag once the pointer is 4 px from where it pressed, however slowly it got there', () => {
+  const press = { x: 100, y: 100 }
+  const moves = [1, 2, 3, 3.9, 4, 5].map((d) => dragStarted(press, { x: 100 + d, y: 100 }))
+  assert.deepEqual(moves, [false, false, false, false, true, true], '1 px at a time: the fourth px starts it')
+  assert.equal(dragStarted(press, { x: 103, y: 103 }), true, 'diagonally')
+  assert.equal(dragStarted(press, { x: 98, y: 101 }), false)
+})
+
+test('wholePx: a whole px, held where it was drawn until the place is 0.75 px off it (no 1 px flicker round a half)', () => {
+  assert.equal(wholePx(339.5), 340)
+  let x = wholePx(339.49)
+  for (const v of [339.51, 339.49, 339.6, 339.4, 339.7]) x = wholePx(v, x)
+  assert.equal(x, 339, 'wavering round 339.5: it stays')
+  assert.equal(wholePx(339.8, 339), 340, 'moved on: it follows')
+  assert.equal(wholePx(337.2, 339), 337)
+})
+
+// ---- layoutSide -----------------------------------------------------------------------------------------------------
+
+// 1440 × 900 in chase: the flight card cuts the safe area's top, the rail its right; the aircraft a little above the
+// middle. The blocks' full and compact variants as the app measures them; at the default range the heading goes under
+// the attitude (no room above).
+const DESK: Rect = { x: 8, y: 178, w: 1366, h: 714 }
+const DESK_SIZES = {
+  left: [{ w: 121, h: 227, ay: 114 }, { w: 104, h: 178, ay: 89 }],
+  right: [{ w: 84, h: 187, ay: 100 }, { w: 72, h: 142, ay: 77 }],
+  top: [{ w: 271, h: 72 }, { w: 221, h: 69 }],
+  bottom: [{ w: 271, h: 119 }, { w: 232, h: 95 }],
+}
+const LEAST = 378 // 0.42 of the view's smaller side: an airliner's square at the chase camera's default range
+const arrangement = (p: Layout): string => IDS.map((id) => (p[id] === null ? `${id}:-` : `${id}:${p[id]!.side}/${p[id]!.v}`)).join(' ')
+
+test('layoutSide: zoomed out, the least side: the blocks keep the default framing\'s distances round a small aircraft', () => {
+  for (const side of [MIN_PX, 60, 200, LEAST - 1]) assert.equal(layoutSide({ x: 720, y: 421, side }, LEAST, DESK_SIZES, DESK), LEAST, String(side))
+  const far = frameLayout({ x: 720, y: 421, side: LEAST }, DESK_SIZES, DESK)
+  assert.equal(arrangement(far), 'left:left/0 right:right/0 top:bottom/0 bottom:bottom/0', 'the heading under the attitude, as at the default range')
+})
+
+test('layoutSide: between the least side and the largest the arrangement fits, the aircraft\'s own', () => {
+  for (const side of [LEAST, 420, 500]) assert.equal(layoutSide({ x: 720, y: 421, side }, LEAST, DESK_SIZES, DESK), side, String(side))
+})
+
+test('layoutSide: zoomed in, the largest side at which every block keeps its side and variant: none moves away or hides', () => {
+  const sq: Square = { x: 720, y: 421, side: 2400 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  assert.ok(Number.isInteger(s) && s > 500 && s < 2400, String(s))
+  const want = arrangement(frameLayout({ ...sq, side: LEAST }, DESK_SIZES, DESK))
+  assert.equal(arrangement(frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)), want)
+  assert.notEqual(arrangement(frameLayout({ ...sq, side: s + 1 }, DESK_SIZES, DESK)), want, 'one px more and a block would move')
+  assert.equal(layoutSide({ ...sq, side: s + 300 }, LEAST, DESK_SIZES, DESK), s, 'the same answer however far in')
+})
+
+test('layoutSide: a block that would slide along its side, not straight out, has moved too: the side stops before it', () => {
+  // The aircraft high on screen: past some side the heading has no room left under the attitude but still some beside it,
+  // on the same side, in the same variant.
+  const sq: Square = { x: 720, y: 201, side: 1663 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)
+  const least = frameLayout({ ...sq, side: LEAST }, DESK_SIZES, DESK)
+  assert.equal(p.top!.x, least.top!.x, 'the heading still under the attitude, not beside it')
+  assert.ok(Math.abs(p.top!.y - least.top!.y - (s - LEAST) / 2) < 1e-6)
+  assert.ok(s > LEAST + 100, String(s))
+})
+
+test('layoutSide: moved cards never change the side: a stored offset puts a dropped card back where it was dropped, and a second drop moves no other', () => {
+  // Zoomed in on a desktop view: the side is the largest the automatic arrangement allows.
+  const sq: Square = { x: 720, y: 421, side: 1400 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const at0 = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)
+  const lsq: Square = { ...sq, side: s }
+  const drop = (id: BlockId, dx: number, dy: number, moved: Partial<Record<BlockId, Offset>>): Partial<Record<BlockId, Offset>> => {
+    const p = frameLayout(lsq, DESK_SIZES, DESK, 10, undefined, fixedAt(moved, lsq, DESK_SIZES, DESK))[id]!
+    return { ...moved, [id]: offsetAt(p.x + dx, p.y + dy, DESK_SIZES[id], lsq, DESK, []) }
+  }
+  const one = drop('right', 80, 40, {})
+  const two = drop('bottom', -60, 30, one)
+  const side = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const after = frameLayout({ ...sq, side }, DESK_SIZES, DESK, 10, undefined, fixedAt(two, { ...sq, side }, DESK_SIZES, DESK))
+  assert.deepEqual(at(after, 'right'), { x: at0.right!.x + 80, y: at0.right!.y + 40 }, 'the first drop where it was dropped')
+  assert.deepEqual(at(after, 'bottom'), { x: at0.bottom!.x - 60, y: at0.bottom!.y + 30 }, 'the second drop where it was dropped')
+  apart(after, DESK_SIZES, { ...sq, side: 0 }, 10)
+})
+
+test('layoutSide: from far out to close in, no block ever changes side or variant, and none jumps', () => {
+  for (const [name, safe, least, x, y] of [
+    ['desktop', DESK, LEAST, 720, 421],
+    ['a scenario, no card', { x: 8, y: 8, w: 1366, h: 800 }, LEAST, 720, 421],
+    ['1280 × 720', { x: 8, y: 178, w: 1206, h: 534 }, 302, 640, 312],
+  ] as const) {
+    let prev: Layout | undefined
+    let prevSide = 0
+    for (let side = MIN_PX; side < 4000; side *= 1.02) {
+      const sq: Square = { x, y, side }
+      const s = layoutSide(sq, least, DESK_SIZES, safe, 10, prev)
+      const p = frameLayout({ ...sq, side: s }, DESK_SIZES, safe, 10, prev)
+      if (prev !== undefined) {
+        assert.equal(arrangement(p), arrangement(prev), `${name}: ${Math.round(side)} px`)
+        for (const id of IDS) {
+          if (p[id] === null) continue
+          const d = Math.hypot(p[id]!.x - prev[id]!.x, p[id]!.y - prev[id]!.y)
+          assert.ok(d <= Math.abs(s - prevSide) / 2 + 1e-6, `${name}: ${id} jumped ${d.toFixed(1)} px at ${Math.round(side)} px`)
+        }
+      }
+      inside(p, DESK_SIZES, safe, name)
+      for (const id of IDS) assert.notEqual(p[id], null, `${name}: ${id} shown`)
+      prev = p
+      prevSide = s
+    }
+  }
+})
+
+test('layoutSide: a phone: less than the least side where a tape would leave its side of the aircraft; compact variants still come', () => {
+  // 390 × 844: the flight card and the tab bar take the bottom; the phone's blocks as the app measures them.
+  const safe: Rect = { x: 8, y: 8, w: 374, h: 581 }
+  const sizes = {
+    left: [{ w: 101, h: 161, ay: 80 }, { w: 97, h: 139, ay: 69 }],
+    right: [{ w: 68, h: 144, ay: 72 }, { w: 66, h: 122, ay: 61 }],
+    top: [{ w: 209, h: 67 }, { w: 184, h: 69 }],
+    bottom: [{ w: 209, h: 91 }, { w: 184, h: 78 }],
+  }
+  const sq: Square = { x: 195, y: 391, side: 26 } // zoomed out
+  // Round 164 px even the compact altitude card misses the room left of the aircraft by 2 px: it would go above the heading.
+  assert.equal(frameLayout({ ...sq, side: 164 }, sizes, safe).left!.side, 'top')
+  const s = layoutSide(sq, 164, sizes, safe)
+  assert.equal(s, 160)
+  const p = frameLayout({ ...sq, side: s }, sizes, safe)
+  for (const id of IDS) assert.equal(p[id]!.side, id, `${id} on its own side`)
+  assert.equal(p.left!.v, 1, 'the altitude compact: its full card has no room')
+  assert.equal(layoutSide({ ...sq, side: 210 }, 164, sizes, safe), 160, 'the default range: the tapes stay beside the aircraft, over its wingtips')
+  // A least side far too large for the screen: less, down to where the tapes are beside the aircraft again.
+  const small = layoutSide(sq, 400, sizes, safe)
+  assert.equal(small, 160)
+})
+
+test('layoutSide: what covers the view sends a tape to another side, never closes the side in on the aircraft', () => {
+  for (const [name, view, safe, sq, least] of [
+    // 1024 × 768, the flight card with its photo down the left: the room is right of it
+    ['1024 × 768, a photo', { x: 8, y: 8, w: 1008, h: 752 }, { x: 340, y: 8, w: 616, h: 752 }, { x: 512, y: 347, side: 252 }, 322],
+    // 1440 × 900 with the Aircraft panel open beside the rail: the room is left of it, under the flight card
+    ['1440 × 900, a panel', { x: 8, y: 8, w: 1424, h: 884 }, { x: 8, y: 178, w: 848, h: 714 }, { x: 720, y: 421, side: 300 }, 378],
+  ] as const) {
+    for (const side of [40, sq.side]) {
+      const s = layoutSide({ ...sq, side }, least, DESK_SIZES, safe, 10, undefined, view)
+      assert.equal(s, least, `${name}, ${side} px: the least side, not less`)
+      const p = frameLayout({ ...sq, side: s }, DESK_SIZES, safe)
+      for (const id of IDS) assert.notEqual(p[id], null, `${name}: ${id} has a place`)
+      inside(p, DESK_SIZES, safe, name)
+      apart(p, DESK_SIZES, { ...sq, side: s }, 10, name)
+    }
+  }
+  // Where even other sides leave a block no place (the room far too small), the largest side at which each has one.
+  const tiny: Rect = { x: 340, y: 8, w: 400, h: 400 }
+  const s = layoutSide({ x: 540, y: 208, side: 40 }, 322, DESK_SIZES, tiny, 10, undefined, { x: 8, y: 8, w: 1008, h: 752 })
+  assert.ok(s < 322, String(s))
+  const p = frameLayout({ x: 540, y: 208, side: s }, DESK_SIZES, tiny)
+  for (const id of IDS) assert.notEqual(p[id], null, `tiny: ${id} has a place`)
+})
+
+test('layoutSide: where no side has the tapes beside the aircraft (the flight card open on a small window), the least side stands', () => {
+  const safe: Rect = { x: 340, y: 8, w: 388, h: 584 }
+  const sizes: Sizes = { left: { w: 104, h: 196 }, right: { w: 104, h: 196 }, top: { w: 290, h: 56 }, bottom: { w: 260, h: 112 } }
+  assert.equal(layoutSide({ x: 400, y: 300, side: 40 }, 128, sizes, safe), 128)
+})
+
+// ---- boxCentre -------------------------------------------------------------------------------------------------------
+
+test('boxCentre: the box centre through the model matrix, grown with the scale the model is drawn at (about its origin)', () => {
+  const mm = Matrix4.fromTranslation(new Cartesian3(100, 200, 300))
+  const typed = { box: { centre: [-2, 0, 1], half: 20 } } as unknown as ModelManifestEntry
+  assert.deepEqual(boxCentre(mm, typed, new Cartesian3()), new Cartesian3(98, 200, 301))
+  assert.deepEqual(boxCentre(mm, typed, new Cartesian3(), 2), new Cartesian3(96, 200, 302))
+  const generic = {} as ModelManifestEntry // no box: Cesium_Air's
+  const c = boxCentre(mm, generic, new Cartesian3(), 3)
+  assert.ok(Cartesian3.equalsEpsilon(c, new Cartesian3(100 + 3 * BOX_CENTRE.x, 200, 300 + 3 * BOX_CENTRE.z), 1e-9))
+  assert.deepEqual([BOX_CENTRE.x, BOX_CENTRE.z], [-2.7, 1.58], 'the shared centre untouched')
 })
 
 // ---- liveFlightData -------------------------------------------------------------------------------------------------

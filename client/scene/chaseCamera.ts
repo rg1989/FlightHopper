@@ -1,6 +1,6 @@
 // client/scene/chaseCamera.ts
-import { Cartesian3, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
-import type { Camera, Cartesian2, Cartographic, Scene, Viewer } from 'cesium'
+import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRange, Matrix4, ScreenSpaceEventHandler, ScreenSpaceEventType, Transforms } from 'cesium'
+import type { Camera, Cartesian2, Scene, Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
 
 const RAD = Math.PI / 180
@@ -13,6 +13,19 @@ const PITCH_MAX_DEG = 10 // slightly below the aircraft, looking up
 const ZOOM_PER_WHEEL = 0.0015 // Cesium wheel delta ≈ ±100 per notch → ×0.86 / ×1.16
 const RANGE_MIN_M = 25
 const RANGE_MAX_M = 3000
+// The view's middle this far under the aimed point, so the aircraft sits a little above it at every range: where an
+// airliner sat at the default range when the camera aimed at its wheels.
+const AIM_BELOW_DEG = 2.4
+export const DEFAULT_RANGE_M = 150
+
+/**
+ * The camera's range at first and after a reset: DEFAULT_RANGE_M, farther on a view taller than wide, so the aircraft
+ * takes the share of the view's width it takes on a wide one (Cesium's field of view spans the larger side: upright, a
+ * phone would show it twice as wide, larger than the flight-data frame's cards leave room for).
+ */
+export function defaultRangeM(w: number, h: number): number {
+  return DEFAULT_RANGE_M * (w > 0 ? Math.max(1, h / w) : 1)
+}
 
 /**
  * Camera position relative to the target, in the target's local east-north-up frame (metres).
@@ -101,6 +114,7 @@ export class ChaseCamera {
   #minClearanceM: number
   #tauS: number
   #headingDeg: number | null = null
+  #at = new Cartographic()
   #target = new Cartesian3()
   #frame = new Matrix4()
   #hpr = new HeadingPitchRange()
@@ -110,17 +124,24 @@ export class ChaseCamera {
     this.#scene = viewer.scene
     const globe = viewer.scene.globe
     this.#groundAt = opts.groundAt ?? ((c) => globe.getHeight(c) ?? null)
-    this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? 150)
+    const canvas = viewer.scene.canvas
+    this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? defaultRangeM(canvas.clientWidth, canvas.clientHeight))
     this.#minClearanceM = opts.minClearanceM ?? 15
     this.#tauS = opts.headingTauS ?? 1.0
   }
 
-  update(state: RenderState, dtS: number): { clearanceM: number | null } {
+  /**
+   * aim: the point to orbit and look at, the aircraft's middle (world coordinates); absent, its wheels (state). Its middle
+   * keeps the aircraft, and whatever is drawn round it, in place on screen as the range changes.
+   */
+  update(state: RenderState, dtS: number, aim?: Cartesian3): { clearanceM: number | null } {
     this.#attachInput()
+    if (aim === undefined) Cartographic.fromDegrees(state.lon, state.lat, state.hM, this.#at)
+    else Cartographic.fromCartesian(aim, Ellipsoid.WGS84, this.#at)
     const heading = wrap360(this.#smoothHeading(state.headingDeg, dtS) + this.orbit.headingOffsetDeg)
     let pitch = this.orbit.pitchDeg
     let liftM = 0
-    let clearance = this.#place(state, heading, pitch, liftM)
+    let clearance = this.#place(heading, pitch, liftM)
     // ponytail: the correction is recomputed every frame, not smoothed. Ceiling: a cliff under the camera snaps the pitch;
     // upgrade: low-pass the correction with the heading tau.
     for (let i = 0; i < CLEARANCE_PASSES && clearance !== null && clearance < this.#minClearanceM; i++) {
@@ -130,8 +151,9 @@ export class ChaseCamera {
       if (sinP >= Math.sin(STEEPEST_DEG * RAD)) pitch = Math.asin(sinP) / RAD
       else if (pitch > STEEPEST_DEG) pitch = STEEPEST_DEG // go (almost) straight above first, then measure again
       else liftM += needM // already above: the aircraft is under the terrain model, so raise the whole rig
-      clearance = this.#place(state, heading, pitch, liftM)
+      clearance = this.#place(heading, pitch, liftM)
     }
+    this.#camera.lookDown(AIM_BELOW_DEG * RAD) // turns the view only: the clearance stands
     return { clearanceM: clearance }
   }
 
@@ -193,9 +215,10 @@ export class ChaseCamera {
     return (this.#headingDeg = wrap360(this.#headingDeg + k * delta))
   }
 
-  /** Put the camera on the target's ENU frame; returns camera height − ground height, null while the ground is unknown. */
-  #place(state: RenderState, headingDeg: number, pitchDeg: number, liftM: number): number | null {
-    Cartesian3.fromDegrees(state.lon, state.lat, state.hM + liftM, Ellipsoid.WGS84, this.#target)
+  /** Put the camera on the aimed point's ENU frame; returns camera height − ground height, null while the ground is unknown. */
+  #place(headingDeg: number, pitchDeg: number, liftM: number): number | null {
+    const at = this.#at
+    Cartesian3.fromRadians(at.longitude, at.latitude, at.height + liftM, Ellipsoid.WGS84, this.#target)
     Transforms.eastNorthUpToFixedFrame(this.#target, Ellipsoid.WGS84, this.#frame)
     this.#hpr.heading = headingDeg * RAD
     this.#hpr.pitch = pitchDeg * RAD

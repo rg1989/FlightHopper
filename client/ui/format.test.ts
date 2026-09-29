@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { StatusBrief } from '../../shared/api.ts'
 import type { RenderState } from '../types.ts'
-import { bannerText, hudFields, hudTitle } from './format.ts'
+import { bannerText, formatDistanceM, hudFields, hudTitle } from './format.ts'
 
 const live: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP95S: 2, chasePeriodP95S: 1 }
 
@@ -86,6 +86,12 @@ test('no aircraft selected: no fields', () => {
 test('hudTitle: callsign · type · hex, skipping unknowns', () => {
   assert.equal(hudTitle(state()), 'UAL123 · B738 · a1b2c3')
   assert.equal(hudTitle(state({ callsign: null, typeCode: null })), 'a1b2c3')
+})
+
+test('formatDistanceM: whole metres with thousands separators', () => {
+  assert.equal(formatDistanceM(849.6), '850 m')
+  assert.equal(formatDistanceM(12_345.4), '12,345 m')
+  assert.equal(formatDistanceM(0.2), '0 m')
 })
 
 test('banner: provider problems first, with the exact wording', () => {
