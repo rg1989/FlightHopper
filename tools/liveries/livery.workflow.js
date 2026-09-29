@@ -73,7 +73,7 @@ Otherwise research it: get reference photos into ${REFS(a)}/ (use \`node tools/l
   (r, a) => (r && r.skipped ? r : agent(`${RULES}
 Independently check the livery dossier ${DOSSIER(a)} for ${a.airline} against the photos in ${REFS(a)}/ (refs.json). Assume it has mistakes. Check the current scheme, every colour (re-sample hex values from sunlit areas), the belly line and every stripe's geometry, the titles (text, size, place, left/right), the fin, engines and wingtips on both faces, and the logo licences (open each Commons file page). Get missing views. Fix the dossier in place, marking changes "(verified)" or "(corrected: was …)". Return the structured summary with skipped=false.`, { label: `verify:${a.code}`, phase: 'Verify', schema: RESEARCH_SCHEMA })),
   (r, a, i) => agent(`${RULES}
-Task: draw ${a.airline}'s livery (${a.code}) as a FlightHopper design, so that the 3-D models (${a.pairs.join(', ')}) look like the aircraft in the reference photos.
+Task: draw ${a.airline}'s livery (${a.code}) as a FlightHopper design, so that the 3-D models (${a.pairs.join(', ')}) look like the aircraft in the reference photos. ${a.note ?? ''}
 Inputs: the dossier ${DOSSIER(a)}; the photos ${REFS(a)}/ (refs.json says each one's view); the kit API in docs/liveries.md §3.4 and client/livery/kit.ts; examples: the other designs in client/livery/designs/ (read at least one finished one if there is one); the model profiles in public/models/manifest.json ("profile").
 Your files: client/livery/designs/${a.code}.ts (already registered in designs/index.ts), public/liveries/${a.code}/ (logos + sources.json), new files in public/fonts/ if you need a font. Nothing else.
 Loop until it matches: edit the design → run \`${shotsCmd(a, 9360 + 2 * i, 'all')}\` → open the PNGs in ${SHOTS(a)}/<model>-${a.code}/ (sheet.png shows each photo beside the same view; the per-view PNGs are larger) → compare with the photos view by view (colours in similar light, belly line, every stripe/swoosh and where it starts and ends, the titles' text/size/position on BOTH sides, fin art, engines, wingtips, nose) → fix. Do at least 4 iterations and stop when a careful observer would say it is the same livery. Check the right side too (the text must read correctly). Use k.side / k.model only where the real aircraft differ.
@@ -88,7 +88,7 @@ List every visible difference a spotter would notice: colours, belly line, strip
       last = c
       if (!c || c.verdict === 'pass' || round === ROUNDS) break // the last round only judges
       await agent(`${RULES}
-Fix ${a.airline}'s design (client/livery/designs/${a.code}.ts and its public/liveries/${a.code}/ assets only) for these issues an independent critic found comparing the renders with the photos (${SHOTS(a)}, ${REFS(a)}):
+Fix ${a.airline}'s design (client/livery/designs/${a.code}.ts and its public/liveries/${a.code}/ assets only; the renders: ${a.pairs.join(', ')}) for these issues an independent critic found comparing the renders with the photos (${SHOTS(a)}, ${REFS(a)}):
 ${JSON.stringify(c.issues, null, 1)}
 Fix every major issue and as many minor ones as you can. Iterate with \`${shotsCmd(a, 9360 + 2 * i, 'all')}\` and look at the result against the photos after each change. Then run \`cd ${REPO} && npx tsc --noEmit -p . && node --test client/livery/*.test.ts\`. Return a short summary of what you changed.`, { label: `fix:${a.code}:r${round}`, phase: 'Critique' })
     }

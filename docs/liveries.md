@@ -184,6 +184,12 @@ Drawing. A colour is a CSS string (sRGB); where a call takes a colour it also ta
 Text and images read correctly on both sides: on the right side the kit flips them, so a title covers the same span
 of the fuselage on both sides. Set `mirror: true` for a directional logo that must face forward on both sides.
 
+**Schemes.** An airline in the middle of a repaint flies two liveries at once (El Al's 1999 ribbons and its 2025
+refresh). List the registrations per scheme in `variants: { A1: ['4X-EHA', …], B: […] }`, set `defaultVariant` for
+aircraft in no list (usually the newest scheme), and branch on `k.variant` in the drawing. The app picks the scheme
+from the aircraft's registration; the lab and the shots tool take `livery=ELY~A1` / `b738:ELY~A1`. Record in the
+design when the lists were checked: repaints move aircraft between them.
+
 `k.side` is `'left'` or `'right'`, for the rare design that differs per side (for example a title in another script
 on the right). `k.model` is the manifest id, for a per-type tweak (`if (k.model.startsWith('b78'))`).
 
