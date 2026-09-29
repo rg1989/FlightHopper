@@ -9,7 +9,8 @@
 //
 // How, on the triangles (plane sections: the decimated tubes have few vertices):
 // - The parts (vertices welded by position, then joined by triangles) that reach out past 2.5 × bodyHalfWidth (wings,
-//   tailplanes, nacelles) or are long thin blades (rotor blades) are left out of the body (never the longest part: the
+//   tailplanes, nacelles), are long thin blades (rotor blades) or flat and reach out past the fuselage (a T-tail's
+//   tailplane) are left out of the body (never the longest part: the
 //   fuselage, or the whole welded airframe); so are the engines (a rear-mounted pair beside the fuselage).
 // - body: a section every 0.25 m (the plane z = c) within bodyHalfWidth. Bottom: its lowest point (keel, belly fairing).
 //   Top: its highest, except where a narrow blade (under 0.6 of its width and 0.5 m, not a V) at least 0.3 m tall stands on it (the
@@ -336,7 +337,8 @@ export function profileOf(e: ModelManifestEntry, m: Mesh = paintMesh(e)): Measur
   const boxes = partBoxes(m, part)
   const spans = new Set([...boxes].filter(([, { box: b }]) => {
     const long = Math.max(b[1] - b[0], b[5] - b[4])
-    return Math.max(-b[0], b[1]) > 2.5 * hw || (long > 2.5 * hw && b[3] - b[2] < 0.3) // reaching far out, or a thin blade
+    const [wide, reach] = [b[1] - b[0], Math.max(-b[0], b[1])]
+    return reach > 2.5 * hw || (long > 2.5 * hw && b[3] - b[2] < 0.3) || (reach > 1.5 * hw && wide > hw && b[3] - b[2] < 0.25 * wide) // reaching far out, a thin blade, or flat and reaching out past the fuselage (a T-tail's tailplane)
   }).map(([k]) => k))
   spans.delete([...boxes].reduce((a, b) => (b[1].box[5] - b[1].box[4] > a[1].box[5] - a[1].box[4] ? b : a))[0]) // never the longest part: the fuselage (or all of the airframe, welded)
   // engines: the biggest nacelle-shaped part in the paint map's engine box on the left, and what hangs with it
