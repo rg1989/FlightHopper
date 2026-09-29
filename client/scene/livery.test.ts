@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { UniformType } from 'cesium'
+import { DESIGNS } from '../livery/designs/index.ts'
 import { drawDesign, profileOf } from '../livery/kit.ts'
 import type { Op } from '../livery/kit.ts'
 import type { ModelManifest, ModelManifestEntry } from '../types.ts'
@@ -58,7 +59,8 @@ test('table: colours are #rrggbb, aliases land on liveries, every decal file exi
       if (v !== undefined) assert.match(v, hex, `${code}.${k}`)
     }
   }
-  for (const [from, to] of Object.entries(TABLE.aliases)) assert.ok(to in TABLE.liveries, `${from} → ${to}`)
+  for (const [from, to] of Object.entries(TABLE.aliases)) assert.ok(to in TABLE.liveries || to in DESIGNS, `${from} → ${to}`)
+  for (const code of Object.keys(DESIGNS)) assert.ok(!(code in TABLE.liveries), `${code}: a design and a colours entry`)
   const wanted = new Set<string>()
   for (const [code, l] of Object.entries(TABLE.liveries)) {
     if (l.title) wanted.add(`${code}-title.png`)
