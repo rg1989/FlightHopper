@@ -1,0 +1,12 @@
+{
+  "title.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Israir_Airlines_Logo.svg",
+    "licence": "PD-textlogo (Commons {{PD-logo}}, a redirect to {{PD-textlogo}}); author Israir Airlines Ltd., source israir.co.il. Trademark rights remain.",
+    "modified": "The Hebrew word, the star and ISRAIR paths are unchanged; FlightHopper recoloured them (navy #102A78, orange #F36A1E) and laid them out as the titles seen on the Israir A320 (side elevation, 1 unit = 1 cm: wider gaps, letters compressed vertically, the star a little smaller)."
+  },
+  "star.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Israir_Airlines_Logo.svg",
+    "licence": "PD-textlogo (Commons {{PD-logo}}, a redirect to {{PD-textlogo}}); author Israir Airlines Ltd., source israir.co.il. Trademark rights remain.",
+    "modified": "The star path only, unchanged; FlightHopper recoloured it (orange #F36A1E) and cropped the viewBox to its ink."
+  }
+}

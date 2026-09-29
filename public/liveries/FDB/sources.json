@@ -1,0 +1,12 @@
+{
+  "title.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Fly_Dubai_logo_2010_03.svg",
+    "licence": "PD-textlogo (Commons {{PD-textlogo}} + {{Trademark}}); author flydubai. Trademark rights remain.",
+    "modified": "Path data unchanged; FlightHopper recoloured it to the paint colours measured on the aircraft (#FF8200 → #F05A28, #006496 → #0D4A9E), added a viewBox and a 10× raster size, and a comment naming the source."
+  },
+  "winglet-wordmark.svg": {
+    "source": "https://commons.wikimedia.org/wiki/File:Fly_Dubai_logo_2010_03.svg",
+    "licence": "PD-textlogo (Commons {{PD-textlogo}} + {{Trademark}}); author flydubai. Trademark rights remain.",
+    "modified": "Path data unchanged (the same two paths as title.svg); FlightHopper coloured \"fly\" and the disc #F05A28 and \"dubai\" white as on the winglets' inboard faces, turned the wordmark 58 degrees (rotate(-58)) to run up the winglet's swept span, and set a viewBox and a 10x raster size."
+  }
+}
