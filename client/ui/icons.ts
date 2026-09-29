@@ -9,6 +9,16 @@ const P: Record<string, string> = {
   list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
   // Stacked sheets: the scene layers.
   layers: 'M12 3 2.5 8 12 13l9.5-5L12 3ZM2.5 12.5 12 17.5l9.5-5M2.5 16.5 12 21.5l9.5-5',
+  // A fan of waves, struck through: no network.
+  wifiOff: 'M2.5 8.8a14 14 0 0 1 5.8-3.4M12.5 5a14 14 0 0 1 9 3.8M5.6 12.2a9.5 9.5 0 0 1 3.6-2.3M15.3 10.6a9.5 9.5 0 0 1 3.1 1.6M8.6 15.5a5 5 0 0 1 6.8 0M12 19.5h.01M3.5 3.5l17 17',
+  // Two stacked server boxes: the app's own server.
+  server: 'M4 4.5h16v6H4zM4 13.5h16v6H4zM7.5 7.5h.01M7.5 16.5h.01M11 7.5h5.5M11 16.5h5.5',
+  // A radar scope and its sweep: the flight-data source.
+  radar: 'M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18ZM12 16.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9ZM12 12l6.4-6.4',
+  // A circle struck through: refused.
+  ban: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM5.6 5.6l12.8 12.8',
+  // An hourglass: slowed, or taking long.
+  hourglass: 'M6.5 3.5h11M6.5 20.5h11M7.5 3.5c0 5 9 5 9 8.5s-9 3.5-9 8.5M16.5 3.5c0 5-9 5-9 8.5s9 3.5 9 8.5',
   // A cloud: the weather.
   cloud: 'M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.5 9.6 4.5 4.5 0 0 0 7 18.5Z',
   // A road running into the distance: roads and places.

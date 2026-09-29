@@ -13,6 +13,9 @@ const SOURCES: Record<SourceKind, { name: string; href: string | null }> = {
   replay: { name: 'recording', href: null },
 }
 
+/** The source's name for sentences: "adsb.fi", "own receiver", "the recording". */
+export const sourceName = (kind: SourceKind): string => (kind === 'replay' ? 'The recording' : SOURCES[kind].name)
+
 export interface SourceView {
   text: string
   title: string

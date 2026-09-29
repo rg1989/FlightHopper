@@ -342,3 +342,43 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* A pill button: the accent one does the thing, the secondary one steps aside (the card's Chase, the outage cards). */
+.fh-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--fh-accent);
+  color: #06111f;
+  font: 600 12px/1 var(--fh-font);
+  cursor: pointer;
+  transition: filter var(--fh-fast) var(--fh-ease), background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-pill:hover {
+  filter: brightness(1.1);
+}
+
+.fh-pill:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+.fh-pill-icon {
+  display: grid;
+}
+
+.fh-pill-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fh-text);
+}
+
+.fh-pill-secondary:hover {
+  background: rgba(255, 255, 255, 0.16);
+  filter: none;
+}

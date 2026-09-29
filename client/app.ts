@@ -54,7 +54,7 @@ import type { Scenario } from './scenario/types.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
-import { mountBanner } from './ui/banner.ts'
+import { FAILS_DOWN, mountOutage, outageFor } from './ui/outage.ts'
 import type { Lookup } from './ui/detail.ts'
 import { entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
@@ -68,7 +68,7 @@ import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { FRAME_PREFS_KEY, readFramePrefs, writeFramePrefs } from './ui/framePrefs.ts'
 import { baseKey, mountSceneToggles } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
-import { mountStatusPanel, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
+import { mountStatusPanel, sourceName, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readScenario, readView, writeUrl, type Orbit } from './ui/urlState.ts'
 import { mountTable, type TableHandle } from './ui/table.ts'
 import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
@@ -81,7 +81,6 @@ const PRUNE_AGE_S = 60 // forget an aircraft at least this long after its newest
 // (the 3-D traffic shows 10 nm), dropped 30 s after its newest sample.
 const TRAFFIC_TRACK_NM = 12
 const TRAFFIC_TRACK_KEEP_S = 30
-const FAILS_DOWN = 3 // failed polls in a row before the banner reports it
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
 const MIN_VIEW_NM = 20
 // The visible hemisphere. The server polls a view up to 250 nm as one circle and a wider one as grid cells, each at a
@@ -106,7 +105,7 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
-const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-toast, .fh-playbar, .fh-captions'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -472,7 +471,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     traffic?.close()
     if (hex !== null) select(hex)
   }
-  const banner = mountBanner(ui)
+  // Live data stopped (offline, our server, the source): a card over the greyed map, or a pill (outage.ts).
+  const outage = mountOutage(ui)
+  let lastOkMs: number | null = null // the last good answer from our server (Date.now clock)
   const mapKey = mountMapKey(ui) // bottom left, top-down only: altitude colours and the scale
   let scaleAtMs = -Infinity
   const keyA = new Cartesian2()
@@ -912,7 +913,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       trafficCard.keepClear(c.left + trafficClick.x, c.top + trafficClick.y, TRAFFIC_CLEAR_PX, frame)
       trafficClick = null
     }
-    banner.update(sf === null ? shown : NO_STATUS) // live-feed trouble says nothing about a scenario
+    // Live-feed trouble says nothing about a scenario; before the first answer the splash speaks for it.
+    const kind = outageFor({ online: navigator.onLine, failedPolls, degraded: status === NO_STATUS ? null : status.degraded, inScenario: sf !== null })
+    outage.update(kind, sourceName(status === NO_STATUS ? 'adsbfi' : status.source), lastOkMs, Date.now())
     const known = status === NO_STATUS ? null : shown
     statusPanel.update(known, api.ready ? api.serverNowMs() : null)
     rail.setDot('aircraft', statusDot(known))
@@ -1033,7 +1036,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
-    if (ok) failedPolls = 0
+    if (ok) {
+      failedPolls = 0
+      lastOkMs = Date.now()
+    }
     else if (failedPolls++ === 0) console.warn('FlightHopper: poll failed:', (view as PromiseRejectedResult).reason)
     if (api.ready) {
       const t = api.serverNowMs()
@@ -1143,7 +1149,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       frameLayer.remove()
       scenarioPanel.destroy()
       toggles.destroy()
-      banner.destroy()
+      outage.destroy()
       card.destroy()
       trafficCard.destroy()
       settings.destroy()

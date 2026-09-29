@@ -1,0 +1,239 @@
+/* client/ui/outage.css */
+/* Live data stopped (outage.ts): a card over a dimmed, greyed map, or a pill at the top; the emblem (.fh-art) is the
+   splash's too. The veil never takes the pointer: the map stays usable under it. */
+.fh-art,
+.fh-outage,
+.fh-outage-pill,
+.fh-splash {
+  --fh-tone: var(--fh-accent);
+  --fh-tone-rgb: 90 169 255;
+}
+
+[data-tone='red'] {
+  --fh-tone: #ff6b6b;
+  --fh-tone-rgb: 255 107 107;
+}
+
+[data-tone='amber'] {
+  --fh-tone: #f5b942;
+  --fh-tone-rgb: 245 185 66;
+}
+
+[data-tone='green'] {
+  --fh-tone: var(--fh-ok);
+  --fh-tone-rgb: 60 207 110;
+}
+
+/* ---- the emblem: the icon on a disc, three rings pulsing out of it ---- */
+.fh-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+}
+
+.fh-art-ring {
+  position: absolute;
+  inset: 28px;
+  border: 1.5px solid rgb(var(--fh-tone-rgb) / 0.55);
+  border-radius: 50%;
+  animation: fh-art-ring 2.7s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+@keyframes fh-art-ring {
+  0% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(2); opacity: 0; }
+}
+
+.fh-art-disc {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgb(var(--fh-tone-rgb) / 0.45);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgb(var(--fh-tone-rgb) / 0.35), rgb(var(--fh-tone-rgb) / 0.08) 70%);
+  box-shadow: 0 0 28px rgb(var(--fh-tone-rgb) / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.12);
+  color: var(--fh-tone);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-art-ring {
+    animation: none;
+    opacity: 0.35;
+  }
+}
+
+/* ---- the card over the veil ---- */
+.fh-outage {
+  position: absolute;
+  z-index: 17; /* over the map and the flight-data frame, under the flight card (18), panels (19) and buttons (20) */
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  pointer-events: none;
+  animation: fh-outage-in 260ms var(--fh-ease);
+}
+
+.fh-outage[hidden] {
+  display: none;
+}
+
+@keyframes fh-outage-in {
+  from { opacity: 0; }
+}
+
+/* The map behind, darker at the edges and greyed: plainly not live. */
+.fh-outage-veil {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 45%, rgb(8 11 17 / 0.35), rgb(8 11 17 / 0.72) 75%);
+  -webkit-backdrop-filter: grayscale(0.85) blur(2px);
+  backdrop-filter: grayscale(0.85) blur(2px);
+}
+
+.fh-outage-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(400px, 100%);
+  padding: 8px 26px 22px;
+  border-color: rgb(var(--fh-tone-rgb) / 0.28);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgb(var(--fh-tone-rgb) / 0.14), transparent 60%),
+    var(--fh-glass);
+  text-align: center;
+  pointer-events: auto;
+  animation: fh-outage-card-in 320ms var(--fh-ease);
+}
+
+@keyframes fh-outage-card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+}
+
+.fh-outage-title {
+  margin: 2px 0 8px;
+  font: 700 18px/1.25 var(--fh-font);
+  letter-spacing: 0.005em;
+}
+
+.fh-outage-body {
+  margin: 0 0 14px;
+  color: var(--fh-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fh-outage-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.fh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.05);
+  color: var(--fh-text);
+  font: 600 11px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-chip .fh-spin {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+
+.fh-outage-actions .fh-pill {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+/* ---- the pill at the top (folded, or mild), and "Live again" ---- */
+.fh-outage-pill {
+  position: absolute;
+  z-index: 30;
+  top: var(--fh-top);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(520px, calc(100% - 180px));
+  height: 36px;
+  padding: 0 8px 0 14px;
+  transform: translateX(-50%);
+  border-color: rgb(var(--fh-tone-rgb) / 0.35);
+  border-radius: 999px;
+  color: var(--fh-text);
+  font: 600 12px/1 var(--fh-font);
+  cursor: pointer;
+  pointer-events: auto;
+  animation: fh-outage-pill-in 220ms var(--fh-ease);
+}
+
+.fh-outage-pill[hidden] {
+  display: none;
+}
+
+@keyframes fh-outage-pill-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+}
+
+.fh-outage-pill-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fh-outage-pill-more {
+  flex: none;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgb(var(--fh-tone-rgb) / 0.16);
+  color: var(--fh-tone);
+  font-size: 11px;
+}
+
+.fh-outage-ok {
+  --fh-tone-rgb: 60 207 110;
+  padding-right: 14px;
+  cursor: default;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .fh-outage-card {
+    padding: 4px 20px 20px;
+  }
+
+  .fh-outage-title {
+    font-size: 17px;
+  }
+
+  .fh-outage-body {
+    font-size: 14px;
+  }
+
+  .fh-outage-pill {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    max-width: calc(100% - 24px);
+    font-size: 13px;
+  }
+
+  .fh-outage-actions .fh-pill {
+    height: 44px;
+  }
+}
