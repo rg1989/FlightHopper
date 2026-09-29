@@ -1,0 +1,49 @@
+{
+  "_about": [
+    "Derived type models built by tools/models/variants.ts (the recipe is the corresponding source of the GPL change). Sizes are the real aircraft's, metres, used as mesh metres; angles in degrees.",
+    "wingtip.blendStartM: where the device leaves the wing, inboard of the base profile's wing tip (the base wing is cut there; everything outboard goes). A blade: blendSpanM/blendRiseM, the blend's reach out and up at the leading edge; heightM, the top above the wing's chord plane extended (upper blades); lengthM (lower blades); cantDeg, the straight part's lean outboard from vertical (upper) or droop below horizontal (lower); teSweepDeg (upper: the trailing edge, the blade's straight line; the leading edge follows from the chords) or leSweepDeg (lower), in side view from vertical; chordsM, at the blend's end (or the root) and the tip; thickness, over the chord.",
+    "nacelle.scale: across, up and along the nacelle (along: from the inlet lip aft), about its axis; then forwardM and upM.",
+    "Sources. [A320] Airbus AC A320 (2025-01) https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2025-01/AC_A320_0624.pdf: span 34.10 m with fences, 35.80 m with sharklets (p.40, p.42); sharklet 2.43 m from its tip to the wing's lower-surface line extended, 2.64 m all in (p.42, p.50); the blend starts 16.29 m from the centre line, the tip 17.90 m (p.43); off the p.42 drawing: 6° cant, leading edge 40° and trailing edge 27° from vertical, chord 1.57 m at the wing, 0.9 m where the straight part starts, 0.45 m at the rounded tip, the blend about 1.3 m out and 0.8 m up.",
+    "Nacelles [A320]: CFM56-5B 2.3 m tall, 2.07-2.1 m wide, 3.43 m to the fan exhaust (p.124); LEAP-1A 2.52 × 2.60 m, 4.1 m to the fan nozzle (p.135); PW1100G 2.60 × 2.67 m, 4.3 m (p.131); inlet 11.19 m (ceo) vs 11.14 m (neo) from the nose (p.41, p.45); engine clearance 0.577 m (ceo) vs 0.46 m (neo) at MTOW (p.48, p.51): the axis stays, the bigger nacelle takes the clearance. The A320 mesh's cowl measures 2.12 × 2.30 m. neo: the mean of LEAP-1A and PW1100G (Royal Jordanian flies LEAP-1A, Wizz Air PW1100G).",
+    "[A321] Airbus AC A321 (2023-12) https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2023-12/ac_a321_1223.pdf: the A320's wing and sharklet; inlet 15.46 m (ceo) vs 15.40 m (neo) from the nose (p.42, p.46).",
+    "[MAX] Boeing D6-38A004 Rev H https://www.boeing.com/content/dam/boeing/v2/airports/acaps/737MAX_RevH.pdf: span 35.92 m; the AT winglet 2.92 m from the lower blade's tip to the upper's (fig 2-10); off the drawing: the upper blade 2.4 m long rising 2.1 m (29° outboard), leading edge 39° and trailing edge 18° in side view, chord 1.35 m to 0.3 m; the lower blade 1.25 m, 32° below horizontal, leading edge 65-70°, chord 1.0 m to 0.35 m; the junction about 16.8 m from the centre line. [NG] D6-58325-7 Rev C https://www.boeing.com/content/dam/boeing/v2/airports/acaps/737NG_REV_C.pdf: 737-800 span 35.79 m with winglets, 34.32 m without.",
+    "Nacelles [NG]/[MAX]: CFM56-7B fan 61 in, LEAP-1B 69.4 in (https://en.wikipedia.org/wiki/CFM_International_LEAP); nacelle about 3.2 m inlet to fan exhaust, 1.97 m tall (737-800) vs 3.76 m, inlet 2.19 m tall (MAX 8); inlet 13.36 m vs 13.00 m from the nose (0.36 m forward); engine axis about 0.2 m higher; clearance 0.48 m (800) vs 0.43 m (MAX 8) at MTOW. Width estimated 2.25 m vs 2.55 m. The 737-800 mesh's cowl measures 2.19 × 1.99 m."
+  ],
+  "a20n": {
+    "base": "a320",
+    "name": "Airbus A320neo",
+    "types": ["A20N"],
+    "date": "2026-09-29",
+    "wingtip": {
+      "kind": "sharklet",
+      "blendStartM": 0.76,
+      "upper": { "blendSpanM": 1.35, "blendRiseM": 0.8, "heightM": 2.4, "cantDeg": 6, "teSweepDeg": 27, "chordsM": [0.9, 0.45], "thickness": 0.1 }
+    },
+    "nacelle": { "scale": [1.24, 1.11, 1.15], "forwardM": 0.05, "upM": 0 }
+  },
+  "a21n": {
+    "base": "a321",
+    "name": "Airbus A321neo",
+    "types": ["A21N"],
+    "date": "2026-09-29",
+    "wingtip": {
+      "kind": "sharklet",
+      "blendStartM": 0.76,
+      "upper": { "blendSpanM": 1.35, "blendRiseM": 0.8, "heightM": 2.4, "cantDeg": 6, "teSweepDeg": 27, "chordsM": [0.9, 0.45], "thickness": 0.1 }
+    },
+    "nacelle": { "scale": [1.24, 1.11, 1.15], "forwardM": 0.06, "upM": 0 }
+  },
+  "b38m": {
+    "base": "b738",
+    "name": "Boeing 737 MAX 8",
+    "types": ["B38M", "B37M", "B39M", "B3XM"],
+    "date": "2026-09-29",
+    "wingtip": {
+      "kind": "at-winglet",
+      "blendStartM": 0.97,
+      "upper": { "blendSpanM": 0.2, "blendRiseM": 0.3, "heightM": 2.1, "cantDeg": 29, "teSweepDeg": 20, "chordsM": [1.2, 0.3], "thickness": 0.09 },
+      "lower": { "lengthM": 1.25, "cantDeg": 32, "leSweepDeg": 67, "chordsM": [1.0, 0.35], "rootLeAftM": 0.05, "thickness": 0.09 }
+    },
+    "nacelle": { "scale": [1.16, 1.17, 1.17], "forwardM": 0.36, "upM": 0.2 }
+  }
+}

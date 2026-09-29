@@ -10,7 +10,7 @@
 #
 # spec: { "glb": path, "turn": bool (noseMinusZ: the mesh is turned 180° about y, the paint frame), "out": png path,
 #         "title": str, "views": [{ "name", "dir": [x,y,z] (camera → model), "up": [x,y,z], "px": width in pixels,
-#         "centre": [x,y,z]?, "extent": metres across? (a close-up), "overlay": [{ "pts": [[x,y,z]…], "color": "#rrggbb",
+#         "centre": [x,y,z]?, "extent": metres across? (a close-up), "clip": [axis, lo]?, "overlay": [{ "pts": [[x,y,z]…], "color": "#rrggbb",
 #         "closed": bool, "width": px, "label": str?, "dots": bool? }] }], "cols": views per row }
 # ponytail: reads every primitive's POSITION/NORMAL/COLOR_0 with node transforms; no textures, no sparse accessors.
 import json
@@ -123,7 +123,10 @@ def render(P, N, C, T, view, light):
     img[:] = (0.93, 0.95, 0.97)
     L = np.array(light, float)
     L /= np.linalg.norm(L)
+    clip = view.get('clip')  # [axis, lo]: only the triangles whose centre is beyond lo on that axis (a close-up's own part)
     for t in T:
+        if clip is not None and P[t, clip[0]].mean() < clip[1]:
+            continue
         xs, ys = X[t], Y[t]
         x0, x1 = int(max(0, np.floor(xs.min()))), int(min(W - 1, np.ceil(xs.max())))
         y0, y1 = int(max(0, np.floor(ys.min()))), int(min(H - 1, np.ceil(ys.max())))

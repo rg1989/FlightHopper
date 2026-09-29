@@ -229,6 +229,8 @@ const cm = (x: number): number => Math.round(x * 100) / 100 + 0 // + 0: no −0 
 export const DOCS: Record<string, { lengthM: number | null; doors: number[]; cockpit: number; source: string }> = {
   // Airbus AC A320 (2025-01) §2-2 door location (PDF p.74), cockpit off the side view (PDF p.42)
   a320: { lengthM: 37.57, doors: [5.04, 29.53], cockpit: 3.26, source: 'https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2025-01/AC_A320_0624.pdf' },
+  // the A320neo: the A320's doors and nose (the same AC document)
+  a20n: { lengthM: 37.57, doors: [5.04, 29.53], cockpit: 3.26, source: 'https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2025-01/AC_A320_0624.pdf' },
   // Airbus AC A321 (2023-12) PDF p.87: L1, L2 and L3 (the emergency-exit doors either side of the wing), L4; nose as the A320
   a321: { lengthM: 44.51, doors: [5.02, 13.84, 24.79, 36.58], cockpit: 3.26, source: 'https://www.aircraft.airbus.com/sites/g/files/jlcbta126/files/2023-12/ac_a321_1223.pdf' },
   // the same, PDF p.89: the A321neo Airbus Cabin Flex (the Wizz Air layout): L1, L3 moved aft, L4; overwing exits instead of L2
