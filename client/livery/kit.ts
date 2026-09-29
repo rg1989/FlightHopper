@@ -65,6 +65,9 @@ export interface Design {
   fonts?: Array<{ family: string; src: string; weight?: string; style?: string }> // web fonts to load (public/ paths)
 }
 
+/** A public/ file's URL (logos, fonts), under the app's base path. */
+export const asset = (path: string): string => `${import.meta.env?.BASE_URL ?? '/'}${path}`
+
 export const WING = '#dbe0e6' // the old shader's wing grey (0.86, 0.88, 0.9)
 export const WHITE = '#f7f7f7'
 
