@@ -7,3 +7,6 @@ data/recordings/
 
 # Scenario files that must not be published (logos under trademark, audio of unclear rights): scenarios-design.md §1
 public/scenarios/*/local/
+
+# Livery reference photos (copyrighted; only their URLs and credits are committed): livery-pipeline-design.md §9
+data/livery-refs/
