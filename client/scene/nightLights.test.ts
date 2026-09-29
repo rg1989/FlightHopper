@@ -139,3 +139,13 @@ test('metresPerPx: Web Mercator ground resolution of a tile row (156 km/px at z0
   assert.ok(Math.abs(z14TelAviv - 8.1) < 0.05, `${z14TelAviv}`)
   assert.ok(Math.abs(metresPerPx(13, 3324) / metresPerPx(14, 6649) - 2) < 0.01)
 })
+
+test('lampsWait: no lamps on a far-coarser stand-in, nor on a shallow ground tile far blurrier than the view wants', async () => {
+  const { lampsWait, MAX_STAND_IN_LEVELS, COARSE_SSE, COARSE_BELOW_LEVEL } = await import('./nightLights.ts')
+  assert.equal(lampsWait(0, 1, 2, 13), false) // its own lamp tile, sharp enough
+  assert.equal(lampsWait(MAX_STAND_IN_LEVELS, 1, 2, 13), false) // a near stand-in may show
+  assert.equal(lampsWait(MAX_STAND_IN_LEVELS + 1, 1, 2, 13), true)
+  assert.equal(lampsWait(0, 2 * COARSE_SSE + 0.1, 2, 6), true) // ground still loading
+  assert.equal(lampsWait(0, 2 * COARSE_SSE - 0.1, 2, 6), false)
+  assert.equal(lampsWait(0, 100, 2, COARSE_BELOW_LEVEL), false) // deep tiles near the camera keep their lamps
+})

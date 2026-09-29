@@ -1,5 +1,12 @@
 // client/scene/nightLights.ts
-import { Credit, ImageryLayer, Resource, UrlTemplateImageryProvider } from 'cesium'
+import {
+  Credit,
+  // @ts-expect-error: private, not in Cesium.d.ts
+  GlobeSurfaceTileProvider,
+  ImageryLayer,
+  Resource,
+  UrlTemplateImageryProvider,
+} from 'cesium'
 import type { ImageryTypes, Request } from 'cesium'
 import { openFreeMapTiles } from './buildings.ts'
 import { decodeLines, type LineFeature } from './mvt.ts'
@@ -235,6 +242,82 @@ class LampProvider extends UrlTemplateImageryProvider {
   }
 }
 
+// ---------- dark until loaded ----------
+// Where the lamps are still loading, Cesium draws what it has: the imagery tile of a much coarser level stretched over
+// the ground (TileImagery.processStateMachine's ancestor), or a whole ground tile far coarser than the view wants
+// (terrain still loading: at start, after a jump, flying into new ground). Either way the city's mean light is smeared
+// over kilometres as a pale wash with glowing roads (user report 2026-09-30, from the map into the chase at night). At
+// night unloaded ground should be dark: those tiles are drawn without the lamps until their own arrive.
+export const MAX_STAND_IN_LEVELS = 2 // a lamp tile at most this many levels coarser than its own may stand in
+export const COARSE_SSE = 4 // a ground tile past this × the globe's screen-space error is still loading: no lamps
+export const COARSE_BELOW_LEVEL = 12 // …on tiles shallower than this (deeper ones near the camera may be the last level)
+
+/** Whether a ground tile draws without the lamps: its lamp tile a far-coarser stand-in, or itself far too coarse. */
+export function lampsWait(standInLevels: number, sse: number, maxSse: number, level: number): boolean {
+  return standInLevels > MAX_STAND_IN_LEVELS || (level < COARSE_BELOW_LEVEL && sse > maxSse * COARSE_SSE)
+}
+
+interface LampImagery { level: number; imageryLayer: unknown }
+interface LampTileImagery { readyImagery?: LampImagery; loadingImagery?: LampImagery }
+interface LampTile { level: number; _distance: number; data?: { imagery?: LampTileImagery[] } }
+interface LampFrame {
+  context: { drawingBufferHeight: number }
+  camera: { frustum: { sseDenominator: number } }
+  pixelRatio: number
+  fog: { enabled: boolean; density: number; sse: number }
+}
+interface LampProviderPrivate {
+  _tilesToRenderByTextureCount?: (LampTile[] | undefined)[]
+  _quadtree?: { maximumScreenSpaceError: number }
+  getLevelMaximumGeometricError(level: number): number
+}
+type EndUpdate = (this: LampProviderPrivate, frameState: LampFrame) => unknown
+const DARK_MARK = Symbol.for('flighthopper.lampsWait')
+let lampLayer: ImageryLayer | null = null
+
+/**
+ * Keeps unloaded ground dark at night (see above): GlobeSurfaceTileProvider.endUpdate builds the globe's draw commands
+ * with the lamp layer left out of the tiles lampsWait picks, their imagery lists put back in a finally (imageryFade.ts
+ * swaps the same way, inside this). The SSE is QuadtreePrimitive's screenSpaceError, fog included.
+ * ponytail: one lamp layer per page (the app's one Viewer); a Cesium without these privates keeps the old smear.
+ */
+export function darkUntilLoaded(layer: ImageryLayer): void {
+  lampLayer = layer
+  const proto = (GlobeSurfaceTileProvider as { prototype?: { endUpdate?: EndUpdate } } | undefined)?.prototype
+  if (typeof proto?.endUpdate !== 'function' || DARK_MARK in proto.endUpdate) return
+  const orig = proto.endUpdate
+  const endUpdate: EndUpdate = function (frameState) {
+    const buckets = this._tilesToRenderByTextureCount
+    const saved: [NonNullable<LampTile['data']>, LampTileImagery[]][] = []
+    if (lampLayer?.show && Array.isArray(buckets)) {
+      const maxSse = this._quadtree?.maximumScreenSpaceError ?? 2
+      const k = frameState.context.drawingBufferHeight / frameState.camera.frustum.sseDenominator
+      for (const bucket of buckets) {
+        for (const tile of bucket ?? []) {
+          const st = tile.data
+          const list = st?.imagery
+          const ti = list?.find((t) => (t.readyImagery ?? t.loadingImagery)?.imageryLayer === lampLayer)
+          if (!st || !list || !ti?.readyImagery) continue
+          const gap = ti.loadingImagery ? ti.loadingImagery.level - ti.readyImagery.level : 0
+          let sse = (this.getLevelMaximumGeometricError(tile.level) * k) / Math.max(tile._distance, 1e-3)
+          if (frameState.fog.enabled) sse -= (1 - Math.exp(-((tile._distance * frameState.fog.density) ** 2))) * frameState.fog.sse // CesiumMath.fog
+          sse /= frameState.pixelRatio
+          if (!lampsWait(gap, sse, maxSse, tile.level)) continue
+          saved.push([st, list])
+          st.imagery = list.filter((t) => t !== ti)
+        }
+      }
+    }
+    try {
+      return orig.call(this, frameState)
+    } finally {
+      for (const [st, list] of saved) st.imagery = list
+    }
+  }
+  Object.defineProperty(endUpdate, DARK_MARK, { value: true })
+  proto.endUpdate = endUpdate
+}
+
 /**
  * The city-lights layer, hidden and transparent: Sun fades it in at dusk (alpha = night) and shows it only while it is
  * visible, so daytime makes no requests. Its tiles are lamplight (composeLamps); Sun sets its brightness so the lamps
@@ -247,5 +330,7 @@ export function makeNightLayer(): ImageryLayer {
     maximumLevel: STREETS_MAX_LEVEL,
     credit: new Credit(`${NIGHT_CREDIT} ${STREETS_CREDIT}`),
   })
-  return new ImageryLayer(provider, { alpha: 0, show: false })
+  const layer = new ImageryLayer(provider, { alpha: 0, show: false })
+  darkUntilLoaded(layer)
+  return layer
 }
