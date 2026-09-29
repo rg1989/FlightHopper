@@ -512,6 +512,7 @@ const EDGE = 8 // the blocks from the view's edges (app.ts safeArea's pad)
 const PAD = 8
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
+const BAR_EDGE = 12 // the edit toolbar from the view's edges
 // The flight ID over the brackets, as the traffic's (layout.css): 12 px high, 5 px over the square, 9 px a character.
 const ID_H = 12
 const ID_GAP = 5
@@ -958,7 +959,8 @@ export class FlightFrame {
       const b = p === null ? undefined : this.#sizes[id][p.v]
       return p === null || b === undefined ? [] : [{ x: p.x, y: p.y, w: b.w, h: b.h }]
     })
-    const p = freeSpot(this.#area.x + (this.#area.w - w) / 2, bar.offsetTop, w, h, this.#area, [...avoid, ...cards], PAD)
+    const room = { x: BAR_EDGE, y: BAR_EDGE, w: this.#view.w - 2 * BAR_EDGE, h: this.#view.h - 2 * BAR_EDGE }
+    const p = freeSpot(room.x + (room.w - w) / 2, bar.offsetTop, w, h, room, [...avoid, ...cards], PAD)
     bar.style.left = `${Math.round(p.x)}px`
     bar.style.top = `${Math.round(p.y)}px`
     this.#bar0 = { x: p.x, y: p.y, w, h }

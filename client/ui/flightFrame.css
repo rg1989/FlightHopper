@@ -1206,7 +1206,8 @@
 
 @media (max-width: 640px) {
   .fh-fbar {
-    top: calc(8px + env(safe-area-inset-top, 0px));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    max-width: calc(100% - 24px);
     padding: 4px 4px 4px 12px;
     font-size: 14px;
   }
@@ -1218,6 +1219,13 @@
   }
 
   .fh-fbar-more {
+    display: none;
+  }
+}
+
+/* A phone held upright: the title alone (the grips on the cards say how), so the toolbar keeps 12 px from each edge. */
+@media (max-width: 480px) {
+  .fh-fbar-hint {
     display: none;
   }
 }
