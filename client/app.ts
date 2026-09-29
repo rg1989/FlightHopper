@@ -829,7 +829,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         // relief: flattened or growing, the ground drawn is not the ground.
         const aglFt = groundM === null || !prefs.topo || topo.animating ? null : Math.max(0, placed.hM - groundM) / FT
         const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up')
-        flightFrame.update(viewer, model.model.modelMatrix, model.entry, data, frameSafe(now), sf?.t)
+        // Its flight ID over its brackets, as over the traffic's: the callsign, else the hex (a scenario has its own).
+        const id = placed.callsign ?? (sf === null ? placed.hex.toUpperCase() : '')
+        flightFrame.update(viewer, model.model, model.entry, data, frameSafe(now), sf?.t, id)
         framed = true
       }
       chased = placed

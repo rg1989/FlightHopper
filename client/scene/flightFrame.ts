@@ -12,7 +12,7 @@
 // round a square on the aircraft, never over it; layoutSide (pure) sizes that square: the default framing's when zoomed
 // out, and zoomed in no larger than the blocks' arrangement fits, so there they stop, over the aircraft.
 import { Cartesian2, Cartesian3, Math as CesiumMath, Matrix4, SceneTransforms } from 'cesium'
-import type { PerspectiveFrustum, Viewer } from 'cesium'
+import type { Model, PerspectiveFrustum, Viewer } from 'cesium'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import { trueAirspeedKt } from '../track/airspeed.ts'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
@@ -25,8 +25,8 @@ import '../ui/flightFrame.css'
 
 /** A rectangle in CSS px from the canvas's top-left. */
 export interface Rect { x: number; y: number; w: number; h: number }
-/** The bracket square: centre and side, CSS px from the canvas's top-left. */
-export interface Square { x: number; y: number; side: number }
+/** The bracket square: centre and side, CSS px from the canvas's top-left; head: room kept clear over it too (px). */
+export interface Square { x: number; y: number; side: number; head?: number }
 export type BlockId = 'left' | 'right' | 'top' | 'bottom'
 
 export const TEXT_MS = 100 // figures at most 10 times a second: steadier to read (the instruments themselves move every frame)
@@ -172,7 +172,7 @@ export function frameLayout(
   moved?: Partial<Record<BlockId, Offset>>,
 ): Record<BlockId, Placed | null> {
   const r = sq.side / 2
-  const S: Box = { x0: sq.x - r, y0: sq.y - r, x1: sq.x + r, y1: sq.y + r }
+  const S: Box = { x0: sq.x - r, y0: sq.y - r - (sq.head ?? 0), x1: sq.x + r, y1: sq.y + r }
   const out: Record<BlockId, Placed | null> = { left: null, right: null, top: null, bottom: null }
   const taken: Box[] = []
   const variants = (id: BlockId): Array<{ b: BlockSize; v: number }> => variantsOf(sizes[id])
@@ -237,7 +237,8 @@ export function layoutSide(
   prev?: Partial<Record<BlockId, Placed | null>>,
   moved?: Partial<Record<BlockId, Offset>>,
 ): number {
-  const at = (side: number): Record<BlockId, Placed | null> => frameLayout({ x: sq.x, y: sq.y, side }, sizes, safe, gap, prev, moved)
+  const at = (side: number): Record<BlockId, Placed | null> =>
+    frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, safe, gap, prev, moved)
   // Every block has a place and, with flank, the tapes are beside the aircraft (their readouts level with it).
   const fits = (side: number, flank: boolean): boolean => {
     const p = at(side)
@@ -285,9 +286,13 @@ export function layoutSide(
   return same(sq.side) ? sq.side : largest(lo, sq.side, same)
 }
 
-/** The aircraft's middle in world coordinates: its bracket box's centre (the manifest's box, else Cesium_Air's) through modelMatrix. */
-export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3): Cartesian3 {
-  return Matrix4.multiplyByPoint(modelMatrix, entry.box ? Cartesian3.fromArray(entry.box.centre, 0, out) : BOX_CENTRE, out)
+/**
+ * The aircraft's middle in world coordinates: its bracket box's centre (the manifest's box, else Cesium_Air's) through
+ * modelMatrix; k: the scale the model is drawn at over that (Cesium's minimumPixelSize grows it about its origin).
+ */
+export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3, k = 1): Cartesian3 {
+  const bc = entry.box ? Cartesian3.fromArray(entry.box.centre, 0, out) : Cartesian3.clone(BOX_CENTRE, out)
+  return Matrix4.multiplyByPoint(modelMatrix, Cartesian3.multiplyByScalar(bc, k, out), out)
 }
 
 // ---- data -----------------------------------------------------------------------------------------------------------
@@ -459,6 +464,10 @@ export const eprText = (e: number): string => e.toFixed(2)
 const GAP = 10 // between the square and a block, and between blocks
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
+// The flight ID over the brackets, as the traffic's (layout.css): 12 px high, 5 px over the square, 9 px a character.
+const ID_H = 12
+const ID_GAP = 5
+const ID_CHAR = 9
 const CARD: Record<BlockId, string> = { left: 'altitude', right: 'speed', top: 'heading', bottom: 'attitude' } // for the controls
 // The least side of the square the blocks go round (layoutSide), of the view's smaller dimension: an airliner's at the
 // chase camera's default range (150 m) in a desktop window.
@@ -519,6 +528,7 @@ export interface FrameOpts {
  */
 export class FlightFrame {
   readonly #bracket = h('div', 'fh-bracket')
+  readonly #id = h('span', 'fh-bracket-id') // the flight ID over the brackets
   readonly #blocks: Record<BlockId, HTMLDivElement>
   // Left: the altitude tape and the vertical-speed scale; under them the vertical speed and the height above the ground.
   readonly #alt = new Tape(ALT_TAPE, 'alt')
@@ -605,6 +615,7 @@ export class FlightFrame {
   constructor(layer: HTMLElement, opts: FrameOpts = {}) {
     this.#phone = typeof matchMedia === 'function' ? matchMedia(PHONE) : null
     this.#layer = layer
+    this.#bracket.append(this.#id)
     const p = opts.prefs ?? NO_FRAME_PREFS
     this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden] }
     this.#onPrefs = opts.onPrefs ?? ((): void => {})
@@ -683,12 +694,14 @@ export class FlightFrame {
   }
 
   /**
-   * The frame around the chased model this frame: its square from the manifest box through modelMatrix (which carries
-   * entry.scale), as Traffic.update projects a traffic model's. data null, or the model behind the camera: hidden.
-   * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live).
+   * The frame around the chased model this frame: its square from the manifest box through its modelMatrix (which
+   * carries entry.scale) at the scale Cesium draws it (a far one larger: minimumPixelSize), as Traffic.update projects a
+   * traffic model's. data null, or the model behind the camera: hidden.
+   * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live). flightId: over
+   * the brackets ('': none).
    */
-  update(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry, data: FlightData | null, safe: Rect, dataT?: number): void {
-    this.draw(data === null ? null : this.#square(viewer, modelMatrix, entry), data, safe, performance.now(), dataT)
+  update(viewer: Viewer, model: Model, entry: ModelManifestEntry, data: FlightData | null, safe: Rect, dataT?: number, flightId = ''): void {
+    this.draw(data === null ? null : this.#square(viewer, model, entry), data, safe, performance.now(), dataT, flightId)
   }
 
   get editing(): boolean {
@@ -712,7 +725,7 @@ export class FlightFrame {
   }
 
   /** The frame around sq (null: hidden) showing data, its blocks inside safe. Hidden too when sq is outside safe. */
-  draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now(), dataT?: number): void {
+  draw(sq: Square | null, data: FlightData | null, safe: Rect, nowMs = performance.now(), dataT?: number, flightId = ''): void {
     const r = sq === null ? 0 : sq.side / 2
     if (sq === null || data === null || sq.x + r < safe.x || sq.x - r > safe.x + safe.w || sq.y + r < safe.y || sq.y - r > safe.y + safe.h) {
       if (this.#shown) this.#hide()
@@ -745,11 +758,15 @@ export class FlightFrame {
       const y = Math.max(safe.y, this.#barBottom)
       safe = { x: safe.x, y, w: safe.w, h: Math.max(0, safe.y + safe.h - y) }
     }
+    // Over the square the cards go round, room for the flight ID: no card covers it.
+    const head = flightId === '' ? 0 : ID_GAP + ID_H + 1
     // A drag keeps the square's side (the card stays under the pointer) and moves the card where the pointer holds it.
     const sizes = this.#sizes
     const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
-    const ls = d !== null ? this.#lsq.side : layoutSide(sq, LEAST_SIDE * this.#view, sizes, safe, GAP, this.#placed, this.#prefs.moved)
-    this.#lsq = { x: sq.x, y: sq.y, side: ls }
+    const ls = d !== null
+      ? this.#lsq.side
+      : layoutSide({ ...sq, head }, LEAST_SIDE * this.#view, sizes, safe, GAP, this.#placed, this.#prefs.moved)
+    this.#lsq = { x: sq.x, y: sq.y, side: ls, head }
     this.#safe = safe
     if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], this.#lsq, safe)
     const at = frameLayout(this.#lsq, sizes, safe, GAP, this.#placed, this.#prefs.moved)
@@ -767,6 +784,19 @@ export class FlightFrame {
       move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
     }
     this.#placed = at
+    // The flight ID over the brackets; zoomed in past the square the cards go round, over that one instead: in the room
+    // kept for it, on screen. A card the viewer moved over it hides it.
+    say(this.#id, flightId)
+    const idB = sq.y - Math.min(sq.side, ls) / 2 - ID_GAP
+    const w = flightId.length * ID_CHAR
+    const covered = IDS.some((k) => {
+      const p = at[k]
+      if (p === null || this.#blocks[k].hidden) return false
+      const b = sizes[k][p.v]
+      return p.x < sq.x + w / 2 && sq.x - w / 2 < p.x + b.w && p.y < idB && idB - ID_H < p.y + b.h
+    })
+    show(this.#id, flightId !== '' && !covered)
+    move(this.#id, `translate(-50%, ${Math.max(0, (sq.side - ls) / 2).toFixed(1)}px)`)
   }
 
   destroy(): void {
@@ -864,18 +894,21 @@ export class FlightFrame {
     this.#shown = false
   }
 
-  #square(viewer: Viewer, modelMatrix: Matrix4, entry: ModelManifestEntry): Square | null {
+  #square(viewer: Viewer, model: Model, entry: ModelManifestEntry): Square | null {
     const scene = viewer.scene
     const cam = scene.camera
     const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
-    const c = boxCentre(modelMatrix, entry, this.#c)
+    // The scale Cesium draws the model at over its matrix (last frame's: it is set as the scene renders). Not in its
+    // typings; the model drawn at 1 without it.
+    const k = (model as unknown as { computedScale?: number }).computedScale ?? 1
+    const c = boxCentre(model.modelMatrix, entry, this.#c, k)
     const depthM = Cartesian3.dot(Cartesian3.subtract(c, cam.positionWC, this.#v), cam.directionWC)
     if (!(depthM > 1)) return null // behind the camera
     const w = SceneTransforms.worldToWindowCoordinates(scene, c, this.#w)
     if (w === undefined) return null
     this.#sq.x = w.x
     this.#sq.y = w.y
-    this.#sq.side = squarePx((entry.box?.half ?? BOX_HALF) * entry.scale, depthM, fovy, scene.canvas.clientHeight)
+    this.#sq.side = squarePx((entry.box?.half ?? BOX_HALF) * entry.scale * k, depthM, fovy, scene.canvas.clientHeight)
     return this.#sq
   }
 

@@ -5,7 +5,9 @@ import { registerHooks } from 'node:module'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, RenderState } from '../types.ts'
 import type { BlockId, BlockSize, Placed, Rect, Square } from './flightFrame.ts'
-import { MIN_PX } from './traffic.ts'
+import { Cartesian3, Matrix4 } from 'cesium'
+import type { ModelManifestEntry } from '../types.ts'
+import { BOX_CENTRE, MIN_PX } from './traffic.ts'
 import { trueAirspeedKt } from '../track/airspeed.ts'
 
 // flightFrame.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -13,8 +15,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const {
-  HYST_PX, altText, bankText, blocksShown, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData, offsetAt,
-  pitchText, speedText, vsText, windText,
+  HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData,
+  offsetAt, pitchText, speedText, vsText, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -227,6 +229,14 @@ test('frameLayout: 300 random cases: every block inside the safe area, clear of 
   }
 })
 
+test('frameLayout: room kept over the square (the flight ID over the brackets): the top block goes above it, the rest as before', () => {
+  const sq: Square = { x: 640, y: 400, side: 120 }
+  const p = frameLayout({ ...sq, head: 18 }, SIZES, SAFE)
+  assert.deepEqual(at(p, 'top'), { x: 640 - 85, y: 400 - 60 - 18 - 10 - 28 })
+  for (const id of ['left', 'right', 'bottom'] as const) assert.deepEqual(at(p, id), at(frameLayout(sq, SIZES, SAFE), id), id)
+  assert.equal(layoutSide({ ...sq, side: 2400, head: 18 }, 378, DESK_SIZES, DESK) <= layoutSide({ ...sq, side: 2400 }, 378, DESK_SIZES, DESK), true)
+})
+
 test('frameLayout: a moved card goes where the viewer put it, its anchor its offset × the side from the centre; the rest avoid it', () => {
   const sq: Square = { x: 640, y: 400, side: 120 }
   const far = frameLayout(sq, SIZES, SAFE, 10, undefined, { left: { x: -3, y: -2 } })
@@ -382,6 +392,19 @@ test('layoutSide: where no side has the tapes beside the aircraft (the flight ca
   const safe: Rect = { x: 340, y: 8, w: 388, h: 584 }
   const sizes: Sizes = { left: { w: 104, h: 196 }, right: { w: 104, h: 196 }, top: { w: 290, h: 56 }, bottom: { w: 260, h: 112 } }
   assert.equal(layoutSide({ x: 400, y: 300, side: 40 }, 128, sizes, safe), 128)
+})
+
+// ---- boxCentre -------------------------------------------------------------------------------------------------------
+
+test('boxCentre: the box centre through the model matrix, grown with the scale the model is drawn at (about its origin)', () => {
+  const mm = Matrix4.fromTranslation(new Cartesian3(100, 200, 300))
+  const typed = { box: { centre: [-2, 0, 1], half: 20 } } as unknown as ModelManifestEntry
+  assert.deepEqual(boxCentre(mm, typed, new Cartesian3()), new Cartesian3(98, 200, 301))
+  assert.deepEqual(boxCentre(mm, typed, new Cartesian3(), 2), new Cartesian3(96, 200, 302))
+  const generic = {} as ModelManifestEntry // no box: Cesium_Air's
+  const c = boxCentre(mm, generic, new Cartesian3(), 3)
+  assert.ok(Cartesian3.equalsEpsilon(c, new Cartesian3(100 + 3 * BOX_CENTRE.x, 200, 300 + 3 * BOX_CENTRE.z), 1e-9))
+  assert.deepEqual([BOX_CENTRE.x, BOX_CENTRE.z], [-2.7, 1.58], 'the shared centre untouched')
 })
 
 // ---- liveFlightData -------------------------------------------------------------------------------------------------
