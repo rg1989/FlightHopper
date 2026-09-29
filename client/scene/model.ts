@@ -259,14 +259,14 @@ export class ChaseModel {
   paint(code: string | null): void {
     if (!this.m.paint || code === this.livery) return
     this.livery = code
-    this.shade(this.shaders(this.m.paint).for(code))
+    this.shade(this.shaders().for(code))
   }
 
   /** Paints the model in a livery that is not in the table (a scenario's: liveryFromSpec) until the next paint(code). */
   paintLivery(livery: Livery): void {
     if (!this.m.paint) return
     this.livery = undefined
-    this.shade(this.shaders(this.m.paint).custom(livery))
+    this.shade(this.shaders().custom(livery))
   }
 
   /** Folds the wing tips in to halfSpanM (real metres; null: the model's own span). Only where the paint map has wingTipY. */
@@ -339,9 +339,9 @@ export class ChaseModel {
     this.gears.clear()
   }
 
-  private shaders(paint: NonNullable<ModelManifestEntry['paint']>): LiveryShaders {
+  private shaders(): LiveryShaders {
     let l = this.liveries.get(this.m.id)
-    if (l === undefined) this.liveries.set(this.m.id, (l = new LiveryShaders(paint)))
+    if (l === undefined) this.liveries.set(this.m.id, (l = new LiveryShaders(this.m)))
     return l
   }
 

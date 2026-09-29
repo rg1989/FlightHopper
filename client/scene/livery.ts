@@ -1,92 +1,65 @@
 // client/scene/livery.ts
-// Airline liveries on the 3-D models: a custom shader paints regions of the model (fuselage, belly, fin, engines) in
-// the airline's colours from liveries.json and projects its logo decals onto the fin and the fuselage sides. Where the
-// regions are comes from the model's manifest paint map. Airlines not in the table fly plain white. A scenario brings
-// its own livery (liveryFromSpec: colours, a body-wrap decal, a fin logo) and can fold the wing tips in (u_span) and
-// cut away a damaged fin and tail cone (u_cut) on models whose paint map measures them.
+// Airline liveries on the 3-D models (livery-pipeline-design.md): each airline's design (client/livery) is drawn onto
+// the model's measured side profile as three atlases (the fuselage and fin, the nacelles, the wingtip devices), which a
+// custom shader projects across the span; wings and tailplane take the design's flat colours. Airlines with only a
+// colours entry in liveries.json get it drawn the old way (legacy.ts); airlines in neither fly plain white. A scenario
+// brings its own livery (liveryFromSpec: colours, a body-wrap decal, a fin logo) and can fold the wing tips in (u_span)
+// and cut away a damaged fin and tail cone (u_cut) on models whose paint map measures them.
 import { Cartesian3, Cartesian4, Color, CustomShader, CustomShaderMode, TextureMinificationFilter, TextureUniform, UniformType, VaryingType } from 'cesium'
 import { operatorOf } from '../../shared/airlines.ts'
+import { DESIGNS } from '../livery/designs/index.ts'
+import { WHITE as WHITE_HEX, WING, profileOf } from '../livery/kit.ts'
+import type { Design, Target } from '../livery/kit.ts'
+import { specDesign, tableDesign } from '../livery/legacy.ts'
+import type { LiveryEntry } from '../livery/legacy.ts'
+import { MARGIN, SIZES, rasterize } from '../livery/raster.ts'
+import type { Atlas } from '../livery/raster.ts'
 import type { LiverySpec } from '../scenario/types.ts'
-import type { Paint } from '../types.ts'
+import type { ModelManifestEntry, ModelProfile, Paint } from '../types.ts'
 import table from './liveries.json' with { type: 'json' }
 
-export interface LiveryEntry {
-  base: string // sRGB hex; belly and engine default to it, fin2 to fin
-  belly?: string
-  fin: string
-  fin2?: string
-  engine?: string
-  title?: boolean // public/liveries/<code>-title.png
-  finLogo?: boolean // public/liveries/<code>-fin.png
-}
+export type { LiveryEntry }
 
-/** A resolved livery. code keys the shader cache. Decal URLs: null = none (a blank texture). */
+/** A resolved livery: code keys the shader cache (null: plain white). */
 export interface Livery {
   code: string | null
-  base: string
-  belly: string
-  fin: string
-  fin2: string
-  engine: string
-  bodyUrl: string | null // body-wrap decal over Paint.body (scenarios only)
-  finUrl: string | null
-  titleUrl: string | null
+  design: Design
 }
 
 export const TABLE = table as { aliases: Record<string, string>; liveries: Record<string, LiveryEntry>; logos: Record<string, string> }
 
-export const WHITE: Livery = { code: null, base: '#f7f7f7', belly: '#f7f7f7', fin: '#f7f7f7', fin2: '#f7f7f7', engine: '#dfe3e8', bodyUrl: null, finUrl: null, titleUrl: null }
+const WHITE_DESIGN: Design = { code: '', name: 'plain white', base: WHITE_HEX, engineColor: '#dfe3e8', side: (k) => k.fill(WHITE_HEX), engine: (k) => k.fill('#dfe3e8') }
+export const WHITE: Livery = { code: null, design: WHITE_DESIGN }
+
+const known = (code: string): boolean => code in DESIGNS || code in TABLE.liveries
 
 /** The livery a callsign flies in: its operator, or the brand a subsidiary or single-partner regional flies as; null (plain white) when not in the table. */
 export function liveryCode(callsign: string | null): string | null {
   const op = operatorOf(callsign)
   if (op === null) return null
   const code = TABLE.aliases[op] ?? op
-  return code in TABLE.liveries ? code : null
+  return known(code) ? code : null
 }
 
+/** A code's design: drawn with the kit (designs/), else its colours entry, else plain white. */
 export function liveryOf(code: string | null): Livery {
-  const l = code === null ? undefined : TABLE.liveries[code]
-  if (l === undefined) return WHITE
-  const base = `${import.meta.env?.BASE_URL ?? '/'}liveries/${code}`
-  return {
-    code, base: l.base, belly: l.belly ?? l.base, fin: l.fin, fin2: l.fin2 ?? l.fin, engine: l.engine ?? l.base,
-    bodyUrl: null, finUrl: l.finLogo === true ? `${base}-fin.png` : null, titleUrl: l.title === true ? `${base}-title.png` : null,
-  }
+  if (code === null) return WHITE
+  const d = DESIGNS[code]
+  if (d !== undefined) return { code, design: d }
+  const l = TABLE.liveries[code]
+  return l === undefined ? WHITE : { code, design: tableDesign(code, l, import.meta.env?.BASE_URL ?? '/') }
 }
 
 /**
  * A scenario's livery (scenario.json aircraft.livery). Decal paths are relative to the scenario folder `base` (ending
  * in '/'); present says which optional files the loader found (a missing fin logo is no error: the fin stays plain).
  * key must not be a table code (e.g. 'scenario:jal123').
- * ponytail: the paths are joined, not URL-resolved: the format gives plain relative paths. Upgrade: new URL(path, base)
- * if a package ever points outside its folder.
  */
 export function liveryFromSpec(key: string, spec: LiverySpec, base: string, present: { body: boolean; finLogo: boolean }): Livery {
-  const url = (path: string | undefined, found: boolean): string | null => (path === undefined || !found ? null : `${base}${path}`)
-  return {
-    code: key, base: spec.base, belly: spec.belly ?? spec.base, fin: spec.fin, fin2: spec.fin2 ?? spec.fin, engine: spec.engine ?? spec.base,
-    bodyUrl: url(spec.body, present.body), finUrl: url(spec.finLogo, present.finLogo), titleUrl: url(spec.title, true),
-  }
+  return { code: key, design: specDesign(key, spec, base, present) }
 }
 
 const f = (n: number): string => n.toFixed(3)
-
-/**
- * The body wrap (scenarios-design §6.2): u runs nose → tail across the box, f top → bottom; the image's top half is
- * the left side (turned +x), its bottom half the right side, both nose at the left. uv.y grows towards the image top,
- * as in decal().
- */
-function wrapText([zNose, zTail, yBottom, yTop]: NonNullable<Paint['body']>): string {
-  return `
-vec4 bodyWrap(sampler2D t, vec3 p) {
-  float u = (${f(zNose)} - p.z) / ${f(zNose - zTail)};
-  float f = (${f(yTop)} - p.y) / ${f(yTop - yBottom)};
-  if (u < 0.0 || u > 1.0 || f < 0.0 || f > 1.0) return vec4(0.0);
-  float row = p.x > 0.0 ? 0.5 * f : 0.5 + 0.5 * f;
-  return texture(t, vec2(u, 1.0 - row));
-}`
-}
 
 /**
  * The damage (scenarios-design §6.3), in the turned frame. The fin goes above a jagged line at finKeepY and, below it,
@@ -150,26 +123,40 @@ float lowAltitude(vec3 wc) {
 }`
 
 /**
- * The fragment shader for one model's paint map. Colours and decals are uniforms, so every airline on a model shares
- * one GLSL program. The old texture survives only where it is near black (windows). Translucent parts (propeller
- * discs) keep their own look. Decals are side projections along x, flipped on one side so they read front to back.
- * The body wrap and the damage are compiled in only where the paint map measures them (body, cut).
+ * GLSL that samples one atlas (raster.ts) over a side box [zMin, zMax, yMin, yMax]: the half by `left` (seen from the
+ * left: top half), the row inside the half's margins, u from the nose at the left.
+ */
+function atlasText(name: string, [zMin, zMax, yMin, yMax]: [number, number, number, number], height: number): string {
+  const half = height / 2
+  return `
+vec3 ${name}At(vec3 p, bool left) {
+  float u = clamp((${f(zMax)} - p.z) / ${f(zMax - zMin)}, 0.0, 1.0);
+  float r = clamp((${f(yMax)} - p.y) / ${f(yMax - yMin)}, 0.0, 1.0);
+  return texture(u_${name}, vec2(u, (left ? 0.0 : ${f(half)}) / ${f(height)} + (${f(MARGIN)} + r * ${f(half - 2 * MARGIN)}) / ${f(height)})).rgb;
+}`
+}
+
+/**
+ * The fragment shader for one model's paint map and profile. The airline's paint is in the atlases (uniforms), so every
+ * airline on a model shares one GLSL program. The fuselage and fin take the skin atlas by position (x > 0: the left
+ * side), nacelles and wingtip devices theirs by the facing (the outboard face of the left engine faces +x). The old
+ * texture survives only where it is near black (windows). Translucent parts (propeller discs) keep their own look. The
+ * damage is compiled in only where the paint map measures it (cut).
  * The finish: glossy paint, semi-gloss grey wings and tailplane, dark glass in the windows; where the model reflects
  * its own sky map (u_env: the chased aircraft), bare-metal wing leading edges and polished engine inlet lips. By night
  * (u_night) the cabin windows glow warm and, below 10,000 ft, the logo lights on the tailplane light the fin. The
  * chased aircraft's own lamps (aircraftLights.ts) light its skin: position lights, strobe flashes and beacons.
  */
-export function paintShaderText(p: Paint): string {
+export function paintShaderText(p: Paint, prof: ModelProfile): string {
   const [ex0, ex1, ez0, ez1] = p.engines
-  const [slope, zRef, below] = p.finSplit
-  const [lz, ly, ls] = p.finLogo
-  const [tz, ty, tw] = p.title
-  const finH = Math.max(0.5, 2 * (ly - p.fin.aboveY)) // the fin's height, about twice its logo's centre above its root
-  return `
-vec4 decal(sampler2D t, vec3 p, float z0, float y0, float w, float h) {
-  vec2 uv = vec2((p.x > 0.0 ? -1.0 : 1.0) * (p.z - z0) / w + 0.5, (p.y - y0) / h + 0.5);
-  return all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0))) ? texture(t, uv) : vec4(0.0);
-}${LIGHTING_GLSL}${p.body ? wrapText(p.body) : ''}${p.windows ? windowsText(p.windows) : ''}
+  const [, ty, tw] = p.title
+  const finH = Math.max(0.5, 2 * (p.finLogo[1] - p.fin.aboveY)) // the fin's height, about twice its logo's centre above its root
+  const e = prof.engines
+  const w = prof.winglet
+  const engineTest = e
+    ? `abs(p.x) > ${f(e[0])} && abs(p.x) < ${f(e[1])} && p.z > ${f(e[2])} && p.z < ${f(e[3])} && p.y > ${f(e[4])} && p.y < ${f(e[5])} && abs(n.y) < 0.8`
+    : `abs(p.x) > ${f(ex0)} && abs(p.x) < ${f(ex1)} && p.z > ${f(ez0)} && p.z < ${f(ez1)} && abs(n.y) < 0.8`
+  return `${atlasText('skin', prof.box, SIZES.skin[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], SIZES.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], SIZES.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   vec3 turn = vec3(${p.noseMinusZ ? '-1.0, 1.0, -1.0' : '1.0'});
   vec3 p = fsInput.attributes.positionMC * turn;${p.cut ? cutText(p.cut, p.fin.halfWidth) : ''}
@@ -179,20 +166,16 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   float detail = mix(0.2, 1.0, smoothstep(0.06, 0.14, lum));
   bool body = abs(p.x) < ${f(p.bodyHalfWidth)};
   bool fin = p.z < ${f(p.fin.behindZ)} && p.y > ${f(p.fin.aboveY)} && abs(p.x) < ${f(p.fin.halfWidth)};
-  bool engine = abs(p.x) > ${f(ex0)} && abs(p.x) < ${f(ex1)} && p.z > ${f(ez0)} && p.z < ${f(ez1)} && abs(n.y) < 0.8;
-  vec3 c = vec3(0.86, 0.88, 0.9);
-  if (body) c = p.y < ${f(p.bellyBelowY)} ? u_belly : u_base;
-  if (engine) c = u_engine;
+  bool engine = ${engineTest};
+  bool tip = ${w ? `!body && !fin && !engine && abs(p.x) > ${f(w[0])} && abs(p.x) < ${f(w[1])} && p.z > ${f(w[2])} && p.z < ${f(w[3])} && p.y > ${f(w[4])} && p.y < ${f(w[5])}` : 'false'};
+  vec3 c = ${prof.stab ? `p.z < ${f(prof.stab[1])} && abs(p.x) < ${f(prof.stab[2] + 0.3)} ? u_stab : u_wing` : 'u_wing'};
+  if (body || fin) c = skinAt(p, p.x > 0.0);${e ? `
+  if (engine) c = nacelleAt(p, n.x > 0.0);` : `
+  if (engine) c = u_engine;`}${w ? `
+  if (tip) c = tipAt(p, n.x > 0.0);` : ''}
   bool side = abs(n.x) > 0.3;
-  if (fin) {
-    c = (p.y - ${f(p.fin.aboveY)}) + ${f(slope)} * (p.z - ${f(zRef)}) < ${f(below)} ? u_fin2 : u_fin;
-    if (side) { vec4 t = decal(u_finLogo, p, ${f(lz)}, ${f(ly)}, ${f(ls)}, ${f(ls)}); c = mix(c, t.rgb, t.a); }
-  } else if (body) {${p.body ? `
-    if (abs(n.x) > 0.2) { vec4 t = bodyWrap(u_body, p); c = mix(c, t.rgb, t.a); }` : ''}
-    if (side) { vec4 t = decal(u_title, p, ${f(tz)}, ${f(ty)}, ${f(tw)}, ${f(tw / 4)}); c = mix(c, t.rgb, t.a); }
-  }
   vec3 albedo = czm_srgbToLinear(c) * detail;
-  bool wing = !body && !fin && !engine;
+  bool wing = !body && !fin && !engine && !tip;
   float ahead = smoothstep(0.55, 0.85, n.z); // facing forward: a leading edge, an inlet lip
   float metal = u_env * ahead * (engine ? 1.0 : wing ? 0.85 : 0.0);
   float cabin = body && !fin ? ${p.windows ? 'windowRow(p, n)' : `(abs(n.x) > 0.5 && p.y > ${f(p.bellyBelowY)} && p.y < ${f(ty + tw / 8)} ? 1.0 - smoothstep(0.035, 0.1, lum) : 0.0)`} : 0.0;
@@ -234,29 +217,38 @@ export function paintVertexText(p: Paint): string {
 }`
 }
 
-const BLANK = new Uint8Array([0, 0, 0, 0])
-
 const rgb = (hex: string): Cartesian3 => {
   const c = Color.fromCssColorString(hex)
   return new Cartesian3(c.red, c.green, c.blue)
 }
 
-const decal = (url: string | null): TextureUniform =>
-  url === null
-    ? new TextureUniform({ typedArray: BLANK, width: 1, height: 1 })
-    : new TextureUniform({ url, repeat: false, minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR })
+/** A 1×1 texture of one colour: the atlas until the design is drawn. */
+const flat = (hex: string): TextureUniform => {
+  const c = Color.fromCssColorString(hex)
+  return new TextureUniform({ typedArray: new Uint8Array(c.toBytes()), width: 1, height: 1 })
+}
+
+const texture = (a: Atlas): TextureUniform =>
+  new TextureUniform({ typedArray: a.data, width: a.width, height: a.height, repeat: false, minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR })
 
 /** Every paint shader made, for setNight. They live as long as their LiveryShaders caches: the session. */
 const made = new Set<CustomShader>()
 let nightNow = 0
 
+/** Atlases are drawn one at a time, a task apart, so a burst of new traffic does not stall a frame. */
+let queue: Promise<unknown> = Promise.resolve()
+const later = (job: () => Promise<void>): void => {
+  queue = queue.then(job).catch((err: unknown) => console.warn('FlightHopper: livery not drawn:', err)).then(() => new Promise((r) => setTimeout(r, 0)))
+}
+
 /**
- * One CustomShader per livery for one model's paint map, made on first use and shared by every model of that airline.
- * Every one declares u_body, u_span and u_cut (off), so ChaseModel can set them on whichever it draws, and the lights'
- * uniforms (aircraftLights.ts sets them on the chased aircraft's): u_env, u_navL, u_navR, u_navT, u_bcn0, u_bcn1 and
- * u_strobe, all off. u_night is every shader's at once (setNight).
- * ponytail: the cache keeps every livery seen for the session (≤ the table's ~40 + white + a scenario's). Upgrade:
- * evict if it grows.
+ * One CustomShader per livery for one model, made on first use and shared by every model of that airline and type.
+ * It starts in the design's flat colours and takes its atlases once raster.ts has drawn them (browser only). Every
+ * shader declares u_span and u_cut (off), so ChaseModel can set them on whichever it draws, and the lights' uniforms
+ * (aircraftLights.ts sets them on the chased aircraft's): u_env, u_navL, u_navR, u_navT, u_bcn0, u_bcn1 and u_strobe,
+ * all off. u_night is every shader's at once (setNight).
+ * ponytail: the cache keeps every livery seen for the session (≤ the table's ~40 + white + a scenario's, per type).
+ * Upgrade: evict, and destroy the atlases, if it grows.
  */
 export class LiveryShaders {
   /** The night on every paint shader (0 day … 1 night: the cabin windows and the logo lights). Cheap when unchanged. */
@@ -267,13 +259,23 @@ export class LiveryShaders {
     for (const s of made) s.setUniform('u_night', n)
   }
 
+  /** Resolves once every atlas asked for so far is drawn and handed to its shader (the livery lab waits on it). */
+  static idle(): Promise<unknown> {
+    return queue
+  }
+
+  readonly #target: Target
   readonly #fragment: string
   readonly #vertex: string
   readonly #cache = new Map<string, CustomShader>()
   readonly #custom = new Map<string, CustomShader>()
 
-  constructor(paint: Paint) {
-    this.#fragment = paintShaderText(paint)
+  constructor(m: ModelManifestEntry) {
+    const paint = m.paint
+    const profile = profileOf(m)
+    if (paint === undefined || profile === null) throw new Error(`${m.id}: no paint map`)
+    this.#target = { id: m.id, profile, paint }
+    this.#fragment = paintShaderText(paint, profile)
     this.#vertex = paintVertexText(paint)
   }
 
@@ -281,7 +283,7 @@ export class LiveryShaders {
     const key = code ?? ''
     let s = this.#cache.get(key)
     if (s === undefined) {
-      s = this.#make(liveryOf(code))
+      s = this.#make(liveryOf(code).design)
       this.#cache.set(key, s)
     }
     return s
@@ -292,25 +294,23 @@ export class LiveryShaders {
     const key = livery.code ?? ''
     let s = this.#custom.get(key)
     if (s === undefined) {
-      s = this.#make(livery)
+      s = this.#make(livery.design)
       this.#custom.set(key, s)
     }
     return s
   }
 
-  #make(l: Livery): CustomShader {
+  #make(d: Design): CustomShader {
     const off = (): { type: UniformType; value: Cartesian4 } => ({ type: UniformType.VEC4, value: new Cartesian4() })
+    const p = this.#target.profile
     const s = new CustomShader({
       mode: CustomShaderMode.MODIFY_MATERIAL,
       uniforms: {
-        u_base: { type: UniformType.VEC3, value: rgb(l.base) },
-        u_belly: { type: UniformType.VEC3, value: rgb(l.belly) },
-        u_fin: { type: UniformType.VEC3, value: rgb(l.fin) },
-        u_fin2: { type: UniformType.VEC3, value: rgb(l.fin2) },
-        u_engine: { type: UniformType.VEC3, value: rgb(l.engine) },
-        u_finLogo: { type: UniformType.SAMPLER_2D, value: decal(l.finUrl) },
-        u_title: { type: UniformType.SAMPLER_2D, value: decal(l.titleUrl) },
-        u_body: { type: UniformType.SAMPLER_2D, value: decal(l.bodyUrl) },
+        u_skin: { type: UniformType.SAMPLER_2D, value: flat(d.base ?? WHITE_HEX) },
+        ...(p.engines ? { u_nacelle: { type: UniformType.SAMPLER_2D, value: flat(d.engineColor ?? d.base ?? WHITE_HEX) } } : { u_engine: { type: UniformType.VEC3, value: rgb(d.engineColor ?? d.base ?? WHITE_HEX) } }),
+        ...(p.winglet ? { u_tip: { type: UniformType.SAMPLER_2D, value: flat(d.wingletColor ?? d.wing ?? WING) } } : {}),
+        u_wing: { type: UniformType.VEC3, value: rgb(d.wing ?? WING) },
+        u_stab: { type: UniformType.VEC3, value: rgb(d.stab ?? d.wing ?? WING) },
         u_span: { type: UniformType.FLOAT, value: 0 },
         u_cut: { type: UniformType.FLOAT, value: 0 },
         u_night: { type: UniformType.FLOAT, value: nightNow },
@@ -323,6 +323,14 @@ export class LiveryShaders {
       fragmentShaderText: this.#fragment,
     })
     made.add(s)
+    if (typeof document !== 'undefined') {
+      later(async () => {
+        const a = await rasterize(d, this.#target)
+        s.setUniform('u_skin', texture(a.skin))
+        if (a.nacelle && p.engines) s.setUniform('u_nacelle', texture(a.nacelle))
+        if (a.tip && p.winglet) s.setUniform('u_tip', texture(a.tip))
+      })
+    }
     return s
   }
 }
