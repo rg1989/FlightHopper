@@ -463,7 +463,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
     if (id === 'scenarios') openedScenarios()
   })
-  rail.button('layout').setAttribute('aria-pressed', 'false') // a toggle: edit mode
+  const layoutBtn = rail.button('layout')
+  layoutBtn.setAttribute('aria-pressed', 'false') // a toggle: edit mode
   const ionImagery = ionFell.find((f) => f.what === 'imagery') // EOX in place of ion's Bing
   const imagery0 = badgeView(ionImagery ? { source: 'eox', fallback: ionImagery.why } : imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
@@ -867,6 +868,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       chased = placed
     }
     if (!framed) flightFrame.draw(null, null, NO_ROOM) // hidden: no chased state (or no model)
+    // No cards drawn, nothing to arrange: the layout button waits (editing, it stays on, to end the mode).
+    const noCards = !framed && !flightFrame.editing
+    if (layoutBtn.disabled !== noCards) layoutBtn.disabled = noCards
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
     // time (D12): the server reports how far its clock is ahead of the upstream's. A scenario, at its own instant.
     const st = sun.update(sf !== null ? sf.tUtcMs : sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
