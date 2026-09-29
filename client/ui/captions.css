@@ -1,7 +1,9 @@
 /* client/ui/captions.css */
 /* Scenario captions (captions.ts): centred above the play bar (playbar.css sets --fh-playbar-space), never taking the
    pointer. Each line a dark chip: the head in the channel's tint (cockpit neutral, radio and company blue, cabin muted,
-   alerts amber, with a matching edge), the words in plain white. Readable over bright imagery and at night. */
+   alerts amber, with a matching edge), the words in plain white. Readable over bright imagery and at night.
+   The box keeps the band two lines take (each with its original) for the whole playback, the lines stacked from its
+   bottom (a rare third rises over it): the flight-data frame, laid out round the box, stays put as lines come and go. */
 .fh-captions {
   position: absolute;
   z-index: 16;
@@ -11,7 +13,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  height: 154px;
   pointer-events: none;
 }
 
@@ -99,6 +103,7 @@
     bottom: calc(var(--fh-playbar-space, 141px) + 8px);
     left: 8px;
     gap: 4px;
+    height: 144px;
   }
 
   .fh-cap {
