@@ -281,6 +281,22 @@ test('OrbitControl: a pinch spreading the fingers 2× halves the distance, closi
   near(o.rangeM, 3000, 1e-9)
 })
 
+test('OrbitControl.trackpad: two fingers only zoom (moving up or down as the wheel does, or pinching); they never turn the view', () => {
+  const o = new OrbitControl(-12, 150)
+  const wheel = new OrbitControl(-12, 150)
+  o.trackpad.drag(300, 0) // sideways: nothing
+  assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [0, -12, 150])
+  o.trackpad.drag(40, 100) // the content follows the fingers down: as the wheel turned up, closer
+  wheel.wheel(100)
+  near(o.rangeM, wheel.rangeM, 1e-9)
+  o.trackpad.drag(0, -250) // up: farther
+  wheel.wheel(-250)
+  near(o.rangeM, wheel.rangeM, 1e-9)
+  o.trackpad.pinch(2, 400, 300) // where the fingers are does not matter here
+  near(o.rangeM, wheel.rangeM / 2, 1e-9)
+  assert.deepEqual([o.headingOffsetDeg, o.pitchDeg], [0, -12], 'the angle is the mouse drag\'s alone')
+})
+
 test('ChaseCamera follows the orbit: 90° offset looks east from the west side; zoom sets the distance', () => {
   const { camera, viewer } = fakeViewer(() => 0)
   const cc = new ChaseCamera(viewer)
