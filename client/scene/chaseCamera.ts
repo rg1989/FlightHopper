@@ -16,6 +16,16 @@ const RANGE_MAX_M = 3000
 // The view's middle this far under the aimed point, so the aircraft sits a little above it at every range: where an
 // airliner sat at the default range when the camera aimed at its wheels.
 const AIM_BELOW_DEG = 2.4
+export const DEFAULT_RANGE_M = 150
+
+/**
+ * The camera's range at first and after a reset: DEFAULT_RANGE_M, farther on a view taller than wide, so the aircraft
+ * takes the share of the view's width it takes on a wide one (Cesium's field of view spans the larger side: upright, a
+ * phone would show it twice as wide, larger than the flight-data frame's cards leave room for).
+ */
+export function defaultRangeM(w: number, h: number): number {
+  return DEFAULT_RANGE_M * (w > 0 ? Math.max(1, h / w) : 1)
+}
 
 /**
  * Camera position relative to the target, in the target's local east-north-up frame (metres).
@@ -114,7 +124,8 @@ export class ChaseCamera {
     this.#scene = viewer.scene
     const globe = viewer.scene.globe
     this.#groundAt = opts.groundAt ?? ((c) => globe.getHeight(c) ?? null)
-    this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? 150)
+    const canvas = viewer.scene.canvas
+    this.orbit = new OrbitControl(opts.pitchDeg ?? -12, opts.rangeM ?? defaultRangeM(canvas.clientWidth, canvas.clientHeight))
     this.#minClearanceM = opts.minClearanceM ?? 15
     this.#tauS = opts.headingTauS ?? 1.0
   }

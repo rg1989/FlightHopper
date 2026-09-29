@@ -19,6 +19,7 @@ import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
 import { NO_FRAME_PREFS, type FramePrefs, type Offset } from '../ui/framePrefs.ts'
 import { icon } from '../ui/icons.ts'
 import { ALT_TAPE, Adi, ArcGauge, EPR_GAUGE, G_GAUGE, HeadingTape, SPEED_TAPE, Tape, Vsi, WindDial, h, move, say, show } from '../ui/instruments.ts'
+import { defaultRangeM } from './chaseCamera.ts'
 import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
 import '../ui/flightFrame.css'
@@ -622,6 +623,7 @@ export class FlightFrame {
   #placed: Partial<Record<BlockId, Placed | null>> = {}
   #auto: Partial<Record<BlockId, Placed | null>> = {} // the automatic arrangement last frame (layoutSide's hysteresis)
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
+  #own = 0 // the aircraft's square at the chase camera's default range (update(); 0 for draw() alone)
   readonly #resize: ResizeObserver
   #view = { w: 0, h: 0 } // the layer's size (the view's), px
   readonly #c = new Cartesian3()
@@ -788,10 +790,12 @@ export class FlightFrame {
     show(this.#bar, this.#editing)
     // Over the square the cards go round, room for the flight ID: no card covers it.
     const head = flightId === '' ? 0 : ID_GAP + ID_H + 1
-    // The side from the automatic arrangement alone. A moved card goes where its offset from it says, clear of what covers
-    // the view (and of the toolbar while editing); a dragged one where the pointer holds it.
+    // The side from the automatic arrangement alone, at least the aircraft's own at the default range (a wide body keeps
+    // its default spacing zoomed out). A moved card goes where its offset from it says, clear of what covers the view
+    // (and of the toolbar while editing); a dragged one where the pointer holds it.
     const sizes = this.#sizes
-    const ls = layoutSide({ ...sq, head }, LEAST_SIDE * Math.min(this.#view.w, this.#view.h), sizes, safe, GAP, this.#auto)
+    const want = { ...sq, side: Math.max(sq.side, this.#own), head }
+    const ls = layoutSide(want, LEAST_SIDE * Math.min(this.#view.w, this.#view.h), sizes, safe, GAP, this.#auto)
     const lsq = (this.#lsq = { x: sq.x, y: sq.y, side: ls, head })
     const area = (this.#area = { x: PAD, y: PAD, w: this.#view.w - 2 * PAD, h: this.#view.h - 2 * PAD })
     const avoid = (this.#avoid = this.#editing && this.#bar0 !== null ? [...room.covers, this.#bar0] : room.covers)
@@ -820,18 +824,25 @@ export class FlightFrame {
       move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
     }
     this.#placed = at
+    const underCard = (x0: number, y0: number, x1: number, y1: number): boolean =>
+      IDS.some((k) => {
+        const p = at[k]
+        if (p === null || this.#blocks[k].hidden) return false
+        const b = sizes[k][p.v]
+        return p.x < x1 && x0 < p.x + b.w && p.y < y1 && y0 < p.y + b.h
+      })
+    // A corner of the brackets a card is over (the aircraft outgrew the square the cards go round) is not drawn.
+    const arm = Math.min(Math.max(0.3 * side, 7), 20) // layout.css's corner
+    const bx = sq.x - side / 2
+    const by = sq.y - side / 2
+    br.classList.toggle('fh-cut-tr', underCard(bx + side - arm, by, bx + side, by + arm))
+    br.classList.toggle('fh-cut-bl', underCard(bx, by + side - arm, bx + arm, by + side))
     // The flight ID over the brackets; zoomed in past the square the cards go round, over that one instead: in the room
     // kept for it, on screen. A card the viewer moved over it hides it.
     say(this.#id, flightId)
     const idB = sq.y - Math.min(sq.side, ls) / 2 - ID_GAP
     const w = flightId.length * ID_CHAR
-    const covered = IDS.some((k) => {
-      const p = at[k]
-      if (p === null || this.#blocks[k].hidden) return false
-      const b = sizes[k][p.v]
-      return p.x < sq.x + w / 2 && sq.x - w / 2 < p.x + b.w && p.y < idB && idB - ID_H < p.y + b.h
-    })
-    show(this.#id, flightId !== '' && !covered)
+    show(this.#id, flightId !== '' && !underCard(sq.x - w / 2, idB - ID_H, sq.x + w / 2, idB))
     move(this.#id, `translate(-50%, ${Math.max(0, (sq.side - ls) / 2).toFixed(1)}px)`)
     if (this.#editing && this.#bar0 === null) this.#placeBar([...room.covers, { x: sq.x - w / 2, y: idB - ID_H, w, h: ID_H }], at)
   }
@@ -968,7 +979,10 @@ export class FlightFrame {
     if (w === undefined) return null
     this.#sq.x = w.x
     this.#sq.y = w.y
-    this.#sq.side = squarePx((entry.box?.half ?? BOX_HALF) * entry.scale * k, depthM, fovy, scene.canvas.clientHeight)
+    const rM = (entry.box?.half ?? BOX_HALF) * entry.scale
+    const h = scene.canvas.clientHeight
+    this.#sq.side = squarePx(rM * k, depthM, fovy, h)
+    this.#own = squarePx(rM, defaultRangeM(scene.canvas.clientWidth, h), fovy, h)
     return this.#sq
   }
 

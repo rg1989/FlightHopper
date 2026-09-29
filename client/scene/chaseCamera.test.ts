@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Camera, Cartesian3, Cartographic, Ellipsoid, GeographicProjection, MapMode2D, Matrix4, SceneMode } from 'cesium'
 import type { Viewer } from 'cesium'
 import type { RenderState } from '../types.ts'
-import { chaseOffsetEnu, ChaseCamera, OrbitControl } from './chaseCamera.ts'
+import { chaseOffsetEnu, ChaseCamera, defaultRangeM, OrbitControl } from './chaseCamera.ts'
 
 const near = (a: number, b: number, tol: number, msg = ''): void => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b} (tol ${tol}) ${msg}`)
 const DEG = 180 / Math.PI
@@ -122,6 +122,16 @@ test('the view\'s middle a little under the aimed point: the aircraft sits above
     near(Math.acos(Cartesian3.dot(to, camera.directionWC)) * DEG, 2.4, 1e-6, `${r} m`)
     assert.ok(Cartesian3.dot(to, camera.upWC) > 0, `${r} m: above the middle`)
   }
+})
+
+test('defaultRangeM: 150 m on a wide view; on a tall one farther, so the aircraft takes the share of the width it takes on a wide one', () => {
+  assert.equal(defaultRangeM(1440, 900), 150)
+  assert.equal(defaultRangeM(900, 900), 150)
+  near(defaultRangeM(390, 844), 150 * 844 / 390, 1e-9)
+  assert.equal(defaultRangeM(0, 0), 150, 'before layout: the plain default')
+  const tall = fakeViewer(() => 0)
+  ;(tall.viewer.scene.canvas as { clientWidth: number; clientHeight: number }) = { clientWidth: 390, clientHeight: 844 }
+  near(new ChaseCamera(tall.viewer).orbit.rangeM, 150 * 844 / 390, 1e-9, 'the camera starts there')
 })
 
 test('headingTauS option: a slower camera turns less in the same time', () => {

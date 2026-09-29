@@ -40,6 +40,12 @@
   --fh-att-gap: 10px;
 }
 
+/* The chased aircraft's brackets (.fh-bracket, layout.css): a corner a card is over is not drawn (FlightFrame). */
+.fh-frame .fh-bracket.fh-cut-tr::before,
+.fh-frame .fh-bracket.fh-cut-bl::after {
+  display: none;
+}
+
 /* Cards, parts and glyphs with nothing to show (several are flex containers, which would override `hidden`). */
 .fh-frame [hidden] {
   display: none !important;
