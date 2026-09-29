@@ -469,7 +469,7 @@ export function profileOf(e: ModelManifestEntry, m: Mesh = paintMesh(e)): Measur
   // the tip: the outermost vertex at the wing's own level (a winglet rises above it); its y, the middle of the vertices
   // there
   let tipX = x0
-  const level = (i: number): boolean => m.p[3 * i + 1] <= plane(m.p[3 * i]) + 0.1 && m.p[3 * i + 1] >= plane(m.p[3 * i]) - 0.7
+  const level = (i: number): boolean => m.p[3 * i + 1] <= plane(m.p[3 * i]) + 0.1 && m.p[3 * i + 1] >= plane(m.p[3 * i]) - 0.3
   for (let i = 0; i < n; i++) if (m.p[3 * i] > tipX && level(i)) tipX = m.p[3 * i]
   let [lo, hi] = [Infinity, -Infinity]
   for (let i = 0; i < n; i++) if (m.p[3 * i] > tipX - 0.3 && level(i)) [lo, hi] = [Math.min(lo, m.p[3 * i + 1]), Math.max(hi, m.p[3 * i + 1])]
