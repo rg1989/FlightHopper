@@ -513,6 +513,13 @@ const PAD = 8
 const PHONE = '(max-width: 640px)' // the app's phone layout: the blocks' smaller sizes (flightFrame.css)
 const DRAG_PX = 4 // a press on a card moves it once the pointer has gone this far (a shorter one is a click)
 const BAR_EDGE = 12 // the edit toolbar from the view's edges
+const HOLD_PX = 0.75 // a block drawn at a whole px stays there until its place is this far off it
+
+/**
+ * A place rounded to a whole px (crisp text), held at the one drawn (was) until it is HOLD_PX off it: a place that
+ * wavers round a half px (a scenario's aircraft, a sub-px each frame) no longer steps a px every other frame.
+ */
+export const wholePx = (v: number, was?: number): number => (was !== undefined && Math.abs(v - was) < HOLD_PX ? was : Math.round(v))
 // The flight ID over the brackets, as the traffic's (layout.css): 12 px high, 5 px over the square, 9 px a character.
 const ID_H = 12
 const ID_GAP = 5
@@ -638,6 +645,7 @@ export class FlightFrame {
   #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
   #placed: Partial<Record<BlockId, Placed | null>> = {}
   #auto: Partial<Record<BlockId, Placed | null>> = {} // the automatic arrangement last frame (layoutSide's hysteresis)
+  #px: Partial<Record<BlockId, { x: number; y: number }>> = {} // each block's whole-px place as drawn (wholePx)
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
   #own = 0 // the aircraft's square at the chase camera's default range (update(); 0 for draw() alone)
   readonly #resize: ResizeObserver
@@ -861,7 +869,8 @@ export class FlightFrame {
         b.dataset.v = variant
         if (id === 'right') this.#spd.resized()
       }
-      move(b, `translate3d(${Math.round(p.x)}px,${Math.round(p.y)}px,0)`) // whole px: crisp text
+      const w = (this.#px[id] = { x: wholePx(p.x, this.#px[id]?.x), y: wholePx(p.y, this.#px[id]?.y) })
+      move(b, `translate3d(${w.x}px,${w.y}px,0)`) // whole px: crisp text
     }
     this.#placed = at
     const underCard = (x0: number, y0: number, x1: number, y1: number): boolean =>
@@ -1020,6 +1029,7 @@ export class FlightFrame {
     this.#spdSrc = null
     this.#placed = {}
     this.#auto = {}
+    this.#px = {}
     this.#shown = false
   }
 

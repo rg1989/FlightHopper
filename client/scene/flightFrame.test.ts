@@ -17,7 +17,7 @@ registerHooks({
 })
 const {
   HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, freeSpot, gText, layoutSide,
-  liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, windText,
+  liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, wholePx, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -342,6 +342,15 @@ test('movedTo, offsetAt: every card pinned where the automatic layout put it sta
   for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(after, id), at(auto, id), `${id} stays`)
   // A variant that no longer fits the view (a stored layout on a smaller screen): the largest that does.
   assert.equal(movedTo({ x: 0, y: 0, v: 0 }, sizes.top, sq, { x: 8, y: 8, w: 200, h: 400 }, [])!.v, 1)
+})
+
+test('wholePx: a whole px, held where it was drawn until the place is 0.75 px off it (no 1 px flicker round a half)', () => {
+  assert.equal(wholePx(339.5), 340)
+  let x = wholePx(339.49)
+  for (const v of [339.51, 339.49, 339.6, 339.4, 339.7]) x = wholePx(v, x)
+  assert.equal(x, 339, 'wavering round 339.5: it stays')
+  assert.equal(wholePx(339.8, 339), 340, 'moved on: it follows')
+  assert.equal(wholePx(337.2, 339), 337)
 })
 
 // ---- layoutSide -----------------------------------------------------------------------------------------------------
