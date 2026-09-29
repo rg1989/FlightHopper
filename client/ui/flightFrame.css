@@ -37,6 +37,7 @@
   --fh-read-h: 26px;
   --fh-read-fs: 15.5px;
   --fh-col-w: 66px;
+  --fh-att-gap: 10px;
 }
 
 /* Cards, parts and glyphs with nothing to show (several are flex containers, which would override `hidden`). */
@@ -404,17 +405,27 @@
 
 /* ---- heading ---------------------------------------------------------------------------------------------------- */
 
+/* The heading card is the attitude card's width, the tape over the attitude indicator, the wind a line under it: the two
+   cards share their edges and the wind's value can grow without moving anything. */
 .fh-fblock[data-block='top'] {
-  flex-direction: row;
-  align-items: flex-end;
-  gap: 12px;
+  align-items: center;
+  width: calc(2 * var(--fh-col-w) + var(--fh-adi) * 1.1 + 2 * var(--fh-att-gap));
+  padding-right: 10px;
+  padding-left: 10px;
 }
 
-.fh-hdgcol,
-.fh-wind {
+.fh-hdgcol {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.fh-wind {
+  display: flex;
+  order: 1;
+  align-self: stretch;
+  align-items: center;
+  justify-content: space-between;
 }
 
 /* The heading's readout sits above the tape's middle, its pointer on the index; the label to its left. */
@@ -500,7 +511,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
+  height: 28px;
 }
 
 .fh-wind .fh-bhead {
@@ -572,7 +583,7 @@
 .fh-attrow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--fh-att-gap);
 }
 
 .fh-attcol {
@@ -917,12 +928,13 @@
     padding: 6px 7px;
   }
 
-  .fh-attrow {
-    gap: 7px;
+  .fh-frame {
+    --fh-att-gap: 7px;
   }
 
   .fh-fblock[data-block='top'] {
-    gap: 8px;
+    padding-right: 7px;
+    padding-left: 7px;
   }
 
   .fh-fblock[data-v='1'] {
