@@ -62,7 +62,8 @@ const q = new URLSearchParams(location.search)
 const status = document.getElementById('status')!
 const sheet = document.getElementById('sheet')!
 const say = (s: string): void => void (status.textContent = s)
-const frame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()))
+// a frame, or 40 ms where a hidden page gets no animation frames (the Browser pane when it is not shown)
+const frame = (): Promise<void> => new Promise((r) => { requestAnimationFrame(() => r()); setTimeout(r, 40) })
 const lab: { done: boolean; tiles: Array<{ view: string; dataUrl: string }>; errors: string[] } = { done: false, tiles: [], errors: [] }
 ;(window as unknown as { __lab: typeof lab }).__lab = lab
 addEventListener('error', (e) => lab.errors.push(String(e.message)))
@@ -207,7 +208,7 @@ async function main(): Promise<void> {
   // the atlases, as drawn (images are cached by the raster module)
   const ops = drawDesign(livery.design, { id: m.id, profile, paint: m.paint })
   const imgs = new Map<string, HTMLImageElement | null>()
-  for (const r of [ops.skin, ops.nacelle, ops.tip]) {
+  for (const r of [ops.skin, ops.nacelle, ops.tip, ops.belly]) {
     for (const op of r ? [...r.left, ...r.right] : []) {
       if ((op.k === 'image' || op.k === 'wrap') && !imgs.has(op.src)) {
         const im = new Image()
@@ -225,6 +226,7 @@ async function main(): Promise<void> {
   figure(arow, regionCanvas(ops.skin, SIZES.skin, imgs), `skin ${SIZES.skin.join('×')} over box ${profile.box.join(', ')}`).classList.add('atlas')
   if (ops.nacelle) figure(arow, regionCanvas(ops.nacelle, SIZES.nacelle, imgs), 'nacelle').classList.add('atlas')
   if (ops.tip) figure(arow, regionCanvas(ops.tip, SIZES.tip, imgs), 'wingtip device').classList.add('atlas')
+  if (ops.belly) figure(arow, regionCanvas(ops.belly, SIZES.belly, imgs, true), 'belly, from below (nose left, left wing up)').classList.add('atlas')
   say(`done: ${wanted.length} views${refs.length ? `, ${refs.length} reference photos` : ''}`)
   lab.done = true
 }

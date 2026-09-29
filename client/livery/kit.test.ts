@@ -96,3 +96,12 @@ test('stroke, circle and clip record their ops; clip wraps what it draws', () =>
   const clip = k.ops[2] as Extract<Op, { k: 'clip' }>
   assert.deepEqual(clip.d[0], ['M', -6, 0.95], 'the fin outline starts 5 cm under the leading-edge root')
 })
+
+test('belly: a plan view across the fuselage, drawn only when the design has one', () => {
+  const paint = { bodyHalfWidth: 2 } as Parameters<typeof drawDesign>[1]['paint']
+  const none = drawDesign({ code: 'A', name: 'a', side: (k) => k.fill('#ffffff') }, { id: 'tube', profile: P, paint })
+  assert.equal(none.belly, null)
+  const d = drawDesign({ code: 'B', name: 'b', side: (k) => k.fill('#ffffff'), belly: (k) => k.text('B', { z: 0, y: 0, capM: 1, color: '#000000' }) }, { id: 'tube', profile: P, paint })
+  assert.deepEqual(d.belly!.box, [-10.1, 10.1, -2.1, 2.1])
+  assert.equal(d.belly!.left[0].k, 'text')
+})

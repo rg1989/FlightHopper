@@ -27,7 +27,7 @@ test('every design draws on every painted model with finite coordinates, valid c
   for (const [code, d] of Object.entries(DESIGNS)) {
     for (const m of manifest.models.filter((e) => e.paint)) {
       const ops = drawDesign(d, { id: m.id, profile: profileOf(m)!, paint: m.paint })
-      for (const r of [ops.skin, ops.nacelle, ops.tip]) {
+      for (const r of [ops.skin, ops.nacelle, ops.tip, ops.belly]) {
         for (const op of r ? [...r.left, ...r.right] : []) {
           for (const n of nums(op)) assert.ok(Number.isFinite(n), `${code} on ${m.id}: ${JSON.stringify(op).slice(0, 120)}`)
           if ('color' in op) for (const c of typeof op.color === 'string' ? [op.color] : op.color.stops.map((st) => st[1])) assert.match(c, COLOUR, `${code} on ${m.id}`)

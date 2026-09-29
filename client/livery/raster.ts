@@ -16,15 +16,16 @@ export interface Atlases {
   skin: Atlas
   nacelle: Atlas | null
   tip: Atlas | null
+  belly: Atlas | null // premultiplied alpha (transparent where the design drew nothing)
 }
 
 /** Atlas sizes [width, height] per region at full detail: the skin's ~45 px/m on a narrowbody, ~30 px/m on a 787. */
-export const SIZES = { skin: [2048, 1024], nacelle: [512, 512], tip: [256, 512] } as const
+export const SIZES = { skin: [2048, 1024], nacelle: [512, 512], tip: [256, 512], belly: [1024, 256] } as const
 
 /** The sizes at a detail: 1 for the chased aircraft, 0.5 for traffic (a quarter of the memory). */
-export function sizesAt(detail: number): { skin: [number, number]; nacelle: [number, number]; tip: [number, number] } {
+export function sizesAt(detail: number): { skin: [number, number]; nacelle: [number, number]; tip: [number, number]; belly: [number, number] } {
   const k = (s: readonly [number, number]): [number, number] => [s[0] * detail, s[1] * detail]
-  return { skin: k(SIZES.skin), nacelle: k(SIZES.nacelle), tip: k(SIZES.tip) }
+  return { skin: k(SIZES.skin), nacelle: k(SIZES.nacelle), tip: k(SIZES.tip), belly: k(SIZES.belly) }
 }
 /** Rows left above and below each half's box, so mipmaps do not bleed one side into the other. */
 export const MARGIN = 8
@@ -78,22 +79,39 @@ export async function rasterize(d: Design, m: Target, detail = 1): Promise<Atlas
     skin: region(ops.skin, size.skin, img),
     nacelle: ops.nacelle && region(ops.nacelle, size.nacelle, img),
     tip: ops.tip && region(ops.tip, size.tip, img),
+    belly: ops.belly && premultiply(region(ops.belly, size.belly, img, true)),
   }
 }
 
-/** A region's canvas, for the lab (tools/livery-lab) to show; region() reads it back. */
-export function regionCanvas(r: RegionOps, [w, h]: readonly [number, number], img: Map<string, HTMLImageElement | null>): HTMLCanvasElement {
+/** A region's canvas, for the lab (tools/livery-lab) to show; region() reads it back. single: one view (the belly). */
+export function regionCanvas(r: RegionOps, [w, h]: readonly [number, number], img: Map<string, HTMLImageElement | null>, single = false): HTMLCanvasElement {
   const c = document.createElement('canvas')
   c.width = w
   c.height = h
   const ctx = c.getContext('2d', { willReadFrequently: true })!
-  half(ctx, r.box, r.left, 0, w, h / 2, false, img)
-  half(ctx, r.box, r.right, h / 2, w, h / 2, true, img)
+  if (single) {
+    half(ctx, r.box, r.left, 0, w, h, false, img)
+  } else {
+    half(ctx, r.box, r.left, 0, w, h / 2, false, img)
+    half(ctx, r.box, r.right, h / 2, w, h / 2, true, img)
+  }
   return c
 }
 
-function region(r: RegionOps, size: readonly [number, number], img: Map<string, HTMLImageElement | null>): Atlas {
-  const c = regionCanvas(r, size, img)
+/** Premultiplies an atlas's alpha, so its mipmaps do not darken towards the transparent black around the art. */
+function premultiply(a: Atlas): Atlas {
+  const d = a.data
+  for (let i = 0; i < d.length; i += 4) {
+    const k = d[i + 3] / 255
+    d[i] = Math.round(d[i] * k)
+    d[i + 1] = Math.round(d[i + 1] * k)
+    d[i + 2] = Math.round(d[i + 2] * k)
+  }
+  return a
+}
+
+function region(r: RegionOps, size: readonly [number, number], img: Map<string, HTMLImageElement | null>, single = false): Atlas {
+  const c = regionCanvas(r, size, img, single)
   const px = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, c.width, c.height)
   return { data: new Uint8Array(px.data.buffer), width: c.width, height: c.height }
 }

@@ -7,7 +7,7 @@
 import type { ModelManifestEntry, ModelProfile, Paint } from '../types.ts'
 
 export type Side = 'left' | 'right'
-export type Region = 'skin' | 'nacelle' | 'tip'
+export type Region = 'skin' | 'nacelle' | 'tip' | 'belly'
 /** A CSS colour (sRGB). */
 export type Color = string
 /** A colour or a gradient in metres: linear from (z0, y0) to (z1, y1), or radial around (z, y); stops 0 … 1. */
@@ -62,6 +62,12 @@ export interface Design {
   engine?(k: Kit): void
   /** The wingtip devices (sharklets, winglets), in their side box. Default: fill `winglet` else `wing`. */
   winglet?(k: Kit): void
+  /**
+   * Markings seen only from below (belly titles, a belly panel narrower than the fuselage), drawn in plan view: z along
+   * the fuselage and y across it (+ the left wing), seen from below with the nose at the left. Transparent where not
+   * drawn; blended onto the skin where it faces down. Default: none.
+   */
+  belly?(k: Kit): void
   base?: Color // the fuselage colour drawn before the atlas is ready (default: white)
   engineColor?: Color
   wingletColor?: Color
@@ -138,6 +144,7 @@ export class Kit {
     const box: Landmarks['box'] =
       region === 'nacelle' && p.engines ? [p.engines[2], p.engines[3], p.engines[4], p.engines[5]]
       : region === 'tip' && p.winglet ? [p.winglet[2], p.winglet[3], p.winglet[4], p.winglet[5]]
+      : region === 'belly' ? [p.box[0], p.box[1], -bellyHalf(o.paint), bellyHalf(o.paint)]
       : p.box
     const [bot, top] = contourAt(p.body, (nose + tail) / 2)
     this.a = {
@@ -303,7 +310,11 @@ export interface DesignOps {
   skin: RegionOps
   nacelle: RegionOps | null
   tip: RegionOps | null
+  belly: RegionOps | null // one view (left), from below
 }
+
+/** Half the belly atlas's width: the fuselage's half-width and a little. */
+export const bellyHalf = (paint: Paint | undefined): number => (paint?.bodyHalfWidth ?? 2.4) + 0.1
 
 /** The model a design is drawn on. */
 export interface Target {
@@ -326,13 +337,14 @@ export function drawDesign(d: Design, m: Target): DesignOps {
     skin: run('skin', (k) => d.side(k)),
     nacelle: p.engines ? run('nacelle', (k) => (d.engine ? d.engine(k) : k.fill(d.engineColor ?? d.base ?? WHITE))) : null,
     tip: p.winglet ? run('tip', (k) => (d.winglet ? d.winglet(k) : k.fill(d.wingletColor ?? d.wing ?? WING))) : null,
+    belly: d.belly ? run('belly', d.belly) : null,
   }
 }
 
 /** Every image a design's ops use (to load before drawing). */
 export function imagesOf(ops: DesignOps): string[] {
   const out = new Set<string>()
-  for (const r of [ops.skin, ops.nacelle, ops.tip]) {
+  for (const r of [ops.skin, ops.nacelle, ops.tip, ops.belly]) {
     for (const op of r ? [...r.left, ...r.right] : []) if (op.k === 'image' || op.k === 'wrap') out.add(op.src)
   }
   return [...out]

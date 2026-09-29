@@ -187,6 +187,11 @@ of the fuselage on both sides. Set `mirror: true` for a directional logo that mu
 `k.side` is `'left'` or `'right'`, for the rare design that differs per side (for example a title in another script
 on the right). `k.model` is the manifest id, for a per-type tweak (`if (k.model.startsWith('b78'))`).
 
+Markings seen only from below (a belly title, a belly panel narrower than the fuselage): `belly(k)` draws in plan
+view, seen from below with the nose at the left: `z` along the fuselage as usual, `y` across it (positive towards the
+left wing; `k.a.box` is `[zMin, zMax, -half, half]`). It is transparent where you draw nothing, and it is blended onto
+the skin where the skin faces down. Text reads correctly for someone below the aircraft with the nose to their left.
+
 The engines: `engine(k)` draws the nacelle's side box (`k.a.box` is `[zInletAft…]`: `[zMin, zMax, yMin, yMax]`; the
 inlet is at `zMax`). The wingtip devices: `winglet(k)`, over the device's side box. Wings and the tailplane: the flat
 colours `wing` and `stab`.

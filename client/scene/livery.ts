@@ -8,7 +8,7 @@
 import { Cartesian3, Cartesian4, Color, CustomShader, CustomShaderMode, TextureMinificationFilter, TextureUniform, UniformType, VaryingType } from 'cesium'
 import { operatorOf } from '../../shared/airlines.ts'
 import { DESIGNS } from '../livery/designs/index.ts'
-import { WHITE as WHITE_HEX, WING, profileOf } from '../livery/kit.ts'
+import { WHITE as WHITE_HEX, WING, bellyHalf, profileOf } from '../livery/kit.ts'
 import type { Design, Target } from '../livery/kit.ts'
 import { specDesign, tableDesign } from '../livery/legacy.ts'
 import type { LiveryEntry } from '../livery/legacy.ts'
@@ -136,6 +136,16 @@ vec3 ${name}At(vec3 p, bool left) {
 }`
 }
 
+/** GLSL that samples the belly atlas (premultiplied) in plan view over [zMin, zMax] × ±half, the left wing at the top. */
+function bellyText([zMin, zMax]: [number, number, number, number], half: number, height: number): string {
+  return `
+vec4 bellyAt(vec3 p) {
+  float u = clamp((${f(zMax)} - p.z) / ${f(zMax - zMin)}, 0.0, 1.0);
+  float r = clamp((${f(half)} - p.x) / ${f(2 * half)}, 0.0, 1.0);
+  return texture(u_belly, vec2(u, (${f(MARGIN)} + r * ${f(height - 2 * MARGIN)}) / ${f(height)}));
+}`
+}
+
 /**
  * The fragment shader for one model's paint map and profile. The airline's paint is in the atlases (uniforms), so every
  * airline on a model shares one GLSL program. The fuselage and fin take the skin atlas by position (x > 0: the left
@@ -157,7 +167,7 @@ export function paintShaderText(p: Paint, prof: ModelProfile, detail = 1): strin
   const engineTest = e
     ? `abs(p.x) > ${f(e[0])} && abs(p.x) < ${f(e[1])} && p.z > ${f(e[2])} && p.z < ${f(e[3])} && p.y > ${f(e[4])} && p.y < ${f(e[5])} && abs(n.y) < 0.8`
     : `abs(p.x) > ${f(ex0)} && abs(p.x) < ${f(ex1)} && p.z > ${f(ez0)} && p.z < ${f(ez1)} && abs(n.y) < 0.8`
-  return `${atlasText('skin', prof.box, size.skin[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], size.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], size.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
+  return `${atlasText('skin', prof.box, size.skin[1])}${bellyText(prof.box, bellyHalf(p), size.belly[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], size.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], size.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   vec3 turn = vec3(${p.noseMinusZ ? '-1.0, 1.0, -1.0' : '1.0'});
   vec3 p = fsInput.attributes.positionMC * turn;${p.cut ? cutText(p.cut, p.fin.halfWidth) : ''}
@@ -170,7 +180,12 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   bool engine = ${engineTest};
   bool tip = ${w ? `!body && !fin && !engine && abs(p.x) > ${f(w[0])} && abs(p.x) < ${f(w[1])} && p.z > ${f(w[2])} && p.z < ${f(w[3])} && p.y > ${f(w[4])} && p.y < ${f(w[5])}` : 'false'};
   vec3 c = ${prof.stab ? `p.z < ${f(prof.stab[1])} && abs(p.x) < ${f(prof.stab[2] + 0.3)} ? u_stab : u_wing` : 'u_wing'};
-  if (body || fin) c = skinAt(p, p.x > 0.0);${e ? `
+  if (body || fin) c = skinAt(p, p.x > 0.0);
+  if (body && !fin && n.y < -0.3) { // markings seen from below, on the skin that faces down
+    vec4 b = bellyAt(p);
+    float down = smoothstep(0.3, 0.6, -n.y) * b.a;
+    c = c * (1.0 - down) + b.rgb * smoothstep(0.3, 0.6, -n.y);
+  }${e ? `
   if (engine) c = nacelleAt(p, n.x > 0.0);` : `
   if (engine) c = u_engine;`}${w ? `
   if (tip) c = tipAt(p, n.x > 0.0);` : ''}
@@ -311,6 +326,7 @@ export class LiveryShaders {
       mode: CustomShaderMode.MODIFY_MATERIAL,
       uniforms: {
         u_skin: { type: UniformType.SAMPLER_2D, value: flat(d.base ?? WHITE_HEX) },
+        u_belly: { type: UniformType.SAMPLER_2D, value: new TextureUniform({ typedArray: new Uint8Array(4), width: 1, height: 1 }) }, // none: transparent
         ...(p.engines ? { u_nacelle: { type: UniformType.SAMPLER_2D, value: flat(d.engineColor ?? d.base ?? WHITE_HEX) } } : { u_engine: { type: UniformType.VEC3, value: rgb(d.engineColor ?? d.base ?? WHITE_HEX) } }),
         ...(p.winglet ? { u_tip: { type: UniformType.SAMPLER_2D, value: flat(d.wingletColor ?? d.wing ?? WING) } } : {}),
         u_wing: { type: UniformType.VEC3, value: rgb(d.wing ?? WING) },
@@ -333,6 +349,7 @@ export class LiveryShaders {
         s.setUniform('u_skin', texture(a.skin))
         if (a.nacelle && p.engines) s.setUniform('u_nacelle', texture(a.nacelle))
         if (a.tip && p.winglet) s.setUniform('u_tip', texture(a.tip))
+        if (a.belly) s.setUniform('u_belly', texture(a.belly))
       })
     }
     return s
