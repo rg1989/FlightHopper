@@ -162,7 +162,8 @@ Where things are:
 | `k.fin(u, h)` | a point on the fin: `u` 0 leading edge … 1 trailing edge, `h` 0 root … 1 tip |
 | `k.stations(from, to, step)` | z values from `from` to `to`, for building your own curves |
 
-Drawing (all colours are CSS strings, sRGB):
+Drawing. A colour is a CSS string (sRGB); where a call takes a colour it also takes a gradient in metres:
+`{ linear: [z0, y0, z1, y1], stops: [[0, '#fff'], [1, '#c6007e']] }` or `{ radial: [z, y, r], stops: … }`.
 
 | Call | Draws |
 |---|---|
@@ -172,6 +173,9 @@ Drawing (all colours are CSS strings, sRGB):
 | `k.stripe(f, widthM, color, o)` | a stripe of constant width centred on a fraction |
 | `k.poly([[z, y], …], color)` | a polygon |
 | `k.path([['M', z, y], ['L', z, y], ['Q', cz, cy, z, y], ['C', …], ['Z']], color)` | a path with curves |
+| `k.stroke(pathOrPoints, widthM, color)` | a line `widthM` metres wide on the aircraft (pinstripes, outlines) |
+| `k.circle(z, y, r, color)` | a disc (dots, roundels) |
+| `k.clip('fin' \| points \| path, () => { … })` | draws the calls inside the function only within the shape (`'fin'`: the fin's outline) |
 | `k.finFill(color, {down})` | the fin, from its measured outline, reaching `down` m into the fuselage |
 | `k.finPoly([[u, h], …], color)` | a polygon in fin coordinates |
 | `k.text(str, {z, y, capM, color, font, weight, italic, align, tracking, mirror})` | text; `y` is the baseline, `capM` the cap height; `align` says which end sits at `z` (`fore`, `centre`, `aft`) |
