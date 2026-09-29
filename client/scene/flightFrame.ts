@@ -665,7 +665,7 @@ export class FlightFrame {
   // Edit mode: the viewer's layout, its toolbar and each card's eye, the card being dragged (pointer and grip in client
   // px, the layer's origin), and this frame's square and safe area to drag in.
   readonly #layer: HTMLElement
-  #prefs: { moved: Partial<Record<BlockId, Offset>>; hidden: BlockId[] }
+  #prefs: { moved: Partial<Record<BlockId, Offset>>; hidden: BlockId[]; order: BlockId[] }
   readonly #onPrefs: (prefs: FramePrefs) => void
   readonly #onEdit: (on: boolean) => void
   #editing = false
@@ -686,7 +686,7 @@ export class FlightFrame {
     this.#layer = layer
     this.#bracket.append(this.#id)
     const p = opts.prefs ?? NO_FRAME_PREFS
-    this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden] }
+    this.#prefs = { moved: { ...p.moved }, hidden: [...p.hidden], order: [...p.order] }
     this.#onPrefs = opts.onPrefs ?? ((): void => {})
     this.#onEdit = opts.onEdit ?? ((): void => {})
     this.#bracket.hidden = true
@@ -754,6 +754,7 @@ export class FlightFrame {
     this.#bar.append(title, this.#reset, done)
     this.#reset.disabled = this.#plain()
     layer.append(this.#bracket, ...IDS.map((id) => blocks[id]), this.#bar)
+    this.#stack()
     // Read when the view resizes, not in every frame (a layout read).
     this.#resize = new ResizeObserver(([e]) => {
       this.#view = { w: e.contentRect.width, h: e.contentRect.height }
@@ -946,7 +947,17 @@ export class FlightFrame {
     this.#blocks[d.id].classList.remove('fh-dragging')
     if (!d.on || this.#sizes[d.id].length === 0) return
     this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, this.#sizes[d.id], this.#lsq, this.#area, this.#avoid, d.v)
+    this.#prefs.order = [...this.#prefs.order.filter((id) => id !== d.id), d.id]
+    this.#stack()
     this.#changed()
+  }
+
+  /** The cards stacked in the layer as prefs.order has them, the last moved on top (the default order first); under the toolbar. */
+  #stack(): void {
+    for (const id of [...IDS.filter((x) => !this.#prefs.order.includes(x)), ...this.#prefs.order]) {
+      const b = this.#blocks[id]
+      if (b.nextSibling !== this.#bar) this.#layer.insertBefore(b, this.#bar)
+    }
   }
 
   /**
@@ -993,7 +1004,8 @@ export class FlightFrame {
 
   /** Every card back in its place, shown. */
   #resetPrefs(): void {
-    this.#prefs = { moved: {}, hidden: [] }
+    this.#prefs = { moved: {}, hidden: [], order: [] }
+    this.#stack()
     this.#placed = {} // laid out afresh: no hysteresis from where the viewer had them
     this.#auto = {}
     for (const id of IDS) this.#paint(id)
@@ -1002,7 +1014,7 @@ export class FlightFrame {
 
   #changed(): void {
     this.#reset.disabled = this.#plain()
-    this.#onPrefs({ moved: { ...this.#prefs.moved }, hidden: [...this.#prefs.hidden] })
+    this.#onPrefs({ moved: { ...this.#prefs.moved }, hidden: [...this.#prefs.hidden], order: [...this.#prefs.order] })
   }
 
   /** Whether every card is in its place and shown. */
