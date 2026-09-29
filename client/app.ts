@@ -104,7 +104,8 @@ const NO_STATUS: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP9
 const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
-const FRAME_COVERS = '.fh-rail, .fh-panel, .fh-card, .fh-toast, .fh-playbar, .fh-captions'
+// Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
+const FRAME_COVERS = '.fh-rail, .fh-panel, .fh-card:not(.fh-tcard), .fh-toast, .fh-playbar, .fh-captions'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -887,8 +888,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     trafficCard.update(te === undefined ? null : th, te === undefined ? null : entryState(te), trafficRaw, te?.info ?? null, shown, false,
       dist === null ? null : { distM: dist, from })
     if (trafficClick !== null) {
+      // Clear of the clicked aircraft and of the flight-data frame, which does not make way for it.
       const c = viewer.canvas.getBoundingClientRect()
-      trafficCard.keepClear(c.left + trafficClick.x, c.top + trafficClick.y, TRAFFIC_CLEAR_PX)
+      const frame = flightFrame.occupied().map((r) => ({ ...r, x: c.left + r.x, y: c.top + r.y }))
+      trafficCard.keepClear(c.left + trafficClick.x, c.top + trafficClick.y, TRAFFIC_CLEAR_PX, frame)
       trafficClick = null
     }
     banner.update(sf === null ? shown : NO_STATUS) // live-feed trouble says nothing about a scenario

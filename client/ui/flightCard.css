@@ -521,6 +521,20 @@
   }
 }
 
+/* Where both ends of its column would cover the flight-data frame's cards (FlightCardHandle.keepClear, which the frame
+   does not make way for: they stay put), the chased card's place, which waits hidden. Narrower screens put it there
+   anyway (below). */
+@media (min-width: 861px) {
+  .fh-card.fh-tcard.fh-card-home {
+    right: auto;
+    left: var(--fh-left);
+  }
+
+  .fh-ui:has(.fh-tcard.fh-card-home:not([hidden])) .fh-card:not(.fh-tcard) {
+    visibility: hidden;
+  }
+}
+
 /* Narrow screens: no room for two cards side by side. It takes the chased card's place, which waits hidden; on phones
    that is above the tab bar, and its airline, registration and photo mark stay (a card opened to be read). */
 @media (max-width: 860px) {

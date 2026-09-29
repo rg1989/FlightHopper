@@ -632,6 +632,8 @@ export class FlightFrame {
   #textAt = -Infinity
   #lastMs = 0
   #shown = false
+  #idRect: Rect | null = null // the flight ID as drawn (layer px); null when not shown
+  #brRect: Rect | null = null // the chased aircraft's brackets as drawn (layer px)
   // Edit mode: the viewer's layout, its toolbar and each card's eye, the card being dragged (pointer and grip in client
   // px, the layer's origin), and this frame's square and safe area to drag in.
   readonly #layer: HTMLElement
@@ -744,6 +746,21 @@ export class FlightFrame {
     return this.#editing
   }
 
+  /** What the frame shows (layer px): its cards, the chased aircraft's brackets and flight ID. The traffic card keeps off it. */
+  occupied(): Rect[] {
+    if (!this.#shown) return []
+    const out: Rect[] = []
+    for (const k of IDS) {
+      const p = this.#placed[k]
+      if (p == null || this.#blocks[k].hidden) continue
+      const b = this.#sizes[k][p.v]
+      out.push({ x: p.x, y: p.y, w: b.w, h: b.h })
+    }
+    if (this.#brRect !== null) out.push(this.#brRect)
+    if (this.#idRect !== null) out.push(this.#idRect)
+    return out
+  }
+
   /** Edit mode on or off (the rail's button, Esc, the toolbar's Done). */
   edit(on: boolean): void {
     if (on === this.#editing) return
@@ -787,6 +804,7 @@ export class FlightFrame {
     if (br.style.width !== px) br.style.width = br.style.height = px
     move(br, `translate3d(${(sq.x - side / 2).toFixed(1)}px, ${(sq.y - side / 2).toFixed(1)}px, 0)`)
     show(br, true)
+    this.#brRect = { x: sq.x - side / 2, y: sq.y - side / 2, w: side, h: side }
     show(this.#bar, this.#editing)
     // Over the square the cards go round, room for the flight ID: no card covers it.
     const head = flightId === '' ? 0 : ID_GAP + ID_H + 1
@@ -842,7 +860,9 @@ export class FlightFrame {
     say(this.#id, flightId)
     const idB = sq.y - Math.min(sq.side, ls) / 2 - ID_GAP
     const w = flightId.length * ID_CHAR
-    show(this.#id, flightId !== '' && !underCard(sq.x - w / 2, idB - ID_H, sq.x + w / 2, idB))
+    const idShown = flightId !== '' && !underCard(sq.x - w / 2, idB - ID_H, sq.x + w / 2, idB)
+    show(this.#id, idShown)
+    this.#idRect = idShown ? { x: sq.x - w / 2, y: idB - ID_H, w, h: ID_H } : null
     move(this.#id, `translate(-50%, ${Math.max(0, (sq.side - ls) / 2).toFixed(1)}px)`)
     if (this.#editing && this.#bar0 === null) this.#placeBar([...room.covers, { x: sq.x - w / 2, y: idB - ID_H, w, h: ID_H }], at)
   }
@@ -949,6 +969,7 @@ export class FlightFrame {
 
   #hide(): void {
     this.#bracket.hidden = true
+    this.#brRect = this.#idRect = null
     this.#bar.hidden = true
     for (const id of IDS) {
       this.#blocks[id].hidden = true

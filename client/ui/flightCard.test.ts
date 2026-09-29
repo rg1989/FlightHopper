@@ -314,6 +314,54 @@ test('mountFlightCard: keepClear moves a shown card to the other end of its colu
   c.destroy()
 }))
 
+test("mountFlightCard: keepClear keeps off the flight-data frame: its own place, the other end, the chased card's", () => withClock(() => {
+  const { card, c } = setup(undefined, 200, true)
+  const place = (): string => (card.classList.contains('fh-card-flip') ? 'flip' : card.classList.contains('fh-card-home') ? 'home' : 'own')
+  // flightCard.css on a 1024 × 768 screen, with a photo: top right, flipped to the bottom right, or the chased card's
+  card.getBoundingClientRect = () => ({
+    own: { left: 634, top: 12, right: 954, bottom: 398 },
+    flip: { left: 634, top: 370, right: 954, bottom: 756 },
+    home: { left: 12, top: 12, right: 332, bottom: 398 },
+  })[place()]!
+  const gs = { x: 556, y: 246, w: 84, h: 187 } // the speed tape, under the right edge of both right-hand places
+  const alt = { x: 340, y: 269, w: 127, h: 160 } // the altitude tape, just clear of the chased card's place
+  c.update('4691c4', entryState(ENTRY), null, INFO, LIVE, false, null)
+  c.keepClear(100, 700, 48, [])
+  assert.equal(place(), 'own', 'nothing in the way')
+  c.keepClear(100, 700, 48, [gs, alt])
+  assert.equal(place(), 'home')
+  c.keepClear(800, 200, 48, [{ x: 700, y: 300, w: 50, h: 50 }])
+  assert.equal(place(), 'flip', 'a card under its own place only: the other end')
+  c.keepClear(100, 100, 48, [gs, alt])
+  assert.equal(place(), 'flip', "none clears both: the least covering of those clear of the aircraft (in the chased card's place)")
+  c.keepClear(800, 200, 48, [gs, alt, { x: 20, y: 300, w: 50, h: 50 }])
+  assert.equal(place(), 'flip', 'none clears both, the aircraft under its own place: the other end covers less')
+  c.keepClear(800, 200, 48, [{ x: 20, y: 300, w: 50, h: 50 }, { x: 700, y: 500, w: 200, h: 200 }])
+  assert.equal(place(), 'home', 'the chased card\'s place covers less')
+  c.keepClear(800, 200, 48, [{ x: 0, y: 0, w: 1024, h: 768 }])
+  assert.equal(place(), 'flip', 'all covered alike: the first clear of the aircraft')
+  c.destroy()
+}))
+
+test('mountFlightCard: placed while its photo loads, a traffic card is placed again when none comes (shorter)', async () => {
+  const { card, c } = setup(undefined, 200, true)
+  const photo = byClass(card, 'fh-card-photo')
+  const place = (): string => (card.classList.contains('fh-card-flip') ? 'flip' : card.classList.contains('fh-card-home') ? 'home' : 'own')
+  // 1024 × 768: with the photo box it reaches down past the speed tape's top; without, it clears it
+  card.getBoundingClientRect = () => {
+    const h = photo.hidden ? 179 : 386
+    return place() === 'flip' ? { left: 634, top: 756 - h, right: 954, bottom: 756 } : { left: 634, top: 12, right: 954, bottom: 12 + h }
+  }
+  const frame = [{ x: 683, y: 246, w: 84, h: 187 }, { x: 377, y: 647, w: 271, h: 72 }] // speed tape, heading card
+  c.update('abc123', entryState({ ...ENTRY, hex: 'abc123' }), null, INFO, LIVE, false, null) // no photo of it
+  c.keepClear(520, 80, 48, frame)
+  assert.equal(place(), 'flip', 'the photo box would reach the speed tape: the bottom, the least covering')
+  await flush()
+  assert.equal(photo.hidden, true, 'none came')
+  assert.equal(place(), 'own', 'shorter: its own place clears the frame')
+  c.destroy()
+})
+
 test('mountFlightCard: the chased card has no range line and keeps its own labels', () => withClock(() => {
   const { card, c } = setup()
   c.update('4691c4', S, RAW, INFO, LIVE, true)

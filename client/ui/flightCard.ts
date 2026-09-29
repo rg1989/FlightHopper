@@ -162,10 +162,13 @@ export interface FlightCardHandle {
     range?: CardRange | null,
   ): void
   /**
-   * Keeps the shown card clear of (x, y) (viewport CSS px, padded by padPx; a clicked aircraft): where it covers it, it
-   * moves to the other end of its column (flightCard.css .fh-card-flip), if that clears it, until the next call.
+   * Places the shown card clear of (x, y) (viewport CSS px, padded by padPx: a clicked aircraft) and of avoid (the
+   * flight-data frame's cards and aircraft, which stay put): the first of its places (flightCard.css) that clears both,
+   * in order its own, the other end of its column (.fh-card-flip), the chased card's (.fh-card-home: that card waits
+   * hidden). None does: of those clear of the point, the one covering the least of avoid; else its own. Until the next
+   * call.
    */
-  keepClear(x: number, y: number, padPx: number): void
+  keepClear(x: number, y: number, padPx: number, avoid?: readonly { x: number; y: number; w: number; h: number }[]): void
   destroy(): void
 }
 
@@ -184,6 +187,12 @@ function iconButton(name: Parameters<typeof icon>[0], label: string): HTMLButton
   b.append(icon(name, 16))
   return b
 }
+
+// A traffic card's places (flightCard.css), in order of preference: its own, the other end of its column, the chased
+// card's. How far it keeps from the flight-data frame's cards: under the frame's own 8 px from the chased card, whose
+// place it may take.
+const PLACES = ['', 'fh-card-flip', 'fh-card-home'] as const
+const AVOID_PX = 4
 
 /**
  * Mounts the (hidden) card. update() may be called every frame: texts are rewritten at most every UPDATE_MS, with a
@@ -331,13 +340,39 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const syncSub = (): void => {
     sub.hidden = subText.textContent === '' && noPhoto.hidden
   }
-  /** The photo box goes; the struck-through camera says why on hover. */
+  /** The photo box goes; the struck-through camera says why on hover. Shorter, the card may fit a place it did not. */
   function noPhotoFor(why: string): void {
     figure.hidden = true
     noPhoto.hidden = false
     noPhoto.title = why
     noPhoto.setAttribute('aria-label', why)
     syncSub()
+    place()
+  }
+
+  // keepClear's last arguments: placed again when the photo box goes.
+  let clearOf: { x: number; y: number; padPx: number; avoid: readonly { x: number; y: number; w: number; h: number }[] } | null = null
+  function place(): void {
+    if (clearOf === null) return
+    const { x, y, padPx, avoid } = clearOf
+    const put = (at: string): void => {
+      for (const p of PLACES) if (p !== '') card.classList.toggle(p, p === at)
+    }
+    put('')
+    if (card.hidden) return
+    let best: { at: string; covered: number } | null = null
+    for (const at of PLACES) {
+      put(at)
+      const r = card.getBoundingClientRect() // a layout read: a few per placing
+      if (x > r.left - padPx && x < r.right + padPx && y > r.top - padPx && y < r.bottom + padPx) continue
+      // How much of avoid it covers, AVOID_PX round it.
+      const covered = avoid.reduce((sum, a) => sum +
+        Math.max(0, Math.min(r.right + AVOID_PX, a.x + a.w) - Math.max(r.left - AVOID_PX, a.x)) *
+        Math.max(0, Math.min(r.bottom + AVOID_PX, a.y + a.h) - Math.max(r.top - AVOID_PX, a.y)), 0)
+      if (covered === 0) return
+      if (best === null || covered < best.covered) best = { at, covered }
+    }
+    put(best?.at ?? '')
   }
 
   function showPhoto(hex: string): void {
@@ -478,15 +513,9 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
     },
-    keepClear(x, y, padPx) {
-      const covers = (): boolean => {
-        const r = card.getBoundingClientRect() // a layout read: a few per click
-        return x > r.left - padPx && x < r.right + padPx && y > r.top - padPx && y < r.bottom + padPx
-      }
-      card.classList.remove('fh-card-flip')
-      if (card.hidden || !covers()) return
-      card.classList.add('fh-card-flip')
-      if (covers()) card.classList.remove('fh-card-flip') // taller than the gap (a phone): no better there
+    keepClear(x, y, padPx, avoid = []) {
+      clearOf = { x, y, padPx, avoid }
+      place()
     },
     destroy() {
       destroyed = true
