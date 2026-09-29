@@ -3,9 +3,10 @@
 // time; all start closed) or runs an action. Panel bodies are mounted once, at start, so their owners can update them
 // while they are closed. The app routes Esc here first (close()), then to leaving chase. On phones (rail.css) the rail
 // is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
-// a panel is a sheet above it that a downward swipe on its header closes. A corner item is not on the rail: it is a
-// button of its own, in a glass square, at the bottom right (on phones the top right). An under item is a panel's button
-// in a glass square of its own just under the rail (on phones at the top right, above the corner buttons).
+// a panel is a sheet above it that a downward swipe on its header closes. An item with a spot is not on the rail: it is
+// a button of its own, in a glass square, at that spot (rail.css): 'under' just under the rail, 'corner' at the bottom
+// right, 'left' at the top left (its panel opens beside it), 'bottom' at the bottom centre. On phones 'under' and
+// 'corner' stack at the top right, 'left' and 'bottom' at the top left.
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -17,8 +18,7 @@ export interface RailItem {
   group?: number // a thin divider goes between groups
   /** Opens a panel titled `title`; mount() fills its body (and may add controls to its header) once, at start. */
   panel?: { title: string; wide?: boolean; mount(body: HTMLElement, head: HTMLElement): void }
-  corner?: boolean // a button of its own in the corner, not on the rail (an action, never a panel)
-  under?: boolean // a panel's button of its own, in a square under the rail, not on it
+  spot?: 'under' | 'corner' | 'left' | 'bottom' // a button of its own there, not on the rail
   action?(): void
 }
 
@@ -63,6 +63,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
 
   const corner = el('div', 'fh-corner')
   const under = el('div', 'fh-under')
+  const spots = { under, corner, left: el('div', 'fh-spot-left'), bottom: el('div', 'fh-spot-bottom') }
   const buttons = new Map<string, HTMLButtonElement>()
   const panes = new Map<string, { body: HTMLElement; extras: HTMLElement; item: RailItem }>()
   const badges = new Map<string, HTMLElement>()
@@ -70,7 +71,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   let lastGroup = items[0]?.group ?? 0
 
   for (const item of items) {
-    const own = item.corner === true || item.under === true // a button of its own, not on the rail
+    const own = item.spot !== undefined // a button of its own, not on the rail
     if (!own && (item.group ?? 0) !== lastGroup) {
       rail.append(el('span', 'fh-rail-sep'))
       lastGroup = item.group ?? 0
@@ -88,7 +89,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       const square = el('div', 'fh-corner-b fh-glass fh-blur')
       square.dataset.id = item.id
       square.append(b)
-      ;(item.under ? under : corner).append(square)
+      spots[item.spot!].append(square)
     } else rail.append(b)
     buttons.set(item.id, b)
     if (item.panel) {
@@ -103,7 +104,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     }
   }
   close.addEventListener('click', () => api.open(null))
-  root.append(rail, panel, under, corner)
+  root.append(rail, panel, ...Object.values(spots))
 
   // The under squares sit 8 px below the rail's foot; on phones (the rail a bottom tab bar) at the top right, with the
   // corner buttons 8 px below them. A sideways phone's full-height rail leaves no room below it: rail.css places them.
@@ -178,6 +179,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
         title.textContent = p.item.panel!.title
         headIcon.replaceChildren(icon(p.item.icon, 16))
         panel.classList.toggle('fh-wide', p.item.panel!.wide === true)
+        panel.classList.toggle('fh-panel-left', p.item.spot === 'left') // beside its button, top left
         panel.dataset.id = id
         panel.hidden = false
       }
@@ -220,8 +222,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       resized.disconnect()
       rail.remove()
       panel.remove()
-      under.remove()
-      corner.remove()
+      for (const e of Object.values(spots)) e.remove()
     },
   }
   return api

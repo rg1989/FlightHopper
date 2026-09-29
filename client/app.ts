@@ -400,8 +400,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   })
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
-  // Every tool sits behind a small icon on the rail (right edge), full screen and the instrument layout on buttons of
-  // their own in the corner; all panels start closed. layout.css places the rest.
+  // Every tool sits behind a small icon on the rail (right edge), or on a button of its own (rail.ts spots): Layers under
+  // the rail, Scenarios at the top left, the instrument layout at the bottom centre, settings and full screen at the
+  // bottom right. All panels start closed. layout.css places the rest.
   let toggles!: SceneTogglesHandle
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
@@ -417,18 +418,18 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       mount: (b, head) => (table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })),
     } },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
-    { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', under: true, panel: {
+    { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
       title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
     } },
     { id: 'legend', icon: 'altitude', label: 'Altitude colours', short: 'Colours', group: 1, panel: { title: 'Altitude colours', mount: (b) => (legend = mountLegend(b)) } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
     // A traffic aircraft's card closes too (it and its brackets would sit over the cards), and none opens while editing.
-    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', corner: true, action: () => {
+    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', spot: 'bottom', action: () => {
       if (!flightFrame.editing) rail.close()
       if (!flightFrame.editing) traffic?.close()
       flightFrame.edit(!flightFrame.editing)
     } },
-    { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', group: 2, panel: {
+    { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', spot: 'left', panel: {
       title: 'Scenarios',
       mount: (b) => (scenarioPanel = mountScenarioPanel(b, {
         list: () => scenariosOpened.then(() => listScenarios(base)),
@@ -436,9 +437,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       })),
     } },
     { id: 'controls', icon: 'keyboard', label: 'Controls', short: 'Controls', group: 2, panel: { title: 'Controls', mount: (b) => mountInfoPanel(b) } },
+    { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', spot: 'corner', action: () => settings.open() },
     // Not where the page cannot go full screen (iPhone Safari).
-    ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', corner: true, action: () => toggleFullscreen() } as const] : []),
-    { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', group: 3, action: () => settings.open() },
+    ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', spot: 'corner', action: () => toggleFullscreen() } as const] : []),
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
     if (id === 'scenarios') openedScenarios()

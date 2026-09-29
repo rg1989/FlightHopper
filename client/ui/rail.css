@@ -59,9 +59,19 @@
   to { --fh-sweep: 360deg; }
 }
 
-/* Buttons of their own (rail.ts: corner items), each in a glass square as wide as the rail, stacked in its column at the
-   bottom right: full screen, and in the chase the instrument layout above it (flightFrame.css hides it elsewhere). The
-   play bar and the captions stop short of this column. */
+/* Buttons of their own (rail.ts spots), each in a glass square as wide as the rail. The corner: a column at the bottom
+   right, settings over full screen; the play bar and the captions stop short of it. --fh-spot is a square and its gap:
+   the flight card starts right of the Scenarios square (flightCard.css). */
+:root {
+  --fh-spot: 58px;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --fh-spot: 66px;
+  }
+}
+
 .fh-corner {
   position: absolute;
   z-index: 20;
@@ -89,9 +99,41 @@
   gap: 8px;
 }
 
-/* Tooltips to the left of the rail and the corner buttons, only while no panel is open (they would cover it). */
+/* Top left: Scenarios; its panel opens beside it (.fh-panel-left). */
+.fh-spot-left {
+  position: absolute;
+  z-index: 20;
+  top: var(--fh-top);
+  left: var(--fh-left);
+}
+
+/* Bottom centre: the instrument layout (the chase only: flightFrame.css). A scenario's play bar and captions take the
+   bottom centre: then it stands over the bar's left end. */
+.fh-spot-bottom {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.fh-ui[data-scenario] .fh-spot-bottom {
+  bottom: calc(var(--fh-playbar-space) + 8px);
+  left: var(--fh-left);
+  transform: none;
+}
+
+.fh-panel.fh-panel-left {
+  right: auto;
+  left: calc(var(--fh-left) + var(--fh-spot));
+}
+
+/* Tooltips to the left of the rail and the corner buttons (right of the left one, above the bottom one), only while no
+   panel is open (they would cover it). */
 .fh-rail .fh-ibtn[data-tip]:hover::after,
 .fh-under .fh-ibtn[data-tip]:hover::after,
+.fh-spot-left .fh-ibtn[data-tip]:hover::after,
+.fh-spot-bottom .fh-ibtn[data-tip]:hover::after,
 .fh-corner .fh-ibtn[data-tip]:hover::after {
   content: attr(data-tip);
   position: absolute;
@@ -111,8 +153,23 @@
 
 .fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-under .fh-ibtn[data-tip]:hover::after,
+.fh-rail.fh-has-open ~ .fh-spot-left .fh-ibtn[data-tip]:hover::after,
+.fh-rail.fh-has-open ~ .fh-spot-bottom .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-corner .fh-ibtn[data-tip]:hover::after {
   display: none;
+}
+
+.fh-spot-left .fh-ibtn[data-tip]:hover::after {
+  right: auto;
+  left: calc(100% + 10px);
+}
+
+.fh-spot-bottom .fh-ibtn[data-tip]:hover::after {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .fh-panel {
@@ -217,6 +274,8 @@
 /* Touch screens (a phone on its side, a tablet): finger-sized rail buttons, the panel beside them. */
 @media (pointer: coarse) {
   .fh-rail .fh-ibtn,
+  .fh-spot-left .fh-ibtn,
+  .fh-spot-bottom .fh-ibtn,
   .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
     width: 44px;
@@ -231,6 +290,8 @@
 /* A phone on its side in a browser (280-340 px left under the toolbars): the 44 px rail would run off the bottom. */
 @media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
   .fh-rail .fh-ibtn,
+  .fh-spot-left .fh-ibtn,
+  .fh-spot-bottom .fh-ibtn,
   .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
     height: 38px;
@@ -388,14 +449,25 @@
     display: none;
   }
 
-  /* The bottom is the tab bar's and the flight card's: the corner buttons go to the top right. */
+  /* The bottom is the tab bar's and the flight card's: the corner buttons go to the top right, the bottom one to the top
+     left under Scenarios. */
   .fh-corner {
     top: var(--fh-top);
     bottom: auto;
   }
 
+  .fh-spot-bottom,
+  .fh-ui[data-scenario] .fh-spot-bottom {
+    top: calc(var(--fh-top) + var(--fh-spot) - 4px);
+    bottom: auto;
+    left: var(--fh-left);
+    transform: none;
+  }
+
   .fh-panel,
-  .fh-panel.fh-wide {
+  .fh-panel.fh-wide,
+  .fh-panel.fh-panel-left {
+    z-index: 21; /* a tall sheet goes over the squares at the top (rail.ts spots) */
     top: auto;
     right: 0;
     bottom: var(--fh-tabbar-h);

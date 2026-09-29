@@ -9,6 +9,11 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Buttons rearranged on local `main` (2026-09-30, not pushed).** rail.ts items take `spot: 'under' | 'corner' |
+  'left' | 'bottom'` (was `corner`/`under` booleans). Scenarios is a square at the top left (its panel opens beside it,
+  `.fh-panel-left`; the flight card moved right by `--fh-spot`), the instrument layout a square at the bottom centre
+  (chase only; over the play bar's left end in a scenario), Settings joined full screen in the bottom-right corner. On
+  phones: Scenarios and layout stack at the top left, Layers, Settings, full screen at the top right; sheets go over them.
 - **Map layers on local `main` (2026-09-30, not pushed).** The Scene panel left the rail: it is "Layers", a panel
   button in a glass square of its own under the rail (rail.ts `under` items; on phones at the top right, the corner
   buttons below it). Map: Map | Satellite for the view on screen (M; `mapTop` default map, `mapChase` default

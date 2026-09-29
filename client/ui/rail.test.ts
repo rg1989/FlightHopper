@@ -73,9 +73,9 @@ test('mountRail: a corner item is a button of its own in the corner, not on the 
   let full = 0
   const rail = mountRail(root as unknown as HTMLElement, [
     { id: 'list', icon: 'list', label: 'Aircraft', short: 'Aircraft', panel: { title: 'Aircraft', mount: () => {} } },
-    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', group: 1, corner: true, action: () => {} },
+    { id: 'layout', icon: 'layout', label: 'Edit instrument layout', short: 'Layout', group: 1, spot: 'corner', action: () => {} },
     { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', group: 1, action: () => {} },
-    { id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', group: 2, corner: true, action: () => full++ },
+    { id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', group: 2, spot: 'corner', action: () => full++ },
   ])
   const [nav] = find(root, (e) => e.classes.has('fh-rail'))
   const [corner] = find(root, (e) => e.classes.has('fh-corner'))
@@ -95,7 +95,7 @@ test('mountRail: an under item is a panel button in a square of its own under th
   const root = new El('div')
   const rail = mountRail(root as unknown as HTMLElement, [
     { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
-    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', under: true, panel: { title: 'Layers', mount: () => {} } },
+    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', spot: 'under', panel: { title: 'Layers', mount: () => {} } },
   ])
   const [nav] = find(root, (e) => e.tagName === 'nav')
   const [under] = find(root, (e) => e.classes.has('fh-under'))
@@ -105,6 +105,24 @@ test('mountRail: an under item is a panel button in a square of its own under th
   ;(rail.button('scene') as unknown as El).click()
   assert.equal(rail.openId, 'scene')
   assert.equal((rail.button('scene') as unknown as El).attrs['aria-expanded'], 'true')
+  rail.destroy()
+  assert.equal(root.children.length, 0)
+})
+
+test('mountRail: left and bottom spots; a left item panel opens beside it (fh-panel-left), others at the rail', () => {
+  const root = new El('div')
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'scenarios', icon: 'film', label: 'Scenarios', short: 'Scenes', spot: 'left', panel: { title: 'Scenarios', mount: () => {} } },
+    { id: 'layout', icon: 'layout', label: 'Layout', short: 'Layout', spot: 'bottom', action: () => {} },
+  ])
+  const at = (cls: string): (string | undefined)[] => ids(find(root, (e) => e.classes.has(cls))[0])
+  assert.deepEqual([at('fh-rail'), at('fh-spot-left'), at('fh-spot-bottom')], [['status'], ['scenarios'], ['layout']])
+  const [panel] = find(root, (e) => e.classes.has('fh-panel'))
+  rail.open('scenarios')
+  assert.ok(panel.classes.has('fh-panel-left'))
+  rail.open('status')
+  assert.ok(!panel.classes.has('fh-panel-left'))
   rail.destroy()
   assert.equal(root.children.length, 0)
 })
