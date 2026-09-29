@@ -226,7 +226,8 @@ export function frameLayout(
  * going to other sides, sliding past each other or hiding; the aircraft's own in between. So zooming moves the blocks
  * continuously and never to another side. Where round `least` a tape would leave its side of the aircraft (a phone held
  * upright) or a block have no place, less: the largest side at which they do not. Beyond the aircraft's own, whole px,
- * so each frame finds the same side.
+ * so each frame finds the same side. The automatic arrangement only: the cards the viewer moved (edit mode) are placed at
+ * offsets from this side, so they must not change it (a drop would land elsewhere, and move every other moved card).
  */
 export function layoutSide(
   sq: Square,
@@ -235,10 +236,8 @@ export function layoutSide(
   safe: Rect,
   gap = 10,
   prev?: Partial<Record<BlockId, Placed | null>>,
-  moved?: Partial<Record<BlockId, Offset>>,
 ): number {
-  const at = (side: number): Record<BlockId, Placed | null> =>
-    frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, safe, gap, prev, moved)
+  const at = (side: number): Record<BlockId, Placed | null> => frameLayout({ x: sq.x, y: sq.y, side, head: sq.head }, sizes, safe, gap, prev)
   // Every block has a place and, with flank, the tapes are beside the aircraft (their readouts level with it).
   const fits = (side: number, flank: boolean): boolean => {
     const p = at(side)
@@ -269,7 +268,7 @@ export function layoutSide(
   if (!(sq.side > lo)) return lo
   const p0 = at(lo)
   // Each block as round `lo`: on the same side in the same variant, moved straight out with the square's edge (none
-  // slides along its side, or stacks otherwise); a moved one by its offset × the growth, not pushed back by the safe area.
+  // slides along its side, or stacks otherwise).
   const same = (side: number): boolean => {
     const p = at(side)
     const d = (side - lo) / 2
@@ -277,9 +276,8 @@ export function layoutSide(
       const a = p0[id]
       const b = p[id]
       if (a === null || b === null) return a === b
-      const o = moved?.[id]
-      const dx = o !== undefined ? o.x * (side - lo) : a.side === 'left' ? -d : a.side === 'right' ? d : 0
-      const dy = o !== undefined ? o.y * (side - lo) : a.side === 'top' ? -d : a.side === 'bottom' ? d : 0
+      const dx = a.side === 'left' ? -d : a.side === 'right' ? d : 0
+      const dy = a.side === 'top' ? -d : a.side === 'bottom' ? d : 0
       return b.side === a.side && b.v === a.v && Math.abs(b.x - a.x - dx) < 0.5 && Math.abs(b.y - a.y - dy) < 0.5
     })
   }
@@ -588,6 +586,7 @@ export class FlightFrame {
   readonly #keys: Record<BlockId, string> = { left: '', right: '', top: '', bottom: '' }
   #has: Record<BlockId, boolean> = { left: false, right: false, top: false, bottom: false }
   #placed: Partial<Record<BlockId, Placed | null>> = {}
+  #auto: Partial<Record<BlockId, Placed | null>> = {} // the automatic arrangement last frame (layoutSide's hysteresis)
   readonly #sq: Square = { x: 0, y: 0, side: 0 }
   readonly #resize: ResizeObserver
   #view = 0 // the layer's smaller side (the view's), px
@@ -760,16 +759,16 @@ export class FlightFrame {
     }
     // Over the square the cards go round, room for the flight ID: no card covers it.
     const head = flightId === '' ? 0 : ID_GAP + ID_H + 1
-    // A drag keeps the square's side (the card stays under the pointer) and moves the card where the pointer holds it.
+    // The side from the automatic arrangement alone; a dragged card goes where the pointer holds it, at an offset from it.
     const sizes = this.#sizes
-    const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
-    const ls = d !== null
-      ? this.#lsq.side
-      : layoutSide({ ...sq, head }, LEAST_SIDE * this.#view, sizes, safe, GAP, this.#placed, this.#prefs.moved)
+    const ls = layoutSide({ ...sq, head }, LEAST_SIDE * this.#view, sizes, safe, GAP, this.#auto)
     this.#lsq = { x: sq.x, y: sq.y, side: ls, head }
     this.#safe = safe
+    const d = this.#drag?.on === true && sizes[this.#drag.id].length > 0 ? this.#drag : null
     if (d !== null) this.#prefs.moved[d.id] = offsetAt(d.x - d.ox - d.gx, d.y - d.oy - d.gy, sizes[d.id], this.#lsq, safe)
-    const at = frameLayout(this.#lsq, sizes, safe, GAP, this.#placed, this.#prefs.moved)
+    const moved = this.#prefs.moved
+    const at = frameLayout(this.#lsq, sizes, safe, GAP, this.#placed, moved)
+    this.#auto = Object.keys(moved).length === 0 ? at : frameLayout(this.#lsq, sizes, safe, GAP, this.#auto)
     for (const id of IDS) {
       const b = this.#blocks[id]
       const p = at[id]
@@ -852,6 +851,7 @@ export class FlightFrame {
   #resetPrefs(): void {
     this.#prefs = { moved: {}, hidden: [] }
     this.#placed = {} // laid out afresh: no hysteresis from where the viewer had them
+    this.#auto = {}
     for (const id of IDS) this.#paint(id)
     this.#changed()
   }
@@ -891,6 +891,7 @@ export class FlightFrame {
     this.#dataT = null
     this.#spdSrc = null
     this.#placed = {}
+    this.#auto = {}
     this.#shown = false
   }
 

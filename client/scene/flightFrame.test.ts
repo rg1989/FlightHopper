@@ -5,6 +5,7 @@ import { registerHooks } from 'node:module'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FlightData, RenderState } from '../types.ts'
 import type { BlockId, BlockSize, Placed, Rect, Square } from './flightFrame.ts'
+import type { Offset } from '../ui/framePrefs.ts'
 import { Cartesian3, Matrix4 } from 'cesium'
 import type { ModelManifestEntry } from '../types.ts'
 import { BOX_CENTRE, MIN_PX } from './traffic.ts'
@@ -326,15 +327,21 @@ test('layoutSide: a block that would slide along its side, not straight out, has
   assert.ok(s > LEAST + 100, String(s))
 })
 
-test('layoutSide: a moved card keeps its offset in sides, so it spreads with the square; the side stops before it leaves the safe area', () => {
-  const moved = { top: { x: -1.2, y: -0.5 } } // the heading up and left of the aircraft
-  const sq: Square = { x: 720, y: 421, side: 2400 }
-  assert.equal(layoutSide({ ...sq, side: 60 }, LEAST, DESK_SIZES, DESK, 10, undefined, moved), LEAST, 'zoomed out: where it was put')
-  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK, 10, undefined, moved)
-  assert.equal(s, Math.floor((421 - 36 - 178) / 0.5), 'its top edge at the safe area\'s')
-  const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK, 10, undefined, moved)
-  assert.ok(Math.abs(p.top!.y + 36 - (421 - 0.5 * s)) < 1e-9, 'not pushed back: in proportion')
-  assert.ok(Math.abs(p.top!.x + 135.5 - (720 - 1.2 * s)) < 1e-9)
+test('layoutSide: moved cards never change the side: a stored offset puts a dropped card back where it was dropped, and a second drop moves no other', () => {
+  // Zoomed in on a desktop view: the side is the largest the automatic arrangement allows.
+  const sq: Square = { x: 720, y: 421, side: 1400 }
+  const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const at0 = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)
+  const drop = (id: BlockId, dx: number, dy: number, moved: Partial<Record<BlockId, Offset>>): Partial<Record<BlockId, Offset>> => {
+    const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK, 10, undefined, moved)[id]!
+    return { ...moved, [id]: offsetAt(p.x + dx, p.y + dy, DESK_SIZES[id], { ...sq, side: s }, DESK) }
+  }
+  const one = drop('right', 80, 40, {})
+  const two = drop('bottom', -60, 30, one)
+  const after = frameLayout({ ...sq, side: layoutSide(sq, LEAST, DESK_SIZES, DESK) }, DESK_SIZES, DESK, 10, undefined, two)
+  assert.deepEqual(at(after, 'right'), { x: at0.right!.x + 80, y: at0.right!.y + 40 }, 'the first drop where it was dropped')
+  assert.deepEqual(at(after, 'bottom'), { x: at0.bottom!.x - 60, y: at0.bottom!.y + 30 }, 'the second drop where it was dropped')
+  apart(after, DESK_SIZES, { ...sq, side: 0 }, 10)
 })
 
 test('layoutSide: from far out to close in, no block ever changes side or variant, and none jumps', () => {
