@@ -1085,18 +1085,18 @@
   color: var(--fh-muted);
 }
 
-/* The toolbar, top centre: what the mode does, a reset, Done. Over the cards, under every panel. */
+/* The toolbar: what the mode does, a reset, Done. At the top, centred, or where FlightFrame finds room (left and top
+   set there); over the cards, under every panel. */
 .fh-fbar {
   position: absolute;
   z-index: 3;
   top: var(--fh-top);
-  left: 50%;
+  left: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: calc(100% - 16px);
   padding: 5px 5px 5px 12px;
-  transform: translateX(-50%);
   border: 1px solid var(--fh-hairline);
   border-radius: var(--fh-radius);
   background: var(--fh-glass-strong);
@@ -1110,7 +1110,7 @@
 }
 
 @keyframes fh-fbar-in {
-  from { opacity: 0; transform: translate(-50%, -6px); }
+  from { opacity: 0; transform: translateY(-6px); }
 }
 
 .fh-fbar-t {

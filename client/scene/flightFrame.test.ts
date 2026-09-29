@@ -16,8 +16,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 const {
-  HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, gText, layoutSide, liveFlightData,
-  offsetAt, pitchText, speedText, vsText, windText,
+  HYST_PX, altText, bankText, blocksShown, boxCentre, deg3, eprText, frameLayout, frameView, freeSpot, gText, layoutSide,
+  liveFlightData, movedTo, offsetAt, pitchText, speedText, vsText, windText,
 } = await import('./flightFrame.ts')
 
 type Sizes = Record<BlockId, BlockSize>
@@ -57,6 +57,9 @@ const apart = (p: Layout, sizes: Record<BlockId, BlockSize | readonly BlockSize[
   }
 }
 const at = (p: Layout, id: BlockId): { x: number; y: number } => ({ x: p[id]!.x, y: p[id]!.y })
+/** The moved blocks' places (movedTo) for their offsets round sq, in view with no covers. */
+const fixedAt = (moved: Partial<Record<BlockId, Offset>>, sq: Square, sizes: Record<BlockId, BlockSize | readonly BlockSize[]>, view: Rect) =>
+  Object.fromEntries(IDS.filter((id) => moved[id]).map((id) => [id, movedTo(moved[id]!, sizes[id], sq, view, [])!]))
 
 // ---- frameLayout ----------------------------------------------------------------------------------------------------
 
@@ -240,11 +243,11 @@ test('frameLayout: room kept over the square (the flight ID over the brackets): 
 
 test('frameLayout: a moved card goes where the viewer put it, its anchor its offset × the side from the centre; the rest avoid it', () => {
   const sq: Square = { x: 640, y: 400, side: 120 }
-  const far = frameLayout(sq, SIZES, SAFE, 10, undefined, { left: { x: -3, y: -2 } })
+  const far = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ left: { x: -3, y: -2 } }, sq, SIZES, SAFE))
   assert.deepEqual(at(far, 'left'), { x: 640 - 360 - 48, y: 400 - 240 - 29 })
   assert.deepEqual([far.left!.side, far.left!.v], ['left', 0])
   for (const id of ['right', 'top', 'bottom'] as const) assert.deepEqual(at(far, id), at(frameLayout(sq, SIZES, SAFE), id), `${id} where it was`)
-  const there = frameLayout(sq, SIZES, SAFE, 10, undefined, { left: { x: 1.5, y: 0 } }) // on the speed's place
+  const there = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ left: { x: 1.5, y: 0 } }, sq, SIZES, SAFE)) // on the speed's place
   assert.deepEqual(at(there, 'left'), { x: 640 + 180 - 48, y: 400 - 29 })
   apart(there, SIZES, sq, 10)
 })
@@ -253,31 +256,63 @@ test('frameLayout: a tape moved away frees its side, but the heading stays under
   const sq: Square = { x: 720, y: 421, side: 378 }
   const before = frameLayout(sq, DESK_SIZES, DESK)
   assert.equal(before.top!.side, 'bottom')
-  const after = frameLayout(sq, DESK_SIZES, DESK, 10, undefined, { right: { x: 0.9, y: -0.55 } })
+  const after = frameLayout(sq, DESK_SIZES, DESK, 10, undefined, fixedAt({ right: { x: 0.9, y: -0.55 } }, sq, DESK_SIZES, DESK))
   assert.deepEqual(at(after, 'top'), at(before, 'top'))
   const noTapes = frameLayout(sq, { ...DESK_SIZES, left: [], right: [] }, DESK)
   assert.deepEqual(at(noTapes, 'top'), at(before, 'top'), 'nor with no tapes at all')
 })
 
-test('frameLayout: a moved card may cover the aircraft, stays inside the safe area, and takes the largest variant that fits there', () => {
+test('frameLayout: a moved card may cover the aircraft, stays inside the view, and takes the largest variant that fits there', () => {
   const sq: Square = { x: 640, y: 400, side: 120 }
-  const over = frameLayout(sq, SIZES, SAFE, 10, undefined, { bottom: { x: 0, y: 0 } })
+  const over = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ bottom: { x: 0, y: 0 } }, sq, SIZES, SAFE))
   assert.deepEqual(at(over, 'bottom'), { x: 640 - 98, y: 400 - 22 }, 'on the aircraft: the viewer put it there')
-  const edge = frameLayout(sq, SIZES, SAFE, 10, undefined, { right: { x: 9, y: -9 } })
+  const edge = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ right: { x: 9, y: -9 } }, sq, SIZES, SAFE))
   assert.deepEqual(at(edge, 'right'), { x: 1280 - 88, y: 0 }, 'pushed back inside')
   const small: Rect = { x: 0, y: 0, w: 150, h: 800 }
   const sizes = { ...SIZES, bottom: [{ w: 196, h: 44 }, { w: 140, h: 40 }] }
-  assert.equal(frameLayout({ x: 75, y: 400, side: 40 }, sizes, small, 10, undefined, { bottom: { x: 0, y: 2 } }).bottom!.v, 1)
+  const sqs: Square = { x: 75, y: 400, side: 40 }
+  assert.equal(frameLayout(sqs, sizes, small, 10, undefined, fixedAt({ bottom: { x: 0, y: 2 } }, sqs, sizes, small)).bottom!.v, 1)
 })
 
-test('offsetAt: the offset that puts a dragged card\'s top-left where the pointer holds it, or as near as the safe area allows', () => {
+test('offsetAt: the offset that puts a dragged card\'s top-left where the pointer holds it, or as near as the view allows', () => {
   const sq: Square = { x: 640, y: 400, side: 150 }
   for (const [x, y] of [[100, 120], [700, 380], [1250, 790], [-40, -30]]) {
-    const p = frameLayout(sq, SIZES, SAFE, 10, undefined, { right: offsetAt(x, y, SIZES.right, sq, SAFE) })
+    const p = frameLayout(sq, SIZES, SAFE, 10, undefined, fixedAt({ right: offsetAt(x, y, SIZES.right, sq, SAFE, []) }, sq, SIZES, SAFE))
     assert.deepEqual(at(p, 'right'), { x: Math.min(Math.max(x, 0), 1280 - 88), y: Math.min(Math.max(y, 0), 800 - 64) }, `${x},${y}`)
   }
-  const o = offsetAt(640 - 44, 400 - 32, SIZES.right, sq, SAFE)
+  const o = offsetAt(640 - 44, 400 - 32, SIZES.right, sq, SAFE, [])
   assert.deepEqual(o, { x: 0, y: 0 }, 'centred on the aircraft: no offset')
+})
+
+test('freeSpot: the nearest place inside the view and clear of what covers it, not only below a band as wide as the view', () => {
+  const view: Rect = { x: 8, y: 8, w: 1424, h: 884 }
+  const card: Rect = { x: 12, y: 12, w: 320, h: 158 } // the flight card, top-left
+  const rail: Rect = { x: 1382, y: 12, w: 46, h: 334 }
+  // The top right, beside neither: where it was put.
+  assert.deepEqual(freeSpot(1100, 20, 84, 187, view, [card, rail], 8), { x: 1100, y: 20 })
+  // Onto the flight card: out by its nearest edge (its right), not below the band the card's height makes.
+  assert.deepEqual(freeSpot(280, 40, 84, 60, view, [card, rail], 8), { x: 340, y: 40 })
+  // Into the corner between the rail and the view's edge: out of both.
+  const p = freeSpot(1400, 100, 84, 187, view, [card, rail], 8)
+  assert.ok(p.x + 84 + 8 <= rail.x || p.y >= rail.y + rail.h + 8, JSON.stringify(p))
+  assert.ok(p.x >= 8 && p.x + 84 <= 1432 && p.y >= 8 && p.y + 187 <= 892, JSON.stringify(p))
+  assert.deepEqual(freeSpot(-50, 2000, 84, 187, view, [], 8), { x: 8, y: 892 - 187 }, 'no covers: kept inside the view')
+  assert.deepEqual(freeSpot(100, 100, 50, 50, view, [{ x: 0, y: 0, w: 0, h: 0 }], 8), { x: 100, y: 100 }, 'a hidden cover (0 × 0) covers nothing')
+})
+
+test('movedTo, offsetAt: a moved card where its offset puts it, kept in the view clear of the covers; the offset of a drop gives the drop back', () => {
+  const view: Rect = { x: 8, y: 8, w: 1424, h: 884 }
+  const card: Rect = { x: 12, y: 12, w: 320, h: 158 }
+  const sq: Square = { x: 720, y: 421, side: 378 }
+  for (const [x, y] of [[1100, 20], [500, 300], [20, 700]]) {
+    const o = offsetAt(x, y, DESK_SIZES.right, sq, view, [card])
+    assert.deepEqual(movedTo(o, DESK_SIZES.right, sq, view, [card]), { x, y, v: 0 }, `${x},${y}`)
+  }
+  const nearRight = offsetAt(300, 50, DESK_SIZES.right, sq, view, [card])
+  assert.deepEqual(movedTo(nearRight, DESK_SIZES.right, sq, view, [card]), { x: 342, y: 50, v: 0 }, 'dropped on the flight card\'s right: beside it')
+  const nearBottom = offsetAt(100, 50, DESK_SIZES.right, sq, view, [card])
+  assert.deepEqual(movedTo(nearBottom, DESK_SIZES.right, sq, view, [card]), { x: 100, y: 180, v: 0 }, 'further in: below it, the nearer way out')
+  assert.equal(movedTo({ x: 0, y: 0 }, [], sq, view, []), null, 'a card with nothing to show has no place')
 })
 
 // ---- layoutSide -----------------------------------------------------------------------------------------------------
@@ -332,13 +367,15 @@ test('layoutSide: moved cards never change the side: a stored offset puts a drop
   const sq: Square = { x: 720, y: 421, side: 1400 }
   const s = layoutSide(sq, LEAST, DESK_SIZES, DESK)
   const at0 = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK)
+  const lsq: Square = { ...sq, side: s }
   const drop = (id: BlockId, dx: number, dy: number, moved: Partial<Record<BlockId, Offset>>): Partial<Record<BlockId, Offset>> => {
-    const p = frameLayout({ ...sq, side: s }, DESK_SIZES, DESK, 10, undefined, moved)[id]!
-    return { ...moved, [id]: offsetAt(p.x + dx, p.y + dy, DESK_SIZES[id], { ...sq, side: s }, DESK) }
+    const p = frameLayout(lsq, DESK_SIZES, DESK, 10, undefined, fixedAt(moved, lsq, DESK_SIZES, DESK))[id]!
+    return { ...moved, [id]: offsetAt(p.x + dx, p.y + dy, DESK_SIZES[id], lsq, DESK, []) }
   }
   const one = drop('right', 80, 40, {})
   const two = drop('bottom', -60, 30, one)
-  const after = frameLayout({ ...sq, side: layoutSide(sq, LEAST, DESK_SIZES, DESK) }, DESK_SIZES, DESK, 10, undefined, two)
+  const side = layoutSide(sq, LEAST, DESK_SIZES, DESK)
+  const after = frameLayout({ ...sq, side }, DESK_SIZES, DESK, 10, undefined, fixedAt(two, { ...sq, side }, DESK_SIZES, DESK))
   assert.deepEqual(at(after, 'right'), { x: at0.right!.x + 80, y: at0.right!.y + 40 }, 'the first drop where it was dropped')
   assert.deepEqual(at(after, 'bottom'), { x: at0.bottom!.x - 60, y: at0.bottom!.y + 30 }, 'the second drop where it was dropped')
   apart(after, DESK_SIZES, { ...sq, side: 0 }, 10)

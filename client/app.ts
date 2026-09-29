@@ -30,7 +30,7 @@ import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, heightToFit, isB
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
-import { FlightFrame, boxCentre, liveFlightData, type Rect } from './scene/flightFrame.ts'
+import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './scene/flightFrame.ts'
 import { makeMapLayer } from './scene/mapLayer.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { liveryCode, liveryFromSpec } from './scene/livery.ts'
@@ -105,7 +105,7 @@ const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 const FRAME_COVERS = '.fh-rail, .fh-panel, .fh-card, .fh-toast, .fh-playbar, .fh-captions'
 const SAFE_EVERY_MS = 100
-const NO_RECT: Rect = { x: 0, y: 0, w: 0, h: 0 }
+const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
 
 /** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–5,400 nm. */
 function viewNm(nm: number): number {
@@ -397,7 +397,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let run: ScenarioRun | null = null
   let dress: Dresser | null = null // the scenario's aircraft on the chase model
   let loadingScenario: string | null = urlScenario?.id ?? null // set before the poll loop's first turn
-  let safe = NO_RECT // the flight-data frame's safe area, as last measured
+  let room = NO_ROOM // the flight-data frame's safe area and what covers the canvas, as last measured
   let safeAtMs = -Infinity
 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
@@ -831,12 +831,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up')
         // Its flight ID over its brackets, as over the traffic's: the callsign, else the hex (a scenario has its own).
         const id = placed.callsign ?? (sf === null ? placed.hex.toUpperCase() : '')
-        flightFrame.update(viewer, model.model, model.entry, data, frameSafe(now), sf?.t, id)
+        flightFrame.update(viewer, model.model, model.entry, data, frameRoom(now), sf?.t, id)
         framed = true
       }
       chased = placed
     }
-    if (!framed) flightFrame.draw(null, null, NO_RECT) // hidden: no chased state (or no model)
+    if (!framed) flightFrame.draw(null, null, NO_ROOM) // hidden: no chased state (or no model)
     // Every frame, in both modes (off, it keeps the fixed light above the camera). Replays are lit at their recording
     // time (D12): the server reports how far its clock is ahead of the upstream's. A scenario, at its own instant.
     const st = sun.update(sf !== null ? sf.tUtcMs : sunTimeMs(tSunMs, sunParam, status.upstreamOffsetMs ?? 0), sunWC)
@@ -869,16 +869,16 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   const removeFrame = viewer.scene.preUpdate.addEventListener(frame)
 
-  /** The flight-data frame's safe area (safeArea): re-measured at most every SAFE_EVERY_MS, as it reads the layout. */
-  function frameSafe(now: number): Rect {
-    if (now - safeAtMs < SAFE_EVERY_MS) return safe
+  /** The flight-data frame's safe area (safeArea) and its covers: re-measured at most every SAFE_EVERY_MS, as it reads the layout. */
+  function frameRoom(now: number): Room {
+    if (now - safeAtMs < SAFE_EVERY_MS) return room
     safeAtMs = now
     const c = viewer.canvas.getBoundingClientRect()
     const covers = [...ui.querySelectorAll(FRAME_COVERS)].map((el) => {
       const r = el.getBoundingClientRect()
       return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height }
     })
-    return (safe = safeArea(c.width, c.height, covers))
+    return (room = { safe: safeArea(c.width, c.height, covers), covers })
   }
 
   /** Centre and radius of the view poll: browse, around the visible map; else the chased aircraft, else the globe point at the canvas centre, else below the camera. */
