@@ -340,9 +340,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const urlScenario = readScenario(location.search) // ?scenario=<id>&t=<s>: that scenario, paused at t, once loaded
   // Topography takes the scene in the task that builds the viewer, before its first frame: moving the factor off 1
   // with tiles loaded rebuilds every tile (PoC: up to 2 s).
-  let ionFailed = null as string | null // Cesium ion failed at start (the keyless terrain or imagery in its place): why
+  // Cesium ion failing at start (its token refused, or ion down): the keyless terrain or imagery took its place.
+  const ionFell: { what: 'terrain' | 'imagery'; why: string }[] = []
   const viewerWithTopography = async (): Promise<[Viewer, Topography]> => {
-    const v = await createViewer(root, cfg, { onIonFallback: (_what, why) => (ionFailed = why) })
+    const v = await createViewer(root, cfg, { onIonFallback: (what, why) => ionFell.push({ what, why }) })
     return [v, new Topography(v.scene, prefs.topo)]
   }
   const [[viewer, topo], airports, manifest] = await Promise.all([
@@ -401,8 +402,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
-  // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays.
-  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root)) : null
+  // Chase traffic: 3-D models around the chased aircraft, their brackets in a layer under the overlays; the open one's
+  // (its card showing) in one over the flight-data frame's cards.
+  const traffic = pick ? new Traffic(viewer, pick, div('fh-traffic', root), { openLayer: div('fh-traffic fh-traffic-open', root) }) : null
   const lights = new AircraftLights(viewer) // nav, beacon, strobe and landing lights on the chased model and the traffic
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
   const frameLayer = div('fh-frame', root)
@@ -444,12 +446,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
     if (id === 'scenarios') openedScenarios()
   })
-  const imagery0 = badgeView(imageryStatus(cfg))
+  const ionImagery = ionFell.find((f) => f.what === 'imagery') // EOX in place of ion's Bing
+  const imagery0 = badgeView(ionImagery ? { source: 'eox', fallback: ionImagery.why } : imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
   // The API keys (the rail's gear): saved in this browser, they win over .env.local at the next load.
   const settings = mountSettings(ui, { env: import.meta.env, store })
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
-  if (ionFailed !== null) settings.setFallback('ion', ionFailed)
+  for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
   const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor })
   // A click in a traffic aircraft's brackets opens its card: live from the fleet, its full object asked for as a focused
@@ -501,7 +504,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       sun.setDay(eox)
       const v = badgeView({ source: 'eox', fallback: why })
       statusPanel.setImagery(v.text, v.state)
-      settings.setFallback('arcgis', why)
+      settings.setFallback('arcgis', 'imagery', why)
     })
   }
   sun.attachModel(model?.model ?? null)
@@ -968,7 +971,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (trafficChase.status === 'fulfilled' && trafficChase.value !== null) {
       const r = trafficChase.value
       fleet.ingest(r.samples, r.info ? [r.info] : undefined)
-      trafficRaw = r.raw ?? null // detailRows ignores one of another aircraft (the card moved on)
+      if (th === (traffic?.openHex ?? null)) trafficRaw = r.raw ?? null // a reply for the card's last aircraft only feeds the fleet
     }
     if (chased0) {
       // The first chase reply carries the stored history (since=0). A track takes samples in time order only, so the
@@ -1020,6 +1023,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (traffic !== null) {
       const hit = traffic.hitAt(e.position.x, e.position.y)
       if (hit !== null) {
+        if (hit !== traffic.openHex) trafficRaw = null // the last aircraft's object, until this one's arrives
         traffic.open(hit)
         rail.close()
         trafficClick = Cartesian2.clone(e.position)

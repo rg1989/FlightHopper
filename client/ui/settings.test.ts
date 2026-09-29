@@ -60,8 +60,12 @@ test('keyStatus: where the key comes from, a reload still to come, a failure whi
   assert.deepEqual(keyStatus('ion', 'none', false, null), { text: 'Not set — using keyless Re:Earth terrain', tone: 'off' })
   assert.deepEqual(keyStatus('arcgis', 'saved', true, null), { text: 'Saved in this browser · reload to apply', tone: 'ok' })
   assert.deepEqual(keyStatus('ion', 'none', true, null), { text: 'Not set — using keyless Re:Earth terrain · reload to apply', tone: 'off' })
-  assert.deepEqual(keyStatus('ion', 'saved', false, 'ion HTTP 401'), {
-    text: 'Saved in this browser, but it failed (ion HTTP 401): Re:Earth terrain instead', tone: 'warn',
+  const failed = (what: ('terrain' | 'imagery')[]): string => keyStatus('ion', 'saved', false, { why: 'ion HTTP 401', what }).text
+  assert.equal(failed(['terrain']), 'Saved in this browser, but it failed (ion HTTP 401): Re:Earth terrain instead')
+  assert.equal(failed(['imagery']), 'Saved in this browser, but it failed (ion HTTP 401): EOX imagery instead')
+  assert.equal(failed(['imagery', 'terrain']), 'Saved in this browser, but it failed (ion HTTP 401): Re:Earth terrain and EOX imagery instead')
+  assert.deepEqual(keyStatus('arcgis', 'env', false, { why: 'Esri HTTP 498', what: ['imagery'] }), {
+    text: 'Using the key from .env.local, but it failed (Esri HTTP 498): EOX imagery instead', tone: 'warn',
   })
-  assert.equal(keyStatus('ion', 'saved', true, 'ion HTTP 401').tone, 'ok', 'a new key since: its reload is what counts')
+  assert.equal(keyStatus('ion', 'saved', true, { why: 'ion HTTP 401', what: ['terrain'] }).tone, 'ok', 'a new key since: its reload is what counts')
 })

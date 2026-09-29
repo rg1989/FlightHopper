@@ -2,14 +2,26 @@
 // The Settings dialog, opened by the rail's gear: the API keys FlightHopper can use. Each is optional: without them it
 // runs on keyless Re:Earth terrain and EOX imagery. A key is checked with a cheap request to its own provider, then
 // saved in this browser (config.ts KEYS_KEY), where it wins over the build's .env.local from the next load: terrain and
-// imagery are built with the viewer, so a reload applies it. A key goes nowhere else: it rides in its provider's
-// Authorization header, never in a URL, a log or the page (an .env.local key is never shown). A native modal <dialog>:
-// the page behind is inert, so the focus stays in it; Esc, the X and a click on the backdrop close it.
+// imagery are built with the viewer, so a reload applies it. A key goes to its own provider only: the check sends it in
+// the Authorization header; in use, it travels in the URLs those services ask for (Esri's tiles take ?token=, Cesium
+// asks ion's asset endpoint with ?access_token=). It never goes into the app's own URL, a log or the page (an
+// .env.local key is never shown). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
+// X and a click on the backdrop close it.
 import { KEYS_KEY, keySources, readSavedKeys, writeSavedKeys, type KeySource, type SavedKeys } from '../config.ts'
-import { icon, type IconName } from './icons.ts'
+import { icon } from './icons.ts'
 import './settings.css'
 
 export type KeyId = 'arcgis' | 'ion'
+
+/** What a key feeds, and so what can fall back to its keyless source: Re:Earth terrain, EOX imagery. */
+export type KeyUse = 'terrain' | 'imagery'
+const KEYLESS: Readonly<Record<KeyUse, string>> = { terrain: 'Re:Earth terrain', imagery: 'EOX imagery' }
+
+/** A key that failed while the app used it: why, and what fell back (ion: its terrain, its imagery, or both). */
+export interface KeyFailure {
+  why: string
+  what: readonly KeyUse[]
+}
 
 interface KeySpec {
   id: KeyId
@@ -78,15 +90,18 @@ export async function checkKey(id: KeyId, key: string, fetchFn: typeof fetch = (
 
 /**
  * A key's status line: where the app takes it from (source, now), a reload still to come when that changed since the
- * page loaded, and a failure while it was in use (the keyless source took its place).
+ * page loaded, and a failure while it was in use (what fell back to its keyless source, and why).
  */
-export function keyStatus(id: KeyId, source: KeySource, changed: boolean, failure: string | null): { text: string; tone: 'ok' | 'off' | 'warn' } {
+export function keyStatus(id: KeyId, source: KeySource, changed: boolean, failure: KeyFailure | null): { text: string; tone: 'ok' | 'off' | 'warn' } {
   const spec = SPECS.find((s) => s.id === id)!
   const base = source === 'saved' ? 'Saved in this browser'
     : source === 'env' ? `Using the ${spec.noun} from .env.local`
       : `Not set — using keyless ${spec.keyless}`
   if (changed) return { text: `${base} · reload to apply`, tone: source === 'none' ? 'off' : 'ok' }
-  if (failure !== null && source !== 'none') return { text: `${base}, but it failed (${failure}): ${spec.keyless} instead`, tone: 'warn' }
+  if (failure !== null && failure.what.length > 0 && source !== 'none') {
+    const instead = (['terrain', 'imagery'] as const).filter((w) => failure.what.includes(w)).map((w) => KEYLESS[w]).join(' and ')
+    return { text: `${base}, but it failed (${failure.why}): ${instead} instead`, tone: 'warn' }
+  }
   return { text: base, tone: source === 'none' ? 'off' : 'ok' }
 }
 
@@ -99,8 +114,8 @@ export interface SettingsOpts {
 
 export interface SettingsHandle {
   open(): void
-  /** A key failed while the app used it (the keyless source took its place): why, on its status line. */
-  setFallback(id: KeyId, why: string): void
+  /** A key failed while the app used it: what fell back to its keyless source and why, on its status line. */
+  setFallback(id: KeyId, what: KeyUse, why: string): void
   destroy(): void
 }
 
@@ -121,7 +136,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   }
   const atLoad = readSavedKeys(stored)
   let saved: SavedKeys = { ...atLoad }
-  const failures = new Map<KeyId, string>()
+  const failures = new Map<KeyId, { why: string; what: KeyUse[] }>()
 
   const dialog = h('dialog', 'fh-settings')
   dialog.setAttribute('aria-labelledby', 'fh-settings-title')
@@ -205,21 +220,19 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
     const actions = h('div', 'fh-key-actions')
     const clear = h('button', 'fh-pill fh-pill-secondary', 'Clear')
     clear.type = 'button'
-    const save = h('button', 'fh-pill')
+    // While it checks, a spinner stands in for its label, which keeps the button's width: the row does not move.
+    const save = h('button', 'fh-pill fh-key-save')
     save.type = 'submit'
-    const saveText = h('span', '', 'Save')
-    const spin = h('span', 'fh-spin')
-    spin.hidden = true
-    save.append(spin, saveText)
+    save.append(h('span', '', 'Save'), h('span', 'fh-spin'))
     actions.append(clear, save)
     row.append(status, actions)
 
     const msg = h('p', 'fh-key-msg')
     msg.setAttribute('role', 'status')
     msg.hidden = true
-    const say = (tone: 'ok' | 'err' | 'warn', text: string): void => {
-      const name: IconName = tone === 'ok' ? 'check' : tone === 'err' ? 'x' : 'alert'
-      msg.replaceChildren(icon(name, 14), h('span', '', text))
+    const say = (tone: 'ok' | 'err' | 'warn' | 'wait', text: string): void => {
+      const mark = tone === 'wait' ? h('span', 'fh-spin') : icon(tone === 'ok' ? 'check' : tone === 'err' ? 'x' : 'alert', 14)
+      msg.replaceChildren(mark, h('span', '', text))
       msg.dataset.tone = tone
       msg.hidden = false
     }
@@ -237,6 +250,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       input.placeholder = keySources(opts.env, {})[spec.id] === 'env' ? `Paste a ${spec.noun} to use instead` : spec.paste
       const typed = input.value.trim()
       save.disabled = checking || typed === '' || typed === saved[spec.field]
+      save.classList.toggle('fh-checking', checking)
       clear.disabled = checking || saved[spec.field] === undefined
       input.readOnly = checking
       syncFoot()
@@ -270,19 +284,15 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       const key = input.value.trim()
       if (checking || key === '' || key === saved[spec.field]) return
       checking = true
-      spin.hidden = false
-      saveText.textContent = 'Checking…'
-      msg.hidden = true
+      say('wait', `Checking with ${spec.provider}…`)
       input.focus() // Save is disabled while it checks: the focus stays in the dialog
       sync()
       void checkKey(spec.id, key, opts.fetch).then((r) => {
         checking = false
-        spin.hidden = true
-        saveText.textContent = 'Save'
         if (r.ok === false) say('err', `${r.why}. Not saved.`)
         else if (!store(key)) say('err', 'This browser blocks storage for this page, so the key cannot be saved.')
         else if (r.ok) say('ok', `${spec.provider} accepted the ${spec.noun}. Saved: reload to use it.`)
-        else say('warn', `Could not check it (${r.why}). Saved anyway: if it is wrong, the app falls back to ${spec.keyless}.`)
+        else say('warn', `Could not check it (${r.why}). Saved anyway: if it is wrong, the app falls back to its keyless sources.`)
         sync()
       })
     })
@@ -322,8 +332,10 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       window.addEventListener('keydown', keep, true)
       dialog.showModal()
     },
-    setFallback(id, why) {
-      failures.set(id, why)
+    setFallback(id, what, why) {
+      const f = failures.get(id) ?? { why, what: [] }
+      if (!f.what.includes(what)) f.what.push(what)
+      failures.set(id, f)
       for (const k of keys) k.sync()
     },
     destroy() {

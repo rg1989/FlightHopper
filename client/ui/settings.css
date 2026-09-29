@@ -1,6 +1,6 @@
 /* client/ui/settings.css */
-/* The Settings dialog (settings.ts): a native modal <dialog> in the top layer over a dimmed page, the panels' dark glass
-   (opaque enough to need no blur, which would cost a GPU pass on every globe frame). Its keys are cards: title and link,
+/* The Settings dialog (settings.ts): a native modal <dialog> in the top layer over a dimmed page, opaque in the panels'
+   dark colour (no blur: it would cost a GPU pass on every globe frame). Its keys are cards: title and link,
    a line on what the key unlocks, the masked field, the status with Clear and Save, the provider's answer. */
 /* Anchored near the top, not centred: a message appearing under a key grows it downwards instead of shifting it. */
 .fh-settings {
@@ -12,7 +12,7 @@
   overflow: hidden;
   border: 1px solid var(--fh-hairline);
   border-radius: 16px;
-  background: var(--fh-glass-strong);
+  background: #0d1119; /* opaque, as the phone sheets: no map label reads through it */
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
   color: var(--fh-text);
   pointer-events: auto; /* the overlay layer (.fh-ui) passes none down */
@@ -214,15 +214,29 @@
   padding: 0 14px;
 }
 
-.fh-key-actions .fh-pill .fh-spin {
-  width: 12px;
-  height: 12px;
+.fh-key-save {
+  position: relative;
+  justify-content: center;
+}
+
+.fh-key-save .fh-spin {
+  position: absolute;
+  inset: 0;
+  width: 14px;
+  height: 14px;
+  margin: auto;
   border-width: 1.5px;
+  border-color: rgba(6, 17, 31, 0.25);
   border-top-color: #06111f;
 }
 
-.fh-key-actions .fh-spin[hidden] {
-  display: none;
+.fh-key-save:not(.fh-checking) .fh-spin,
+.fh-key-save.fh-checking > span:first-child {
+  visibility: hidden;
+}
+
+.fh-settings .fh-key-save.fh-checking:disabled {
+  opacity: 0.85; /* busy, not unavailable: the spinner reads */
 }
 
 .fh-settings .fh-pill:disabled {
@@ -245,9 +259,16 @@
   display: none;
 }
 
-.fh-key-msg .fh-icon {
+.fh-key-msg .fh-icon,
+.fh-key-msg .fh-spin {
   flex: none;
   margin-top: 1.5px;
+}
+
+.fh-key-msg .fh-spin {
+  width: 13px;
+  height: 13px;
+  border-width: 1.5px;
 }
 
 .fh-key-msg[data-tone='ok'] {
@@ -260,6 +281,10 @@
 
 .fh-key-msg[data-tone='warn'] {
   color: #f5d38a;
+}
+
+.fh-key-msg[data-tone='wait'] {
+  color: var(--fh-muted);
 }
 
 .fh-settings-foot {

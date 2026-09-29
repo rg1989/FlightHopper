@@ -104,7 +104,9 @@ export function cardView(
     text = 'Predicting · waiting for data'
   } else {
     state = 'live'
-    text = ['Live', sourceLabel(raw, s.quality)].filter(Boolean).join(' · ')
+    // Another aircraft's object (the card has just moved on, its own not in yet) says nothing of this one's source.
+    const own = raw !== null && raw.hex.toLowerCase() === hex ? raw : null
+    text = ['Live', sourceLabel(own, s.quality)].filter(Boolean).join(' · ')
   }
 
   return {

@@ -71,6 +71,13 @@ test('cardView: only focused, Live until 2.5 view refreshes pass without a posit
   assert.equal(cardView('4691c4', { ...S, ageS: 11 }, RAW, INFO, LIVE, GR, 30, false).state, 'lost', 'never under 10 s')
 })
 
+test('cardView: the source comes from the aircraft\'s own object only; another\'s (the card just switched) is ignored', () => {
+  const mlat: ReadsbAircraft = { ...RAW, type: 'mlat' }
+  assert.equal(cardView('4691c4', S, mlat, INFO, LIVE, GR, 1).status, 'Live · MLAT')
+  const other: ReadsbAircraft = { ...mlat, hex: 'a1b2c3' }
+  assert.equal(cardView('4691c4', { ...S, quality: 'adsb01' }, other, INFO, LIVE, GR, 1).status, 'Live · ADS-B v0/1', 'its own quality, not "MLAT"')
+})
+
 test('cardView: on the ground reads GND with no unit', () => {
   assert.deepEqual(cardView('4691c4', { ...S, onGround: true }, RAW, INFO, LIVE, GR, 1).stats[0], { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: false })
 })

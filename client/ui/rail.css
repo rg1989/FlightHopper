@@ -216,7 +216,9 @@
 }
 
 /* Phones: the rail is a tab bar along the bottom (icon over a short label, full-width touch targets), and a panel is a
-   sheet rising from it, closed by its X, the same tab, Esc or a swipe down on its header. */
+   sheet rising from it, closed by its X, the same tab, Esc or a swipe down on its header. More tabs than fit (a narrow
+   phone, a chase-only tab) scroll sideways, each at least 44 px and its label clear of the next; a fade marks the side
+   with more (rail.ts: .fh-more-start, .fh-more-end). */
 @media (max-width: 640px) {
   .fh-rail {
     top: auto;
@@ -230,21 +232,63 @@
     padding: 4px 4px env(safe-area-inset-bottom, 0px);
     border-width: 1px 0 0;
     border-radius: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 24px;
+    scrollbar-width: none;
+  }
+
+  .fh-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .fh-rail::before,
+  .fh-rail::after {
+    content: '';
+    position: sticky;
+    z-index: 1;
+    flex: none;
+    width: 28px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--fh-fast) var(--fh-ease);
+  }
+
+  .fh-rail::before {
+    left: 0;
+    margin-right: -28px;
+    background: linear-gradient(to right, rgba(13, 17, 25, 0.96) 15%, rgba(13, 17, 25, 0));
+  }
+
+  .fh-rail::after {
+    right: 0;
+    margin-left: -28px;
+    background: linear-gradient(to left, rgba(13, 17, 25, 0.96) 15%, rgba(13, 17, 25, 0));
+  }
+
+  .fh-rail.fh-more-start::before,
+  .fh-rail.fh-more-end::after {
+    opacity: 1;
   }
 
   .fh-rail-sep {
     display: none;
   }
 
+  /* Equal widths while they fit; never narrower than the label (at least 36 px) and 4 px either side of it, so the bar
+     scrolls before two labels touch. */
   .fh-rail .fh-ibtn {
     display: flex;
-    flex: 1;
+    flex: 1 1 0;
     flex-direction: column;
     justify-content: center;
     gap: 3px;
     width: auto;
     height: 52px;
+    padding: 0 4px;
     border-radius: 12px;
+    scroll-snap-align: start;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -255,8 +299,11 @@
 
   .fh-ibtn-label {
     display: block;
+    min-width: 36px;
     font: 600 11px/1 var(--fh-font);
     letter-spacing: 0.01em;
+    text-align: center;
+    white-space: nowrap;
   }
 
   .fh-rail .fh-ibtn[aria-expanded='true'] {

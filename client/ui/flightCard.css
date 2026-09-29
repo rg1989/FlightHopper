@@ -500,7 +500,7 @@
    (keepClear: .fh-card-flip). A panel opened over it hides it until it closes (app.ts closes the panel when a bracket
    is clicked). */
 .fh-card.fh-tcard {
-  right: calc(64px + var(--fh-right));
+  right: calc(70px + var(--fh-right)); /* 12 px clear of the rail (12 px from the edge, 46 px wide) */
   left: auto;
   border-color: rgb(255 210 63 / 0.42);
 }
@@ -517,7 +517,7 @@
 
 @media (pointer: coarse) {
   .fh-card.fh-tcard {
-    right: calc(72px + var(--fh-right));
+    right: calc(78px + var(--fh-right)); /* the rail's 44 px buttons make it 54 px wide */
   }
 }
 

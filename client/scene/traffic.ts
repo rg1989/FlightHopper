@@ -205,6 +205,7 @@ interface Slot {
 export interface TrafficOpts {
   load?: (m: ModelManifestEntry) => Promise<Model>
   loadGear?: (uri: string) => Promise<Model>
+  openLayer?: HTMLElement // where the open aircraft's brackets go (layout.css: over the flight-data frame); else layer
 }
 
 const PROBES_PER_FRAME = 2 // depth reads (each a GPU sync) per frame: every square is re-checked every n / 2 frames
@@ -227,6 +228,7 @@ export class Traffic {
   readonly #viewer: Viewer
   readonly #pick: ModelPicker
   readonly #layer: HTMLElement
+  readonly #openLayer: HTMLElement
   readonly #load: (m: ModelManifestEntry) => Promise<Model>
   readonly #loadGear: (uri: string) => Promise<Model>
   readonly #carto = new Cartographic()
@@ -260,6 +262,7 @@ export class Traffic {
     this.#viewer = viewer
     this.#pick = pick
     this.#layer = layer
+    this.#openLayer = opts.openLayer ?? layer
     this.#load = opts.load ?? loadTrafficModel
     this.#loadGear = opts.loadGear ?? loadGearModel
   }
@@ -546,7 +549,10 @@ export class Traffic {
     setText(id, b.label)
     setText(dist, formatDistanceM(b.distM))
     if (id.hidden === labelShown) id.hidden = dist.hidden = !labelShown
-    el.classList.toggle('fh-bracket-open', b.hex === this.#openHex) // layout.css: highlighted while its card is open
+    const open = b.hex === this.#openHex // layout.css: highlighted while its card is open, and over the frame's cards
+    el.classList.toggle('fh-bracket-open', open)
+    const home = open ? this.#openLayer : this.#layer
+    if (el.parentElement !== home) home.append(el)
     const side = Math.round(b.side)
     el.style.width = el.style.height = `${side}px`
     el.style.transform = `translate(${(b.x - side / 2).toFixed(1)}px, ${(b.y - side / 2).toFixed(1)}px)`
