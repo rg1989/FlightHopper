@@ -506,7 +506,7 @@ export class Traffic {
 
   #shaders(m: ModelManifestEntry): LiveryShaders {
     let p = this.#paint.get(m.id)
-    if (p === undefined) this.#paint.set(m.id, (p = new LiveryShaders(m)))
+    if (p === undefined) this.#paint.set(m.id, (p = new LiveryShaders(m, 0.5))) // small on screen: half-size atlases
     return p
   }
 

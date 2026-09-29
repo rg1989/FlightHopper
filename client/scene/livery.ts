@@ -12,7 +12,7 @@ import { WHITE as WHITE_HEX, WING, profileOf } from '../livery/kit.ts'
 import type { Design, Target } from '../livery/kit.ts'
 import { specDesign, tableDesign } from '../livery/legacy.ts'
 import type { LiveryEntry } from '../livery/legacy.ts'
-import { MARGIN, SIZES, rasterize } from '../livery/raster.ts'
+import { MARGIN, rasterize, sizesAt } from '../livery/raster.ts'
 import type { Atlas } from '../livery/raster.ts'
 import type { LiverySpec } from '../scenario/types.ts'
 import type { ModelManifestEntry, ModelProfile, Paint } from '../types.ts'
@@ -147,7 +147,8 @@ vec3 ${name}At(vec3 p, bool left) {
  * (u_night) the cabin windows glow warm and, below 10,000 ft, the logo lights on the tailplane light the fin. The
  * chased aircraft's own lamps (aircraftLights.ts) light its skin: position lights, strobe flashes and beacons.
  */
-export function paintShaderText(p: Paint, prof: ModelProfile): string {
+export function paintShaderText(p: Paint, prof: ModelProfile, detail = 1): string {
+  const size = sizesAt(detail)
   const [ex0, ex1, ez0, ez1] = p.engines
   const [, ty, tw] = p.title
   const finH = Math.max(0.5, 2 * (p.finLogo[1] - p.fin.aboveY)) // the fin's height, about twice its logo's centre above its root
@@ -156,7 +157,7 @@ export function paintShaderText(p: Paint, prof: ModelProfile): string {
   const engineTest = e
     ? `abs(p.x) > ${f(e[0])} && abs(p.x) < ${f(e[1])} && p.z > ${f(e[2])} && p.z < ${f(e[3])} && p.y > ${f(e[4])} && p.y < ${f(e[5])} && abs(n.y) < 0.8`
     : `abs(p.x) > ${f(ex0)} && abs(p.x) < ${f(ex1)} && p.z > ${f(ez0)} && p.z < ${f(ez1)} && abs(n.y) < 0.8`
-  return `${atlasText('skin', prof.box, SIZES.skin[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], SIZES.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], SIZES.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
+  return `${atlasText('skin', prof.box, size.skin[1])}${e ? atlasText('nacelle', [e[2], e[3], e[4], e[5]], size.nacelle[1]) : ''}${w ? atlasText('tip', [w[2], w[3], w[4], w[5]], size.tip[1]) : ''}${LIGHTING_GLSL}${p.windows ? windowsText(p.windows) : ''}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   vec3 turn = vec3(${p.noseMinusZ ? '-1.0, 1.0, -1.0' : '1.0'});
   vec3 p = fsInput.attributes.positionMC * turn;${p.cut ? cutText(p.cut, p.fin.halfWidth) : ''}
@@ -247,8 +248,9 @@ const later = (job: () => Promise<void>): void => {
  * shader declares u_span and u_cut (off), so ChaseModel can set them on whichever it draws, and the lights' uniforms
  * (aircraftLights.ts sets them on the chased aircraft's): u_env, u_navL, u_navR, u_navT, u_bcn0, u_bcn1 and u_strobe,
  * all off. u_night is every shader's at once (setNight).
- * ponytail: the cache keeps every livery seen for the session (≤ the table's ~40 + white + a scenario's, per type).
- * Upgrade: evict, and destroy the atlases, if it grows.
+ * detail: the atlases' resolution, 1 for the chased aircraft, 0.5 for traffic (sizesAt).
+ * ponytail: the cache keeps every livery seen for the session (≤ the table's ~40 + white + a scenario's, per type):
+ * ~12 MB of GPU memory per livery and type at detail 1, ~3 MB at 0.5. Upgrade: evict, and destroy the atlases, if it grows.
  */
 export class LiveryShaders {
   /** The night on every paint shader (0 day … 1 night: the cabin windows and the logo lights). Cheap when unchanged. */
@@ -265,17 +267,19 @@ export class LiveryShaders {
   }
 
   readonly #target: Target
+  readonly #detail: number
   readonly #fragment: string
   readonly #vertex: string
   readonly #cache = new Map<string, CustomShader>()
   readonly #custom = new Map<string, CustomShader>()
 
-  constructor(m: ModelManifestEntry) {
+  constructor(m: ModelManifestEntry, detail = 1) {
     const paint = m.paint
     const profile = profileOf(m)
     if (paint === undefined || profile === null) throw new Error(`${m.id}: no paint map`)
     this.#target = { id: m.id, profile, paint }
-    this.#fragment = paintShaderText(paint, profile)
+    this.#detail = detail
+    this.#fragment = paintShaderText(paint, profile, detail)
     this.#vertex = paintVertexText(paint)
   }
 
@@ -325,7 +329,7 @@ export class LiveryShaders {
     made.add(s)
     if (typeof document !== 'undefined') {
       later(async () => {
-        const a = await rasterize(d, this.#target)
+        const a = await rasterize(d, this.#target, this.#detail)
         s.setUniform('u_skin', texture(a.skin))
         if (a.nacelle && p.engines) s.setUniform('u_nacelle', texture(a.nacelle))
         if (a.tip && p.winglet) s.setUniform('u_tip', texture(a.tip))

@@ -18,8 +18,14 @@ export interface Atlases {
   tip: Atlas | null
 }
 
-/** Atlas sizes [width, height] per region: the skin's ~45 px/m on a narrowbody, ~30 px/m on a 787. */
+/** Atlas sizes [width, height] per region at full detail: the skin's ~45 px/m on a narrowbody, ~30 px/m on a 787. */
 export const SIZES = { skin: [2048, 1024], nacelle: [512, 512], tip: [256, 512] } as const
+
+/** The sizes at a detail: 1 for the chased aircraft, 0.5 for traffic (a quarter of the memory). */
+export function sizesAt(detail: number): { skin: [number, number]; nacelle: [number, number]; tip: [number, number] } {
+  const k = (s: readonly [number, number]): [number, number] => [s[0] * detail, s[1] * detail]
+  return { skin: k(SIZES.skin), nacelle: k(SIZES.nacelle), tip: k(SIZES.tip) }
+}
 /** Rows left above and below each half's box, so mipmaps do not bleed one side into the other. */
 export const MARGIN = 8
 
@@ -62,15 +68,16 @@ function loadFonts(d: Design): Promise<unknown> {
 }
 
 /** Draws design d on model m: the three atlases (null where the model has no nacelles or wingtip devices). */
-export async function rasterize(d: Design, m: Target): Promise<Atlases> {
+export async function rasterize(d: Design, m: Target, detail = 1): Promise<Atlases> {
+  const size = sizesAt(detail)
   const ops = drawDesign(d, m)
   const srcs = imagesOf(ops)
   const [loaded] = await Promise.all([Promise.all(srcs.map(loadImage)), loadFonts(d)])
   const img = new Map(srcs.map((s, i) => [s, loaded[i]]))
   return {
-    skin: region(ops.skin, SIZES.skin, img),
-    nacelle: ops.nacelle && region(ops.nacelle, SIZES.nacelle, img),
-    tip: ops.tip && region(ops.tip, SIZES.tip, img),
+    skin: region(ops.skin, size.skin, img),
+    nacelle: ops.nacelle && region(ops.nacelle, size.nacelle, img),
+    tip: ops.tip && region(ops.tip, size.tip, img),
   }
 }
 
