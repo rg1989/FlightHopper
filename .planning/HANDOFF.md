@@ -9,6 +9,12 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Livery pipeline merged into local `main` as `fa013e8` (2026-09-29, not pushed).** Airline liveries are designs drawn
+  with a kit (`client/livery/`) onto each model's measured side profile and projected by the paint shader; guide in
+  `docs/liveries.md`, design in `.planning/livery-pipeline-design.md`, dossiers in `.planning/liveries/`. New models
+  `a20n`, `a21n`, `b38m` (recipes in `tools/models/variants.json`). Designs: El Al (schemes A1/A2/B by registration),
+  Wizz Air, Israir, flydubai, Royal Jordanian. Reference photos are in `data/livery-refs/` (git-ignored, 124 MB). To add
+  an airline: `tools/liveries/livery.workflow.js` (docs Part 5). `npm run check` 1241/1241.
 - **`main` is this handoff's commit; everything is merged into it** (2026-09-29, at the user's request): every branch
   (`feat/flight-physics`, `worktree-kc1388-airspeed`, `build/mvp`, `feat/traffic-id`) has no commit outside `main`, and
   the main checkout has no uncommitted work. The voice-over/playbar work that sat uncommitted since 2026-09-23 is
