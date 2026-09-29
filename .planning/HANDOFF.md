@@ -9,6 +9,10 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Corner buttons and a Controls panel on local `main` as `b32d62b` (2026-09-30, not pushed).** The instrument-layout
+  and full-screen buttons left the rail: each is a button of its own in a glass square at the bottom right (on phones
+  the top right; rail.ts `corner` items). "Controls and credits" is now "Controls" (map, 3-D chase, keys, scenario;
+  touch gestures on touch screens), and every credit line is gone at the user's request, with the code that fed them.
 - **Trackpad gestures on local `main` as `d99bb4d` (2026-09-29, not pushed).** A pinch zooms (Chromium sends it as
   ctrl + wheel, which Cesium dropped) and two fingers moving pan the top-down map, where they used to zoom; in the chase
   two fingers only zoom (`OrbitControl.trackpad`; the user tried orbiting and rejected it: a pinch's drifting fingers
