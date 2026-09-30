@@ -1,15 +1,17 @@
 // client/scene/mapLayer.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ImageryLayer, ImageryLayerCollection, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
+import { Event, ImageryLayer, ImageryLayerCollection, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
 import type { Viewer } from 'cesium'
 import { DARK_URLS, OSM_CREDIT_HTML, OSM_URL, makeMapLayer } from './mapLayer.ts'
 
-/** Just the imagery collection, with a satellite-like base layer already in it. Nothing here touches the network. */
+/** Just the imagery collection, with a satellite-like base layer already in it, and a scene to render. No network. */
 function fakeViewer() {
   const imageryLayers = new ImageryLayerCollection()
   const base = imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url: 'https://satellite.invalid/{z}/{x}/{y}.jpg' }))
-  return { imageryLayers, base, viewer: { imageryLayers } as unknown as Viewer }
+  const scene = { postRender: new Event(), globe: { tilesLoaded: true } }
+  const render = (): void => void scene.postRender.raiseEvent()
+  return { imageryLayers, base, scene, render, viewer: { imageryLayers, scene } as unknown as Viewer }
 }
 
 test('makeMapLayer: the OpenStreetMap layer (and the dark one) on top of the base layer, standard tile URL, zoom ≤ 19', () => {
@@ -70,17 +72,46 @@ test('destroy removes only the street map and is idempotent; another tile server
   assert.equal((imageryLayers.get(1).imageryProvider as OpenStreetMapImageryProvider).url, 'https://tiles.example.org/osm/{z}/{x}/{y}.png')
 })
 
-test('dark: swaps the light layer for Esri Dark Gray (base + labels), only while shown; the hidden theme loads no tiles', () => {
+test('dark: Esri Dark Gray base + the places labels, greyed; while hidden a theme change loads nothing', () => {
   const { imageryLayers, viewer } = fakeViewer()
   const map = makeMapLayer(viewer)
-  const [light, dark, labels] = [imageryLayers.get(1), imageryLayers.get(2), imageryLayers.get(3)]
+  const light = imageryLayers.get(1)
+  const [dark, labels] = [imageryLayers.get(2), imageryLayers.get(3)]
   assert.deepEqual([dark, labels].map((l) => (l.imageryProvider as UrlTemplateImageryProvider).url), DARK_URLS)
-  assert.equal(labels.show, dark.show)
-  assert.deepEqual([map.dark, light.show, dark.show], [false, true, false])
-  map.dark = true
-  assert.deepEqual([map.dark, light.show, dark.show], [true, false, true])
+  assert.equal(labels.saturation, 0, 'the cream labels go grey-white')
   map.show = false
-  assert.deepEqual([map.show, light.show, dark.show], [false, false, false])
-  map.show = true
-  assert.deepEqual([light.show, dark.show], [false, true])
+  map.dark = true
+  assert.deepEqual([light.show, dark.show, labels.show], [false, false, false])
+  map.show = true // off screen before: no old theme to keep
+  assert.deepEqual([light.show, dark.show, labels.show], [false, true, true])
+  map.show = false
+  assert.deepEqual([light.show, dark.show], [false, false])
+})
+
+test('a theme swap on screen puts the new theme on top and keeps the old under it until the tiles are in', () => {
+  const { imageryLayers, viewer, scene, render } = fakeViewer()
+  const map = makeMapLayer(viewer)
+  const light = imageryLayers.get(1)
+  const [dark, labels] = [imageryLayers.get(2), imageryLayers.get(3)]
+  const order = (): number[] => [light, dark, labels].map((l) => imageryLayers.indexOf(l))
+  map.dark = true
+  assert.deepEqual(order(), [1, 2, 3], 'dark on top')
+  assert.deepEqual([light.show, dark.show, labels.show], [true, true, true], 'the light stays under while dark loads')
+  scene.globe.tilesLoaded = true
+  render() // the frame that queues the new tiles
+  assert.equal(light.show, true)
+  scene.globe.tilesLoaded = false
+  render()
+  assert.equal(light.show, true, 'still loading')
+  scene.globe.tilesLoaded = true
+  render()
+  assert.deepEqual([light.show, dark.show, labels.show], [false, true, true])
+  map.dark = false // and back
+  assert.deepEqual(order(), [3, 1, 2], 'light on top')
+  assert.deepEqual([light.show, dark.show], [true, true])
+  map.show = false // a switch to the satellite mid-swap hides both at once
+  render()
+  render()
+  assert.deepEqual([light.show, dark.show, labels.show], [false, false, false])
+  assert.equal(scene.postRender.numberOfListeners, 0)
 })
