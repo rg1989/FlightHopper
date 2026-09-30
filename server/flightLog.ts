@@ -7,13 +7,14 @@
 // <dir>/YYYY-MM-DD/HHMMSSZ-<callsign or hex>-<hex>.jsonl (UTC start), one JSON object per line:
 //   {"flight": {v, hex, callsign, reg, typeCode, route, source, by, startedMs}}   first line
 //   {"s": Sample}                                                                  one per sample, oldest first
+//   {"name": "Go-around at LLBG"}                                                  a name given by hand (the last wins; "" clears it)
 //   {"route": "LIRF-LLBG"}                                                         when the route becomes known or changes
 //                                                                                   (it often arrives after the start, and an
 //                                                                                   aircraft may drop its callsign on landing)
 //   {"end": {why: 'stopped'|'landed'|'lost', endedMs, samples}}                    last line, when it ended
 // A file without an end line was cut short by a server stop that did not resume it.
 // <dir>/active.json lists the recordings under way, so a restarted server carries on appending to the same files.
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RecordingInfo, RecordingState, RecordingTrack } from '../shared/api.ts'
 import type { AircraftInfo } from '../shared/info.ts'
@@ -21,7 +22,8 @@ import type { Sample, SourceKind } from '../shared/types.ts'
 
 export const LANDED_KT = 40 // on the ground below this, after being airborne in this recording: landed, taxiing
 export const LANDED_HOLD_MS = 60_000 // … for this long (the roll-out and the turn off the runway are kept)
-export const LOST_MS = 15 * 60_000 // no new sample for this long: gone (out of coverage, or landed where no one hears it)
+export const LOST_MS = 15 * 60_000
+export const NAME_MAX = 60 // characters of a recording's name // no new sample for this long: gone (out of coverage, or landed where no one hears it)
 
 export type EndReason = 'stopped' | 'landed' | 'lost'
 
@@ -128,6 +130,29 @@ export class FlightLog {
     return [...this.#active.keys()]
   }
 
+  /**
+   * Names a recording (a name line, so its file, its id and replay links stay); a blank name clears it. The name as
+   * kept (trimmed, control characters out, ≤ NAME_MAX), or undefined when there is no such recording.
+   */
+  rename(file: string, name: string): string | null | undefined {
+    if (this.read(file) === null) return undefined
+    const clean = name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, NAME_MAX).trim()
+    appendFileSync(join(this.#dir, file), JSON.stringify({ name: clean }) + '\n')
+    return clean === '' ? null : clean
+  }
+
+  /** Deletes a recording for good; one under way stops first (no end line: its file goes). Whether it existed. */
+  remove(file: string): boolean {
+    if (this.read(file) === null) return false
+    for (const [hex, a] of this.#active) {
+      if (a.state.file !== file) continue
+      this.#active.delete(hex)
+      this.#save()
+    }
+    unlinkSync(join(this.#dir, file))
+    return true
+  }
+
   /** Every recording on disk, newest first. ponytail: reads every file whole per call (KBs to a few MB each). */
   list(): RecordingInfo[] {
     const out: RecordingInfo[] = []
@@ -160,10 +185,11 @@ export class FlightLog {
     let head: Record<string, unknown> | null = null
     let ended: RecordingInfo['ended'] = null
     let route: string | null = null
+    let name: string | null = null
     const samples: Sample[] = []
     for (const line of text.split('\n')) {
       if (line === '') continue
-      let o: { flight?: Record<string, unknown>; s?: Sample; route?: unknown; end?: { why: EndReason; endedMs: number } }
+      let o: { flight?: Record<string, unknown>; s?: Sample; route?: unknown; name?: unknown; end?: { why: EndReason; endedMs: number } }
       try {
         o = JSON.parse(line)
       } catch {
@@ -172,6 +198,7 @@ export class FlightLog {
       if (o.s) samples.push(o.s)
       else if (o.flight) head = o.flight
       else if (typeof o.route === 'string') route = o.route
+      else if (typeof o.name === 'string') name = o.name === '' ? null : o.name
       else if (o.end) ended = { why: o.end.why, endedMs: o.end.endedMs }
     }
     if (head === null || typeof head.hex !== 'string') return null
@@ -180,7 +207,7 @@ export class FlightLog {
     const active = ended === null && this.#active.get(hex)?.state.file === file
     return {
       info: {
-        file, hex,
+        file, name, hex,
         callsign: str(head.callsign), reg: str(head.reg), typeCode: str(head.typeCode), category: str(head.category),
         military: head.military === true, route: route ?? str(head.route) ?? (active ? this.#routeOf(hex) : null), source: str(head.source) ?? '',
         startedMs: typeof head.startedMs === 'number' ? head.startedMs : 0,

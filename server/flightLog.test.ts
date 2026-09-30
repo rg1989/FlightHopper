@@ -1,12 +1,12 @@
 // server/flightLog.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { Sample } from '../shared/types.ts'
-import { FlightLog, LANDED_HOLD_MS, LOST_MS } from './flightLog.ts'
+import { FlightLog, LANDED_HOLD_MS, LOST_MS, NAME_MAX } from './flightLog.ts'
 
 const T0 = Date.UTC(2026, 8, 30, 14, 30, 12)
 const INFO: AircraftInfo = { hex: '738abc', callsign: 'ELY315', reg: '4X-EKA', typeCode: 'B738', category: 'A3', squawk: null, emergency: null, military: false, route: 'LLBG-EGLL' }
@@ -114,4 +114,26 @@ test('a route learnt after the start gets a line of its own and is listed, even 
   const kinds = readFileSync(join(dir, rec.file), 'utf8').trim().split('\n').map((l) => Object.keys(JSON.parse(l))[0])
   assert.deepEqual(kinds, ['flight', 's', 'route', 'end'], 'one route line, written once')
   assert.equal(new FlightLog({ dir, source: 'adsbfi' }).read(rec.file)?.info.route, 'LLBG-EGLL')
+})
+
+test('rename: a name line (the file stays), trimmed and capped, blank clears it; remove: the file goes, a live one stops first', () => {
+  const { dir, log } = setup()
+  const a = log.start('738abc', INFO, [sample(T0)])
+  assert.equal(log.rename(a.file, '  Go-around\nat LLBG  '), 'Go-around at LLBG')
+  assert.equal(log.list()[0].name, 'Go-around at LLBG')
+  assert.equal(log.rename(a.file, 'x'.repeat(100))?.length, NAME_MAX)
+  assert.equal(log.rename(a.file, '   '), null)
+  assert.equal(log.list()[0].name, null)
+  assert.equal(log.rename('2026-09-30/000000Z-X-000000.jsonl', 'n'), undefined, 'no such recording')
+  assert.equal(log.rename('../active.json', 'n'), undefined)
+  assert.equal(log.read(a.file)?.samples.length, 1, 'name lines are not samples')
+
+  assert.equal(log.remove(a.file), true)
+  assert.deepEqual([log.list(), log.active(), log.hexes()], [[], [], []])
+  assert.equal(existsSync(join(dir, a.file)), false)
+  log.add(sample(T0 + 1000)) // not recorded any more: nothing recreates the file
+  assert.equal(existsSync(join(dir, a.file)), false)
+  assert.deepEqual(new FlightLog({ dir, source: 'adsbfi' }).active(), [], 'nor does a restart')
+  assert.equal(log.remove(a.file), false)
+  assert.equal(log.remove('active.json'), false)
 })

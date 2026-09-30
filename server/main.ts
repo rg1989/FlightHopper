@@ -7,6 +7,7 @@
 //   GET /api/record                     the flights being recorded (FLIGHTS_DIR set; else 404)
 //   POST /api/record?hex&on=1|0         start or stop recording one aircraft → RecordResponse
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
+//   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
@@ -51,6 +52,7 @@ const SELECTED_ROUTE_GAP_MS = 5000
 const SELECTED_ROUTE_RPS = 1 / 60
 const FLIGHT_LOG_TICK_MS = 5000
 const gzipAsync = promisify(gzip)
+const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete']) // the only writes
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -322,6 +324,16 @@ export function createServer(
     return { recordings: flights.list() }
   }
 
+  /** Rename or delete one recording: [200, its list after] or [404, …]. */
+  function editRecording(q: URLSearchParams, what: 'rename' | 'delete'): [number, unknown] {
+    if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
+    const file = q.get('file') ?? ''
+    const name = q.get('name')
+    if (what === 'rename') check(name !== null, 'name is required (blank clears it)')
+    const done = what === 'rename' ? flights.rename(file, name!) !== undefined : flights.remove(file)
+    return done ? [200, { recordings: flights.list() }] : [404, { error: 'no such recording' }]
+  }
+
   function record(q: URLSearchParams, post: boolean): RecordResponse {
     if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
     if (!post) return { rec: null, active: flights.active() }
@@ -336,9 +348,9 @@ export function createServer(
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const isApi = url.pathname === '/api' || url.pathname.startsWith('/api/')
-    const post = req.method === 'POST' && url.pathname === '/api/record'
+    const post = req.method === 'POST' && POSTS.has(url.pathname)
     if (req.method !== 'GET' && !post) {
-      if (isApi) return sendJson(req, res, 405, { error: 'only GET (and POST /api/record)' })
+      if (isApi) return sendJson(req, res, 405, { error: `only GET (and POST ${[...POSTS].join(', ')})` })
       return sendText(res, 405, 'only GET\n')
     }
     if (!isApi) return serveStatic(root, url.pathname, req.headers.range, res)
@@ -352,6 +364,8 @@ export function createServer(
       else if (url.pathname === '/api/status') body = poller.report()
       else if (url.pathname === '/api/record') body = record(url.searchParams, post)
       else if (url.pathname === '/api/recordings') body = recordings()
+      else if (post && url.pathname === '/api/recordings/rename') [status, body] = editRecording(url.searchParams, 'rename')
+      else if (post && url.pathname === '/api/recordings/delete') [status, body] = editRecording(url.searchParams, 'delete')
       else if (url.pathname === '/api/recordings/track') {
         if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
         const r = flights.read(url.searchParams.get('file') ?? '')

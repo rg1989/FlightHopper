@@ -53,7 +53,8 @@ export function recordingScenario(rec: RecordingTrack, model: string): Scenario 
   }
   if (rows.length < 2) return null
   const { info } = rec
-  const title = info.callsign ?? info.hex.toUpperCase()
+  const flight = info.callsign ?? info.hex.toUpperCase()
+  const title = info.name ?? flight
   return {
     format: 1,
     id: recordingId(info.file),
@@ -68,7 +69,7 @@ export function recordingScenario(rec: RecordingTrack, model: string): Scenario 
     note: '',
     summary: [],
     crew: [],
-    aircraft: { registration: info.reg ?? '', type: info.typeCode ?? '', callsign: title, operator: '', model },
+    aircraft: { registration: info.reg ?? '', type: info.typeCode ?? '', callsign: flight, operator: '', model },
     speakers: {},
     imagery: [],
     ending: null,

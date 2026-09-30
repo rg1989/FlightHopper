@@ -46,6 +46,7 @@ export interface RecordingState {
 /** A recorded flight as the Recordings list shows it (server/flightLog.ts list()). Times on the server clock. */
 export interface RecordingInfo {
   file: string                   // relative to the flights directory: its id
+  name: string | null            // given by hand (Rename); null: none, shown by its callsign
   hex: string
   callsign: string | null
   reg: string | null

@@ -435,6 +435,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         list: () => scenariosOpened.then(() => listScenarios(base)),
         recordings: () => scenariosOpened.then(() => api.recordings()),
         onPlay: (id) => void startScenario(id, { play: true }),
+        onRename: (file, name) => api.renameRecording(file, name),
+        onDelete: (file) => api.deleteRecording(file),
       })),
     } },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.

@@ -401,3 +401,25 @@ test('FLIGHTS_DIR: POST /api/record starts and stops one aircraft; chase reports
   assert.equal((await fetch(`${b2}/api/record?hex=${CHASED}&on=1`, { method: 'POST' })).status, 400)
   assert.equal((await get<ChaseResponse>(`${b2}/api/chase?hex=${CHASED}`)).body.rec, undefined, 'no rec field: the card shows no Record button')
 })
+
+test('POST /api/recordings/rename and /delete: name one, delete one; unknown files 404; GET is not allowed', async (t) => {
+  const clock = { t: T0 }
+  const nowMs = (): number => clock.t
+  const flights = tmp()
+  const cfg = { ...readServerConfig({ REPLAY_FILES: FILE, FLIGHTS_DIR: flights }), staticDir: join(tmp(), 'dist') }
+  const app = createServer(cfg, { source: makeReplay({ files: cfg.replayFiles, nowMs }), nowMs })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+  await waitFor('the chased aircraft', () => get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}`), (r) => r.body.samples.length > 0)
+  const post = (path: string) => fetch(`${base}${path}`, { method: 'POST' })
+  const { rec } = await (await post(`/api/record?hex=${CHASED}&on=1`)).json()
+  const f = encodeURIComponent(rec.file)
+  const named = await (await post(`/api/recordings/rename?file=${f}&name=${encodeURIComponent('Final approach')}`)).json()
+  assert.equal(named.recordings[0].name, 'Final approach')
+  assert.equal((await post(`/api/recordings/rename?file=${f}`)).status, 400, 'a name is required')
+  assert.equal((await fetch(`${base}/api/recordings/delete?file=${f}`)).status, 404, 'GET does not delete')
+  assert.deepEqual(await (await post(`/api/recordings/delete?file=${f}`)).json(), { recordings: [] })
+  assert.equal((await get<{ active: unknown[] }>(`${base}/api/record`)).body.active.length, 0, 'it stopped recording')
+  assert.equal((await post(`/api/recordings/delete?file=${f}`)).status, 404)
+  assert.equal((await post(`/api/recordings/rename?file=..%2Fx&name=a`)).status, 404)
+})

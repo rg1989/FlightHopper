@@ -292,7 +292,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   range.append(icon('bracket', 14), rangeDist, rangeFrom)
   range.hidden = true
 
-  // While recording: "● REC 4:05 · 318 points   Stop". After it ends: "Recording saved" for a few seconds.
+  // While recording: "● REC 4:05 · 318 points   Stop". After it ends: "Recording ended" for a few seconds.
   const recRow = h('div', 'fh-card-rec')
   recRow.hidden = true
   recRow.setAttribute('role', 'status')
@@ -372,7 +372,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   // The recording of the shown aircraft: rec and when the server said so (local clock), for a ticking length.
   let rec: { hex: string; state: RecordingState | null | undefined; atMs: number; serverNowMs: number } | null = null
   let recBusy = false
-  let savedUntilMs = 0 // "Recording saved" shows until then
+  let savedUntilMs = 0 // "Recording ended" shows until then
   let recTimer: ReturnType<typeof setInterval> | null = null
 
   const hexOf = (): string | null => curHex
@@ -530,7 +530,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (on && rec !== null) {
       const elapsed = rec.serverNowMs + (Date.now() - rec.atMs) - mine.startedMs
       set(recText, `REC ${formatElapsed(elapsed)} · ${mine.samples.toLocaleString('en-US')} point${mine.samples === 1 ? '' : 's'}`)
-    } else if (saved) set(recText, 'Recording saved')
+    } else if (saved) set(recText, 'Recording ended')
     const tick = on || saved
     if (tick && recTimer === null) recTimer = setInterval(paintRec, 1000)
     else if (!tick && recTimer !== null) (clearInterval(recTimer), (recTimer = null))

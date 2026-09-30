@@ -204,6 +204,86 @@
   font-size: 11px;
 }
 
+/* A recording's Rename and Delete, under its facts; the rename field and the delete question take their row. */
+.fh-scn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fh-scn-act {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fh-text);
+  font: 600 12px/1 var(--fh-font);
+  cursor: pointer;
+}
+
+.fh-scn-act:hover:not(:disabled) {
+  background: var(--fh-hover);
+}
+
+.fh-scn-act:focus-visible,
+.fh-scn-input:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-scn-act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fh-scn-act.fh-scn-primary {
+  border-color: transparent;
+  background: var(--fh-accent);
+  color: #fff;
+}
+
+.fh-scn-act.fh-scn-danger {
+  color: #ff9b9b;
+}
+
+.fh-scn-act.fh-scn-danger.fh-scn-primary {
+  background: var(--fh-err);
+  color: #fff;
+}
+
+.fh-scn-input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fh-text);
+  font: 13px var(--fh-font);
+}
+
+.fh-scn-input::placeholder {
+  color: var(--fh-faint);
+}
+
+.fh-scn-ask {
+  flex: 1 1 auto;
+  color: #ffb4b4;
+  font-weight: 600;
+}
+
+.fh-scn-actmsg {
+  margin: 6px 0 0;
+  color: #ffb4b4;
+}
+
+.fh-scn-actmsg[hidden] {
+  display: none;
+}
+
 /* Loading: a row's shape in shimmer bars. */
 .fh-scn-skel {
   display: flex;
@@ -258,5 +338,10 @@
 
   .fh-scn-details {
     padding-left: 64px;
+  }
+
+  .fh-scn-act,
+  .fh-scn-input {
+    min-height: 40px;
   }
 }

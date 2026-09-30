@@ -4,9 +4,11 @@
 // scenario (fromRecording.ts). Every item is one compact row: Play, its title and one line (date and span, or route,
 // start and length), and a chevron that opens its details (a package's subtitle, aircraft, summary, crew and note; a
 // recording's aircraft, route, times, points and how it ended). A recording still under way is marked and plays what
-// is recorded so far; one too short to play says so. The scenarios load once, at mount; the recordings at mount and
-// again on refresh('recordings') (the app asks when the panel opens). An older answer that arrives late is dropped.
-// setPlaying(id) marks the running item. Text only.
+// is recorded so far; one too short to play says so. A recording's details also hold Rename (a name of its own, in
+// place: Enter saves, Esc cancels, blank clears) and Delete (asked twice: it is for good). The scenarios load once, at
+// mount; the recordings at mount and again on refresh('recordings') (the app asks when the panel opens). An older
+// answer that arrives late is dropped; open details stay open across reloads. setPlaying(id) marks the running item.
+// Text only.
 import type { RecordingInfo } from '../../shared/api.ts'
 import { sToClock } from '../scenario/format.ts'
 import { recordingId } from '../scenario/fromRecording.ts'
@@ -19,6 +21,10 @@ export interface ScenarioPanelOpts {
   /** The recorded flights, newest first; null: this server records nothing. Absent: no Recordings section. */
   recordings?(): Promise<RecordingInfo[] | null>
   onPlay(id: string): void
+  /** Names a recording (blank clears); resolves to the list after. Absent: no Rename. */
+  onRename?(file: string, name: string): Promise<RecordingInfo[]>
+  /** Deletes a recording for good; resolves to the list after. Absent: no Delete. */
+  onDelete?(file: string): Promise<RecordingInfo[]>
 }
 
 export interface ScenarioPanelHandle {
@@ -30,6 +36,7 @@ export interface ScenarioPanelHandle {
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const MIN_PLAY_S = 2 // a recording shorter than this has nothing to play
+const NAME_MAX = 60 // server/flightLog.ts NAME_MAX
 
 /** '1985-08-12' → '12 August 1985' (read as written: no time zone moves the day). */
 function dateText(iso: string): string {
@@ -77,6 +84,7 @@ export function mountScenarioPanel(body: HTMLElement, opts: ScenarioPanelOpts): 
   if (opts.recordings) root.append(h('h3', 'fh-scn-section', 'Recordings'), recList)
   body.append(root)
   const buttons = new Map<string, HTMLButtonElement>()
+  const expanded = new Set<string>() // ids whose details are open: kept across reloads
   let playing: string | null = null
   const generation = { scn: 0, rec: 0 } // a newer load (or destroy) makes older answers stale
 
@@ -121,13 +129,16 @@ export function mountScenarioPanel(body: HTMLElement, opts: ScenarioPanelOpts): 
     more.setAttribute('aria-label', `Details of ${title}`)
     more.title = 'Details'
     const box = h('div', 'fh-scn-details')
-    box.hidden = true
     box.append(...details)
-    more.addEventListener('click', () => {
-      box.hidden = !box.hidden
-      more.setAttribute('aria-expanded', String(!box.hidden))
-      more.replaceChildren(icon(box.hidden ? 'chevronDown' : 'chevronUp', 16))
-    })
+    const show = (open: boolean): void => {
+      box.hidden = !open
+      if (open) expanded.add(id)
+      else expanded.delete(id)
+      more.setAttribute('aria-expanded', String(open))
+      more.replaceChildren(icon(open ? 'chevronUp' : 'chevronDown', 16))
+    }
+    show(expanded.has(id))
+    more.addEventListener('click', () => show(box.hidden !== false))
     row.append(play, text, more)
     art.append(row, box)
     buttons.set(id, play)
@@ -153,13 +164,105 @@ export function mountScenarioPanel(body: HTMLElement, opts: ScenarioPanelOpts): 
     return item(c.id, c.title, `${dateText(c.date)} · ${hm(c.start)}–${hm(c.end)} ${c.clockLabel}`, details)
   }
 
+  /** Rename and Delete for one recording, in its details. */
+  function recordingActions(r: RecordingInfo, flight: string): HTMLElement {
+    const bar = h('div', 'fh-scn-actions')
+    const msg = h('p', 'fh-scn-actmsg')
+    msg.hidden = true
+    msg.setAttribute('role', 'alert')
+    const small = (label: string, cls = ''): HTMLButtonElement => {
+      const b = h('button', `fh-scn-act ${cls}`.trim(), label)
+      b.type = 'button'
+      return b
+    }
+    const busy = (on: boolean): void => {
+      for (const b of bar.querySelectorAll('button')) b.disabled = on
+    }
+    const fail = (what: string, e: unknown): void => {
+      console.warn(`[recordings] ${what} failed`, e)
+      busy(false)
+      msg.textContent = `Could not ${what} it. Try again.`
+      msg.hidden = false
+    }
+    const done = (recs: RecordingInfo[]): void => {
+      generation.rec++ // an answer to an older ask must not undo this
+      recList.replaceChildren(...showRecordings(recs))
+      paintPlaying()
+    }
+
+    const idle = (): void => {
+      const items: HTMLElement[] = []
+      if (opts.onRename) {
+        const rename = small('Rename')
+        rename.addEventListener('click', editing)
+        items.push(rename)
+      }
+      if (opts.onDelete) {
+        const del = small('Delete', 'fh-scn-danger')
+        del.addEventListener('click', confirming)
+        items.push(del)
+      }
+      bar.replaceChildren(...items)
+    }
+
+    const editing = (): void => {
+      const input = h('input', 'fh-scn-input')
+      input.type = 'text'
+      input.value = r.name ?? ''
+      input.placeholder = flight
+      input.maxLength = NAME_MAX
+      input.setAttribute('aria-label', `Name of the recording of ${flight}`)
+      const save = small('Save', 'fh-scn-primary')
+      const cancel = small('Cancel')
+      const commit = (): void => {
+        busy(true)
+        input.disabled = true
+        opts.onRename!(r.file, input.value).then(done, (e: unknown) => {
+          input.disabled = false
+          fail('rename', e)
+        })
+      }
+      save.addEventListener('click', commit)
+      cancel.addEventListener('click', idle)
+      input.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key !== 'Enter' && e.key !== 'Escape') return
+        e.preventDefault()
+        e.stopPropagation() // Esc here cancels the edit, not the panel (the app's Esc closes it)
+        if (e.key === 'Enter') commit()
+        else idle()
+      })
+      bar.replaceChildren(input, save, cancel)
+      input.focus()
+    }
+
+    const confirming = (): void => {
+      const q = h('span', 'fh-scn-ask', 'Delete for good?')
+      const yes = small('Delete', 'fh-scn-danger fh-scn-primary')
+      const no = small('Cancel')
+      yes.addEventListener('click', () => {
+        busy(true)
+        opts.onDelete!(r.file).then(done, (e: unknown) => fail('delete', e))
+      })
+      no.addEventListener('click', idle)
+      bar.replaceChildren(q, yes, no)
+      no.focus()
+    }
+
+    idle()
+    const wrap = h('div', 'fh-scn-edit')
+    wrap.append(bar, msg)
+    return wrap
+  }
+
   function recordingItem(r: RecordingInfo): HTMLElement {
-    const title = r.callsign ?? r.hex.toUpperCase()
+    const flight = r.callsign ?? r.hex.toUpperCase()
+    const title = r.name ?? flight
     const route = r.route === null ? '' : r.route.split('-').join(' → ')
     const span = spanS(r)
     const when = utcText(r.firstMs ?? r.startedMs)
     const ended = r.active ? 'Still recording' : r.ended === null ? 'Cut short (the server stopped)' : ENDED[r.ended.why]
     const details = [facts([
+      ['Flight', r.name === null ? '' : flight],
       ['Aircraft', [r.reg, r.typeCode].filter(Boolean).join(' · ')],
       ['Route', route],
       ['Started', utcText(r.startedMs)],
@@ -168,6 +271,7 @@ export function mountScenarioPanel(body: HTMLElement, opts: ScenarioPanelOpts): 
       ['Ended', ended],
       ['Source', r.source],
     ])]
+    if (opts.onRename || opts.onDelete) details.push(recordingActions(r, flight))
     const line = [route, when, lengthText(span)].filter(Boolean).join(' · ')
     const playable = r.samples >= 2 && span >= MIN_PLAY_S
     return item(recordingId(r.file), title, line, details, { mark: r.active ? 'REC' : undefined, playable, why: 'Too short to replay' })
@@ -218,15 +322,14 @@ export function mountScenarioPanel(body: HTMLElement, opts: ScenarioPanelOpts): 
 
   const loadScenarios = (): void =>
     load(scnList, 'scn', opts.list, (cards) => (cards.length > 0 ? cards.map(scenarioItem) : [h('p', 'fh-scn-empty', 'No scenarios yet.')]), 'scenarios')
+  const showRecordings = (recs: RecordingInfo[] | null): HTMLElement[] =>
+    recs === null
+      ? [h('p', 'fh-scn-empty', 'This server records nothing: start it with make to record flights.')]
+      : recs.length > 0
+        ? recs.map(recordingItem)
+        : [h('p', 'fh-scn-empty', 'None yet. Select a flight and press the record button on its card.')]
   const loadRecordings = (): void => {
-    if (!opts.recordings) return
-    load(recList, 'rec', opts.recordings, (recs) =>
-      recs === null
-        ? [h('p', 'fh-scn-empty', 'This server records nothing: start it with make to record flights.')]
-        : recs.length > 0
-          ? recs.map(recordingItem)
-          : [h('p', 'fh-scn-empty', 'None yet. Select a flight and press the record button on its card.')],
-    'recordings')
+    if (opts.recordings) load(recList, 'rec', opts.recordings, showRecordings, 'recordings')
   }
 
   const api: ScenarioPanelHandle = {

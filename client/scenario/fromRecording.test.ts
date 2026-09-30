@@ -10,7 +10,7 @@ import { physicsReport } from './physics.ts'
 const T0 = Date.UTC(2026, 8, 30, 10, 0, 0)
 const FILE = '2026-09-30/100000Z-ELY315-738abc.jsonl'
 const INFO: RecordingInfo = {
-  file: FILE, hex: '738abc', callsign: 'ELY315', reg: '4X-EKA', typeCode: 'B738', category: 'A3', military: false,
+  file: FILE, name: null, hex: '738abc', callsign: 'ELY315', reg: '4X-EKA', typeCode: 'B738', category: 'A3', military: false,
   route: 'LLBG-EGLL', source: 'adsbfi', startedMs: T0, firstMs: T0, lastMs: null, samples: 0, ended: null, active: false,
 }
 

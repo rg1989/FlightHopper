@@ -49,6 +49,22 @@ export class ApiClient {
     return ((await res.json()) as { recordings: RecordingInfo[] }).recordings
   }
 
+  /** Names a recording (blank clears the name); the list after. */
+  renameRecording(file: string, name: string): Promise<RecordingInfo[]> {
+    return this.#editRecording(`rename?file=${encodeURIComponent(file)}&name=${encodeURIComponent(name)}`)
+  }
+
+  /** Deletes a recording for good (one under way stops first); the list after. */
+  deleteRecording(file: string): Promise<RecordingInfo[]> {
+    return this.#editRecording(`delete?file=${encodeURIComponent(file)}`)
+  }
+
+  async #editRecording(path: string): Promise<RecordingInfo[]> {
+    const res = await this.#fetch(`${this.#base}/recordings/${path}`, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return ((await res.json()) as { recordings: RecordingInfo[] }).recordings
+  }
+
   /** One recorded flight's samples, for a replay. */
   async recording(file: string): Promise<RecordingTrack> {
     const res = await this.#fetch(`${this.#base}/recordings/track?file=${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(30_000) })

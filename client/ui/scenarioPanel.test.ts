@@ -25,6 +25,16 @@ class El {
   attrs: Record<string, string> = {}
   dataset: Record<string, string> = {}
   title = ''
+  value = ''
+  placeholder = ''
+  maxLength = -1
+  focused = false
+  focus(): void {
+    this.focused = true
+  }
+  querySelectorAll(tag: string): El[] {
+    return all(this).filter((e) => e !== this && e.tag === tag)
+  }
   get childElementCount(): number {
     return this.children.length
   }
@@ -39,7 +49,7 @@ class El {
     },
     contains: (c: string): boolean => this.#classes.has(c),
   }
-  listeners = new Map<string, (() => void)[]>()
+  listeners = new Map<string, ((e?: unknown) => void)[]>()
   constructor(tag: string) {
     this.tag = tag
   }
@@ -66,11 +76,14 @@ class El {
   setAttribute(k: string, v: string): void {
     this.attrs[k] = v
   }
-  addEventListener(type: string, f: () => void): void {
+  addEventListener(type: string, f: (e?: unknown) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), f])
   }
   click(): void {
-    for (const f of this.listeners.get('click') ?? []) f()
+    if (!this.disabled) this.fire('click')
+  }
+  fire(type: string, e?: unknown): void {
+    for (const f of this.listeners.get(type) ?? []) f(e)
   }
   has(cls: string): boolean {
     return this.className.split(' ').includes(cls) || this.#classes.has(cls)
@@ -121,14 +134,17 @@ const OTHER: ScenarioCard = { ...JAL, id: 'other', title: 'Another flight', crew
 
 const T0 = Date.UTC(2026, 8, 30, 0, 29, 32)
 const ITY: RecordingInfo = {
-  file: '2026-09-30/002932Z-ITY810-4cae1d.jsonl', hex: '4cae1d', callsign: 'ITY810', reg: 'EI-HXG', typeCode: 'A21N', category: 'A3',
+  file: '2026-09-30/002932Z-ITY810-4cae1d.jsonl', name: null, hex: '4cae1d', callsign: 'ITY810', reg: 'EI-HXG', typeCode: 'A21N', category: 'A3',
   military: false, route: 'LIRF-LLBG', source: 'adsbfi', startedMs: T0, firstMs: T0 - 120_000, lastMs: T0 + 280_000, samples: 140,
   ended: { why: 'landed', endedMs: T0 + 340_000 }, active: false,
 }
 const LIVE: RecordingInfo = { ...ITY, file: '2026-09-30/010000Z-ELY336-73806c.jsonl', hex: '73806c', callsign: 'ELY336', route: null, ended: null, active: true }
 const STUB: RecordingInfo = { ...ITY, file: '2026-09-30/020000Z--738abc.jsonl', hex: '738abc', callsign: null, samples: 1, lastMs: T0 - 120_000 }
 
-function mount(list: () => Promise<ScenarioCard[]>, recordings?: () => Promise<RecordingInfo[] | null>) {
+function mount(
+  list: () => Promise<ScenarioCard[]>, recordings?: () => Promise<RecordingInfo[] | null>,
+  edit?: { onRename?(file: string, name: string): Promise<RecordingInfo[]>; onDelete?(file: string): Promise<RecordingInfo[]> },
+) {
   const body = new El('div')
   const plays: string[] = []
   let calls = 0
@@ -143,6 +159,7 @@ function mount(list: () => Promise<ScenarioCard[]>, recordings?: () => Promise<R
       return recordings()
     }),
     onPlay: (id) => plays.push(id),
+    ...edit,
   })
   return { body, panel, plays, calls: () => calls, recCalls: () => recCalls }
 }
@@ -324,4 +341,90 @@ test('destroy removes the panel, and a late answer adds nothing', async () => {
   await flush()
   assert.equal(all(body).length, 1)
   panel.destroy()
+})
+
+const key = (k: string) => {
+  const e = { key: k, stopped: false, prevented: false, stopPropagation() { e.stopped = true }, preventDefault() { e.prevented = true } }
+  return e
+}
+const btn = (root: El, label: string): El => {
+  const b = all(root).filter((e) => e.tag === 'button' && text(e) === label)
+  assert.equal(b.length, 1, `one "${label}" button, found ${b.length}`)
+  return b[0]
+}
+
+test('Rename: in place, Enter saves (the list after it is shown, the row still open), Esc cancels without closing the panel', async () => {
+  const names: [string, string][] = []
+  const { body } = mount(async () => [], async () => [ITY], {
+    onRename: async (file, name) => {
+      names.push([file, name])
+      return [{ ...ITY, name: name.trim() || null }]
+    },
+  })
+  await flush()
+  one(body, 'fh-scn-more').click()
+  btn(body, 'Rename').click()
+  const input = one(body, 'fh-scn-input')
+  assert.deepEqual([input.value, input.placeholder, input.maxLength, input.focused], ['', 'ITY810', 60, true])
+  const esc = key('Escape')
+  input.fire('keydown', esc)
+  assert.ok(esc.stopped, 'Esc stays in the field: the app would close the panel')
+  assert.equal(find(body, 'fh-scn-input').length, 0, 'cancelled')
+  btn(body, 'Rename').click()
+  one(body, 'fh-scn-input').value = 'Night arrival, runway 12'
+  one(body, 'fh-scn-input').fire('keydown', key('Enter'))
+  await flush()
+  assert.deepEqual(names, [[ITY.file, 'Night arrival, runway 12']])
+  assert.deepEqual(titles(body), ['Night arrival, runway 12'])
+  assert.equal(visible(body, 'fh-scn-facts').length, 1, 'still open')
+  assert.match(text(one(body, 'fh-scn-facts')), /^FlightITY810Aircraft/, 'named: its flight in the details')
+  assert.equal(find(body, 'fh-scn-play')[0].attrs['aria-label'], 'Play Night arrival, runway 12')
+})
+
+test('Delete asks first; Cancel keeps it; confirmed, the list after it is shown; a failure says so and allows a retry', async (t) => {
+  t.mock.method(console, 'warn', () => {})
+  let fail = true
+  const deleted: string[] = []
+  const { body } = mount(async () => [], async () => [LIVE, ITY], {
+    onDelete: async (file) => {
+      if (fail) throw new Error('500')
+      deleted.push(file)
+      return [LIVE]
+    },
+  })
+  await flush()
+  const ity = find(body, 'fh-scn-item')[1]
+  one(ity, 'fh-scn-more').click()
+  assert.equal(all(ity).filter((e) => e.tag === 'button' && text(e) === 'Rename').length, 0, 'no onRename: no Rename')
+  btn(ity, 'Delete').click()
+  assert.match(text(ity), /Delete for good\?/)
+  assert.deepEqual(deleted, [])
+  btn(ity, 'Cancel').click()
+  btn(ity, 'Delete').click()
+  btn(ity, 'Delete').click()
+  await flush()
+  assert.match(text(one(ity, 'fh-scn-actmsg')), /Could not delete it/)
+  assert.equal(btn(ity, 'Delete').disabled, false, 'buttons back for a retry')
+  fail = false
+  btn(ity, 'Delete').click()
+  await flush()
+  assert.deepEqual(deleted, [ITY.file])
+  assert.deepEqual(titles(body), ['ELY336'])
+})
+
+test('an edit\'s list is not undone by an older reload answering after it', async () => {
+  const slow = deferred<RecordingInfo[]>()
+  let n = 0
+  const { body, panel } = mount(async () => [], () => (n++ === 0 ? Promise.resolve([ITY]) : slow.promise), {
+    onRename: async () => [{ ...ITY, name: 'Renamed' }],
+  })
+  await flush()
+  panel.refresh('recordings')
+  one(body, 'fh-scn-more').click()
+  btn(body, 'Rename').click()
+  one(body, 'fh-scn-input').fire('keydown', key('Enter'))
+  await flush()
+  slow.resolve([ITY])
+  await flush()
+  assert.deepEqual(titles(body), ['Renamed'])
 })
