@@ -1,7 +1,8 @@
 # FlightHopper on the TV
 
 The living-room TV (Xiaomi Mi TV, Android 9, 4K panel, weak GPU) cannot render Cesium, so `omarchy` (MacBookPro16,1,
-Radeon Pro 5300M, Arch/Omarchy, Hyprland) renders FlightHopper and Sunshine streams it (1080p HEVC at 5 Mbit/s: the TV's Wi-Fi carries only ~9) to Moonlight on the TV.
+Radeon Pro 5300M, Arch/Omarchy, Hyprland) renders FlightHopper and Sunshine streams it to Moonlight on the TV: 1080p
+HEVC capped at 5 Mbit/s (`max_bitrate`), because the TV's Wi-Fi takes only ~9 Mbit/s from omarchy.
 The TV remote drives the app: the page runs with `?tv=1` (`client/ui/remote.ts`).
 
 ```
@@ -35,7 +36,7 @@ failed to start). Whether it locks at all is the owner's choice (Omarchy's `omar
 
 ## TV (tv/moonlight, tv/launcher)
 
-`tv/moonlight/patch.sh` builds `moonlight-tv.apk` (Moonlight v12.2, OK/Back mapped, 4K by default) and
+`tv/moonlight/patch.sh` builds `moonlight-tv.apk` (Moonlight v12.2, OK/Back mapped, 1080p HEVC by default) and
 `tv/launcher/build.sh` builds `flighthopper-tv.apk` (the tile). Install both with `adb install -r`. Pair once: Moonlight →
 omarchy → it shows a PIN → enter it in Sunshine's web UI (PIN tab) or
 `curl -sk -u admin:<pass> -X POST https://localhost:47990/api/pin -d '{"pin":"1234","name":"TV"}'` on omarchy.
