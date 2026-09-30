@@ -26,5 +26,7 @@ if (!navigator.onLine) {
   setTimeout(() => splash.done(), FIRST_DATA_WAIT_MS)
 } catch (e) {
   splash.fail(e instanceof Error ? e.message : String(e))
+  // The TV kiosk (?tv=1) has only a remote, whose OK is Enter: on Try again it reloads (the app's remote never started).
+  if (new URLSearchParams(location.search).get('tv') === '1') document.querySelector<HTMLElement>('.fh-splash button')?.focus()
   throw e
 }
