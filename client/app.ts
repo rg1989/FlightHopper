@@ -59,7 +59,7 @@ import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { FAILS_DOWN, mountOutage, outageFor } from './ui/outage.ts'
 import type { Lookup } from './ui/detail.ts'
-import { entryState, mountFlightCard } from './ui/flightCard.ts'
+import { FOCUS_ASK_MS, entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountMapKey } from './ui/mapKey.ts'
 import { mountRail } from './ui/rail.ts'
@@ -100,7 +100,6 @@ const URL_EVERY_MS = 1000 // how often the address bar follows the view (history
 // arrival age's p90 moving by tenths of a second) showed as a 20 % speed-up lurch. It grows at the default 0.2 s/s, so an
 // aircraft reporting only every ~40 s (thin coverage) reaches a delay that covers its gaps within ~2 min, not ~9.
 const CHASE_SHRINK_S_PER_S = 0.05
-const FOCUS_ASK_MS = 10_000 // a focused (not chased) aircraft: how often its chase reply (raw fields, info) is asked
 const HOVER_PICK_MS = 100 // at most ten hover picks a second while the mouse moves (each pick is a small render pass)
 const HEX = /^~?[0-9a-f]{6}$/
 // Until the first reply. Nothing is drawn before it, so the source named here is never shown.
@@ -1050,10 +1049,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const hex = selected
     const v = viewCircle()
     const noChase: Promise<ChaseResponse | null> = Promise.resolve(null)
-    // Chased: every poll (the server then refreshes it at its chase period). Only focused: every FOCUS_ASK_MS, for the
-    // card's details; its position comes with the view, at the view's own zoom-scaled period like everything on screen.
+    // Chased, or focused and on screen: every poll, so the server refreshes it at its chase period (the fastest its
+    // budget allows) whatever the zoom: the view circle holding it, or hex requests while the view is grid cells.
+    // Focused off screen: every FOCUS_ASK_MS, for the card's details and a hex request or two upstream.
     const nowMs = performance.now()
-    const ask = hex !== null && (chasing || nowMs - lastFocusAskMs >= FOCUS_ASK_MS)
+    const at = hex === null || chasing ? undefined : fleet.get(hex)
+    const onScreen = at !== undefined && distanceNm(v.lat, v.lon, at.lat, at.lon) <= v.nm
+    const ask = hex !== null && (chasing || onScreen || nowMs - lastFocusAskMs >= FOCUS_ASK_MS)
     if (ask && !chasing) lastFocusAskMs = nowMs
     // The open traffic card's aircraft, as a focused one: at once, then every FOCUS_ASK_MS. Within 10 nm of the chased
     // aircraft it is inside the view circle, so the server asks upstream nothing more for it.

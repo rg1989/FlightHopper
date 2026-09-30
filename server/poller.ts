@@ -55,7 +55,13 @@ const EMPTY_MAX_MS = 3_600_000 // …but at least hourly
  */
 const WATCH_PERIOD_MS = 5000
 const WATCH_GAP_MS = 2000
-const HEX_RETRY_MS = 30_000 // a chased hex whose hex request brought no position waits this long before the next one
+const HEX_RETRY_MS = 30_000 // a hex whose hex request left it without a fresh position waits this long before the next one
+/**
+ * Fresh: the newest position is younger than this. A hex answer that only re-serves such a one (the upstream has nothing
+ * newer yet) is no reason to wait: the next position is due any moment. Older (not found, position-less, GPS jammed,
+ * hidden), the hex waits HEX_RETRY_MS.
+ */
+const HEX_FRESH_MS = 10_000
 
 /** A wide view asks only for the areas within this distance of its centre: the middle of the globe, not its rim. */
 export const WIDE_REACH_NM = 2500
@@ -226,9 +232,8 @@ export class Poller {
         const r = await this.#source.hexes(batch)
         if (this.#ingest(r)) {
           this.#chaseOk.ok(this.#now())
-          // A good answer without a fresh (shown) position for it: not found, position-less or hidden. That hex waits
-          // before it is asked again. A failed request is the bucket's to pace (Retry-After, back-off).
-          for (const hex of batch) if ((this.#store.latest(hex)?.rxMs ?? -Infinity) < now) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
+          // A failed request is the bucket's to pace (Retry-After, back-off).
+          this.#backOff(batch, now)
         }
         return true
       }
@@ -236,9 +241,7 @@ export class Poller {
       if (watch.length > 0) {
         if (!this.#bucket.tryTake()) return false
         this.#lastWatchReqMs = now
-        if (this.#ingest(await this.#source.hexes(watch))) {
-          for (const hex of watch) if ((this.#store.latest(hex)?.rxMs ?? -Infinity) < now) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
-        }
+        if (this.#ingest(await this.#source.hexes(watch))) this.#backOff(watch, now)
         return true
       }
       const c = this.#next(now)
@@ -369,8 +372,8 @@ export class Poller {
 
   /**
    * The chased hexes (≤ 100, most recently touched first) that need a hex request: never stored (a ?hex= link), or last
-   * seen outside the view circle (none while the view is grid cells). A hex whose last hex request brought no position
-   * (landed, out of coverage, position-less, hidden, a mistyped ?hex=) is left out for HEX_RETRY_MS.
+   * seen outside the view circle (none while the view is grid cells). A hex whose last hex request left it without a
+   * fresh position (landed, out of coverage, GPS jammed, hidden, a mistyped ?hex=) is left out for HEX_RETRY_MS.
    * ponytail: more than 100 concurrent chases starve the rest.
    */
   #batch(now: number): string[] {
@@ -409,6 +412,11 @@ export class Poller {
       .sort((a, b) => a[1] - b[1])
       .slice(0, MAX_HEXES)
       .map(([hex]) => hex)
+  }
+
+  /** After a good hex answer: each hex left without a fresh (shown) position waits HEX_RETRY_MS before it is asked again. */
+  #backOff(hexes: readonly string[], now: number): void {
+    for (const hex of hexes) if (now - (this.#store.latest(hex)?.tMs ?? -Infinity) >= HEX_FRESH_MS) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
   }
 
   /** The hexes clients are chasing or focused on now (their chase requests keep them for chaseTtlMs). */

@@ -20,6 +20,8 @@ import './flightCard.css'
 
 /** Seconds after a selection with no position during which the card says "Locating…" (then "No recent position"). */
 export const LOCATING_S = 12
+/** A focused aircraft is asked (/api/chase) at least this often whatever the zoom: every poll while it is on screen. */
+export const FOCUS_ASK_MS = 10_000
 
 export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none'
 
@@ -68,9 +70,11 @@ function split(v: string): [string, string] {
 /**
  * What the card shows. sinceSelectS: seconds since this aircraft was selected (for "Locating…" before its first
  * position). Chasing, the status line follows the track: interpolating → Live; extrapolating → Predicting; stale →
- * Signal lost. Only focused, the aircraft is refreshed with the view (every status.viewEveryS, zoom-scaled), so it is
- * Live until 2.5 of those refreshes go by without a position (the map hides an aircraft on the same rule); so is a
- * traffic aircraft (entryState), which also has its range.
+ * Signal lost. Only focused, the aircraft is refreshed with the view (every status.viewEveryS, zoom-scaled) and asked
+ * itself at least every FOCUS_ASK_MS, so it is Live until 2.5 of the shorter go by without a position: a zoomed-out
+ * view's long period no longer keeps a minutes-old position "Live". So is a traffic aircraft (entryState), which also
+ * has its range. Still heard without a position (GPS jammed or spoofed, daily around Israel: the upstream drops those
+ * positions), lost reads "GPS lost", not "Signal lost".
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
@@ -83,8 +87,10 @@ export function cardView(
   }
   const hex = get('hex')?.toLowerCase() ?? selHex
   const fields = hudFields(s, status)
-  const lostAfterS = Math.max(STALE_AGE_S, 2.5 * (status.viewEveryS ?? 0))
+  const lostAfterS = Math.max(STALE_AGE_S, 2.5 * Math.min(status.viewEveryS ?? 0, FOCUS_ASK_MS / 1000))
   const lost = s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfterS)
+  // Another aircraft's object (the card has just moved on, its own not in yet) says nothing of this one.
+  const own = raw !== null && raw.hex.toLowerCase() === hex ? raw : null
   const alt = s?.onGround ? { value: 'GND', dim: lost } : stat(fields, 'ALT', lost)
   const [altV] = split(alt.value)
   const gs = stat(fields, 'GS', lost)
@@ -100,14 +106,14 @@ export function cardView(
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
   } else if (lost) {
     state = 'lost'
-    text = Number.isFinite(s.ageS) ? `Signal lost ${Math.round(Math.max(0, s.ageS))} s ago` : 'Signal lost'
+    // ponytail: `seen` is as of the last chase reply (≤ FOCUS_ASK_MS old), so "GPS" may outlast a real silence by that.
+    const what = own?.seen !== undefined && own.seen < lostAfterS ? 'GPS lost' : 'Signal lost'
+    text = Number.isFinite(s.ageS) ? `${what} ${Math.round(Math.max(0, s.ageS))} s ago` : what
   } else if (chasing && s.mode === 'extrap') {
     state = 'predict'
     text = 'Predicting · waiting for data'
   } else {
     state = 'live'
-    // Another aircraft's object (the card has just moved on, its own not in yet) says nothing of this one's source.
-    const own = raw !== null && raw.hex.toLowerCase() === hex ? raw : null
     text = ['Live', sourceLabel(own, s.quality)].filter(Boolean).join(' · ')
   }
 

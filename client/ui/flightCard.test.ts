@@ -23,6 +23,7 @@ const RAW: ReadsbAircraft = {
   tisb: [], messages: 9956, seen: 0.0, rssi: -4.0,
 }
 const INFO = toInfo(RAW, null)
+const SILENT: ReadsbAircraft = { ...RAW, seen: 60, seen_pos: 60 } // nothing heard from it for a minute
 const S: RenderState = {
   hex: '4691c4', lat: 32.371902, lon: 34.43291, hM: 2620, headingDeg: 105.24, pitchDeg: -1.5, rollDeg: 0.5, gsKt: 337.1,
   trackDeg: 101.81, altBaroFt: 7975, vsFpm: -951, mode: 'interp', altSource: 'geom', onGround: false, ageS: -0.8,
@@ -48,7 +49,7 @@ test('cardView: identity, four live numbers (track, not the computed heading), L
 
 test('cardView: status follows the track: predicting, signal lost (numbers fade), locating, then no position', () => {
   assert.equal(cardView('4691c4', { ...S, mode: 'extrap', ageS: 3 }, RAW, INFO, LIVE, GR, 5).state, 'predict')
-  const lost = cardView('4691c4', { ...S, mode: 'stale', ageS: 47.4 }, RAW, INFO, LIVE, GR, 60)
+  const lost = cardView('4691c4', { ...S, mode: 'stale', ageS: 47.4 }, SILENT, INFO, LIVE, GR, 60)
   assert.equal(lost.state, 'lost')
   assert.equal(lost.status, 'Signal lost 47 s ago')
   assert.ok(lost.stats.every((s) => s.dim))
@@ -65,10 +66,25 @@ test('cardView: only focused, Live until 2.5 view refreshes pass without a posit
   assert.equal(cardView('4691c4', between, RAW, INFO, wide, GR, 30, false).state, 'live')
   assert.equal(cardView('4691c4', between, RAW, INFO, wide, GR, 30, true).state, 'lost', 'the chase keeps its own rule')
   assert.equal(cardView('4691c4', { ...S, mode: 'extrap', ageS: 3 }, RAW, INFO, wide, GR, 30, false).state, 'live')
-  const gone = cardView('4691c4', { ...S, mode: 'stale', ageS: 33 }, RAW, INFO, wide, GR, 60, false)
+  const gone = cardView('4691c4', { ...S, mode: 'stale', ageS: 33 }, SILENT, INFO, wide, GR, 60, false)
   assert.deepEqual([gone.state, gone.status], ['lost', 'Signal lost 33 s ago'])
   assert.ok(gone.stats.every((st) => st.dim))
-  assert.equal(cardView('4691c4', { ...S, ageS: 11 }, RAW, INFO, LIVE, GR, 30, false).state, 'lost', 'never under 10 s')
+  assert.equal(cardView('4691c4', { ...S, ageS: 11 }, SILENT, INFO, LIVE, GR, 30, false).state, 'lost', 'never under 10 s')
+  // Zoomed far out (the view every 10 min) it is still asked itself every FOCUS_ASK_MS: a 40 s old position is lost.
+  const globe: StatusBrief = { ...LIVE, viewEveryS: 600 }
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 40 }, SILENT, INFO, globe, GR, 60, false).state, 'lost')
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 20 }, SILENT, INFO, globe, GR, 60, false).state, 'live')
+})
+
+test('cardView: still heard but no position (GPS jammed, the upstream drops it) reads "GPS lost", not "Signal lost"', () => {
+  const jammed: ReadsbAircraft = { ...RAW, lat: undefined, lon: undefined, seen_pos: undefined, nic: 0, nac_p: 3, seen: 4.4 }
+  const v = cardView('4691c4', { ...S, mode: 'stale', ageS: 34.2 }, jammed, INFO, LIVE, GR, 60)
+  assert.deepEqual([v.state, v.status], ['lost', 'GPS lost 34 s ago'])
+  assert.ok(v.stats.every((st) => st.dim), 'its numbers are the last position\'s')
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 34.2 }, jammed, INFO, LIVE, GR, 60, false).status, 'GPS lost 34 s ago', 'focused too')
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 34.2 }, SILENT, INFO, LIVE, GR, 60).status, 'Signal lost 34 s ago')
+  const other: ReadsbAircraft = { ...jammed, hex: 'a1b2c3' }
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 34.2 }, other, INFO, LIVE, GR, 60).status, 'Signal lost 34 s ago', 'another\'s object says nothing')
 })
 
 test('cardView: the source comes from the aircraft\'s own object only; another\'s (the card just switched) is ignored', () => {

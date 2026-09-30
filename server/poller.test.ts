@@ -45,7 +45,7 @@ function fakeSource(clock: { t: number }, fullSnapshot: boolean, liveHexes = fal
     calls.push({ t: clock.t, m, args })
     const { status, retryAfterS } = replies.shift() ?? { status: 200 }
     // liveHexes: a hex answer's upstream `now` moves with the clock, so each one is a fresh position (the fixed recorded
-    // body is the same position re-served, which the poller rightly treats as nothing new and waits 30 s).
+    // body is the same position re-served, growing older: asked again until it is 10 s old, then every 30 s).
     const live = liveHexes && m === 'hexes'
     const body = status !== 200 ? '' : live ? BODIES.hexes.replace(/"now":\s*\d+/, `"now": ${HEXES_NOW_MS + clock.t - T0}`) : BODIES[m]
     const snapshot = status === 200 ? (m === 'all' ? normalizeReadsb(body) : normalizeAdsblol(body)) : null
@@ -190,6 +190,15 @@ test('a chased aircraft outside the view circle gets a hex request every chasePe
     if ((t.clock.t - T0) % 1000 === 0) t.poller.touchChase('abcdef')
   })
   assert.deepEqual(rel(t.calls, 'hexes'), [0, 30_000])
+})
+
+test('a chased hex re-served with the same, still fresh position is asked again at the chase period; once it is 10 s old, every 30 s', async () => {
+  // The fixed body: a1c7e4's one position, 0.5 s old at T0. The upstream simply has nothing newer yet: no reason to wait.
+  const s = setup({ opts: { chasePeriodMs: 1400 } })
+  await runUntil(s, 45_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchChase('a1c7e4')
+  })
+  assert.deepEqual(rel(s.calls, 'hexes'), [0, 1400, 2800, 4200, 5600, 7000, 8400, 9800, 39_800])
 })
 
 test('singleCircle: every view, however wide, is one circle of ≤ 250 nm; a new view replaces the old one', async () => {
