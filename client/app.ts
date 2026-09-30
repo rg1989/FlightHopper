@@ -400,8 +400,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const ui = div('fh-ui', root)
   ui.dataset.mode = chasing ? 'chase' : 'browse'
   // Every tool sits behind a small icon on the rail (right edge), or on a button of its own (rail.ts spots): Layers under
-  // the rail, Scenarios at the top left, the instrument layout at the bottom centre, settings and full screen at the
-  // bottom right. All panels start closed. layout.css places the rest.
+  // the rail, the instrument layout at the bottom centre, settings and full screen at the bottom right. All panels start closed. layout.css places the rest.
   let toggles!: SceneTogglesHandle
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
@@ -420,6 +419,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })
       },
     } },
+    // On the rail under the list, so the flight card has the top left corner to itself.
+    { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', panel: {
+      title: 'Scenarios',
+      mount: (b) => (scenarioPanel = mountScenarioPanel(b, {
+        list: () => scenariosOpened.then(() => listScenarios(base)),
+        onPlay: (id) => void startScenario(id, { play: true }),
+      })),
+    } },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
     { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
       title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
@@ -430,13 +437,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (!flightFrame.editing) rail.close()
       if (!flightFrame.editing) traffic?.close()
       flightFrame.edit(!flightFrame.editing)
-    } },
-    { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', spot: 'left', panel: {
-      title: 'Scenarios',
-      mount: (b) => (scenarioPanel = mountScenarioPanel(b, {
-        list: () => scenariosOpened.then(() => listScenarios(base)),
-        onPlay: (id) => void startScenario(id, { play: true }),
-      })),
     } },
     // The keys; not where there are none (a touch screen).
     ...(matchMedia('(pointer: coarse)').matches ? [] : [{ id: 'controls', icon: 'keyboard', label: 'Keyboard shortcuts', short: 'Keys', group: 2, panel: { title: 'Keyboard shortcuts', mount: (b: HTMLElement) => mountInfoPanel(b) } } as const]),

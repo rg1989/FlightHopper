@@ -120,20 +120,15 @@ test('mountRail: an under item is a panel button in a square of its own under th
   assert.equal(root.children.length, 0)
 })
 
-test('mountRail: left and bottom spots; a left item panel opens beside it (fh-panel-left), others at the rail', () => {
+test('mountRail: a bottom spot; a spot item\'s panel opens at the rail like the others', () => {
   const root = new El('div')
   const rail = mountRail(root as unknown as HTMLElement, [
     { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
-    { id: 'scenarios', icon: 'film', label: 'Scenarios', short: 'Scenes', spot: 'left', panel: { title: 'Scenarios', mount: () => {} } },
+    { id: 'scenarios', icon: 'film', label: 'Scenarios', short: 'Scenes', panel: { title: 'Scenarios', mount: () => {} } },
     { id: 'layout', icon: 'layout', label: 'Layout', short: 'Layout', spot: 'bottom', action: () => {} },
   ])
   const at = (cls: string): (string | undefined)[] => ids(find(root, (e) => e.classes.has(cls))[0])
-  assert.deepEqual([at('fh-rail'), at('fh-spot-left'), at('fh-spot-bottom')], [['status'], ['scenarios'], ['layout']])
-  const [panel] = find(root, (e) => e.classes.has('fh-panel'))
-  rail.open('scenarios')
-  assert.ok(panel.classes.has('fh-panel-left'))
-  rail.open('status')
-  assert.ok(!panel.classes.has('fh-panel-left'))
+  assert.deepEqual([at('fh-rail'), at('fh-spot-bottom')], [['status', 'scenarios'], ['layout']])
   rail.destroy()
   assert.equal(root.children.length, 0)
 })
@@ -144,18 +139,18 @@ test('mountRail: on phones every button is a tab in the one strip, in item order
     { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
     { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', spot: 'under', panel: { title: 'Layers', mount: () => {} } },
     { id: 'aircraft', icon: 'list', label: 'Aircraft', short: 'Aircraft', group: 1, panel: { title: 'Aircraft', mount: () => {} } },
-    { id: 'scenarios', icon: 'film', label: 'Scenarios', short: 'Scenes', spot: 'left', panel: { title: 'Scenarios', mount: () => {} } },
+    { id: 'layout', icon: 'layout', label: 'Layout', short: 'Layout', spot: 'bottom', action: () => {} },
     { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', spot: 'corner', action: () => {} },
   ])
   const [nav] = find(root, (e) => e.tagName === 'nav')
   assert.deepEqual(ids(nav), ['status', 'aircraft'])
   phone = true
   for (const f of phoneListeners) f()
-  assert.deepEqual(ids(nav), ['status', 'scene', 'aircraft', 'scenarios', 'settings'])
+  assert.deepEqual(ids(nav), ['status', 'scene', 'aircraft', 'layout', 'settings'])
   phone = false
   for (const f of phoneListeners) f()
   assert.deepEqual(ids(nav), ['status', 'aircraft'])
   assert.equal(find(nav, (e) => e.classes.has('fh-rail-sep')).length, 1)
-  assert.deepEqual(ids(find(root, (e) => e.classes.has('fh-spot-left'))[0]), ['scenarios'])
+  assert.deepEqual(ids(find(root, (e) => e.classes.has('fh-spot-bottom'))[0]), ['layout'])
   rail.destroy()
 })

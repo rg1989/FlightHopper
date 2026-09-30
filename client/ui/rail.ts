@@ -5,7 +5,7 @@
 // is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
 // a panel is a sheet above it that a downward swipe on its header closes. An item with a spot is not on the rail: it is
 // a button of its own, in a glass square, at that spot (rail.css): 'under' just under the rail, 'corner' at the bottom
-// right, 'left' at the top left (its panel opens beside it), 'bottom' at the bottom centre. On phones there is no
+// right, 'bottom' at the bottom centre. On phones there is no
 // room for them: every button is a tab in the one bottom strip, in item order (it scrolls sideways when they do not fit).
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
@@ -18,7 +18,7 @@ export interface RailItem {
   group?: number // a thin divider goes between groups
   /** Opens a panel titled `title`; mount() fills its body (and may add controls to its header) once, at start. */
   panel?: { title: string; wide?: boolean; mount(body: HTMLElement, head: HTMLElement): void }
-  spot?: 'under' | 'corner' | 'left' | 'bottom' // a button of its own there, not on the rail
+  spot?: 'under' | 'corner' | 'bottom' // a button of its own there, not on the rail
   action?(): void
 }
 
@@ -63,7 +63,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
 
   const corner = el('div', 'fh-corner')
   const under = el('div', 'fh-under')
-  const spots = { under, corner, left: el('div', 'fh-spot-left'), bottom: el('div', 'fh-spot-bottom') }
+  const spots = { under, corner, bottom: el('div', 'fh-spot-bottom') }
   const buttons = new Map<string, HTMLButtonElement>()
   const panes = new Map<string, { body: HTMLElement; extras: HTMLElement; item: RailItem }>()
   const badges = new Map<string, HTMLElement>()
@@ -195,7 +195,6 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
         title.textContent = p.item.panel!.title
         headIcon.replaceChildren(icon(p.item.icon, 16))
         panel.classList.toggle('fh-wide', p.item.panel!.wide === true)
-        panel.classList.toggle('fh-panel-left', p.item.spot === 'left') // beside its button, top left
         panel.dataset.id = id
         panel.hidden = false
       }

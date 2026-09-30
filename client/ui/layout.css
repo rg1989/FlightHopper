@@ -22,7 +22,7 @@
 
 /* The bench overlay places itself top-left with inline styles, where the flight card is: move it right of the card. */
 .fh-bench > pre {
-  left: calc(332px + var(--fh-spot)) !important;
+  left: 344px !important;
 }
 
 /* Chase traffic (client/scene/traffic.ts): two corner brackets (top right, bottom left) around each 3-D traffic

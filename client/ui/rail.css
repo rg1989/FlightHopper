@@ -60,17 +60,7 @@
 }
 
 /* Buttons of their own (rail.ts spots), each in a glass square as wide as the rail. The corner: a column at the bottom
-   right, settings over full screen; the play bar and the captions stop short of it. --fh-spot is a square and its gap:
-   the flight card starts right of the Scenarios square (flightCard.css). */
-:root {
-  --fh-spot: 58px;
-}
-
-@media (pointer: coarse) {
-  :root {
-    --fh-spot: 66px;
-  }
-}
+   right, settings over full screen; the play bar and the captions stop short of it. */
 
 .fh-corner {
   position: absolute;
@@ -99,14 +89,6 @@
   gap: 8px;
 }
 
-/* Top left: Scenarios; its panel opens beside it (.fh-panel-left). */
-.fh-spot-left {
-  position: absolute;
-  z-index: 20;
-  top: var(--fh-top);
-  left: var(--fh-left);
-}
-
 /* Bottom centre: the instrument layout (the chase only: flightFrame.css). A scenario's play bar and captions take the
    bottom centre: then it stands over the bar's left end. */
 .fh-spot-bottom {
@@ -123,16 +105,10 @@
   transform: none;
 }
 
-.fh-panel.fh-panel-left {
-  right: auto;
-  left: calc(var(--fh-left) + var(--fh-spot));
-}
-
-/* Tooltips to the left of the rail and the corner buttons (right of the left one, above the bottom one), only while no
+/* Tooltips to the left of the rail and the corner buttons (above the bottom one), only while no
    panel is open (they would cover it). */
 .fh-rail .fh-ibtn[data-tip]:hover::after,
 .fh-under .fh-ibtn[data-tip]:hover::after,
-.fh-spot-left .fh-ibtn[data-tip]:hover::after,
 .fh-spot-bottom .fh-ibtn[data-tip]:hover::after,
 .fh-corner .fh-ibtn[data-tip]:hover::after {
   content: attr(data-tip);
@@ -153,15 +129,9 @@
 
 .fh-rail.fh-has-open .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-under .fh-ibtn[data-tip]:hover::after,
-.fh-rail.fh-has-open ~ .fh-spot-left .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-spot-bottom .fh-ibtn[data-tip]:hover::after,
 .fh-rail.fh-has-open ~ .fh-corner .fh-ibtn[data-tip]:hover::after {
   display: none;
-}
-
-.fh-spot-left .fh-ibtn[data-tip]:hover::after {
-  right: auto;
-  left: calc(100% + 10px);
 }
 
 .fh-spot-bottom .fh-ibtn[data-tip]:hover::after {
@@ -274,7 +244,6 @@
 /* Touch screens (a phone on its side, a tablet): finger-sized rail buttons, the panel beside them. */
 @media (pointer: coarse) {
   .fh-rail .fh-ibtn,
-  .fh-spot-left .fh-ibtn,
   .fh-spot-bottom .fh-ibtn,
   .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
@@ -290,7 +259,6 @@
 /* A phone on its side in a browser (280-340 px left under the toolbars): the 44 px rail would run off the bottom. */
 @media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
   .fh-rail .fh-ibtn,
-  .fh-spot-left .fh-ibtn,
   .fh-spot-bottom .fh-ibtn,
   .fh-under .fh-ibtn,
   .fh-corner .fh-ibtn {
@@ -452,14 +420,12 @@
   /* Every button is a tab in the strip (rail.ts arrange): the squares stay empty. */
   .fh-under,
   .fh-corner,
-  .fh-spot-left,
   .fh-spot-bottom {
     display: none;
   }
 
   .fh-panel,
-  .fh-panel.fh-wide,
-  .fh-panel.fh-panel-left {
+  .fh-panel.fh-wide {
     top: auto;
     right: 0;
     bottom: var(--fh-tabbar-h);

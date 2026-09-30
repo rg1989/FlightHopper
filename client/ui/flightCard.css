@@ -1,10 +1,10 @@
 /* client/ui/flightCard.css */
-/* The chased aircraft's card, top-left right of the Scenarios button (rail.css --fh-spot): identity, photo, four live numbers, status; expanded, the details. */
+/* The chased aircraft's card, in the top left corner: identity, photo, four live numbers, status; expanded, the details. */
 .fh-card {
   position: absolute;
   z-index: 18;
   top: var(--fh-top);
-  left: calc(var(--fh-left) + var(--fh-spot));
+  left: var(--fh-left);
   display: flex;
   flex-direction: column;
   width: 320px;
@@ -552,7 +552,7 @@
 @media (min-width: 861px) {
   .fh-card.fh-tcard.fh-card-home {
     right: auto;
-    left: calc(var(--fh-left) + var(--fh-spot));
+    left: var(--fh-left);
   }
 
   .fh-ui:has(.fh-tcard.fh-card-home:not([hidden])) .fh-card:not(.fh-tcard) {
@@ -565,7 +565,7 @@
 @media (max-width: 860px) {
   .fh-card.fh-tcard {
     right: auto;
-    left: calc(var(--fh-left) + var(--fh-spot));
+    left: var(--fh-left);
   }
 
   .fh-ui:has(.fh-tcard:not([hidden])) .fh-card:not(.fh-tcard) {
