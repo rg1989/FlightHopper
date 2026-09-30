@@ -1,12 +1,12 @@
 # FlightHopper on the TV
 
 The living-room TV (Xiaomi Mi TV, Android 9, 4K panel, weak GPU) cannot render Cesium, so `omarchy` (MacBookPro16,1,
-Radeon Pro 5300M, Arch/Omarchy, Hyprland) renders FlightHopper at 4K and Sunshine streams it to Moonlight on the TV.
+Radeon Pro 5300M, Arch/Omarchy, Hyprland) renders FlightHopper and Sunshine streams it (1080p HEVC at 5 Mbit/s: the TV's Wi-Fi carries only ~9) to Moonlight on the TV.
 The TV remote drives the app: the page runs with `?tv=1` (`client/ui/remote.ts`).
 
 ```
 TV remote → Moonlight (tv/moonlight: OK → Enter, Back → Esc) → Sunshine (omarchy) → uinput keyboard → Hyprland →
-Chromium kiosk on the headless output FHTV (3840x2160, device scale 4 = 960x540 CSS px, Android TV's 10-foot size)
+Chromium kiosk on the headless output FHTV (1920x1080, device scale 1: 1920x1080 CSS px)
 → http://localhost:8787/?tv=1
 ```
 
