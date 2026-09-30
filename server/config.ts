@@ -12,6 +12,7 @@ export interface ServerConfig {
   replayFiles: string[] // REPLAY_FILES expanded to files (replay only), default data/fixtures/*.jsonl
   replaySpeed: number // REPLAY_SPEED, default 1
   recordDir: string | null // RECORD_DIR; unset or empty = no recording (replay is never recorded)
+  flightsDir: string | null // FLIGHTS_DIR: where chosen flights are recorded, one file each (server/flightLog.ts); unset = off
   port: number // PORT, default 8787
   showPiaLadd: boolean // SHOW_PIA_LADD=1 serves PIA/LADD-flagged aircraft
   routes: boolean // ROUTES=1 looks up flight routes on adsb.lol (only used with ADSB_SOURCE=adsblol); default off
@@ -97,6 +98,7 @@ export function readServerConfig(env: Env): ServerConfig {
     replayFiles,
     replaySpeed: num(env, 'REPLAY_SPEED', 1, (v) => v > 0, 'a number > 0'),
     recordDir: str(env, 'RECORD_DIR') || null,
+    flightsDir: str(env, 'FLIGHTS_DIR') || null,
     port: num(env, 'PORT', 8787, (v) => Number.isInteger(v) && v >= 0 && v <= 65535, 'an integer 0..65535'),
     showPiaLadd: flag(env, 'SHOW_PIA_LADD'),
     routes: flag(env, 'ROUTES'),

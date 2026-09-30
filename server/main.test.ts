@@ -370,3 +370,34 @@ test('CLI: a config error exits 1 with the message (adsblol without CONTACT; not
   assert.equal(code, 1)
   assert.match(err, /^server: CONTACT is required for ADSB_SOURCE=adsblol/)
 })
+
+test('FLIGHTS_DIR: POST /api/record starts and stops one aircraft; chase reports it; off without FLIGHTS_DIR', async (t) => {
+  const clock = { t: T0 }
+  const nowMs = (): number => clock.t
+  const flights = tmp()
+  const cfg = { ...readServerConfig({ REPLAY_FILES: FILE, FLIGHTS_DIR: flights }), staticDir: join(tmp(), 'dist') }
+  const app = createServer(cfg, { source: makeReplay({ files: cfg.replayFiles, nowMs }), nowMs })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+  const post = async (q: string) => (await fetch(`${base}/api/record?${q}`, { method: 'POST' })).json()
+  await waitFor('the chased aircraft', () => get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}`), (r) => r.body.samples.length > 0)
+  assert.equal((await get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}`)).body.rec, null)
+
+  const on = await post(`hex=${CHASED}&on=1`)
+  assert.equal(on.rec.hex, CHASED)
+  assert.ok(on.rec.samples > 0, 'starts with the samples the store holds')
+  assert.deepEqual((await get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}`)).body.rec?.file, on.rec.file)
+  assert.equal((await get<{ active: unknown[] }>(`${base}/api/record`)).body.active.length, 1)
+  assert.ok(existsSync(join(flights, on.rec.file)))
+
+  const off = await post(`hex=${CHASED}&on=0`)
+  assert.deepEqual(off, { rec: null, active: [] })
+  assert.equal((await fetch(`${base}/api/record?hex=zz&on=1`, { method: 'POST' })).status, 400)
+  assert.equal((await fetch(`${base}/api/view`, { method: 'POST' })).status, 405)
+
+  const plain = createServer({ ...readServerConfig({ REPLAY_FILES: FILE }), staticDir: join(tmp(), 'dist') })
+  const b2 = await plain.listen(0)
+  t.after(() => plain.close())
+  assert.equal((await fetch(`${b2}/api/record?hex=${CHASED}&on=1`, { method: 'POST' })).status, 400)
+  assert.equal((await get<ChaseResponse>(`${b2}/api/chase?hex=${CHASED}`)).body.rec, undefined, 'no rec field: the card shows no Record button')
+})

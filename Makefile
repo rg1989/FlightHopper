@@ -13,12 +13,14 @@ LIVE_RPS_adsblol = 0.04
 # make live records nothing unless asked (LIVE_RECORD_DIR=data/live): a RECORD_DIR from .env.local would append its
 # answers to the recorder's adsb.lol day files in data/recordings, which make replay then plays as one mixed recording.
 LIVE_RECORD_DIR ?=
+# Flights recorded with the flight card's Record button (one file each, server/flightLog.ts).
+FLIGHTS_DIR ?= data/flights
 
 .PHONY: live start replay run
 
 live:
 	@if [ "$(LIVE_SOURCE)" = adsblol ] && pgrep -f record-cells >/dev/null; then echo "The recorder is polling adsb.lol (one poller at a time): pkill -f record-cells first, or use adsb.fi (make live)."; exit 1; fi
-	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=$(LIVE_SOURCE) MAX_RPS=$(LIVE_RPS_$(LIVE_SOURCE)) RECORD_DIR=$(LIVE_RECORD_DIR)"
+	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=$(LIVE_SOURCE) MAX_RPS=$(LIVE_RPS_$(LIVE_SOURCE)) RECORD_DIR=$(LIVE_RECORD_DIR) FLIGHTS_DIR=$(FLIGHTS_DIR)"
 
 start: live
 

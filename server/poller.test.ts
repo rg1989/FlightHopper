@@ -496,3 +496,19 @@ test('start() ticks every 100 ms without overlapping ticks; stop() ends it', asy
   assert.equal(calls, atStop)
   assert.equal(inFlight, 0)
 })
+
+test('watched (recorded) aircraft outside every view get a hex request once their newest sample is 5 s old, ≥ 2 s apart', async () => {
+  const seen: string[] = []
+  const s = setup({ liveHexes: true, opts: { watched: () => ['a1c7e4', 'abcdef'], onSample: (x) => seen.push(x.hex) } })
+  await runUntil(s, 12_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(LLBG[0], LLBG[1], 5) // neither is in this view
+  })
+  // Both at once (adsb.lol batches), then a1c7e4 every 5 s; abcdef is not in the answer, so it waits 30 s.
+  assert.deepEqual(s.calls.filter((c) => c.m === 'hexes').map((c) => [c.t - T0, c.args[0]]), [
+    [0, ['a1c7e4', 'abcdef']],
+    [5000, ['a1c7e4']],
+    [10_000, ['a1c7e4']],
+  ])
+  assert.ok(seen.includes('a1c7e4'), 'onSample gets every sample the store took')
+  assert.ok(rel(s.calls, 'circle').length >= 3, 'the view is still asked in between')
+})

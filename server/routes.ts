@@ -7,7 +7,7 @@
 //     { callsign, airport_codes: "LROP-OTHH" | "unknown", _airport_codes_iata: "OTP-DOH", _airports: [{ icao, iata, … }],
 //       plausible?: boolean, number?, airline_code? }
 // Never called unless ADSB_SOURCE=adsblol and ROUTES=1 (server/main.ts); tests use a fake fetch.
-import type { RouteInfo } from '../shared/info.ts'
+import type { RouteInfo, RoutePlace } from '../shared/info.ts'
 import type { TokenBucket } from './budget.ts'
 import type { InfoStore } from './infoStore.ts'
 import { parseRetryAfter } from './sources/http.ts'
@@ -40,7 +40,26 @@ export function parseRouteset(body: unknown): RouteInfo[] | null {
     const callsign = typeof o.callsign === 'string' ? o.callsign.trim() : ''
     const route = airportCodes(o.airport_codes) ?? airportCodes(o._airport_codes) ?? airportCodes(o._airport_codes_iata)
     if (callsign === '' || route === null) continue
-    out.push({ callsign, route, plausible: o.plausible !== false })
+    out.push({ callsign, route, plausible: o.plausible !== false, places: placesOf(o._airports, route.split('-')) })
+  }
+  return out
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v.trim().toUpperCase() : '')
+
+/** The `_airports` of a routeset item that are on the route and have a position, under the code the route uses. */
+function placesOf(airports: unknown, codes: string[]): RoutePlace[] {
+  if (!Array.isArray(airports)) return []
+  const out: RoutePlace[] = []
+  for (const a of airports) {
+    if (typeof a !== 'object' || a === null) continue
+    const o = a as Record<string, unknown>
+    const code = [str(o.icao), str(o.iata)].find((c) => c !== '' && codes.includes(c))
+    const lat = o.lat
+    const lon = o.lon
+    if (code === undefined || typeof lat !== 'number' || typeof lon !== 'number') continue
+    if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) continue
+    out.push({ code, lat, lon })
   }
   return out
 }
@@ -69,10 +88,13 @@ export class RouteFetcher {
     this.#minIntervalMs = opts.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
   }
 
-  /** At most one request. Returns whether one was sent. Overlapping calls return false at once. */
-  async tick(store: InfoStore): Promise<boolean> {
+  /**
+   * At most one request. Returns whether one was sent. Overlapping calls return false at once.
+   * only: ask just for the aircraft with these hexes (the selected and recorded ones), not every aircraft known.
+   */
+  async tick(store: InfoStore, only?: ReadonlySet<string>): Promise<boolean> {
     if (this.#busy || this.#now() - this.#lastReqMs < this.#minIntervalMs) return false
-    const planes = store.needRoutes(MAX_PLANES)
+    const planes = store.needRoutes(MAX_PLANES, only)
     if (planes.length === 0 || !this.#bucket.tryTake()) return false
     this.#busy = true
     this.#lastReqMs = this.#now()
@@ -82,7 +104,11 @@ export class RouteFetcher {
       const routes = r.status === 200 ? parseRouteset(r.body) : null
       if (routes === null) return true
       const found = new Map<string, string>()
-      for (const x of routes) if (x.plausible) found.set(x.callsign, x.route)
+      for (const x of routes) {
+        if (!x.plausible) continue
+        found.set(x.callsign, x.route)
+        store.setPlaces(x.places)
+      }
       // ponytail: an implausible route (flown on another leg today) counts as a miss; retried after an hour.
       for (const p of planes) store.setRoute(p.callsign, found.get(p.callsign) ?? null)
       return true

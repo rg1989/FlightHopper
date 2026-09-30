@@ -1,7 +1,7 @@
 // server/infoStore.ts
 // Per aircraft: the newest full upstream object (for the detail panel) and its AircraftInfo (for the table), with the
 // server-clock time the info last changed. Plus the route cache (callsign → route) that RouteFetcher fills.
-import { sameInfo, toInfo, type AircraftInfo } from '../shared/info.ts'
+import { sameInfo, toInfo, type AircraftInfo, type RoutePlace } from '../shared/info.ts'
 import type { ReadsbAircraft } from '../shared/types.ts'
 
 /** A known route is asked again after 6 h, a miss (the upstream has none) after 1 h. */
@@ -29,6 +29,8 @@ export class InfoStore {
   #now: () => number
   #byHex = new Map<string, Entry>()
   #routes = new Map<string, CachedRoute>()
+  // ponytail: never pruned; airports are few (tens of thousands at most worldwide, a few hundred in practice)
+  #places = new Map<string, RoutePlace>() // airport code → where it is, from route answers
 
   /** nowMs is the server clock (setRoute's change time, route expiry). */
   constructor(opts: { nowMs?: () => number } = {}) {
@@ -100,17 +102,30 @@ export class InfoStore {
     }
   }
 
+  /** Remembers where these airports are (route answers carry them). */
+  setPlaces(places: readonly RoutePlace[]): void {
+    for (const p of places) this.#places.set(p.code, p)
+  }
+
+  /** The last airport of this aircraft's route, when both are known. */
+  dest(hex: string): RoutePlace | null {
+    const route = this.get(hex)?.route
+    if (!route) return null
+    return this.#places.get(route.slice(route.lastIndexOf('-') + 1)) ?? null
+  }
+
   /**
    * Up to max airline callsigns (with the aircraft's position) that have no fresh cached answer:
-   * never-asked ones first, then expired ones. Each callsign once.
+   * never-asked ones first, then expired ones. Each callsign once. only: just the aircraft with these hexes.
    */
-  needRoutes(max: number): { callsign: string; lat: number; lon: number }[] {
+  needRoutes(max: number, only?: ReadonlySet<string>): { callsign: string; lat: number; lon: number }[] {
     const now = this.#now()
     const fresh: { callsign: string; lat: number; lon: number }[] = []
     const stale: { callsign: string; lat: number; lon: number }[] = []
     const seen = new Set<string>()
-    for (const e of this.#byHex.values()) {
+    for (const [hex, e] of this.#byHex) {
       if (fresh.length >= max) break
+      if (only !== undefined && !only.has(hex)) continue
       const cs = e.info.callsign
       const { lat, lon } = e.raw
       if (cs === null || seen.has(cs) || !AIRLINE_CALLSIGN.test(cs)) continue

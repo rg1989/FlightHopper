@@ -8,6 +8,7 @@ import { cellBox, cellsForView, type Cell } from './cells.ts'
 import type { InfoStore } from './infoStore.ts'
 import type { Recorder } from './recorder.ts'
 import type { FetchResult, Source } from './sources/types.ts'
+import type { Sample } from '../shared/types.ts'
 import { LATEST_HORIZON_MS, type SampleStore } from './store.ts'
 
 export interface PollerOpts {
@@ -23,6 +24,10 @@ export interface PollerOpts {
   // 0.04 req/s the cell cover of one view (2–4 cells) refreshed each aircraft only every 50–100 s; one circle, every 25 s.
   singleCircle?: boolean
   info?: InfoStore // gets every non-hidden aircraft object of every good answer (identity, detail panel, routes)
+  onSample?: (s: Sample) => void // every sample the store took (server/flightLog.ts records the ones it follows)
+  // Hexes to keep fresh even when no view covers them (flights being recorded): each is asked by hex once its newest
+  // sample is WATCH_PERIOD_MS old. Area sources only; a full snapshot carries them anyway.
+  watched?: () => readonly string[]
 }
 
 /**
@@ -43,6 +48,13 @@ const TICK_MS = 100
 export const VIEW_CIRCLE_MAX_NM = 250
 const EMPTY_FACTOR = 4 // an area whose last answer was empty (sea, desert) is asked this many times less often…
 const EMPTY_MAX_MS = 3_600_000 // …but at least hourly
+/**
+ * A watched (recorded) aircraft is refreshed this often when no view covers it: 5 s is ~250 m on an approach, fine to
+ * tell procedures apart. Watch requests go out at most every WATCH_GAP_MS so areas keep ≥ 0.4 req/s at adsb.fi's 0.9.
+ * ponytail: adsb.fi asks one hex per request, so N watched aircraft outside the view are refreshed every max(5, 2N) s.
+ */
+const WATCH_PERIOD_MS = 5000
+const WATCH_GAP_MS = 2000
 const HEX_RETRY_MS = 30_000 // a chased hex whose hex request brought no position waits this long before the next one
 
 /** A wide view asks only for the areas within this distance of its centre: the middle of the globe, not its rim. */
@@ -121,6 +133,7 @@ export class Poller {
   #viewPeriodMs = 0 // its period
   #chased = new Map<string, number>() // hex → expiresMs
   #lastChaseReqMs = -Infinity
+  #lastWatchReqMs = -Infinity
   #hexRetryMs = new Map<string, number>() // hex → not asked again before this (its last hex request brought no position)
   #lastAllReqMs = -Infinity
   #chaseOk = new OkIntervals()
@@ -216,6 +229,15 @@ export class Poller {
           // A good answer without a fresh (shown) position for it: not found, position-less or hidden. That hex waits
           // before it is asked again. A failed request is the bucket's to pace (Retry-After, back-off).
           for (const hex of batch) if ((this.#store.latest(hex)?.rxMs ?? -Infinity) < now) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
+        }
+        return true
+      }
+      const watch = now - this.#lastWatchReqMs >= WATCH_GAP_MS ? this.#watchBatch(now) : []
+      if (watch.length > 0) {
+        if (!this.#bucket.tryTake()) return false
+        this.#lastWatchReqMs = now
+        if (this.#ingest(await this.#source.hexes(watch))) {
+          for (const hex of watch) if ((this.#store.latest(hex)?.rxMs ?? -Infinity) < now) this.#hexRetryMs.set(hex, now + HEX_RETRY_MS)
         }
         return true
       }
@@ -332,7 +354,7 @@ export class Poller {
       if (this.#opts.hideFlagged && isHidden(ac)) continue
       info?.update(ac, r.tRecvMs)
       const s = toSample(ac, snap.nowMs, offsetMs, r.tRecvMs)
-      if (s) this.#store.add(s)
+      if (s && this.#store.add(s)) this.#opts.onSample?.(s)
     }
     info?.prune(now, INFO_HORIZON_MS) // on good answers only: its route-cache sweep need not run every 100 ms tick
     return true
@@ -368,6 +390,31 @@ export class Poller {
       })
       .slice(0, MAX_HEXES)
       .map(([hex]) => hex)
+  }
+
+  /**
+   * Watched hexes (≤ 100) due for a hex request: no sample for WATCH_PERIOD_MS (a chase or a view keeps most fresh),
+   * not waiting after a request that brought no position. The stalest first, so one-hex sources go round.
+   */
+  #watchBatch(now: number): string[] {
+    const hexes = this.#opts.watched?.() ?? []
+    if (hexes.length === 0 || this.#source.caps.fullSnapshot) return []
+    const due: [string, number][] = []
+    for (const hex of hexes) {
+      if ((this.#hexRetryMs.get(hex) ?? -Infinity) > now) continue
+      const rx = this.#store.latest(hex)?.rxMs ?? -Infinity
+      if (now - rx >= WATCH_PERIOD_MS) due.push([hex, rx])
+    }
+    return due
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, MAX_HEXES)
+      .map(([hex]) => hex)
+  }
+
+  /** The hexes clients are chasing or focused on now (their chase requests keep them for chaseTtlMs). */
+  chasedHexes(): string[] {
+    this.#expire(this.#now())
+    return [...this.#chased.keys()]
   }
 
   /** Is a chased aircraft (as last stored) inside the view circle? Then that circle is how it is chased. */

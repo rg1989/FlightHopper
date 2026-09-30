@@ -35,13 +35,17 @@ test('parseRouteset: ICAO airport_codes first, IATA as a fallback; unknown and m
     'EHAM-KJFK',
   ]
   assert.deepEqual(parseRouteset(body), [
-    { callsign: 'ROT1234', route: 'LROP-OTHH', plausible: true },
-    { callsign: 'QTR5', route: 'OTHH-EGLL-KJFK', plausible: true },
-    { callsign: 'ELY27', route: 'LLBG-KJFK', plausible: false },
-    { callsign: 'DAL45', route: 'ATL-LAX', plausible: true },
-    { callsign: 'BAW1', route: 'EGLL-KJFK', plausible: true },
-    { callsign: 'KLM1', route: 'EHAM-KJFK', plausible: true },
+    { callsign: 'ROT1234', route: 'LROP-OTHH', plausible: true, places: [{ code: 'LROP', lat: 44, lon: 26 }, { code: 'OTHH', lat: 45, lon: 27 }] },
+    { callsign: 'QTR5', route: 'OTHH-EGLL-KJFK', plausible: true, places: [{ code: 'OTHH', lat: 44, lon: 26 }, { code: 'EGLL', lat: 45, lon: 27 }, { code: 'KJFK', lat: 46, lon: 28 }] },
+    { callsign: 'ELY27', route: 'LLBG-KJFK', plausible: false, places: [{ code: 'LLBG', lat: 44, lon: 26 }, { code: 'KJFK', lat: 45, lon: 27 }] },
+    { callsign: 'DAL45', route: 'ATL-LAX', plausible: true, places: [] },
+    { callsign: 'BAW1', route: 'EGLL-KJFK', plausible: true, places: [] },
+    { callsign: 'KLM1', route: 'EHAM-KJFK', plausible: true, places: [] },
   ])
+  // An IATA route takes the airports under their IATA codes; one without a position, or off the route, is left out.
+  const iata = [{ callsign: 'EZY1', _airport_codes_iata: 'LGW-TLV', _airports: [
+    { icao: 'EGKK', iata: 'LGW', lat: 51.15, lon: -0.19 }, { icao: 'LLBG', iata: 'TLV' }, { icao: 'LFPG', iata: 'CDG', lat: 49, lon: 2.5 }] }]
+  assert.deepEqual(parseRouteset(iata)?.[0].places, [{ code: 'LGW', lat: 51.15, lon: -0.19 }])
   assert.equal(parseRouteset({ planes: [] }), null, 'not an array: not a routeset answer')
   assert.equal(parseRouteset(null), null)
   assert.deepEqual(parseRouteset([]), [])

@@ -135,3 +135,15 @@ test('prune drops aircraft not updated within the horizon, and routes long expir
   store.update(byHex('a1c7e4'), clock.t)
   assert.equal(store.get('a1c7e4')?.route, null)
 })
+
+test('needRoutes(only): just those hexes; dest: the route\'s last airport once its position is known', () => {
+  const { store } = setup()
+  for (const ac of KSFO.aircraft) store.update(ac, T0)
+  assert.deepEqual(store.needRoutes(10, new Set(['a1c7e4'])).map((p) => p.callsign), ['UAL872'])
+  assert.deepEqual(store.needRoutes(10, new Set()), [])
+  assert.equal(store.dest('a1c7e4'), null, 'no route yet')
+  store.setRoute('UAL872', 'RJAA-KSFO')
+  assert.equal(store.dest('a1c7e4'), null, 'route, but not where its airports are')
+  store.setPlaces([{ code: 'RJAA', lat: 35.76, lon: 140.39 }, { code: 'KSFO', lat: 37.62, lon: -122.38 }])
+  assert.deepEqual(store.dest('A1C7E4'), { code: 'KSFO', lat: 37.62, lon: -122.38 })
+})

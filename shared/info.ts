@@ -22,6 +22,14 @@ export interface RouteInfo {
   callsign: string
   route: string                  // airport codes joined by '-', ICAO when known
   plausible: boolean             // adsb.lol's own plausibility flag for the route vs the aircraft position
+  places: RoutePlace[]           // the route's airports that came with a position (routeset `_airports`)
+}
+
+/** An airport of a route: its code as the route spells it (ICAO, else IATA) and where it is. */
+export interface RoutePlace {
+  code: string
+  lat: number
+  lon: number
 }
 
 const s = (v: unknown): string | null => {

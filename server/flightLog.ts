@@ -1,0 +1,153 @@
+// server/flightLog.ts
+// Records chosen flights, each to its own file, for later study (approach procedures into an airport, and which one a
+// flight is flying). The poller hands over every new sample (add); the poller also keeps recorded aircraft polled when
+// no view covers them (Poller opts.watched). A recording ends by hand, or by itself once the aircraft has landed and
+// slowed to taxi speed, or after it has been silent for a while (out of coverage, often low on an approach).
+//
+// <dir>/YYYY-MM-DD/HHMMSSZ-<callsign or hex>-<hex>.jsonl (UTC start), one JSON object per line:
+//   {"flight": {v, hex, callsign, reg, typeCode, route, source, by, startedMs}}   first line
+//   {"s": Sample}                                                                  one per sample, oldest first
+//   {"end": {why: 'stopped'|'landed'|'lost', endedMs, samples}}                    last line, when it ended
+// A file without an end line was cut short by a server stop that did not resume it.
+// <dir>/active.json lists the recordings under way, so a restarted server carries on appending to the same files.
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { RecordingState } from '../shared/api.ts'
+import type { AircraftInfo } from '../shared/info.ts'
+import type { Sample, SourceKind } from '../shared/types.ts'
+
+export const LANDED_KT = 40 // on the ground below this, after being airborne in this recording: landed, taxiing
+export const LANDED_HOLD_MS = 60_000 // … for this long (the roll-out and the turn off the runway are kept)
+export const LOST_MS = 15 * 60_000 // no new sample for this long: gone (out of coverage, or landed where no one hears it)
+
+export type EndReason = 'stopped' | 'landed' | 'lost'
+
+interface Active {
+  state: RecordingState
+  airborne: boolean // seen airborne since the recording began: only then can it "land"
+  slowSinceMs: number | null // rxMs from which it has been on the ground and slow
+}
+
+export class FlightLog {
+  #dir: string
+  #now: () => number
+  #source: SourceKind
+  #active = new Map<string, Active>()
+
+  constructor(opts: { dir: string; source: SourceKind; nowMs?: () => number }) {
+    this.#dir = opts.dir
+    this.#source = opts.source
+    this.#now = opts.nowMs ?? Date.now
+    mkdirSync(this.#dir, { recursive: true })
+    this.#resume()
+  }
+
+  /**
+   * Starts recording this aircraft (a no-op answer if it already is), beginning with `backfill`: the samples the store
+   * still holds of it (the last few minutes).
+   */
+  start(hex: string, info: AircraftInfo | null, backfill: readonly Sample[]): RecordingState {
+    hex = hex.toLowerCase()
+    const had = this.#active.get(hex)
+    if (had) return { ...had.state }
+    const now = this.#now()
+    const iso = new Date(now).toISOString() // 2026-09-30T14:30:12.345Z
+    const name = (info?.callsign ?? hex).replace(/[^A-Za-z0-9]/g, '')
+    const file = `${iso.slice(0, 10)}/${iso.slice(11, 19).replace(/:/g, '')}Z-${name}-${hex.replace('~', 'x')}.jsonl`
+    mkdirSync(join(this.#dir, iso.slice(0, 10)), { recursive: true })
+    const flight = {
+      v: 1,
+      hex,
+      callsign: info?.callsign ?? null,
+      reg: info?.reg ?? null,
+      typeCode: info?.typeCode ?? null,
+      route: info?.route ?? null,
+      source: this.#source,
+      by: 'hand',
+      startedMs: now,
+    }
+    appendFileSync(join(this.#dir, file), JSON.stringify({ flight }) + '\n')
+    const a: Active = { state: { hex, callsign: flight.callsign, file, startedMs: now, samples: 0, lastMs: null }, airborne: false, slowSinceMs: null }
+    this.#active.set(hex, a)
+    for (const s of backfill) this.#write(a, s)
+    this.#save()
+    return { ...a.state }
+  }
+
+  /** Ends this aircraft's recording. Its final state, or null when it was not being recorded. */
+  stop(hex: string, why: EndReason = 'stopped'): RecordingState | null {
+    hex = hex.toLowerCase()
+    const a = this.#active.get(hex)
+    if (!a) return null
+    this.#active.delete(hex)
+    const end = { why, endedMs: this.#now(), samples: a.state.samples }
+    appendFileSync(join(this.#dir, a.state.file), JSON.stringify({ end }) + '\n')
+    this.#save()
+    return { ...a.state }
+  }
+
+  /** A new sample from the poller: appended when its aircraft is being recorded. */
+  add(s: Sample): void {
+    const a = this.#active.get(s.hex)
+    if (a) this.#write(a, s)
+  }
+
+  /** Ends recordings that landed (and slowed to taxi speed for LANDED_HOLD_MS) or fell silent for LOST_MS. */
+  tick(): void {
+    const now = this.#now()
+    for (const [hex, a] of this.#active) {
+      if (a.slowSinceMs !== null && now - a.slowSinceMs >= LANDED_HOLD_MS) this.stop(hex, 'landed')
+      else if (now - (a.state.lastMs ?? a.state.startedMs) >= LOST_MS) this.stop(hex, 'lost')
+    }
+  }
+
+  get(hex: string): RecordingState | null {
+    const a = this.#active.get(hex.toLowerCase())
+    return a ? { ...a.state } : null
+  }
+
+  active(): RecordingState[] {
+    return [...this.#active.values()].map((a) => ({ ...a.state }))
+  }
+
+  hexes(): string[] {
+    return [...this.#active.keys()]
+  }
+
+  #write(a: Active, s: Sample): void {
+    try {
+      appendFileSync(join(this.#dir, a.state.file), JSON.stringify({ s }) + '\n')
+    } catch (e) {
+      console.error('flightLog: write failed:', e) // ponytail: a full disk logs once per sample; the recording goes on
+      return
+    }
+    a.state.samples++
+    a.state.lastMs = Math.max(a.state.lastMs ?? -Infinity, s.rxMs)
+    if (!s.onGround) {
+      a.airborne = true
+      a.slowSinceMs = null
+    } else if (a.airborne && (s.gsKt ?? 0) < LANDED_KT) a.slowSinceMs ??= s.rxMs
+    else a.slowSinceMs = null
+  }
+
+  #save(): void {
+    const list = [...this.#active.values()].map((a) => ({ ...a.state, airborne: a.airborne }))
+    writeFileSync(join(this.#dir, 'active.json'), JSON.stringify(list, null, 1) + '\n')
+  }
+
+  /** Picks up the recordings a previous server left under way. */
+  #resume(): void {
+    let list: (RecordingState & { airborne?: boolean })[]
+    try {
+      list = JSON.parse(readFileSync(join(this.#dir, 'active.json'), 'utf8'))
+    } catch {
+      return // none yet, or unreadable: start clean
+    }
+    if (!Array.isArray(list)) return
+    for (const r of list) {
+      if (typeof r?.hex !== 'string' || typeof r.file !== 'string') continue
+      const { airborne, ...state } = r
+      this.#active.set(r.hex, { state, airborne: airborne === true, slowSinceMs: null })
+    }
+  }
+}

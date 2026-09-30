@@ -19,6 +19,7 @@ test('defaults: replay at 1 req/s on port 8787, no recording, PIA/LADD hidden, c
     replayFiles: [FILE],
     replaySpeed: 1,
     recordDir: null,
+    flightsDir: null,
     port: 8787,
     showPiaLadd: false,
     routes: false,

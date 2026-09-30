@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/recordings/
+data/flights/
 .env.local
 *.log
 .DS_Store

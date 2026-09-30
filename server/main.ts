@@ -4,21 +4,25 @@
 //   GET /api/view?lat&lon&nm&since      samples in a circle received after `since` (server-clock rxMs), + the info the client lacks
 //   GET /api/chase?hex&since            one aircraft's samples received after `since`, + its newest full object and info
 //   GET /api/status                     the poller's StatusReport
+//   GET /api/record                     the flights being recorded (FLIGHTS_DIR set; else 404)
+//   POST /api/record?hex&on=1|0         start or stop recording one aircraft → RecordResponse
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /*                              dist/ (index.html for client routes)
-// JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes.
+// JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
+// any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded.
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
-import type { ChaseResponse, ViewResponse } from '../shared/api.ts'
+import type { ChaseResponse, RecordResponse, ViewResponse } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { TokenBucket } from './budget.ts'
 import { readServerConfig, type ServerConfig } from './config.ts'
+import { FlightLog } from './flightLog.ts'
 import { InfoStore } from './infoStore.ts'
 import { POLLER_DEFAULTS, Poller } from './poller.ts'
 import { Recorder } from './recorder.ts'
@@ -39,6 +43,11 @@ const GZIP_LEVEL = 1
 // An aircraft silent this long may have been dropped by the client (its Fleet prunes old entries): send its info again.
 const INFO_RESEND_GAP_MS = 60_000
 const ROUTE_TICK_MS = 100 // RouteFetcher.tick itself keeps ≥ 60 s between requests
+// Selected-only route lookups (adsb.lol's routeset while the aircraft come from elsewhere): asked when a flight is
+// selected, so at most one request per 5 s and ≤ 1 a minute sustained (burst 3), well under adsb.lol's limits.
+const SELECTED_ROUTE_GAP_MS = 5000
+const SELECTED_ROUTE_RPS = 1 / 60
+const FLIGHT_LOG_TICK_MS = 5000
 const gzipAsync = promisify(gzip)
 
 const TYPES: Record<string, string> = {
@@ -198,13 +207,33 @@ export function createServer(
   const rps = Math.min(cfg.maxRps, source.caps.maxRps)
   const bucket = new TokenBucket(rps, nowMs, Math.random, source.caps.burst)
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
+  const flights = cfg.flightsDir === null ? null : new FlightLog({ dir: cfg.flightsDir, source: source.caps.kind, nowMs })
   // The poller prunes the sample store (180 s of track, 35 min for each newest sample) on every 100 ms tick and the info store on every good answer,
   // so no separate prune timer is needed.
-  const poller = new Poller(source, store, bucket, { ...POLLER_DEFAULTS, singleCircle: rps < LOW_BUDGET_RPS, recorder, hideFlagged: !cfg.showPiaLadd, nowMs, info })
+  const poller = new Poller(source, store, bucket, {
+    ...POLLER_DEFAULTS,
+    singleCircle: rps < LOW_BUDGET_RPS,
+    recorder,
+    hideFlagged: !cfg.showPiaLadd,
+    nowMs,
+    info,
+    onSample: flights === null ? undefined : (s) => flights.add(s),
+    watched: flights === null ? undefined : () => flights.hexes(),
+  })
+  // All routes (adsb.lol, sharing its bucket), or only the selected and recorded aircraft's (own slow bucket).
+  const allRoutes = cfg.routes && cfg.source === 'adsblol'
   const routes =
-    cfg.routes && cfg.source === 'adsblol' && cfg.contact !== null
-      ? new RouteFetcher({ bucket, userAgent: userAgent(cfg.contact), nowMs, fetchFn: deps.routesFetch })
-      : null
+    cfg.contact === null || source.caps.kind === 'replay'
+      ? null
+      : new RouteFetcher({
+          bucket: allRoutes ? bucket : new TokenBucket(SELECTED_ROUTE_RPS, nowMs, Math.random, 3),
+          userAgent: userAgent(cfg.contact),
+          nowMs,
+          fetchFn: deps.routesFetch,
+          minIntervalMs: allRoutes ? undefined : SELECTED_ROUTE_GAP_MS,
+        })
+  const routesFor = (): ReadonlySet<string> | undefined => (allRoutes ? undefined : new Set([...poller.chasedHexes(), ...(flights?.hexes() ?? [])]))
+  let flightTimer: ReturnType<typeof setInterval> | null = null
   let routeTimer: ReturnType<typeof setInterval> | null = null
   const root = resolve(cfg.staticDir)
   const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch })
@@ -271,14 +300,28 @@ export function createServer(
     check(since >= 0, 'since must be ≥ 0')
     poller.touchChase(hex)
     const now = nowMs()
-    return { serverNowMs: now, samples: store.track(hex, since), status: poller.brief(), raw: rawAt(hex, now), info: info.get(hex) }
+    const out: ChaseResponse = { serverNowMs: now, samples: store.track(hex, since), status: poller.brief(), raw: rawAt(hex, now), info: info.get(hex), dest: info.dest(hex) }
+    if (flights !== null) out.rec = flights.get(hex)
+    return out
+  }
+
+  function record(q: URLSearchParams, post: boolean): RecordResponse {
+    if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
+    if (!post) return { rec: null, active: flights.active() }
+    const hex = (q.get('hex') ?? '').trim().toLowerCase()
+    const on = q.get('on')
+    check(HEX.test(hex), 'hex must be 6 hex digits (optionally prefixed with ~)')
+    check(on === '1' || on === '0', 'on must be 1 or 0')
+    const rec = on === '1' ? flights.start(hex, info.get(hex), store.track(hex, 0)) : (flights.stop(hex), null)
+    return { rec, active: flights.active() }
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const isApi = url.pathname === '/api' || url.pathname.startsWith('/api/')
-    if (req.method !== 'GET') {
-      if (isApi) return sendJson(req, res, 405, { error: 'only GET' })
+    const post = req.method === 'POST' && url.pathname === '/api/record'
+    if (req.method !== 'GET' && !post) {
+      if (isApi) return sendJson(req, res, 405, { error: 'only GET (and POST /api/record)' })
       return sendText(res, 405, 'only GET\n')
     }
     if (!isApi) return serveStatic(root, url.pathname, req.headers.range, res)
@@ -290,6 +333,7 @@ export function createServer(
       else if (url.pathname === '/api/view') body = view(url.searchParams)
       else if (url.pathname === '/api/chase') body = chase(url.searchParams)
       else if (url.pathname === '/api/status') body = poller.report()
+      else if (url.pathname === '/api/record') body = record(url.searchParams, post)
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
       if (e instanceof WxError) [status, body] = [e.status, { error: e.message }]
@@ -320,9 +364,13 @@ export function createServer(
             // in firing order, so this one keeps firing first. A due route request (≤ 1 a minute) then gets the next
             // token instead of losing every race to a cell poll, which at MAX_RPS 0.08 wants every token.
             routeTimer = setInterval(() => {
-              routes.tick(info).catch((e: unknown) => console.error('routes: tick failed:', e))
+              routes.tick(info, routesFor()).catch((e: unknown) => console.error('routes: tick failed:', e))
             }, ROUTE_TICK_MS)
             routeTimer.unref()
+          }
+          if (flights !== null && flightTimer === null) {
+            flightTimer = setInterval(() => flights.tick(), FLIGHT_LOG_TICK_MS)
+            flightTimer.unref()
           }
           poller.start()
           done(`http://${HOST}:${(server.address() as AddressInfo).port}`)
@@ -332,6 +380,8 @@ export function createServer(
     close(): Promise<void> {
       if (routeTimer !== null) clearInterval(routeTimer)
       routeTimer = null
+      if (flightTimer !== null) clearInterval(flightTimer)
+      flightTimer = null
       poller.stop()
       if (!server.listening) return Promise.resolve()
       return new Promise((done, fail) => {
@@ -346,8 +396,9 @@ if (import.meta.main) {
   try {
     const cfg = readServerConfig(process.env)
     const url = await createServer(cfg).listen(cfg.port)
-    const routes = cfg.routes && cfg.source === 'adsblol' ? ', routes on' : ''
-    console.log(`FlightHopper server on ${url} (source ${cfg.source}${routes})`)
+    const routes = cfg.contact === null || cfg.source === 'replay' ? '' : cfg.routes && cfg.source === 'adsblol' ? ', routes on' : ', routes of selected flights'
+    const rec = cfg.flightsDir === null ? '' : `, recording flights to ${cfg.flightsDir}`
+    console.log(`FlightHopper server on ${url} (source ${cfg.source}${routes}${rec})`)
   } catch (e) {
     console.error(`server: ${(e as Error).message}`)
     process.exit(1)

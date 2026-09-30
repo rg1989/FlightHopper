@@ -1,4 +1,4 @@
-import type { AircraftInfo } from './info.ts'
+import type { AircraftInfo, RoutePlace } from './info.ts'
 import type { ReadsbAircraft, Sample, SourceKind } from './types.ts'
 
 export type Degraded = null | 'rate-limited' | 'blocked' | 'upstream-down'
@@ -28,6 +28,23 @@ export interface ChaseResponse {
   status: StatusBrief
   raw?: ReadsbAircraft | null    // newest full upstream object for the detail panel
   info?: AircraftInfo | null
+  dest?: RoutePlace | null       // the route's last airport, when the route and its position are known
+  rec?: RecordingState | null    // this aircraft is being recorded (server/flightLog.ts)
+}
+
+/** One flight being recorded to its own file (server/flightLog.ts). Times on the server clock. */
+export interface RecordingState {
+  hex: string
+  callsign: string | null
+  file: string                   // relative to the flights directory, e.g. 2026-09-30/143012Z-ELY315-738abc.jsonl
+  startedMs: number
+  samples: number
+  lastMs: number | null          // rxMs of the newest recorded sample
+}
+
+export interface RecordResponse {
+  rec: RecordingState | null     // after the change: null once stopped
+  active: RecordingState[]
 }
 
 export interface BudgetState {
