@@ -1176,11 +1176,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (traffic.close()) return
     }
     const hex = fleetLayer.pick(e.position, tapPx)
+    // A runway end spells itself out (a tap on a phone, where nothing hovers) until the next click elsewhere.
+    const onRunway = runways.hover(hex === null ? e.position : null, tapPx)
     if (hex !== null) select(hex)
-    else if (!chasing && selected !== null) select(null) // a click on the empty map clears the focus
+    else if (!onRunway && !chasing && selected !== null) select(null) // a click on the empty map clears the focus
   }, ScreenSpaceEventType.LEFT_CLICK)
-  // Hover over an icon: its callsign label and a pointer cursor; over a traffic bracket, the pointer. Picks at most every
-  // HOVER_PICK_MS, at the newest position.
+  // Hover over an icon: its callsign label and a pointer cursor; over a traffic bracket, the pointer; over a runway end's
+  // arrow or number, its words (runways.hover) and the pointer. Picks at most every HOVER_PICK_MS, at the newest position.
   const mousePos = new Cartesian2()
   let hoverTimer: ReturnType<typeof setTimeout> | null = null
   let lastPickMs = -Infinity
@@ -1189,7 +1191,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     lastPickMs = performance.now()
     mapHover = fleetLayer.pick(mousePos)
     const bracket = flightFrame.editing ? null : (traffic?.hitAt(mousePos.x, mousePos.y) ?? null)
-    viewer.canvas.style.cursor = mapHover === null && bracket === null ? '' : 'pointer'
+    const onRunway = runways.hover(mapHover === null && bracket === null ? mousePos : null)
+    viewer.canvas.style.cursor = mapHover === null && bracket === null && !onRunway ? '' : 'pointer'
   }
   mouse.setInputAction((m: ScreenSpaceEventHandler.MotionEvent) => {
     Cartesian2.clone(m.endPosition, mousePos)
@@ -1199,6 +1202,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (hoverTimer !== null) clearTimeout(hoverTimer)
     hoverTimer = null
     mapHover = null
+    runways.hover(null)
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window

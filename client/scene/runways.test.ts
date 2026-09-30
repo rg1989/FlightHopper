@@ -8,6 +8,8 @@ import {
   Color,
   Ellipsoid,
   EntityCollection,
+  Event,
+  HorizontalOrigin,
   JulianDate,
   MaterialAppearance,
   Matrix3,
@@ -15,6 +17,8 @@ import {
   Primitive,
   ShadowMode,
   type Geometry,
+  VerticalOrigin,
+  type Cartesian2,
   type GeometryInstance,
   type Viewer,
 } from 'cesium'
@@ -22,7 +26,8 @@ import type { Airport } from '../../shared/airports.ts'
 import { bearingDeg, distanceNm } from '../../shared/geo.ts'
 import type { TerrainFrame } from '../types.ts'
 import { TOPO_ON, drawnHeightM } from './exaggeration.ts'
-import { addRunways, RUNWAY_LIFT_M, runwayCorners } from './runways.ts'
+import { northAt } from './fleetLayer.ts'
+import { addRunways, compassWord, keepOnScreen, labelSide, RUNWAY_LIFT_M, runwayCorners, runwayTip } from './runways.ts'
 
 const airports: Airport[] = JSON.parse(readFileSync(new URL('../../data/fixtures/golden/airports-sample.json', import.meta.url), 'utf8'))
 const ksfo = airports.find((a) => a.ident === 'KSFO')!
@@ -77,15 +82,28 @@ test('every golden runway: rectangle as wide as published, as long as its ends a
   }
 })
 
-// addRunways against a stand-in viewer: the scene's primitive list and an entity collection are all it touches.
+// addRunways against a stand-in viewer: the scene's primitive list, an entity collection, and for the markers a camera
+// 10 km above (LAT0, LON0) looking straight down, north up, PX_PER_DEG pixels to a degree of latitude, (600, 400) under it.
 // (Labels only need a DOM once Cesium renders them, so this runs in Node.)
-function fakeViewer(): { viewer: Viewer; added: unknown[]; removed: unknown[]; entities: EntityCollection } {
+const LAT0 = 32.0
+const LON0 = 34.88
+const PX_PER_DEG = 10_000
+function fakeViewer(): { viewer: Viewer; added: unknown[]; removed: unknown[]; entities: EntityCollection; preRender: Event } {
   const added: unknown[] = []
   const removed: unknown[] = []
   const entities = new EntityCollection()
   const primitives = { add: (p: unknown) => (added.push(p), p), remove: (p: unknown) => (removed.push(p), true) }
-  const viewer = { scene: { primitives }, entities, isDestroyed: () => false } as unknown as Viewer
-  return { viewer, added, removed, entities }
+  const preRender = new Event()
+  const cartesianToCanvasCoordinates = (p: Cartesian3, out: Cartesian2): Cartesian2 => {
+    const c = Cartographic.fromCartesian(p)
+    out.x = 600 + (deg(c.longitude) - LON0) * PX_PER_DEG * Math.cos(LAT0 * (Math.PI / 180))
+    out.y = 400 - (deg(c.latitude) - LAT0) * PX_PER_DEG
+    return out
+  }
+  const camera = { positionWC: Cartesian3.fromDegrees(LON0, LAT0, 10_000) }
+  const scene = { primitives, preRender, camera, cartesianToCanvasCoordinates, canvas: { clientWidth: 1200, clientHeight: 800 } }
+  const viewer = { scene, entities, isDestroyed: () => false } as unknown as Viewer
+  return { viewer, added, removed, entities, preRender }
 }
 // A Material types its uniforms with instanceof checks against these DOM classes (Material.js getUniformType); Node has none.
 Object.assign(globalThis, { HTMLCanvasElement: class {}, HTMLImageElement: class {}, ImageBitmap: class {}, OffscreenCanvas: class {} })
@@ -267,14 +285,117 @@ test('addRunways: markers off (a scenario airfield): the runways, no threshold d
 })
 
 test('addRunways: destroy removes exactly what it added; no airports adds nothing', () => {
-  const { viewer, added, removed, entities } = fakeViewer()
+  const { viewer, added, removed, entities, preRender } = fakeViewer()
   entities.add({ id: 'someone-else' })
   const h = addRunways(viewer, airports)
   h.destroy()
   assert.deepEqual(removed, added)
   assert.deepEqual(entities.values.map((e) => e.id), ['someone-else'])
+  assert.equal(preRender.numberOfListeners, 0, 'stops aiming the labels')
   const empty = fakeViewer()
   addRunways(empty.viewer, []).destroy()
   assert.equal(empty.added.length, 0)
   assert.equal(empty.removed.length, 0)
+})
+
+test('compassWord: the 8-point compass of a true heading, any number of turns', () => {
+  const cases: [number, string][] = [
+    [0, 'north'], [22.4, 'north'], [22.6, 'northeast'], [80, 'east'], [121.4, 'southeast'], [209, 'southwest'],
+    [260, 'west'], [298, 'northwest'], [337.6, 'north'], [360, 'north'], [-10, 'north'], [-100, 'west'], [725, 'north'],
+  ]
+  for (const [d, w] of cases) assert.equal(compassWord(d), w, `${d}°`)
+})
+
+test('runwayTip: which way planes go on it, how long it is, and which of the parallels it is', () => {
+  const llbg = airports.find((a) => a.ident === 'LLBG')!
+  const tip = (ap: Airport, ident: string): string => {
+    const r = ap.runways.find((x) => x.ends.some((e) => e.ident === ident))!
+    return runwayTip(ap, r, r.ends.find((e) => e.ident === ident)!)
+  }
+  assert.equal(tip(llbg, '26'), 'Runway 26\nPlanes head west · 4.1 km')
+  assert.equal(tip(llbg, '03'), 'Runway 03\nPlanes head northeast · 2.8 km')
+  assert.equal(tip(ksfo, '28R'), 'Runway 28R\nPlanes head northwest · 3.6 km\nRight of 2 parallel runways')
+  assert.equal(tip(ksfo, '1L'), 'Runway 1L\nPlanes head northeast · 2.3 km\nLeft of 2 parallel runways')
+  // three side by side, a lone suffixed one, and an ident that is not a number
+  const end = (ident: string, hdgTrueDeg: number) => ({ ...e10L, ident, hdgTrueDeg })
+  const three: Airport = {
+    ...ksfo,
+    runways: [['09L', '27R'], ['09C', '27C'], ['09R', '27L']].map(([a, b]) => ({ ...rwy, lengthFt: 10_000, ends: [end(a, 90), end(b, 270)] })),
+  }
+  assert.equal(tip(three, '27C'), 'Runway 27C\nPlanes head west · 3.0 km\nCentre of 3 parallel runways')
+  const lone: Airport = { ...ksfo, runways: [{ ...rwy, lengthFt: 3_281, ends: [end('18C', 180), end('N', 0)] }] }
+  assert.equal(tip(lone, '18C'), 'Runway 18C\nPlanes head south · 1.0 km')
+  assert.equal(tip(lone, 'N'), 'Runway N\nPlanes head north · 1.0 km')
+})
+
+test('labelSide: the label sits behind the arrow on screen and grows away from it', () => {
+  const side = (dx: number, dy: number) => {
+    const s = labelSide(dx, dy, { x: 0, y: 0, h: HorizontalOrigin.CENTER, v: VerticalOrigin.CENTER })
+    return { x: Math.sign(Math.round(s.x * 1e6)) + 0, y: Math.sign(Math.round(s.y * 1e6)) + 0, h: s.h, v: s.v } // + 0: no −0
+  }
+  // screen y grows downwards
+  assert.deepEqual(side(0, -1), { x: 0, y: 1, h: HorizontalOrigin.CENTER, v: VerticalOrigin.TOP }, 'arrow up: label below, hanging from its top')
+  assert.deepEqual(side(1, 0), { x: -1, y: 0, h: HorizontalOrigin.RIGHT, v: VerticalOrigin.CENTER }, 'arrow right: label to the left')
+  assert.deepEqual(side(0, 1), { x: 0, y: -1, h: HorizontalOrigin.CENTER, v: VerticalOrigin.BOTTOM }, 'arrow down: label above')
+  assert.deepEqual(side(-1, 0), { x: 1, y: 0, h: HorizontalOrigin.LEFT, v: VerticalOrigin.CENTER }, 'arrow left: label to the right')
+  const d = Math.SQRT1_2
+  assert.deepEqual(side(d, -d), { x: -1, y: 1, h: HorizontalOrigin.RIGHT, v: VerticalOrigin.TOP }, 'arrow up-right: label down-left')
+})
+
+test('addRunways: an arrow at each threshold points down its runway, the number behind it; hover or tap spells it out', () => {
+  const llbg = airports.find((a) => a.ident === 'LLBG')!
+  const { viewer, entities, preRender } = fakeViewer()
+  const rw = addRunways(viewer, [llbg])
+  const byIdent = new Map(entities.values.map((e) => [e.label!.text!.getValue(now) as string, e]))
+  assert.deepEqual([...byIdent.keys()], ['03', '21', '08', '26', '12', '30'])
+  for (const r of llbg.runways) {
+    for (const e of r.ends) {
+      const m = byIdent.get(e.ident)!
+      assert.equal(m.point, undefined, `${e.ident}: an arrow, not a dot`)
+      near(m.billboard!.rotation!.getValue(now), (-e.hdgTrueDeg * Math.PI) / 180, 1e-12, `${e.ident} turned to its heading`)
+      const axis = m.billboard!.alignedAxis!.getValue(now) as Cartesian3
+      near(Cartesian3.distance(axis, northAt(e.thrLat, e.thrLon, new Cartesian3())), 0, 1e-12, `${e.ident} measured from north`)
+    }
+  }
+  preRender.raiseEvent() // aims each label behind its arrow as the camera sees it: north up
+  const m26 = byIdent.get('26')!
+  const off = m26.label!.pixelOffset!.getValue(now) as Cartesian2
+  assert.ok(off.x > 0 && Math.abs(off.y) < off.x, `26 heads west: its number east of the threshold (${off.x}, ${off.y})`)
+  assert.equal(m26.label!.horizontalOrigin!.getValue(now), HorizontalOrigin.LEFT)
+  const m03 = byIdent.get('03')!
+  assert.equal(m03.label!.verticalOrigin!.getValue(now), VerticalOrigin.TOP, '03 heads up the screen: its number below')
+
+  const e26 = llbg.runways[1].ends[1]
+  const at = viewer.scene.cartesianToCanvasCoordinates(Cartesian3.fromDegrees(e26.thrLon, e26.thrLat), new Cartesian3() as unknown as Cartesian2)!
+  const over = { x: at.x - 15, y: at.y + 2 } as Cartesian2 // on the arrow, half way along (it points west, slightly down)
+  assert.equal(rw.hover(over), true)
+  assert.equal(m26.label!.text!.getValue(now), 'Runway 26\nPlanes head west · 4.1 km')
+  assert.equal(m26.label!.showBackground!.getValue(now), true)
+  assert.equal(byIdent.get('08')!.label!.text!.getValue(now), '08', 'the others stay short')
+  assert.equal(rw.hover({ x: at.x, y: at.y + 60 } as Cartesian2), false, 'off the arrow')
+  assert.equal(m26.label!.text!.getValue(now), '26')
+  assert.equal(m26.label!.showBackground!.getValue(now), false)
+  assert.equal(rw.hover({ x: at.x, y: at.y + 60 } as Cartesian2, 70), true, 'a fingertip reaches further')
+  assert.equal(rw.hover(null), false)
+  assert.equal(m26.label!.text!.getValue(now), '26')
+  Cartesian3.fromDegrees(LON0, LAT0, 40_000, undefined, viewer.scene.camera.positionWC) // above 30 km the markers are hidden
+  preRender.raiseEvent()
+  assert.equal(rw.hover(over), false, 'a hidden marker is not hit')
+})
+
+test('keepOnScreen: a spelled-out label near an edge moves back inside the screen, 8 px in; one inside stays', () => {
+  const at = (h: HorizontalOrigin, v: VerticalOrigin, x = 5, y = 5) => ({ x, y, h, v })
+  // anchored at (360, 400) on a 375 × 812 phone, growing right: 240 px wide would end at 605
+  const right = keepOnScreen(at(HorizontalOrigin.LEFT, VerticalOrigin.TOP), 360, 400, 240, 40, 375, 812)
+  assert.equal(360 + right.x + 240, 375 - 8)
+  assert.equal(right.y, 5, 'not moved up or down')
+  const left = keepOnScreen(at(HorizontalOrigin.RIGHT, VerticalOrigin.CENTER), 20, 400, 240, 40, 375, 812)
+  assert.equal(20 + left.x - 240, 8)
+  const centred = keepOnScreen(at(HorizontalOrigin.CENTER, VerticalOrigin.BOTTOM, 0, -5), 187, 30, 240, 40, 375, 812)
+  assert.equal(30 + centred.y - 40, 8, 'pushed down from the top')
+  assert.equal(centred.x, 0)
+  const low = keepOnScreen(at(HorizontalOrigin.CENTER, VerticalOrigin.TOP, 0, 5), 187, 800, 100, 40, 375, 812)
+  assert.equal(800 + low.y + 40, 812 - 8, 'pushed up from the bottom')
+  const inside = keepOnScreen(at(HorizontalOrigin.LEFT, VerticalOrigin.TOP), 100, 100, 240, 40, 375, 812)
+  assert.deepEqual([inside.x, inside.y], [5, 5])
 })
