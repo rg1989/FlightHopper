@@ -31,8 +31,11 @@ export interface UrlState {
   scenario?: { id: string; t: number } | null // a running scenario and its clock
 }
 
-/** A scenario id as the URL may name it: it becomes a path segment (public/scenarios/<id>/). */
-const SCENARIO_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i
+/**
+ * A scenario id as the URL may name it: a package's becomes a path segment (public/scenarios/<id>/); a recording's is
+ * rec:<its file under FLIGHTS_DIR, without .jsonl> (fromRecording.ts).
+ */
+const SCENARIO_ID = /^(?:[a-z0-9][a-z0-9_-]{0,63}|rec:\d{4}-\d{2}-\d{2}\/\d{6}Z-[a-z0-9]*-[0-9a-fx]{6,7})$/i
 
 const nums = (v: string | null, n: number): number[] | null => {
   if (v === null) return null

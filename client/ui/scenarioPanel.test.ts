@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
+import type { RecordingInfo } from '../../shared/api.ts'
 import type { ScenarioCard } from '../scenario/types.ts'
 
 // scenarioPanel.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -22,6 +23,11 @@ class El {
   open = false
   type = ''
   attrs: Record<string, string> = {}
+  dataset: Record<string, string> = {}
+  title = ''
+  get childElementCount(): number {
+    return this.children.length
+  }
   #classes = new Set<string>()
   classList = {
     add: (c: string): void => void this.#classes.add(c),
@@ -113,98 +119,166 @@ const JAL: ScenarioCard = {
 }
 const OTHER: ScenarioCard = { ...JAL, id: 'other', title: 'Another flight', crew: [], summary: [] }
 
-function mount(list: () => Promise<ScenarioCard[]>) {
+const T0 = Date.UTC(2026, 8, 30, 0, 29, 32)
+const ITY: RecordingInfo = {
+  file: '2026-09-30/002932Z-ITY810-4cae1d.jsonl', hex: '4cae1d', callsign: 'ITY810', reg: 'EI-HXG', typeCode: 'A21N', category: 'A3',
+  military: false, route: 'LIRF-LLBG', source: 'adsbfi', startedMs: T0, firstMs: T0 - 120_000, lastMs: T0 + 280_000, samples: 140,
+  ended: { why: 'landed', endedMs: T0 + 340_000 }, active: false,
+}
+const LIVE: RecordingInfo = { ...ITY, file: '2026-09-30/010000Z-ELY336-73806c.jsonl', hex: '73806c', callsign: 'ELY336', route: null, ended: null, active: true }
+const STUB: RecordingInfo = { ...ITY, file: '2026-09-30/020000Z--738abc.jsonl', hex: '738abc', callsign: null, samples: 1, lastMs: T0 - 120_000 }
+
+function mount(list: () => Promise<ScenarioCard[]>, recordings?: () => Promise<RecordingInfo[] | null>) {
   const body = new El('div')
   const plays: string[] = []
   let calls = 0
+  let recCalls = 0
   const panel = mountScenarioPanel(body as unknown as HTMLElement, {
     list: () => {
       calls++
       return list()
     },
+    recordings: recordings && (() => {
+      recCalls++
+      return recordings()
+    }),
     onPlay: (id) => plays.push(id),
   })
-  return { body, panel, plays, calls: () => calls }
+  return { body, panel, plays, calls: () => calls, recCalls: () => recCalls }
 }
 
-test('a skeleton while list() runs, then a card per scenario', async () => {
+const titles = (root: El): string[] => visible(root, 'fh-scn-item').map((c) => text(one(c, 'fh-scn-title')))
+
+test('a skeleton while list() runs, then one compact row per scenario: title and one line, details hidden', async () => {
   const d = deferred<ScenarioCard[]>()
   const { body, calls } = mount(() => d.promise)
   assert.equal(calls(), 1, 'loads at mount')
   assert.equal(visible(body, 'fh-scn-skel').length, 1)
-  assert.ok(visible(body, 'fh-skel').length >= 3, 'shimmer bars')
-  assert.equal(find(body, 'fh-scn-card').length, 0)
+  assert.equal(find(body, 'fh-scn-item').length, 0)
   d.resolve([JAL, OTHER])
   await flush()
   assert.equal(visible(body, 'fh-scn-skel').length, 0)
-  const cards = visible(body, 'fh-scn-card')
-  assert.equal(cards.length, 2)
-  assert.deepEqual(cards.map((c) => text(one(c, 'fh-scn-title'))), ['Japan Air Lines Flight 123', 'Another flight'])
+  assert.deepEqual(titles(body), ['Japan Air Lines Flight 123', 'Another flight'])
+  const row = find(body, 'fh-scn-item')[0]
+  assert.equal(row.attrs['aria-label'], 'Japan Air Lines Flight 123')
+  assert.equal(text(one(row, 'fh-scn-line')), '12 August 1985 · 18:11–18:56 JST')
+  // Nothing else shows until the chevron is pressed.
+  for (const cls of ['fh-scn-sub', 'fh-scn-p', 'fh-scn-note', 'fh-scn-crew-list', 'fh-scn-facts']) assert.equal(visible(row, cls).length, 0, cls)
+  assert.deepEqual(find(body, 'fh-scn-section').map(text), ['Scenarios'], 'no Recordings section without recordings()')
 })
 
-test('a card shows subtitle, date and clock span, registration · type, summary, collapsed crew, the note, and Play', async () => {
+test('the chevron opens and closes a scenario\'s details: subtitle, aircraft, summary, crew, note', async () => {
   const { body } = mount(async () => [JAL])
   await flush()
-  const card = one(body, 'fh-scn-card')
-  assert.equal(card.tag, 'article')
-  assert.equal(card.attrs['aria-label'], 'Japan Air Lines Flight 123', 'named, so its Play button has a context')
-  assert.equal(text(one(card, 'fh-scn-sub')), 'Tokyo Haneda to Osaka Itami')
-  assert.equal(text(one(card, 'fh-scn-date')), '12 August 1985 · 18:11–18:56 JST')
-  assert.equal(text(one(card, 'fh-scn-ac')), 'JA8119 · Boeing 747SR-46')
-  assert.deepEqual(one(card, 'fh-scn-summary').children.map(text), ['First line of the summary.', 'Second line of the summary.'])
-  const crew = one(card, 'fh-scn-crew')
-  assert.equal(crew.tag, 'details')
-  assert.equal(crew.open, false, 'collapsed')
-  assert.equal(text(crew.children[0]), 'Crew')
-  assert.equal(crew.children[0].tag, 'summary')
-  const rows = all(crew).filter((e) => e.tag === 'li')
-  assert.deepEqual(rows.map(text), ['CaptainA. Captainright seat, instructor', 'First OfficerB. Officer'])
-  assert.equal(text(one(card, 'fh-scn-note')), 'Reconstructed from the official accident report.')
-  const play = one(card, 'fh-scn-play')
-  assert.equal(play.tag, 'button')
-  assert.equal(play.type, 'button')
-  assert.ok(play.has('fh-pill'))
-  assert.equal(text(play), 'Play')
+  const row = one(body, 'fh-scn-item')
+  const more = one(row, 'fh-scn-more')
+  assert.equal(more.attrs['aria-expanded'], 'false')
+  more.click()
+  assert.equal(more.attrs['aria-expanded'], 'true')
+  assert.equal(text(one(row, 'fh-scn-sub')), 'Tokyo Haneda to Osaka Itami')
+  assert.equal(text(one(row, 'fh-scn-facts')), 'AircraftJA8119 · Boeing 747SR-46FlightJAL123')
+  assert.deepEqual(visible(row, 'fh-scn-p').map(text), ['First line of the summary.', 'Second line of the summary.'])
+  assert.deepEqual(all(row).filter((e) => e.tag === 'li').map(text), ['CaptainA. Captainright seat, instructor', 'First OfficerB. Officer'])
+  assert.equal(text(one(row, 'fh-scn-note')), 'Reconstructed from the official accident report.')
+  more.click()
+  assert.equal(visible(row, 'fh-scn-note').length, 0)
 })
 
-test('no crew: no Crew list; no summary: no empty block', async () => {
+test('no crew and no summary: no empty blocks in the details', async () => {
   const { body } = mount(async () => [OTHER])
   await flush()
-  assert.equal(find(body, 'fh-scn-card').length, 1)
-  assert.equal(find(body, 'fh-scn-crew').length, 0)
-  assert.equal(find(body, 'fh-scn-summary').length, 0)
+  assert.equal(find(body, 'fh-scn-crew-list').length, 0)
+  assert.equal(find(body, 'fh-scn-p').length, 0)
 })
 
-test('Play calls onPlay with that card\'s id', async () => {
+test('Play calls onPlay with that item\'s id; it is named for its item', async () => {
   const { body, plays } = mount(async () => [JAL, OTHER])
   await flush()
   const [a, b] = find(body, 'fh-scn-play')
+  assert.equal(a.attrs['aria-label'], 'Play Japan Air Lines Flight 123')
   b.click()
   a.click()
   assert.deepEqual(plays, ['other', 'jal123'])
 })
 
-test('setPlaying: that card\'s button reads Playing and is disabled; null restores Play', async () => {
-  const { body, panel, plays } = mount(async () => [JAL, OTHER])
+test('setPlaying: that item\'s Play is pressed and disabled; null restores it; set before the list arrives, it still applies', async () => {
+  const d = deferred<ScenarioCard[]>()
+  const { body, panel, plays } = mount(() => d.promise)
+  panel.setPlaying('jal123')
+  d.resolve([JAL, OTHER])
   await flush()
   const [a, b] = find(body, 'fh-scn-play')
-  panel.setPlaying('jal123')
-  assert.deepEqual([text(a), a.disabled, text(b), b.disabled], ['Playing', true, 'Play', false])
+  assert.deepEqual([a.disabled, a.attrs['aria-pressed'], b.disabled], [true, 'true', false])
   panel.setPlaying(null)
-  assert.deepEqual([text(a), a.disabled, text(b), b.disabled], ['Play', false, 'Play', false])
-  panel.setPlaying('other')
-  assert.deepEqual([text(a), a.disabled, text(b), b.disabled], ['Play', false, 'Playing', true])
+  assert.deepEqual([a.disabled, a.attrs['aria-pressed'], b.disabled], [false, 'false', false])
   assert.deepEqual(plays, [])
 })
 
-test('setPlaying before the list arrives still applies to the cards', async () => {
-  const d = deferred<ScenarioCard[]>()
-  const { body, panel } = mount(() => d.promise)
-  panel.setPlaying('jal123')
-  d.resolve([JAL])
+test('Recordings: newest first as the server lists them; route, start and length in one line; REC while under way', async () => {
+  const { body, recCalls } = mount(async () => [JAL], async () => [LIVE, ITY])
   await flush()
-  const play = one(body, 'fh-scn-play')
-  assert.deepEqual([text(play), play.disabled], ['Playing', true])
+  assert.equal(recCalls(), 1)
+  assert.deepEqual(find(body, 'fh-scn-section').map(text), ['Scenarios', 'Recordings'])
+  assert.deepEqual(titles(body), ['Japan Air Lines Flight 123', 'ELY336', 'ITY810'])
+  const [, live, ity] = find(body, 'fh-scn-item')
+  assert.equal(text(one(ity, 'fh-scn-line')), 'LIRF → LLBG · 30 Sep 2026 · 00:27 UTC · 7 min')
+  assert.equal(find(ity, 'fh-scn-mark').length, 0)
+  assert.equal(text(one(live, 'fh-scn-mark')), 'REC')
+  one(ity, 'fh-scn-more').click()
+  assert.equal(text(one(ity, 'fh-scn-facts')),
+    'AircraftEI-HXG · A21NRouteLIRF → LLBGStarted30 Sep 2026 · 00:29 UTCLength7 minPoints140EndedLanded (stopped by itself)Sourceadsbfi')
+  one(live, 'fh-scn-more').click()
+  assert.match(text(one(live, 'fh-scn-facts')), /EndedStill recording/)
+})
+
+test('a recording plays by its rec: id; one too short says so and cannot be played', async () => {
+  const { body, plays } = mount(async () => [], async () => [ITY, STUB])
+  await flush()
+  const [ity, stub] = find(body, 'fh-scn-item')
+  one(ity, 'fh-scn-play').click()
+  assert.deepEqual(plays, ['rec:2026-09-30/002932Z-ITY810-4cae1d'])
+  assert.equal(text(one(stub, 'fh-scn-title')), '738ABC', 'no callsign: the hex')
+  assert.equal(text(one(stub, 'fh-scn-line')), 'Too short to replay')
+  assert.equal(one(stub, 'fh-scn-play').disabled, true)
+})
+
+test('Recordings: none yet, recording off, and a failed load each say so', async (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const none = mount(async () => [], async () => [])
+  await flush()
+  assert.match(visible(none.body, 'fh-scn-empty').map(text).join(), /None yet\. Select a flight and press the record button/)
+  const off = mount(async () => [], async () => null)
+  await flush()
+  assert.match(visible(off.body, 'fh-scn-empty').map(text).join(), /records nothing/)
+  let fail = true
+  const bad = mount(async () => [], async () => {
+    if (fail) throw new Error('500')
+    return [ITY]
+  })
+  await flush()
+  const err = one(bad.body, 'fh-scn-error')
+  assert.match(text(err), /Could not load the recordings/)
+  fail = false
+  all(err).find((e) => e.tag === 'button')!.click()
+  await flush()
+  assert.deepEqual(titles(bad.body), ['ITY810'])
+})
+
+test('refresh(\'recordings\') asks for the recordings only, keeps the rows until the answer, and drops a late older one', async () => {
+  const answers = [deferred<RecordingInfo[]>(), deferred<RecordingInfo[]>(), deferred<RecordingInfo[]>()]
+  let i = 0
+  const { body, panel, calls } = mount(async () => [], () => answers[i++].promise)
+  answers[0].resolve([ITY])
+  await flush()
+  panel.refresh('recordings')
+  panel.refresh('recordings')
+  assert.equal(calls(), 1, 'the scenarios are not asked again')
+  assert.deepEqual(titles(body), ['ITY810'], 'no flash back to a skeleton')
+  answers[2].resolve([LIVE, ITY])
+  await flush()
+  answers[1].resolve([])
+  await flush()
+  assert.deepEqual(titles(body), ['ELY336', 'ITY810'])
 })
 
 test('list() fails: an error line and Try again, which loads again', async (t) => {
@@ -215,42 +289,28 @@ test('list() fails: an error line and Try again, which loads again', async (t) =
     return [JAL]
   })
   await flush()
-  assert.equal(visible(body, 'fh-scn-skel').length, 0)
   const err = visible(body, 'fh-scn-error')
   assert.equal(err.length, 1)
   assert.match(text(err[0]), /Could not load the scenarios/)
   assert.equal(warn.mock.callCount(), 1, 'the reason goes to the console (a package author needs it)')
   fail = false
-  const retry = all(err[0]).find((e) => e.tag === 'button')!
-  retry.click()
+  all(err[0]).find((e) => e.tag === 'button')!.click()
   assert.equal(calls(), 2)
   await flush()
   assert.equal(visible(body, 'fh-scn-error').length, 0)
-  assert.equal(visible(body, 'fh-scn-card').length, 1)
+  assert.equal(visible(body, 'fh-scn-item').length, 1)
 })
 
-test('an empty list says so', async () => {
+test('an empty scenario list says so', async () => {
   const { body } = mount(async () => [])
   await flush()
   assert.match(text(one(body, 'fh-scn-empty')), /No scenarios/)
 })
 
-test('refresh() reloads, and an older answer arriving late is dropped', async () => {
-  const answers = [deferred<ScenarioCard[]>(), deferred<ScenarioCard[]>()]
-  let i = 0
-  const { body, panel } = mount(() => answers[i++].promise)
-  panel.refresh()
-  answers[1].resolve([OTHER])
-  await flush()
-  answers[0].resolve([JAL, OTHER])
-  await flush()
-  assert.deepEqual(visible(body, 'fh-scn-card').map((c) => text(one(c, 'fh-scn-title'))), ['Another flight'])
-})
-
 test('data goes in as text only', async () => {
-  const { body } = mount(async () => [{ ...JAL, title: '<img src=x onerror=alert(1)>', note: '<b>n</b>' }])
+  const { body } = mount(async () => [{ ...JAL, title: '<img src=x onerror=alert(1)>', note: '<b>n</b>' }], async () => [{ ...ITY, callsign: '<b>x</b>' }])
   await flush()
-  assert.equal(text(one(body, 'fh-scn-title')), '<img src=x onerror=alert(1)>')
+  assert.deepEqual(find(body, 'fh-scn-title').map(text), ['<img src=x onerror=alert(1)>', '<b>x</b>'])
   assert.equal(text(one(body, 'fh-scn-note')), '<b>n</b>')
 })
 

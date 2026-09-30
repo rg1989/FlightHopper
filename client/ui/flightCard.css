@@ -589,3 +589,123 @@
     display: flex;
   }
 }
+
+/* Record: the header button (red while recording, pulsing) and the strip under the numbers. */
+.fh-card-recbtn[hidden] {
+  display: none;
+}
+
+.fh-card-recbtn:hover {
+  color: var(--fh-err);
+}
+
+.fh-card-recbtn.fh-on,
+.fh-card-recbtn.fh-on:hover {
+  color: var(--fh-err);
+  background: rgba(255, 93, 93, 0.14);
+}
+
+.fh-card-recbtn.fh-on .fh-icon path {
+  fill: currentColor;
+  animation: fh-rec-pulse 1.6s ease-in-out infinite;
+}
+
+.fh-card-rec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 8px 12px 0;
+  padding: 5px 5px 5px 10px;
+  border-radius: var(--fh-radius-sm);
+  background: rgba(255, 93, 93, 0.1);
+  border: 1px solid rgba(255, 93, 93, 0.28);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fh-card-rec[hidden] {
+  display: none;
+}
+
+.fh-card-rec-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fh-err);
+  animation: fh-rec-pulse 1.6s ease-in-out infinite;
+}
+
+.fh-card-rec-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fh-text);
+  font-weight: 600;
+}
+
+.fh-card-rec.fh-saved {
+  background: rgba(60, 207, 110, 0.1);
+  border-color: rgba(60, 207, 110, 0.28);
+  padding-block: 7px;
+}
+
+.fh-card-rec.fh-saved .fh-card-rec-dot {
+  background: var(--fh-ok);
+  animation: none;
+}
+
+.fh-card-rec-stop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fh-press);
+  color: var(--fh-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fh-card-rec-stop:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.fh-card-rec-stop:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-card-rec-stop[hidden] {
+  display: none;
+}
+
+.fh-card-rec-stop .fh-icon path {
+  fill: currentColor;
+}
+
+@keyframes fh-rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-card-rec-dot,
+  .fh-card-recbtn.fh-on .fh-icon path {
+    animation: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .fh-card-rec-stop {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+}

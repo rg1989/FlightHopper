@@ -6,22 +6,24 @@
 //   GET /api/status                     the poller's StatusReport
 //   GET /api/record                     the flights being recorded (FLIGHTS_DIR set; else 404)
 //   POST /api/record?hex&on=1|0         start or stop recording one aircraft → RecordResponse
+//   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
-// any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded.
+// any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded (adsbdb.com).
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
-import type { ChaseResponse, RecordResponse, ViewResponse } from '../shared/api.ts'
+import type { ChaseResponse, RecordingInfo, RecordResponse, StatusBrief, ViewResponse } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { TokenBucket } from './budget.ts'
 import { readServerConfig, type ServerConfig } from './config.ts'
+import { AdsbdbRoutes } from './adsbdb.ts'
 import { FlightLog } from './flightLog.ts'
 import { InfoStore } from './infoStore.ts'
 import { POLLER_DEFAULTS, Poller } from './poller.ts'
@@ -43,8 +45,8 @@ const GZIP_LEVEL = 1
 // An aircraft silent this long may have been dropped by the client (its Fleet prunes old entries): send its info again.
 const INFO_RESEND_GAP_MS = 60_000
 const ROUTE_TICK_MS = 100 // RouteFetcher.tick itself keeps ≥ 60 s between requests
-// Selected-only route lookups (adsb.lol's routeset while the aircraft come from elsewhere): asked when a flight is
-// selected, so at most one request per 5 s and ≤ 1 a minute sustained (burst 3), well under adsb.lol's limits.
+// Selected-only route lookups (adsbdb.com, one callsign a request): asked when a flight is selected, so at most one
+// request per 5 s and ≤ 1 a minute sustained (burst 3).
 const SELECTED_ROUTE_GAP_MS = 5000
 const SELECTED_ROUTE_RPS = 1 / 60
 const FLIGHT_LOG_TICK_MS = 5000
@@ -225,13 +227,15 @@ export function createServer(
   const routes =
     cfg.contact === null || source.caps.kind === 'replay'
       ? null
-      : new RouteFetcher({
-          bucket: allRoutes ? bucket : new TokenBucket(SELECTED_ROUTE_RPS, nowMs, Math.random, 3),
-          userAgent: userAgent(cfg.contact),
-          nowMs,
-          fetchFn: deps.routesFetch,
-          minIntervalMs: allRoutes ? undefined : SELECTED_ROUTE_GAP_MS,
-        })
+      : allRoutes
+        ? new RouteFetcher({ bucket, userAgent: userAgent(cfg.contact), nowMs, fetchFn: deps.routesFetch })
+        : new AdsbdbRoutes({
+            bucket: new TokenBucket(SELECTED_ROUTE_RPS, nowMs, Math.random, 3),
+            userAgent: userAgent(cfg.contact),
+            nowMs,
+            fetchFn: deps.routesFetch,
+            minIntervalMs: SELECTED_ROUTE_GAP_MS,
+          })
   const routesFor = (): ReadonlySet<string> | undefined => (allRoutes ? undefined : new Set([...poller.chasedHexes(), ...(flights?.hexes() ?? [])]))
   let flightTimer: ReturnType<typeof setInterval> | null = null
   let routeTimer: ReturnType<typeof setInterval> | null = null
@@ -279,6 +283,14 @@ export function createServer(
     return { ...raw, seen: age(raw.seen), seen_pos: age(raw.seen_pos) }
   }
 
+  /** The poller's brief, with the flights being recorded. */
+  function brief(): StatusBrief {
+    const b = poller.brief()
+    const rec = flights?.active() ?? []
+    if (rec.length > 0) b.recording = rec.map((r) => ({ hex: r.hex, callsign: r.callsign }))
+    return b
+  }
+
   function view(q: URLSearchParams): ViewResponse {
     const lat = num(q, 'lat')
     const lon = num(q, 'lon')
@@ -290,7 +302,7 @@ export function createServer(
     check(since >= 0, 'since must be ≥ 0')
     poller.touchView(lat, lon, nm)
     const samples = store.view(lat, lon, nm, since)
-    return { serverNowMs: nowMs(), samples, status: poller.brief(), info: viewInfo(samples, lat, lon, nm, since) }
+    return { serverNowMs: nowMs(), samples, status: brief(), info: viewInfo(samples, lat, lon, nm, since) }
   }
 
   function chase(q: URLSearchParams): ChaseResponse {
@@ -300,9 +312,14 @@ export function createServer(
     check(since >= 0, 'since must be ≥ 0')
     poller.touchChase(hex)
     const now = nowMs()
-    const out: ChaseResponse = { serverNowMs: now, samples: store.track(hex, since), status: poller.brief(), raw: rawAt(hex, now), info: info.get(hex), dest: info.dest(hex) }
+    const out: ChaseResponse = { serverNowMs: now, samples: store.track(hex, since), status: brief(), raw: rawAt(hex, now), info: info.get(hex), dest: info.dest(hex) }
     if (flights !== null) out.rec = flights.get(hex)
     return out
+  }
+
+  function recordings(): { recordings: RecordingInfo[] } {
+    if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
+    return { recordings: flights.list() }
   }
 
   function record(q: URLSearchParams, post: boolean): RecordResponse {
@@ -334,6 +351,12 @@ export function createServer(
       else if (url.pathname === '/api/chase') body = chase(url.searchParams)
       else if (url.pathname === '/api/status') body = poller.report()
       else if (url.pathname === '/api/record') body = record(url.searchParams, post)
+      else if (url.pathname === '/api/recordings') body = recordings()
+      else if (url.pathname === '/api/recordings/track') {
+        if (flights === null) throw new BadRequest('recording is off: set FLIGHTS_DIR')
+        const r = flights.read(url.searchParams.get('file') ?? '')
+        ;[status, body] = r === null ? [404, { error: 'no such recording' }] : [200, r]
+      }
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
       if (e instanceof WxError) [status, body] = [e.status, { error: e.message }]

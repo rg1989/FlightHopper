@@ -10,9 +10,9 @@
 //   {"end": {why: 'stopped'|'landed'|'lost', endedMs, samples}}                    last line, when it ended
 // A file without an end line was cut short by a server stop that did not resume it.
 // <dir>/active.json lists the recordings under way, so a restarted server carries on appending to the same files.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { RecordingState } from '../shared/api.ts'
+import type { RecordingInfo, RecordingState, RecordingTrack } from '../shared/api.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { Sample, SourceKind } from '../shared/types.ts'
 
@@ -21,6 +21,9 @@ export const LANDED_HOLD_MS = 60_000 // … for this long (the roll-out and the 
 export const LOST_MS = 15 * 60_000 // no new sample for this long: gone (out of coverage, or landed where no one hears it)
 
 export type EndReason = 'stopped' | 'landed' | 'lost'
+
+/** A recording's path under the flights directory, as start() names it: nothing else is ever read. */
+export const RECORDING_FILE = /^\d{4}-\d{2}-\d{2}\/\d{6}Z-[A-Za-z0-9]*-[0-9a-fx]{6,7}\.jsonl$/
 
 interface Active {
   state: RecordingState
@@ -61,6 +64,8 @@ export class FlightLog {
       callsign: info?.callsign ?? null,
       reg: info?.reg ?? null,
       typeCode: info?.typeCode ?? null,
+      category: info?.category ?? null,
+      military: info?.military ?? false,
       route: info?.route ?? null,
       source: this.#source,
       by: 'hand',
@@ -114,6 +119,69 @@ export class FlightLog {
     return [...this.#active.keys()]
   }
 
+  /** Every recording on disk, newest first. ponytail: reads every file whole per call (KBs to a few MB each). */
+  list(): RecordingInfo[] {
+    const out: RecordingInfo[] = []
+    let days: string[]
+    try {
+      days = readdirSync(this.#dir).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    } catch {
+      return out
+    }
+    for (const day of days) {
+      for (const name of readdirSync(join(this.#dir, day))) {
+        const file = `${day}/${name}`
+        if (!RECORDING_FILE.test(file)) continue
+        const r = this.read(file)
+        if (r !== null) out.push(r.info)
+      }
+    }
+    return out.sort((a, b) => b.startedMs - a.startedMs)
+  }
+
+  /** One recording (its info and samples, oldest first), or null: not a recording file, missing, or no header. */
+  read(file: string): RecordingTrack | null {
+    if (!RECORDING_FILE.test(file)) return null
+    let text: string
+    try {
+      text = readFileSync(join(this.#dir, file), 'utf8')
+    } catch {
+      return null
+    }
+    let head: Record<string, unknown> | null = null
+    let ended: RecordingInfo['ended'] = null
+    const samples: Sample[] = []
+    for (const line of text.split('\n')) {
+      if (line === '') continue
+      let o: { flight?: Record<string, unknown>; s?: Sample; end?: { why: EndReason; endedMs: number } }
+      try {
+        o = JSON.parse(line)
+      } catch {
+        continue // a line cut short by a crash mid-write
+      }
+      if (o.s) samples.push(o.s)
+      else if (o.flight) head = o.flight
+      else if (o.end) ended = { why: o.end.why, endedMs: o.end.endedMs }
+    }
+    if (head === null || typeof head.hex !== 'string') return null
+    const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+    const hex = head.hex
+    return {
+      info: {
+        file, hex,
+        callsign: str(head.callsign), reg: str(head.reg), typeCode: str(head.typeCode), category: str(head.category),
+        military: head.military === true, route: str(head.route), source: str(head.source) ?? '',
+        startedMs: typeof head.startedMs === 'number' ? head.startedMs : 0,
+        firstMs: samples.length > 0 ? samples[0].tMs : null,
+        lastMs: samples.length > 0 ? samples[samples.length - 1].tMs : null,
+        samples: samples.length,
+        ended,
+        active: ended === null && this.#active.get(hex)?.state.file === file,
+      },
+      samples,
+    }
+  }
+
   #write(a: Active, s: Sample): void {
     try {
       appendFileSync(join(this.#dir, a.state.file), JSON.stringify({ s }) + '\n')
@@ -135,7 +203,7 @@ export class FlightLog {
     writeFileSync(join(this.#dir, 'active.json'), JSON.stringify(list, null, 1) + '\n')
   }
 
-  /** Picks up the recordings a previous server left under way. */
+  /** Picks up the recordings a previous server left under way; their counts from the files (active.json has the start's). */
   #resume(): void {
     let list: (RecordingState & { airborne?: boolean })[]
     try {
@@ -147,7 +215,21 @@ export class FlightLog {
     for (const r of list) {
       if (typeof r?.hex !== 'string' || typeof r.file !== 'string') continue
       const { airborne, ...state } = r
-      this.#active.set(r.hex, { state, airborne: airborne === true, slowSinceMs: null })
+      const a: Active = { state, airborne: airborne === true, slowSinceMs: null }
+      try {
+        let n = 0
+        for (const line of readFileSync(join(this.#dir, r.file), 'utf8').split('\n')) {
+          if (!line.startsWith('{"s":')) continue
+          const s = (JSON.parse(line) as { s: Sample }).s
+          n++
+          state.lastMs = Math.max(state.lastMs ?? -Infinity, s.rxMs)
+          if (!s.onGround) a.airborne = true
+        }
+        state.samples = n
+      } catch {
+        // the file is gone or unreadable: the count stays as saved; appending recreates it
+      }
+      this.#active.set(r.hex, a)
     }
   }
 }

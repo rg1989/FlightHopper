@@ -58,3 +58,10 @@ test('readView: malformed or out-of-range values are null', () => {
   assert.equal(readView('?cam=0,-10,0').cam, null)
   assert.deepEqual(readView('').cam, null)
 })
+
+test('a recording replay names its file in ?scenario=rec:…, and a reload reads it back; odd ids are refused', () => {
+  const id = 'rec:2026-09-30/002932Z-ITY810-4cae1d'
+  const url = writeUrl('', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS, scenario: { id, t: 1771.4 } })
+  assert.equal(readScenario(url)?.id, id)
+  for (const bad of ['rec:../x', 'rec:2026-09-30/../../x', 'rec:', 'rec:2026-09-30/002932Z-ITY810-4cae1d.jsonl']) assert.equal(readScenario(`?scenario=${encodeURIComponent(bad)}`), null, bad)
+})

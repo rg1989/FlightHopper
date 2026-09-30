@@ -113,3 +113,53 @@
   text-align: left;
   white-space: nowrap;
 }
+
+/* The flights being recorded: a red dot and a button per flight (selects it). */
+.fh-status-rows dd.fh-status-rec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fh-status-rows [hidden] {
+  display: none;
+}
+
+.fh-status-recbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 93, 93, 0.3);
+  border-radius: 6px;
+  background: rgba(255, 93, 93, 0.1);
+  color: var(--fh-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fh-status-recbtn::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fh-err);
+}
+
+.fh-status-recbtn:hover {
+  background: rgba(255, 93, 93, 0.2);
+}
+
+.fh-status-recbtn:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+@media (pointer: coarse) {
+  .fh-status-recbtn {
+    min-height: 36px;
+    padding: 0 10px;
+  }
+}

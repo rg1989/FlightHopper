@@ -55,8 +55,11 @@ export interface StatusPanelHandle {
   setImagery(text: string, state: 'ok' | 'fallback' | 'plain'): void
 }
 
-/** The Status panel: mode and source (linked), how often the view refreshes, areas still loading, imagery. */
-export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
+/**
+ * The Status panel: mode and source (linked), how often the view refreshes, areas still loading, imagery, and the
+ * flights being recorded (each a button: onPick selects it), a row only while there are any.
+ */
+export function mountStatusPanel(root: HTMLElement, opts: { onPick?(hex: string): void } = {}): StatusPanelHandle {
   const h = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag)
     e.className = className
@@ -84,6 +87,10 @@ export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
   const refreshV = row('Map refresh')
   const coverageV = row('Coverage')
   const imageryV = row('Imagery')
+  const recV = row('Recording')
+  const recL = recV.previousElementSibling as HTMLElement
+  recV.className = 'fh-status-rec'
+  recV.hidden = recL.hidden = true
   root.append(hero, rows)
 
   let shown = ''
@@ -94,9 +101,18 @@ export function mountStatusPanel(root: HTMLElement): StatusPanelHandle {
       // In trouble the pending count means nothing (no answers are coming): no "Loading" spinner then.
       const pending = status !== null && status.degraded === null ? (status.pendingAreas ?? 0) : 0
       const every = status?.viewEveryS
-      const key = `${v?.text}|${v?.state}|${v?.title}|${pending}|${every}|${statusDot(status)}`
+      const rec = status?.recording ?? []
+      const key = `${v?.text}|${v?.state}|${v?.title}|${pending}|${every}|${statusDot(status)}|${rec.map((r) => `${r.hex}:${r.callsign}`).join()}`
       if (key === shown) return
       shown = key
+      recV.hidden = recL.hidden = rec.length === 0
+      recV.replaceChildren(...rec.map((r) => {
+        const b = h('button', 'fh-status-recbtn', r.callsign ?? r.hex.toUpperCase())
+        b.type = 'button'
+        b.title = 'Being recorded: show it'
+        b.addEventListener('click', () => opts.onPick?.(r.hex))
+        return b
+      }))
       dot.dataset.state = statusDot(status)
       mode.textContent = v === null ? 'Connecting…' : v.text.split(' · ')[0] === 'REPLAY' ? v.text.replace('REPLAY', 'Replay') : v.state === 'trouble' ? v.title : 'Live traffic'
       if (src !== null && src.href !== null) {

@@ -71,6 +71,9 @@ const P: Record<string, string> = {
   // A speaker with its sound, and silenced.
   volume: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM15.5 9.2a4 4 0 0 1 0 5.6M18.3 6.5a7.8 7.8 0 0 1 0 11',
   muted: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM16 9.5l5 5M21 9.5l-5 5',
+  // Record (a dot in a ring) and stop (a square): a flight recorded to a file.
+  record: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z',
+  stop: 'M7.5 7.5h9v9h-9z',
 }
 
 const NS = 'http://www.w3.org/2000/svg'

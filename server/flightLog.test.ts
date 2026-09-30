@@ -35,7 +35,7 @@ test('a recording: header, the backfill, each new sample of that aircraft only, 
   assert.equal(log.stop('738abc')?.lastMs, T0 + 1000)
   assert.equal(log.stop('738abc'), null)
   const l = lines(rec.file)
-  assert.deepEqual(l[0].flight, { v: 1, hex: '738abc', callsign: 'ELY315', reg: '4X-EKA', typeCode: 'B738', route: 'LLBG-EGLL', source: 'adsbfi', by: 'hand', startedMs: T0 })
+  assert.deepEqual(l[0].flight, { v: 1, hex: '738abc', callsign: 'ELY315', reg: '4X-EKA', typeCode: 'B738', category: 'A3', military: false, route: 'LLBG-EGLL', source: 'adsbfi', by: 'hand', startedMs: T0 })
   assert.deepEqual(l.slice(1, 4).map((x) => x.s.rxMs), [T0 - 2000, T0 - 1000, T0 + 1000])
   assert.deepEqual(l[4], { end: { why: 'stopped', endedMs: T0 + 5000, samples: 3 } })
   assert.deepEqual(log.active(), [])
@@ -72,10 +72,27 @@ test('ends by itself: landed (slow on the ground for a minute after flying), or 
 test('a restarted server carries on the recordings under way, in the same files', () => {
   const { clock, dir, log, lines } = setup()
   const rec = log.start('738abc', INFO, [sample(T0)])
+  log.add(sample(T0 + 500)) // written after active.json was saved: counted from the file
   const again = new FlightLog({ dir, source: 'adsbfi', nowMs: () => clock.t })
-  assert.deepEqual(again.get('738abc'), rec)
+  assert.deepEqual(again.get('738abc'), { ...rec, samples: 2, lastMs: T0 + 500 })
   again.add(sample(T0 + 1000))
   again.stop('738abc')
-  assert.deepEqual(lines(rec.file).map((x) => Object.keys(x)[0]), ['flight', 's', 's', 'end'])
+  assert.deepEqual(lines(rec.file).map((x) => Object.keys(x)[0]), ['flight', 's', 's', 's', 'end'])
   assert.deepEqual(new FlightLog({ dir, source: 'adsbfi' }).active(), [])
+})
+
+test('list: every recording, newest first, with its header, span, count, how it ended and whether it is under way', () => {
+  const { clock, dir, log } = setup()
+  const a = log.start('738abc', INFO, [sample(T0 - 1000), sample(T0)])
+  log.stop('738abc', 'landed')
+  clock.t += 3_600_000
+  const b = log.start('4cae1d', { ...INFO, hex: '4cae1d', callsign: 'ITY810', military: false, category: 'A3' }, [])
+  log.add({ ...sample(clock.t), hex: '4cae1d' })
+  const list = log.list()
+  assert.deepEqual(list.map((r) => [r.file, r.samples, r.active, r.ended?.why ?? null]), [[b.file, 1, true, null], [a.file, 2, false, 'landed']])
+  assert.deepEqual([list[1].firstMs, list[1].lastMs, list[1].route, list[1].category], [T0 - 1000, T0, 'LLBG-EGLL', 'A3'])
+  assert.equal(log.read(a.file)?.samples.length, 2)
+  // Only recording files under the directory: no traversal, no other names.
+  for (const bad of ['../x.jsonl', 'active.json', '2026-09-30/../../etc.jsonl', '2026-09-30/x.jsonl', '']) assert.equal(log.read(bad), null, bad)
+  assert.deepEqual(new FlightLog({ dir: join(dir, 'none'), source: 'adsbfi' }).list(), [])
 })

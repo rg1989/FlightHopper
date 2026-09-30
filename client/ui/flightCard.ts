@@ -6,7 +6,9 @@
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
 // The same card, mounted with `traffic`, shows a chase-traffic aircraft (a click in its brackets): top right, with its
 // distance from the chased aircraft, and Chase to fly behind it instead.
-import type { StatusBrief } from '../../shared/api.ts'
+// With onRecord (the server records flights: FLIGHTS_DIR), a Record button in the header records the aircraft to a
+// file; while it records, a strip under the numbers shows for how long and how many points, with Stop.
+import type { RecordingState, StatusBrief } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
@@ -150,6 +152,8 @@ export interface FlightCardOpts {
   lookup(hex: string, callsign: string | null): Lookup
   /** A chase-traffic aircraft's card (flightCard.css places it apart): its pill always reads Chase, and a range line shows. */
   traffic?: boolean
+  /** Start (on) or stop recording this aircraft; resolves to its recording (null: none), or rejects. */
+  onRecord?(hex: string, on: boolean): Promise<RecordingState | null>
 }
 
 export interface FlightCardHandle {
@@ -169,7 +173,20 @@ export interface FlightCardHandle {
    * call.
    */
   keepClear(x: number, y: number, padPx: number, avoid?: readonly { x: number; y: number; w: number; h: number }[]): void
+  /**
+   * The shown aircraft's recording, from the server (a chase reply of hex): null when it is not being recorded,
+   * undefined when the server records nothing (no Record button). serverNowMs dates it.
+   */
+  setRecording(hex: string, rec: RecordingState | null | undefined, serverNowMs: number): void
   destroy(): void
+}
+
+/** "4:05" or "1:02:09" for a recording's length. */
+export function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const mm = String(Math.floor(s / 60) % 60)
+  const ss = String(s % 60).padStart(2, '0')
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm.padStart(2, '0')}:${ss}` : `${mm}:${ss}`
 }
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] {
@@ -224,7 +241,11 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const actions = h('div', 'fh-card-actions')
   const linkBtn = iconButton('link', traffic ? 'Copy a link to chase this aircraft' : 'Copy a link to this view')
   const closeBtn = iconButton('x', 'Close (Esc)')
-  actions.append(linkBtn, closeBtn)
+  const recBtn = iconButton('record', 'Record this flight')
+  recBtn.classList.add('fh-card-recbtn')
+  recBtn.hidden = true
+  recBtn.setAttribute('aria-pressed', 'false')
+  actions.append(recBtn, linkBtn, closeBtn)
   // Beside the status line, above what it opens.
   const expandBtn = iconButton('chevronDown', 'Show details')
   expandBtn.classList.add('fh-card-expand')
@@ -270,6 +291,18 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const rangeFrom = h('span', 'fh-card-range-f')
   range.append(icon('bracket', 14), rangeDist, rangeFrom)
   range.hidden = true
+
+  // While recording: "● REC 4:05 · 318 points   Stop". After it ends: "Recording saved" for a few seconds.
+  const recRow = h('div', 'fh-card-rec')
+  recRow.hidden = true
+  recRow.setAttribute('role', 'status')
+  const recDot = h('span', 'fh-card-rec-dot')
+  const recText = h('span', 'fh-card-rec-t fh-num')
+  const stopBtn = h('button', 'fh-card-rec-stop')
+  stopBtn.type = 'button'
+  stopBtn.title = 'Stop recording (it also stops by itself once the aircraft has landed)'
+  stopBtn.append(icon('stop', 14), h('span', '', 'Stop'))
+  recRow.append(recDot, recText, stopBtn)
 
   const statusRow = h('div', 'fh-card-status')
   const dot = h('span', 'fh-dot')
@@ -318,7 +351,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
 
   const foot = h('div', 'fh-card-foot')
   foot.append(statusRow, expandBtn, chaseBtn)
-  card.append(head, figure, stats, range, foot, more)
+  card.append(head, figure, stats, recRow, range, foot, more)
   root.append(card)
 
   let curHex: string | null = null
@@ -336,6 +369,11 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   let lkKey = ''
   let expanded = false
   let destroyed = false
+  // The recording of the shown aircraft: rec and when the server said so (local clock), for a ticking length.
+  let rec: { hex: string; state: RecordingState | null | undefined; atMs: number; serverNowMs: number } | null = null
+  let recBusy = false
+  let savedUntilMs = 0 // "Recording saved" shows until then
+  let recTimer: ReturnType<typeof setInterval> | null = null
 
   const hexOf = (): string | null => curHex
   const set = (node: HTMLElement, text: string): void => {
@@ -425,7 +463,9 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     if (hex !== shown) {
       shown = hex
       selectedAtMs = Date.now()
+      savedUntilMs = 0
       showPhoto(hex)
+      paintRec()
     }
     const cs = curInfo?.callsign ?? curS?.callsign ?? null
     const key = `${hex}/${cs}`
@@ -471,6 +511,51 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       }
     }
   }
+
+  function paintRec(): void {
+    const mine = rec !== null && rec.hex === shown ? rec.state : undefined
+    recBtn.hidden = traffic || opts.onRecord === undefined || shown === null || mine === undefined
+    const on = mine !== null && mine !== undefined
+    recBtn.setAttribute('aria-pressed', String(on))
+    recBtn.classList.toggle('fh-on', on)
+    const label = on ? 'Stop recording this flight' : 'Record this flight (until it lands)'
+    recBtn.setAttribute('aria-label', label)
+    recBtn.title = label
+    recBtn.disabled = recBusy
+    stopBtn.disabled = recBusy
+    const saved = !on && Date.now() < savedUntilMs
+    recRow.hidden = recBtn.hidden || (!on && !saved)
+    recRow.classList.toggle('fh-saved', saved)
+    stopBtn.hidden = !on
+    if (on && rec !== null) {
+      const elapsed = rec.serverNowMs + (Date.now() - rec.atMs) - mine.startedMs
+      set(recText, `REC ${formatElapsed(elapsed)} · ${mine.samples.toLocaleString('en-US')} point${mine.samples === 1 ? '' : 's'}`)
+    } else if (saved) set(recText, 'Recording saved')
+    const tick = on || saved
+    if (tick && recTimer === null) recTimer = setInterval(paintRec, 1000)
+    else if (!tick && recTimer !== null) (clearInterval(recTimer), (recTimer = null))
+  }
+
+  async function toggleRec(on: boolean): Promise<void> {
+    const hex = shown
+    if (hex === null || opts.onRecord === undefined || recBusy) return
+    recBusy = true
+    paintRec()
+    try {
+      const state = await opts.onRecord(hex, on)
+      if (destroyed) return
+      if (!on) savedUntilMs = Date.now() + 4000
+      rec = { hex, state, atMs: Date.now(), serverNowMs: state?.startedMs ?? Date.now() }
+      if (state !== null) rec.serverNowMs = Math.max(state.startedMs, state.lastMs ?? state.startedMs)
+    } catch (e) {
+      console.warn('flightCard: record failed:', e)
+    } finally {
+      recBusy = false
+      if (!destroyed) paintRec()
+    }
+  }
+  recBtn.addEventListener('click', () => void toggleRec(recBtn.getAttribute('aria-pressed') !== 'true'))
+  stopBtn.addEventListener('click', () => void toggleRec(false))
 
   expandBtn.addEventListener('click', () => {
     expanded = !expanded
@@ -520,12 +605,20 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
     },
+    setRecording(hex, state, serverNowMs) {
+      if (destroyed || recBusy) return
+      const was = rec !== null && rec.hex === hex && rec.state !== null && rec.state !== undefined
+      if (was && state === null) savedUntilMs = Date.now() + 4000 // it ended by itself: landed, or out of range
+      rec = { hex, state, atMs: Date.now(), serverNowMs }
+      paintRec()
+    },
     keepClear(x, y, padPx, avoid = []) {
       clearOf = { x, y, padPx, avoid }
       place()
     },
     destroy() {
       destroyed = true
+      if (recTimer !== null) clearInterval(recTimer)
       if (timer !== null) clearTimeout(timer)
       timer = null
       card.remove()

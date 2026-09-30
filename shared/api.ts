@@ -12,6 +12,7 @@ export interface StatusBrief {
   viewEveryS?: number            // expected refresh of the newest view's aircraft, s (its zoom-scaled period, stretched by the budget)
   chaseEveryS?: number           // expected refresh of the chased aircraft, s
   pendingAreas?: number          // areas of the view not loaded yet: no good answer so far (a wide view fills centre-out)
+  recording?: { hex: string; callsign: string | null }[] // flights being recorded (server/flightLog.ts); absent when none
   pendingBoxes?: [number, number, number, number][] // those of them that are grid cells, [south, north, west, east] °, in the order they will be asked (the first is loading now); absent when none: the map veils them
 }
 
@@ -40,6 +41,31 @@ export interface RecordingState {
   startedMs: number
   samples: number
   lastMs: number | null          // rxMs of the newest recorded sample
+}
+
+/** A recorded flight as the Recordings list shows it (server/flightLog.ts list()). Times on the server clock. */
+export interface RecordingInfo {
+  file: string                   // relative to the flights directory: its id
+  hex: string
+  callsign: string | null
+  reg: string | null
+  typeCode: string | null
+  category: string | null
+  military: boolean
+  route: string | null           // e.g. 'LIRF-LLBG'
+  source: string
+  startedMs: number
+  firstMs: number | null         // tMs of its first and last sample (null: none)
+  lastMs: number | null
+  samples: number
+  ended: { why: 'stopped' | 'landed' | 'lost'; endedMs: number } | null // null: still recording, or cut short
+  active: boolean                // being recorded now
+}
+
+/** One recording's content (GET /api/recordings/track?file=), for a replay. */
+export interface RecordingTrack {
+  info: RecordingInfo
+  samples: Sample[]
 }
 
 export interface RecordResponse {

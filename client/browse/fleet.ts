@@ -44,7 +44,7 @@ interface InfoRec {
 }
 
 /** Height of the aircraft in WGS84 ellipsoidal metres: geom when it is HAE (v2), else baro (or geom) + N, ground → N. */
-function heightM(s: Sample): number {
+export function heightM(s: Sample): number {
   if (s.onGround) return s.nM
   if (s.version === 2 && s.altGeomFt !== null) return s.altGeomFt * FT
   const ft = s.altBaroFt ?? s.altGeomFt

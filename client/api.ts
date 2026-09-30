@@ -1,6 +1,6 @@
 // client/api.ts
 // Browser client for the FlightHopper server: GET /view and /chase with a per-key `since`, plus the server clock.
-import type { ChaseResponse, ViewResponse } from '../shared/api.ts'
+import type { ChaseResponse, RecordingInfo, RecordingTrack, RecordResponse, ViewResponse } from '../shared/api.ts'
 import { MinOffset } from '../shared/clock.ts'
 
 const OFFSET_WINDOW_MS = 60_000
@@ -32,6 +32,28 @@ export class ApiClient {
   /** The chased aircraft's samples received by the server after the last reply for this hex. */
   chase(hex: string): Promise<ChaseResponse> {
     return this.#get(`chase:${hex}`, (since) => `${this.#base}/chase?hex=${hex}&since=${since}`)
+  }
+
+  /** Starts (on) or stops recording one aircraft to its own file on the server (FLIGHTS_DIR). */
+  async record(hex: string, on: boolean): Promise<RecordResponse> {
+    const res = await this.#fetch(`${this.#base}/record?hex=${encodeURIComponent(hex)}&on=${on ? 1 : 0}`, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as RecordResponse
+  }
+
+  /** Every recorded flight, newest first; null when the server records nothing (no FLIGHTS_DIR). */
+  async recordings(): Promise<RecordingInfo[] | null> {
+    const res = await this.#fetch(`${this.#base}/recordings`, { signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (res.status === 400) return null
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return ((await res.json()) as { recordings: RecordingInfo[] }).recordings
+  }
+
+  /** One recorded flight's samples, for a replay. */
+  async recording(file: string): Promise<RecordingTrack> {
+    const res = await this.#fetch(`${this.#base}/recordings/track?file=${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as RecordingTrack
   }
 
   /** Server clock now, from the local clock and the smallest (receive − serverNowMs) of the last 60 s. Throws before `ready`. */

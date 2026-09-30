@@ -21,11 +21,11 @@ import type { Airport } from '../shared/airports.ts'
 import type { ChaseResponse, StatusBrief } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { countryOf, flagEmoji } from '../shared/icaoCountry.ts'
-import type { AircraftInfo } from '../shared/info.ts'
+import type { AircraftInfo, RoutePlace } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
-import { Fleet } from './browse/fleet.ts'
+import { Fleet, heightM } from './browse/fleet.ts'
 import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, heightToFit, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
@@ -34,7 +34,8 @@ import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './
 import { makeMapLayer, makeRoadsLayer } from './scene/mapLayer.ts'
 import { Weather } from './scene/weather.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
-import { liveryCode, liveryFromSpec } from './scene/livery.ts'
+import { RouteLine, type LinePoint } from './scene/routeLine.ts'
+import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
 import { Traffic } from './scene/traffic.ts'
@@ -49,6 +50,7 @@ import { Topography, groundMemo, pickRelHM } from './scene/topography.ts'
 import { createViewer } from './scene/viewer.ts'
 import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
 import { listScenarios, loadScenario } from './scenario/format.ts'
+import { recordingFile, recordingScenario } from './scenario/fromRecording.ts'
 import { Dresser, ScenarioRun } from './scenario/run.ts'
 import type { Scenario } from './scenario/types.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
@@ -366,6 +368,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let tf: TerrainFrame // this frame's exaggeration: topo.update() writes it first in every frame
   let chaseRaw: ReadsbAircraft | null = null // newest full upstream object and info of the selected aircraft
   let chaseInfo: AircraftInfo | null = null
+  // The top-down map's line for the selected aircraft (routeLine.ts): where it has flown since it was selected, and
+  // where its route ends (from its chase replies).
+  let chaseDest: RoutePlace | null = null
+  const trail: LinePoint[] = []
+  let trailTMs = -Infinity // tMs of trail's newest point
   let tableHover: string | null = null
   let mapHover: string | null = null
   let status = NO_STATUS
@@ -408,6 +415,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // The Scenarios panel asks for its list at mount; it gets it once the panel is first opened, not at start.
   let openedScenarios!: () => void
   const scenariosOpened = new Promise<void>((resolve) => (openedScenarios = resolve))
+  let scenariosSeen = false
   const rail = mountRail(ui, [
     // The live status (source, refresh, coverage, imagery) in a line over the list of the aircraft in view; the button
     // carries the count, the feed's dot and its loading light.
@@ -415,15 +423,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       title: 'Aircraft', wide: true,
       mount: (b, head) => {
         const line = div('fh-status-line', b)
-        statusPanel = mountStatusPanel(line)
+        statusPanel = mountStatusPanel(line, { onPick: pickFromList })
         table = mountTable(b, head, { onSelect: pickFromList, onHover: (hex) => (tableHover = hex), flagOf })
       },
     } },
     // On the rail under the list, so the flight card has the top left corner to itself.
-    { id: 'scenarios', icon: 'film', label: 'Scenarios: recorded flights', short: 'Scenes', panel: {
-      title: 'Scenarios',
+    // The packaged scenarios and the flights recorded with the card's Record button, each replayed in the chase view.
+    { id: 'scenarios', icon: 'film', label: 'Scenarios and recorded flights', short: 'Scenes', panel: {
+      title: 'Scenarios and recordings',
       mount: (b) => (scenarioPanel = mountScenarioPanel(b, {
         list: () => scenariosOpened.then(() => listScenarios(base)),
+        recordings: () => scenariosOpened.then(() => api.recordings()),
         onPlay: (id) => void startScenario(id, { play: true }),
       })),
     } },
@@ -445,7 +455,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', spot: 'corner', action: () => toggleFullscreen() } as const] : []),
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
-    if (id === 'scenarios') openedScenarios()
+    if (id === 'scenarios') {
+      // The first opening lets the mount's asks go; each later one asks for the recordings again (new ones, ended ones).
+      if (scenariosSeen) scenarioPanel.refresh('recordings')
+      scenariosSeen = true
+      openedScenarios()
+    }
   })
   const layoutBtn = rail.button('layout')
   layoutBtn.setAttribute('aria-pressed', 'false') // a toggle: edit mode
@@ -457,7 +472,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
-  const card = mountFlightCard(ui, { onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor })
+  const card = mountFlightCard(ui, {
+    onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor,
+    onRecord: (hex, on) => api.record(hex, on).then((r) => r.rec),
+  })
   // A click in a traffic aircraft's brackets opens its card: live from the fleet, its full object asked for as a focused
   // aircraft's is (poll). Its Chase chases it instead (select: a chase stays a chase, on the new aircraft).
   const trafficCard = mountFlightCard(ui, {
@@ -545,6 +563,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   applyLayers()
   const fleetLayer = new FleetLayer(viewer)
   const pendingLayer = makePendingLayer(viewer) // the view's areas not loaded yet, veiled on the map
+  const routeLine = new RouteLine(viewer)
   const globe = viewer.scene.globe
   // Clearance above the ground drawn this frame: globe.getHeight answers last frame's while the relief grows or sinks.
   const chaseCam = new ChaseCamera(viewer, { groundAt: (c) => topo.ground(globe.getHeight(c), tf, camGround, c) })
@@ -622,6 +641,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     relatchPending = chasing && hex !== null
     chaseRaw = null
     chaseInfo = null
+    chaseDest = null
+    trail.length = 0
+    trailTMs = -Infinity
     liveGear = null // another aircraft: its gear as first seen, not swinging there
     // Only the selected aircraft is estimated: a fresh registry, seeded with the newest sample the fleet has of it.
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
@@ -690,11 +712,20 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   async function startScenario(id: string, o: { t?: number; play?: boolean; cam?: Orbit | null; fromUrl?: boolean } = {}): Promise<void> {
     loadingScenario = id
     let scn: Scenario
+    let recLivery: Livery | null = null // a recording flies in its airline's livery (or grey, military), as live
+    const file = recordingFile(id)
     // A package may carry its airfields as they were (airport.json: one airport, or a list of them: runways, flat rings);
-    // most have none (404).
-    const field = getJson<AirfieldAirport | AirfieldAirport[]>(`${scenarioBase}scenarios/${id}/airport.json`).catch(() => null)
+    // most have none (404). A recording flew today's.
+    const field = file !== null ? Promise.resolve(null) : getJson<AirfieldAirport | AirfieldAirport[]>(`${scenarioBase}scenarios/${id}/airport.json`).catch(() => null)
     try {
-      scn = await loadScenario(scenarioBase, id)
+      if (file !== null) {
+        const rec = await api.recording(file)
+        const m = pick?.for(rec.info.typeCode, rec.info.category) ?? null
+        const built = recordingScenario(rec, m?.id ?? '')
+        if (built === null) throw new Error('too short to replay')
+        scn = built
+        recLivery = liveryOf(liveryCode(rec.info.callsign, rec.info.reg, rec.info.military))
+      } else scn = await loadScenario(scenarioBase, id)
     } catch (e) {
       console.error(`FlightHopper: scenario "${id}" not loaded:`, e)
       if (loadingScenario === id) loadingScenario = null
@@ -721,7 +752,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     groundM = null
     acGround.ok = camGround.ok = false
     const e = pick?.models.find((m) => m.id === scn.aircraft.model) ?? null
-    const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present) : null
+    const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present) : recLivery
+    liveGear = null
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
     if (aps.length > 0) {
@@ -840,9 +872,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (groundM === null && bench !== null) performance.mark('fh:ground-unknown')
       const placed: RenderState = { ...s, hM: placedHeightM(s.hM, s.onGround, groundM) }
       if (sf !== null) {
-        if (model !== null && dress?.apply(model, sf.event.damage.has('fin'), sf.event.gear)) sun.attachModel(model.model)
-        if (sf.jumped) model?.snapGear(sf.event.gear) // a seek: the gear as it was then, not swinging there
-        liveGear = null
+        // A recording has no gear events: the gear as a crew would have it, from the height over the ground drawn, as live.
+        const byHeight = run?.scenario.gearFromHeight === true
+        const aglFt = groundM === null ? null : (s.hM - groundM) / FT
+        const gear = byHeight ? gearWanted(sf.jumped ? null : liveGear, { onGround: placed.onGround, aglFt, vsFpm: placed.vsFpm, gsKt: placed.gsKt }) : sf.event.gear
+        if (model !== null && dress?.apply(model, sf.event.damage.has('fin'), gear)) sun.attachModel(model.model)
+        if (sf.jumped || (byHeight && liveGear === null)) model?.snapGear(gear) // a seek or a first look: as it was then, not swinging there
+        liveGear = byHeight ? gear : null
       } else {
         const ci = chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info) ?? null
         if (model !== null && pick !== null && model.use(pick.for(ci?.typeCode ?? null, ci?.category ?? null))) sun.attachModel(model.model)
@@ -923,6 +959,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     rail.setBusy('aircraft', sf === null && (known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)))
     // In trouble too (they are still not loaded), but none shown as loading: no answer is coming.
     pendingLayer.update(status.pendingBoxes, !chasing, known !== null && known.degraded === null)
+    // Top-down only, live only: the chase has its own view of where it goes.
+    const at = chasing || sf !== null || selected === null ? undefined : fleet.get(selected)
+    routeLine.update(at === undefined ? null : at, trail, chaseDest)
     if (!chasing && now - scaleAtMs > 200) {
       scaleAtMs = now
       mapKey.setScale(groundScale())
@@ -1005,6 +1044,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         mine.push(...r.samples)
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
+        if (r.dest !== undefined) chaseDest = r.dest
+        card.setRecording(hex!, r.rec, r.serverNowMs)
         chased0 = snapClock
         // How old its newest position is on arrival. Not from the first reply: that one is the stored history, whose
         // newest came from the browse view's slower refresh, not from the chase path.
@@ -1033,6 +1074,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         snapClock = false
       }
     } else if (mine.length > 0) registry.ingest(mine)
+    if (current) {
+      // ponytail: the newest 5,000 positions (hours at the rates a focus gets); older ones fall off the line's start.
+      for (const x of [...mine].sort((a, b) => a.tMs - b.tMs)) {
+        if (x.tMs <= trailTMs) continue
+        trailTMs = x.tMs
+        trail.push({ lat: x.lat, lon: x.lon, hM: heightM(x) })
+      }
+      if (trail.length > 5000) trail.splice(0, trail.length - 5000)
+    }
     measure?.('fh:ingest', t0)
     // An aircraft may go 2.5 expected refreshes of this view without a sample before it is hidden (at least 60 s).
     fleet.setHintS(2.5 * (status.viewEveryS ?? 0))
@@ -1164,6 +1214,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       lights.destroy()
       fleetLayer.destroy()
       pendingLayer.destroy()
+      routeLine.destroy()
       map.destroy()
       roads.destroy()
       weather.destroy()
