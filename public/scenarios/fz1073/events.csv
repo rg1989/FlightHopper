@@ -1,19 +1,32 @@
 time,type,value,label,src
+03:04:20,phase,,"Lined up on runway 30R, Dubai",ADSBLOL
+03:04:20,gear,1,Gear down,ADSBLOL
+03:04:22,story,12,"flydubai 1073, a Boeing 737 MAX 8 (A6-FKF), lines up on runway 30R at Dubai International for Tel Aviv, a flight of about three hours.",FR24X
+03:04:32,mark,,Take-off roll,FR24
+03:05:18,mark,,Lift-off,ADSBLOL
+03:05:18,phase,,Climb,ADSBLOL
+03:05:24,gear,0,"Gear up (not recorded; estimated)",ADSBLOL
+03:27:58,mark,,"Level at 32,000 ft",ADSBLOL
+03:27:58,phase,,Cruise,ADSBLOL
+03:54:21,story,14,"From 03:54 to 05:16 the open networks hear nothing over Saudi Arabia; this stretch follows Flightradar24's receivers. The aircraft climbs to 34,000 ft at 04:09 and flies on west past Rafha and Sakaka.",FR24
 05:16:30,phase,,"Cruise at 34,000 ft over northern Saudi Arabia",ADSBLOL
-05:16:35,story,14,"flydubai 1073, a Boeing 737 MAX 8, took off from Dubai at 03:05 UTC for Tel Aviv. Two hours and ten minutes later it cruises west over Saudi Arabia's Al Jawf region at 34,000 ft.",FR24X
+05:16:35,story,14,"Two hours and eleven minutes after take-off, flydubai 1073 cruises west over Saudi Arabia's Al Jawf region at 34,000 ft.",ADSBLOL
 05:21:09,mark,,"Descent begins; the selected altitude still reads 34,000 ft",ADSBLOL
 05:21:09,story,14,"At 05:21:09 the aircraft starts down, reaching 2,900 ft/min. The altitude set on the autopilot panel, which the aircraft keeps broadcasting, still reads 34,000 ft: no descent had been selected.",ADSBLOL
 05:21:44,mark,,"Abrupt pitch changes; the dive steepens",ADSBLOL
 05:21:44,phase,,Dive,ADSBLOL
 05:21:44,story,14,"From 05:21:44 the broadcast pressure altitude jumps by up to 1,000 ft within a second while the GPS positions stay smooth, and the ground speed falls from 441 to 377 kt in five seconds: signs of violent pitch changes. The aircraft then dives, turning right.",ADSBLOL
-05:22:13,mark,,"Last heard before the gap: 27,950 ft, down at ~21,000 ft/min",ADSBLOL
-05:22:13,story,14,"05:22:13 is the last reception for nine minutes: 27,950 ft on the altimeter and descending at about 21,000 ft per minute.",ADSBLOL
-05:22:14,phase,,"Not received: reconstructed",MEDIA
-05:22:20,story,16,"No open receiver heard the aircraft until 05:31; this stretch is reconstructed. Flightradar24 data, as published by Al Jazeera and The Times of Israel: 16,750 ft by 05:22:36, then a brief climb to 21,650 ft and a dip below 14,000 ft before about 15,000 ft (those two times estimated).",MEDIA
+05:22:13,story,12,"At 05:22:13, at 27,950 ft and diving at over 20,000 ft per minute, the aircraft drops out of the open networks' reach for nine minutes. Flightradar24's receivers keep hearing it.",ADSBLOL
+05:22:28,story,14,"It pulls out at about 16,850 ft at 05:22:36 in a hard right turn through north-east, at about 595 kt over the ground: far faster than a 737 normally flies at that height.",FR24
+05:22:36,mark,,"Bottom of the dive: 16,850 ft, ~595 kt",FR24
 05:23:10,story,18,"Israeli security officials said the emergency stemmed from a confrontation between the two pilots in the cockpit. Passengers described blood in the cockpit. A report that one pilot tried to dive the aircraft deliberately is unconfirmed.",MEDIA
-05:31:26,mark,,"Heard again: 15,000 ft, squawk 7700",ADSBLOL
+05:23:23,mark,,"Zoom climb to 21,725 ft",FR24
+05:23:30,phase,,"Down again, turning north-west",FR24
+05:23:32,story,12,"A zoom climb to 21,725 ft at 05:23:23, then down again past 15,000 ft within a minute, turning north-west.",FR24
+05:27:05,mark,,"Low point 13,675 ft",FR24
+05:31:26,mark,,"Open networks hear it again: 15,000 ft, squawk 7700",ADSBLOL
 05:31:26,phase,,"15,000 ft, emergency",ADSBLOL
-05:31:26,story,16,"Reception resumes at 05:31:26: level at 15,000 ft, heading north-west toward Jordan. The selected altitude now reads 15,000 ft. The transponder code is 7700, a general emergency.",ADSBLOL
+05:31:26,story,16,"The open networks hear it again at 05:31:26: level at 15,000 ft, heading north-west toward Jordan. The selected altitude now reads 15,000 ft. The transponder code is 7700, a general emergency.",ADSBLOL
 05:35:17,mark,,"Emergency status: unlawful interference (7500)",ADSBLOL
 05:35:17,story,16,"At 05:35:17 the transponder's emergency status changes to unlawful interference, the meaning of code 7500, used for a hijacking. Israel scrambled fighter jets; Israeli officials later said there was no hijacking.",ADSBLOL
 05:40:20,mark,,Enters Jordanian airspace,ADSBLOL
@@ -23,4 +36,18 @@ time,type,value,label,src
 05:46:20,mark,,Back in Saudi airspace,ADSBLOL
 05:48:41,mark,,Selected heading 130°,ADSBLOL
 05:48:41,story,14,"The selected heading turns to 130°, south-east, at 15,000 ft with code 7500 still set.",ADSBLOL
-05:53:00,story,14,"At 05:53:31 the open networks lose the aircraft. It landed at Tabuk, in north-west Saudi Arabia.",FR24X
+05:53:32,story,14,"At 05:53:32 the open networks lose the aircraft for good. Flightradar24's receivers follow it south-east, then south and south-west toward Tabuk, still at 15,000 ft.",FR24
+06:06:51,mark,,Heads south-west for Tabuk,FR24
+06:13:37,mark,,Out of Flightradar24's ground coverage,FR24
+06:13:37,phase,,"Descent to Tabuk (reconstructed)",FR24
+06:13:40,story,14,"At 06:13 the aircraft leaves Flightradar24's ground coverage. After that only satellites heard it, twice in the air: the descent to Tabuk is reconstructed between those fixes.",FR24X
+06:28:37,mark,,"Satellite fix: 5,475 ft, squawk 7700",FR24
+06:28:40,story,12,"06:28:37: a satellite hears it 15 nm north-east of Tabuk at 5,475 ft, heading south-south-west at 205 kt, squawking 7700.",FR24
+06:29:30,story,16,"The next fix, 15 minutes later, is only 14 nm away: the aircraft flew about three times that distance, and how is not known. It is drawn here as a long right-hand circuit onto runway 31.",FR24
+06:41:15,gear,1,"Gear down (not recorded; estimated)",FR24
+06:41:35,phase,,"Final approach, runway 31",FR24
+06:43:39,mark,,"Satellite fix: 3.2 nm out on runway 31",FR24
+06:43:39,story,12,"06:43:39, the last airborne fix: 3.2 nm out on runway 31's centreline at 3,375 ft, descending 960 ft/min at 185 kt, on a normal 3° glidepath.",FR24
+06:44:50,mark,,"Touchdown, runway 31 (estimated)",FR24
+06:44:50,phase,,Landing,FR24
+06:44:52,story,16,"It lands on runway 31 at Tabuk at about 06:44:50. The last satellite fix, at 06:58:59, shows it stopped at the airfield's north-west end. flydubai said all passengers were safe.",FR24

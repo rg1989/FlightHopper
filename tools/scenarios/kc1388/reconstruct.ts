@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { AttitudeFilter, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
 import type { Obs } from '../../../client/track/smoother.ts'
 import { trueAirspeedKt } from '../../../client/track/airspeed.ts'
-import { fuseGround, fuseHeight, knotAt, type HeightObs, type RateObs } from '../fuse.ts'
+import { fuseGround, fuseHeight, knotAt, spline, timedPolyline, type HeightObs, type RateObs } from '../fuse.ts'
 
 const FT = 0.3048
 const KT = 1852 / 3600
@@ -159,50 +159,6 @@ ground.push([START, LIFT_T])
     if (pa !== null && pa > 500) vObs.push({ t, hFt: pa + PA_TO_MSL_FT, sdFt: FIG_ALT_SD_FT, sdT: FIG_SD_T })
   }
   vObs.push({ t: hms('13:31:50'), hFt: LPAR_FT + 150, sdFt: 30, sdT: 0 })
-}
-
-/** Points along a polyline, timed by distance from t0 to t1 (constant speed). */
-function timedPolyline(poly: Array<[number, number]>, t0: number, t1: number, step = 2): Array<{ t: number; e: number; n: number }> {
-  const cum = [0]
-  for (let i = 1; i < poly.length; i++) cum.push(cum[i - 1] + Math.hypot(poly[i][0] - poly[i - 1][0], poly[i][1] - poly[i - 1][1]))
-  const L = cum[cum.length - 1]
-  const out: Array<{ t: number; e: number; n: number }> = []
-  let j = 1
-  for (let t = t0; t <= t1 + 1e-9; t += step) {
-    const s = ((t - t0) / (t1 - t0)) * L
-    while (j < cum.length - 1 && cum[j] < s) j++
-    const u = (s - cum[j - 1]) / Math.max(1e-9, cum[j] - cum[j - 1])
-    out.push({ t, e: poly[j - 1][0] + u * (poly[j][0] - poly[j - 1][0]), n: poly[j - 1][1] + u * (poly[j][1] - poly[j - 1][1]) })
-  }
-  return out
-}
-
-/** A centripetal Catmull–Rom spline through waypoints (metres), densely sampled. */
-function spline(wp: Array<[number, number]>, per = 40): Array<[number, number]> {
-  const P = [wp[0], ...wp, wp[wp.length - 1]]
-  const out: Array<[number, number]> = []
-  for (let i = 1; i < P.length - 2; i++) {
-    const [p0, p1, p2, p3] = [P[i - 1], P[i], P[i + 1], P[i + 2]]
-    const d = (a: [number, number], b: [number, number]): number => Math.max(1e-6, Math.hypot(b[0] - a[0], b[1] - a[1]) ** 0.5)
-    const t1 = d(p0, p1)
-    const t2 = t1 + d(p1, p2)
-    const t3 = t2 + d(p2, p3)
-    for (let k = 0; k < per; k++) {
-      const t = t1 + ((t2 - t1) * k) / per
-      const lerp = (a: [number, number], b: [number, number], ta: number, tb: number): [number, number] => {
-        const w = tb === ta ? 0 : (t - ta) / (tb - ta)
-        return [a[0] + w * (b[0] - a[0]), a[1] + w * (b[1] - a[1])]
-      }
-      const a1 = lerp(p0, p1, 0, t1)
-      const a2 = lerp(p1, p2, t1, t2)
-      const a3 = lerp(p2, p3, t2, t3)
-      const b1 = lerp(a1, a2, 0, t2)
-      const b2 = lerp(a2, a3, t1, t3)
-      out.push(lerp(b1, b2, t1, t2))
-    }
-  }
-  out.push(wp[wp.length - 1])
-  return out
 }
 
 // Beja (Figure 3): each approach comes from the north onto the extended centreline, each go-around carries on south over

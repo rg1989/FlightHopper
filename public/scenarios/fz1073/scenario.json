@@ -6,12 +6,12 @@
   "date": "2026-09-30",
   "utcOffset": "+00:00",
   "clockLabel": "UTC",
-  "start": "05:16:30",
-  "end": "05:53:31",
-  "note": "A reconstruction from the aircraft's own ADS-B broadcasts of a serious incident in which everyone aboard landed safely. Nine minutes of the dive were not received and are reconstructed; what happened in the cockpit has not been officially established.",
+  "start": "03:04:20",
+  "end": "06:45:34",
+  "note": "A reconstruction from the aircraft's own ADS-B broadcasts of a serious incident in which everyone aboard landed safely. The take-off roll and the last half hour before landing rest on few positions and are partly reconstructed; what happened in the cockpit has not been officially established.",
   "summary": [
     "flydubai 1073, a Boeing 737 MAX 8, from Dubai to Tel Aviv on 30 September 2026.",
-    "Over northern Saudi Arabia the aircraft left 34,000 ft without a descent selected and dived steeply. It declared an emergency (7700), then set 7500 (unlawful interference), turned back over Jordan and landed at Tabuk.",
+    "Over northern Saudi Arabia the aircraft left 34,000 ft without a descent selected and dived steeply. It declared an emergency (7700), then set 7500 (unlawful interference), turned back over Jordan and landed at Tabuk at about 06:45 UTC.",
     "Israeli security officials attributed the emergency to a confrontation between the two pilots. The cause is under investigation."
   ],
   "aircraft": {
@@ -22,16 +22,16 @@
     "model": "b38m"
   },
   "ending": {
-    "fadeFrom": "05:53:22",
-    "darkAt": "05:53:30",
+    "fadeFrom": "06:45:25",
+    "darkAt": "06:45:33",
     "cardAfterS": 2,
     "card": {
       "title": "flydubai Flight 1073",
       "lines": [
         "30 September 2026 · Boeing 737 MAX 8 A6-FKF, Dubai to Tel Aviv.",
-        "After the open networks lost it, the aircraft continued at low level over Saudi Arabia and landed at Tabuk. flydubai said all passengers were safe.",
+        "It landed on runway 31 at Tabuk at about 06:45 UTC. flydubai said all passengers were safe.",
         "Israeli security officials said the emergency stemmed from a confrontation between the two pilots. Its cause, and whether the dive was deliberate, have not been officially established.",
-        "Reconstruction from the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL), checked against ADS-B Exchange, theairtraffic and OpenSky. 05:22:13–05:31:26 was not received and is reconstructed."
+        "From the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL) and, where no open network heard it, by Flightradar24. The take-off roll and the 15 minutes before the final approach are reconstructed."
       ]
     }
   },
@@ -55,10 +55,16 @@
       "note": "Take-off 03:05, 7700 at 05:31, 7500 at 05:38, out of Flightradar24's ground coverage 06:11, 7700 received by satellite 06:28, last signal 06:58."
     },
     {
+      "id": "FR24",
+      "title": "Flightradar24, playback of flight FDB1073 (41e663ed), read 2026-09-30",
+      "url": "https://fr24.com/FDB1073/41e663ed",
+      "note": "Used only where no open network heard the aircraft: the cruise 03:54–05:16, the dive and zoom 05:22–05:31 (a fix every 2–3 s), 05:53–06:13 from its ground receivers, then its space-based fixes at 06:28:37 and 06:43:39 (and 06:58:59, stopped at Tabuk). Its 03:04:54 fix times the take-off roll. Rows marked A are within 5 s of a fix."
+    },
+    {
       "id": "MEDIA",
-      "title": "Flightradar24 figures for the unreceived minutes as published by the press (Al Jazeera Arabic; The Times of Israel, \"What we know about the flydubai plane incident\"), and news reports of 30 September 2026",
+      "title": "News reports of 30 September 2026 (The Times of Israel, \"What we know about the flydubai plane incident\"; Al Jazeera Arabic; Channel 12)",
       "url": "https://www.timesofisrael.com/liveblog_entry/what-we-know-about-the-flydubai-plane-incident",
-      "note": "Secondary sources. Al Jazeera: 30,875 ft at 05:22:07, 16,750 ft at 05:22:36 (https://www.aljazeera.net/news/2026/9/30/). The Times of Israel: a brief climb to 21,650 ft, then under 14,000 ft, then about 15,000 ft. What happened in the cockpit is as reported, not established."
+      "note": "Secondary sources for what happened on board: as reported, not established."
     }
   ]
 }

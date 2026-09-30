@@ -1,0 +1,140 @@
+[
+  {
+    "ident": "OMDB",
+    "name": "Dubai International Airport",
+    "source": "Runway ends from OpenStreetMap ways 95511342 + 1059547901 + 1076760102 (12L/30R) and 152351328 + 1077849652 (12R/30L); thresholds where those ways join (OurAirports: displaced 1,476/984 ft and 2,345/433 ft); widths and end elevations from OurAirports. Heights: MSL + EGM96.",
+    "lat": 25.24979,
+    "lon": 55.370992,
+    "elevFt": 62,
+    "nM": -33.76,
+    "runways": [
+      {
+        "lengthFt": 14251,
+        "widthFt": 197,
+        "surface": "ASP",
+        "ends": [
+          {
+            "ident": "12L",
+            "lat": 25.2667249,
+            "lon": 55.3466213,
+            "thrLat": 25.2646315,
+            "thrLon": 55.3504159,
+            "displacedFt": 1476,
+            "elevFt": 11,
+            "hdgTrueDeg": 121.5,
+            "thrHaeM": -30.45
+          },
+          {
+            "ident": "30R",
+            "lat": 25.2462962,
+            "lon": 55.3834414,
+            "thrLat": 25.2477035,
+            "thrLon": 55.3809094,
+            "displacedFt": 984,
+            "elevFt": 32,
+            "hdgTrueDeg": 301.5,
+            "thrHaeM": -24
+          }
+        ]
+      },
+      {
+        "lengthFt": 14546,
+        "widthFt": 197,
+        "surface": "ASP",
+        "ends": [
+          {
+            "ident": "12R",
+            "lat": 25.2561974,
+            "lon": 55.3582935,
+            "thrLat": 25.252836,
+            "thrLon": 55.364376,
+            "displacedFt": 2345,
+            "elevFt": 11,
+            "hdgTrueDeg": 121.5,
+            "thrHaeM": -30.42
+          },
+          {
+            "ident": "30L",
+            "lat": 25.2353515,
+            "lon": 55.3958753,
+            "thrLat": 25.235919,
+            "thrLon": 55.394882,
+            "displacedFt": 433,
+            "elevFt": 60,
+            "hdgTrueDeg": 301.5,
+            "thrHaeM": -15.42
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "ident": "OETB",
+    "name": "Prince Sultan bin Abdulaziz International Airport (Tabuk)",
+    "source": "Runway 13/31 ends from OpenStreetMap ways 35164178 + 1451637075 + 1451637073 (3,048 m, 45 m wide); 06/24 and the end elevations from OurAirports. Heights: MSL + EGM96.",
+    "lat": 28.3711,
+    "lon": 36.624865,
+    "elevFt": 2551,
+    "nM": 17.79,
+    "runways": [
+      {
+        "lengthFt": 10001,
+        "widthFt": 148,
+        "surface": "ASP",
+        "ends": [
+          {
+            "ident": "13",
+            "lat": 28.3803511,
+            "lon": 36.5945249,
+            "thrLat": 28.3803511,
+            "thrLon": 36.5945249,
+            "displacedFt": 0,
+            "elevFt": 2530,
+            "hdgTrueDeg": 132.4,
+            "thrHaeM": 789.04
+          },
+          {
+            "ident": "31",
+            "lat": 28.3618733,
+            "lon": 36.6175436,
+            "thrLat": 28.3618733,
+            "thrLon": 36.6175436,
+            "displacedFt": 0,
+            "elevFt": 2539,
+            "hdgTrueDeg": 312.4,
+            "thrHaeM": 791.7
+          }
+        ]
+      },
+      {
+        "lengthFt": 10992,
+        "widthFt": 148,
+        "surface": "ASP",
+        "ends": [
+          {
+            "ident": "06",
+            "lat": 28.3692,
+            "lon": 36.6199,
+            "thrLat": 28.3692,
+            "thrLon": 36.6199,
+            "displacedFt": 0,
+            "elevFt": 2545,
+            "hdgTrueDeg": 64.9,
+            "thrHaeM": 793.52
+          },
+          {
+            "ident": "24",
+            "lat": 28.382,
+            "lon": 36.6509,
+            "thrLat": 28.382,
+            "thrLon": 36.6509,
+            "displacedFt": 0,
+            "elevFt": 2551,
+            "hdgTrueDeg": 244.9,
+            "thrHaeM": 795.26
+          }
+        ]
+      }
+    ]
+  }
+]
