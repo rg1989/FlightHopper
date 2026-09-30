@@ -1,5 +1,5 @@
 // client/scenario/run.test.ts
-// The pure parts of a running scenario: the frame each step composes (clock → pose, data, events, captions, ending),
+// The pure parts of a running scenario: the frame each step composes (clock → pose, data, events, captions, marks passed, ending),
 // the seek detection, the keys, the caption views, the credits, the era layer options and the model dressing.
 // ScenarioRun itself (DOM, viewer, audio) is checked in the browser.
 import { test } from 'node:test'
@@ -19,8 +19,8 @@ const { Dresser, JUMP_S, ScenarioPlayer, captionView, eraLayerOptions, scenarioK
 
 const T = clockToS
 
-/** A tiny package: 10:00:00–10:01:00, an ending from 10:00:40 (dark 10:00:45, card 5 s later). */
-function scenario(overrides: Record<string, unknown> = {}) {
+/** A tiny package: 10:00:00–10:01:00, an ending from 10:00:40 (dark 10:00:45, card 5 s later); events: more rows. */
+function scenario(overrides: Record<string, unknown> = {}, events: string[] = []) {
   return parseScenario({
     base: '/s/tiny/',
     manifest: {
@@ -34,7 +34,7 @@ function scenario(overrides: Record<string, unknown> = {}) {
       ...overrides,
     },
     track: ['time,lat,lon,alt_ft,hdg,pitch,roll', '10:00:00,35.5,139.8,0,150,0,0', '10:01:00,35.4,139.9,5000,150,5,0'].join('\n'),
-    events: ['time,type,value,label,src', '10:00:00,phase,,Roll,', '10:00:00,gear,1,,', '10:00:00,flaps,10,,', '10:00:20,gear,0,,', '10:00:30,damage,fin,,'].join('\n'),
+    events: ['time,type,value,label,src', '10:00:00,phase,,Roll,', '10:00:00,gear,1,,', '10:00:00,flaps,10,,', '10:00:20,gear,0,,', '10:00:30,damage,fin,,', ...events].join('\n'),
     transcript: [
       'time,dur,speaker,to,channel,lang,text,original,q,src',
       '10:00:05,4,TWR,CAP,radio,en,Cleared.,,D,',
@@ -127,6 +127,23 @@ test('ScenarioPlayer: jumped marks a seek of more than JUMP_S between steps, not
   assert.equal(p.step(0.016).jumped, false)
   p.seekBy(-10)
   assert.equal(p.step(0.016).jumped, true)
+})
+
+test('ScenarioPlayer: mark is the one play passed in the step (the latest of several), never one a seek jumped over', () => {
+  const s = scenario({}, ['10:00:31,mark,,A,', '10:00:33,mark,,B,', '10:00:38,mark,,C,'])
+  const p = new ScenarioPlayer(s, fakePose(), T('10:00:30'))
+  assert.equal(p.step(1).mark, null, 'paused')
+  p.toggle()
+  assert.equal(p.step(0.5).mark, null, 'not there yet')
+  assert.deepEqual(p.step(1).mark, { key: 'm5', t: T('10:00:31'), label: 'A' })
+  assert.equal(p.step(1).mark, null, 'once')
+  p.seek(T('10:00:39')) // over B and C
+  assert.equal(p.step(0.5).mark, null, 'a seek passes none')
+  p.seek(T('10:00:33')) // a click on its tick
+  assert.equal(p.step(0.5).mark?.label, 'B', 'playing on from a mark')
+  p.seek(T('10:00:30'))
+  for (let i = 0; i < 4; i++) p.clock.nextRate() // 16×: 10:00:30 → 10:00:38 in one step
+  assert.equal(p.step(0.5).mark?.label, 'C', 'the latest')
 })
 
 test('ScenarioPlayer: Play at the stop starts again from the start (a jump)', () => {

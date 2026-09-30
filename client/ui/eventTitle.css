@@ -1,0 +1,101 @@
+/* client/ui/eventTitle.css */
+/* A mark's title (eventTitle.ts): the label in large plain type at the top of the view. White, with a soft dark shadow
+   and a faint haze behind it, so it reads over bright imagery, cloud, sea and either map theme. It fades in and slowly
+   out; it never takes the pointer. With the story message (z 16), under the play bar, the panels and the ending's veil
+   (z 30), which covers it.
+   The band keeps the room two lines take (three on phones) for the whole playback, the title centred in it: the
+   flight-data frame, laid out round the band (app.ts FRAME_COVERS), stays put as titles come and go. As the search box
+   does (searchBox.css), the band keeps clear of what sits in the top corners (--l and --r, the room they take): centred
+   on the view when it fits, else slid right of the story card. On narrow screens the story runs across the top: there
+   the title moves down under it when the two would meet (eventTitle.ts). */
+.fh-event-title {
+  --fh-title-fs: 32px;
+  --l: calc(var(--fh-left) + 360px + 24px); /* the story card (story.css) and a gap */
+  --r: calc(72px + var(--fh-right)); /* the rail */
+  /* Centred and clear of both corners, else as wide as the room between them allows. */
+  --w: max(min(760px, 100% - 2 * max(var(--l), var(--r))), min(560px, 100% - var(--l) - var(--r)));
+  position: absolute;
+  z-index: 16;
+  top: calc(var(--fh-top) + 4px);
+  left: max(var(--l), 50% - var(--w) / 2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--w);
+  height: calc(2 * 1.22 * var(--fh-title-fs) + 8px);
+  pointer-events: none;
+}
+
+.fh-event-title-x {
+  position: relative;
+  margin: 0;
+  color: #fff;
+  font: 600 var(--fh-title-fs) / 1.22 var(--fh-font);
+  letter-spacing: 0.005em;
+  text-align: center;
+  text-wrap: balance;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), 0 2px 18px rgba(0, 0, 0, 0.5);
+  transition: translate 400ms var(--fh-ease); /* making way for a story message, and back (eventTitle.ts) */
+}
+
+/* The haze: a soft dark ellipse behind the words, so white on a white cloud still reads. */
+.fh-event-title-x::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -22px -56px;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0));
+}
+
+.fh-event-title-x.fh-in {
+  animation: fh-event-title-in 700ms ease-out;
+}
+
+@keyframes fh-event-title-in {
+  from { opacity: 0; }
+}
+
+.fh-event-title-x.fh-out {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 1s ease-in, visibility 0s 1s;
+}
+
+/* Beside the story card the band is narrower: a size down, so two lines still hold most labels. */
+@media (max-width: 1239px) {
+  .fh-event-title {
+    --fh-title-fs: 28px;
+  }
+}
+
+/* Too narrow for the band beside the story card: across the view, clear of the rail. */
+@media (max-width: 899px) {
+  .fh-event-title {
+    --l: var(--fh-left);
+  }
+}
+
+/* Phones: no rail beside it (the tab bar is at the bottom), 16 px margins, smaller type, three lines' room. */
+@media (max-width: 640px) {
+  .fh-event-title {
+    --fh-title-fs: 23px;
+    --l: 16px;
+    --r: 16px;
+    height: calc(3 * 1.22 * var(--fh-title-fs) + 8px);
+  }
+
+  .fh-event-title-x::before {
+    inset: -16px -24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-event-title-x,
+  .fh-event-title-x.fh-out {
+    transition: none;
+  }
+
+  .fh-event-title-x.fh-in {
+    animation: none;
+  }
+}

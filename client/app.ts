@@ -110,7 +110,7 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
-const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-search'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }

@@ -1,7 +1,8 @@
 // client/scenario/timeline.ts
 // Pure lookups over a loaded scenario's events.csv and transcript.csv at a given clock time t: the event state
-// (phase/gear/flaps/damage), the timeline's tick marks, the captions on screen, and the ending fade/card. No DOM,
-// no Cesium: ScenarioRun and the UI mounters call these once a frame with the clock's current t.
+// (phase/gear/flaps/damage), the timeline's tick marks (and the one a step of playback passed), the captions on screen,
+// and the ending fade/card. No DOM, no Cesium: ScenarioRun and the UI mounters call these once a frame with the clock's
+// current t.
 import type { EndingSpec, EventRow, Line } from './types.ts'
 
 export interface EventState {
@@ -62,6 +63,29 @@ export function storyAt(events: readonly EventRow[], t: number): Story | null {
 /** The timeline's tick marks: every `mark` event, in file order. */
 export function marks(events: readonly EventRow[]): { t: number; label: string }[] {
   return events.filter((e) => e.type === 'mark').map((e) => ({ t: e.t, label: e.label }))
+}
+
+/** A mark as its title shows it (eventTitle.ts). key: stable per row. */
+export interface PassedMark {
+  key: string
+  t: number
+  label: string
+}
+
+/**
+ * The mark playback passed going from t0 to t1: the latest `mark` event with t0 ≤ e.t ≤ t1 (so playing on from a mark
+ * shows it), null when t1 ≤ t0 (paused) or none lies between. The caller passes only the clock's own advance: t0 is
+ * where the step began, after any seek, so a seek passes nothing, however many marks it jumps. Assumes `events` in
+ * time order (the loader's check), so the last match is the latest.
+ */
+export function markPassed(events: readonly EventRow[], t0: number, t1: number): PassedMark | null {
+  if (!(t1 > t0)) return null
+  let out: PassedMark | null = null
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]
+    if (e.type === 'mark' && e.t >= t0 && e.t <= t1) out = { key: `m${i}`, t: e.t, label: e.label }
+  }
+  return out
 }
 
 /**
