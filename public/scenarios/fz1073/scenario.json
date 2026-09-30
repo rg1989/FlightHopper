@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "id": "fz1073",
+  "title": "flydubai Flight 1073",
+  "subtitle": "Dubai → Tel Aviv, diverted to Tabuk",
+  "date": "2026-09-30",
+  "utcOffset": "+00:00",
+  "clockLabel": "UTC",
+  "start": "05:16:30",
+  "end": "05:53:31",
+  "note": "A reconstruction from the aircraft's own ADS-B broadcasts of a serious incident in which everyone aboard landed safely. Nine minutes of the dive were not received and are reconstructed; what happened in the cockpit has not been officially established.",
+  "summary": [
+    "flydubai 1073, a Boeing 737 MAX 8, from Dubai to Tel Aviv on 30 September 2026.",
+    "Over northern Saudi Arabia the aircraft left 34,000 ft without a descent selected and dived steeply. It declared an emergency (7700), then set 7500 (unlawful interference), turned back over Jordan and landed at Tabuk.",
+    "Israeli security officials attributed the emergency to a confrontation between the two pilots. The cause is under investigation."
+  ],
+  "aircraft": {
+    "registration": "A6-FKF",
+    "type": "Boeing 737 MAX 8",
+    "callsign": "FDB1073",
+    "operator": "flydubai",
+    "model": "b38m"
+  },
+  "ending": {
+    "fadeFrom": "05:53:22",
+    "darkAt": "05:53:30",
+    "cardAfterS": 2,
+    "card": {
+      "title": "flydubai Flight 1073",
+      "lines": [
+        "30 September 2026 · Boeing 737 MAX 8 A6-FKF, Dubai to Tel Aviv.",
+        "After the open networks lost it, the aircraft continued at low level over Saudi Arabia and landed at Tabuk. flydubai said all passengers were safe.",
+        "Israeli security officials said the emergency stemmed from a confrontation between the two pilots. Its cause, and whether the dive was deliberate, have not been officially established.",
+        "Reconstruction from the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL), checked against ADS-B Exchange, theairtraffic and OpenSky. 05:22:13–05:31:26 was not received and is reconstructed."
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "ADSBLOL",
+      "title": "adsb.lol, the day's ADS-B trace of 8965D1 (A6-FKF), trace_full_8965d1.json, fetched 2026-09-30 08:31 UTC",
+      "url": "https://adsb.lol/?icao=8965d1",
+      "note": "Open Database License (ODbL): © adsb.lol contributors. The aircraft's own GPS positions (NACp 8–9), pressure and GNSS altitude, airspeed, Mach, ground velocity, selected altitude and heading, squawk and emergency status, ~1 Hz where received. track.csv smooths them (tools/scenarios/fz1073/reconstruct.ts); rows marked A are within 5 s of a reception."
+    },
+    {
+      "id": "ADSBX",
+      "title": "ADS-B Exchange, the day's trace of 8965D1 (cross-check only)",
+      "url": "https://globe.adsbexchange.com/?icao=8965d1",
+      "note": "Not used for the track; its receptions agree with adsb.lol's to within their receive times. It first shows the code 7500 at 05:36:09."
+    },
+    {
+      "id": "FR24X",
+      "title": "Flightradar24 on X: timeline of flight FZ1073 (all times UTC)",
+      "url": "https://x.com/flightradar24/status/2105192495529279734",
+      "note": "Take-off 03:05, 7700 at 05:31, 7500 at 05:38, out of Flightradar24's ground coverage 06:11, 7700 received by satellite 06:28, last signal 06:58."
+    },
+    {
+      "id": "MEDIA",
+      "title": "News reports of 30 September 2026 (see the research file)",
+      "url": "https://www.theweek.in/news/middle-east/2026/09/30/did-flydubai-pilot-attempt-suicide-mid-air-israeli-media-reports-high-speed-dangerous-dive.html",
+      "note": "Secondary sources. The dive's depth (about 17,000 ft) and what happened in the cockpit are as reported, not established."
+    }
+  ]
+}

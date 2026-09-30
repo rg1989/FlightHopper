@@ -1,0 +1,26 @@
+time,type,value,label,src
+05:16:30,phase,,"Cruise at 34,000 ft over northern Saudi Arabia",ADSBLOL
+05:16:35,story,14,"flydubai 1073, a Boeing 737 MAX 8, took off from Dubai at 03:05 UTC for Tel Aviv. Two hours and ten minutes later it cruises west over Saudi Arabia's Al Jawf region at 34,000 ft.",FR24X
+05:21:09,mark,,"Descent begins; the selected altitude still reads 34,000 ft",ADSBLOL
+05:21:09,story,14,"At 05:21:09 the aircraft starts down, reaching 2,900 ft/min. The altitude set on the autopilot panel, which the aircraft keeps broadcasting, still reads 34,000 ft: no descent had been selected.",ADSBLOL
+05:21:44,mark,,"Abrupt pitch changes; the dive steepens",ADSBLOL
+05:21:44,phase,,Dive,ADSBLOL
+05:21:44,story,14,"From 05:21:44 the broadcast pressure altitude jumps by up to 1,000 ft within a second while the GPS positions stay smooth, and the ground speed falls from 441 to 377 kt in five seconds: signs of violent pitch changes. The aircraft then dives, turning right.",ADSBLOL
+05:22:13,mark,,"Last heard before the gap: 27,950 ft, down at ~21,000 ft/min",ADSBLOL
+05:22:13,story,14,"05:22:13 is the last reception for nine minutes: 27,950 ft on the altimeter and descending at about 21,000 ft per minute.",ADSBLOL
+05:22:14,phase,,"Not received: reconstructed",MEDIA
+05:22:20,story,16,"No receiver of the open networks heard the aircraft until 05:31. The path until then is drawn between the two ends. Israeli media, citing tracking data, reported a fall to about 17,000 ft in under a minute.",MEDIA
+05:23:10,story,18,"Israeli security officials said the emergency stemmed from a confrontation between the two pilots in the cockpit. Passengers described blood in the cockpit. A report that one pilot tried to dive the aircraft deliberately is unconfirmed.",MEDIA
+05:31:26,mark,,"Heard again: 15,000 ft, squawk 7700",ADSBLOL
+05:31:26,phase,,"15,000 ft, emergency",ADSBLOL
+05:31:26,story,16,"Reception resumes at 05:31:26: level at 15,000 ft, heading north-west toward Jordan. The selected altitude now reads 15,000 ft. The transponder code is 7700, a general emergency.",ADSBLOL
+05:35:17,mark,,"Emergency status: unlawful interference (7500)",ADSBLOL
+05:35:17,story,16,"At 05:35:17 the transponder's emergency status changes to unlawful interference, the meaning of code 7500, used for a hijacking. Israel scrambled fighter jets; Israeli officials later said there was no hijacking.",ADSBLOL
+05:40:20,mark,,Enters Jordanian airspace,ADSBLOL
+05:41:54,mark,,"Turns back, 200° to the left",ADSBLOL
+05:41:54,phase,,Turn back,ADSBLOL
+05:41:54,story,14,"Over Jordan, south of Al-Jafr, the aircraft turns left through 200° at up to 24° of bank. The heading selected on the autopilot panel changes to 100°: back toward Saudi Arabia.",ADSBLOL
+05:46:20,mark,,Back in Saudi airspace,ADSBLOL
+05:48:41,mark,,Selected heading 130°,ADSBLOL
+05:48:41,story,14,"The selected heading turns to 130°, south-east, at 15,000 ft with code 7500 still set.",ADSBLOL
+05:53:00,story,14,"At 05:53:31 the open networks lose the aircraft. It landed at Tabuk, in north-west Saudi Arabia.",FR24X

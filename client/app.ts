@@ -791,7 +791,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     groundM = null
     acGround.ok = camGround.ok = false
     const e = pick?.models.find((m) => m.id === scn.aircraft.model) ?? null
-    const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present) : recLivery
+    // A package without its own colours flies its callsign's airline livery, as a recording and a live flight do.
+    const livery = scn.aircraft.livery ? liveryFromSpec(`scenario:${scn.id}`, scn.aircraft.livery, scn.base, scn.present)
+      : recLivery ?? (scn.aircraft.callsign ? liveryOf(liveryCode(scn.aircraft.callsign, scn.aircraft.registration || null)) : null)
     liveGear = null
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
