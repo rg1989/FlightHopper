@@ -1,0 +1,692 @@
+/* client/ui/searchBox.css */
+/* The search box (searchBox.ts). Wide screens: a glass bar at the top centre, kept clear of what sits in the top corners
+   (the flight card on the left; the rail, its panel and a traffic card on the right: --l and --r, the room they take),
+   that widens with the focus and drops its list open below it, one glass surface. Phones: hidden until the Search tab
+   opens it as a full-screen sheet. */
+.fh-search {
+  --w: 400px;
+  --l: 0px;
+  --r: calc(58px + var(--fh-right));
+  --sw: min(var(--w), calc(100% - var(--l) - var(--r) - 24px));
+  position: absolute;
+  z-index: 25; /* over the rail's panel and the cards: the list is short-lived */
+  top: var(--fh-top);
+  left: clamp(calc(var(--l) + 12px), calc(50% - var(--sw) / 2), calc(100% - var(--r) - 12px - var(--sw)));
+  display: flex;
+  flex-direction: column;
+  width: var(--sw);
+  overflow: hidden;
+  pointer-events: auto;
+  transition: width 280ms var(--fh-ease), left 280ms var(--fh-ease), border-color var(--fh-fast) var(--fh-ease),
+    box-shadow 240ms var(--fh-ease);
+}
+
+.fh-search [hidden] {
+  display: none !important;
+}
+
+.fh-search:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.fh-search.fh-open {
+  --w: 520px;
+  border-color: rgba(90, 169, 255, 0.36);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(90, 169, 255, 0.1);
+}
+
+.fh-ui:has(> .fh-card:not(.fh-tcard):not([hidden])) .fh-search {
+  --l: calc(var(--fh-left) + 320px);
+}
+.fh-ui:has(> .fh-panel:not([hidden])) .fh-search {
+  --r: calc(64px + 320px + var(--fh-right));
+}
+.fh-ui:has(> .fh-panel.fh-wide:not([hidden])) .fh-search {
+  --r: calc(64px + 440px + var(--fh-right));
+}
+.fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)) .fh-search {
+  --r: calc(70px + 320px + var(--fh-right));
+}
+
+/* A scenario plays: the bar goes (the phone sheet still opens from its tab; a pick leaves the scenario). */
+@media (min-width: 641px) {
+  .fh-ui[data-scenario] .fh-search {
+    display: none;
+  }
+
+  /* The live-data trouble pill (outage.css), top centre too: under the bar. */
+  .fh-ui:not([data-scenario]) .fh-outage-pill {
+    top: calc(var(--fh-top) + 54px);
+  }
+}
+
+/* The bar: the magnifier, the field, a loader, clear, the "/" hint. */
+.fh-search-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 42px;
+}
+
+.fh-search-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 7px 0 13px;
+}
+
+.fh-search-glyph {
+  display: grid;
+  flex: none;
+  color: var(--fh-muted);
+  transition: color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-open .fh-search-glyph {
+  color: var(--fh-accent);
+}
+
+.fh-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fh-text);
+  font: 500 14px/1 var(--fh-font);
+  caret-color: var(--fh-accent);
+}
+
+.fh-search-input::placeholder {
+  color: var(--fh-faint);
+  opacity: 1;
+}
+
+.fh-search-spin {
+  width: 14px;
+  height: 14px;
+  margin: 0 4px;
+  border-width: 1.75px;
+}
+
+.fh-search-key {
+  margin-right: 5px;
+}
+
+.fh-search-cancel {
+  display: none;
+}
+
+/* The list: a grid row that grows from 0 to its height, so it slides open and shut. */
+.fh-search-drop {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 260ms var(--fh-ease), opacity 180ms var(--fh-ease);
+}
+
+.fh-open .fh-search-drop {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.fh-search-drop-in {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid transparent;
+  transition: border-color 200ms var(--fh-ease);
+}
+
+.fh-open .fh-search-drop-in {
+  border-top-color: var(--fh-hairline);
+}
+
+.fh-search-scroll {
+  position: relative;
+  max-height: min(452px, calc(100vh - var(--fh-top) - 140px));
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.fh-search-list {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The kinds' colours: the tile, the chip, the highlight's edge. */
+[data-kind='airport'] { --k: #5aa9ff; --k-rgb: 90 169 255; }
+[data-kind='city'] { --k: #43d6c5; --k-rgb: 67 214 197; }
+[data-kind='country'] { --k: #b48dff; --k-rgb: 180 141 255; }
+[data-kind='flight'] { --k: #ffd23f; --k-rgb: 255 210 63; }
+[data-kind='recording'] { --k: #ff6f6f; --k-rgb: 255 111 111; }
+[data-kind='scenario'] { --k: #ff9bd6; --k-rgb: 255 155 214; }
+
+.fh-search-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 52px;
+  padding: 0 10px 0 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+/* One highlight glides to the active row (searchBox.ts setActive), tinted by the row's kind, with its colour at the edge. */
+.fh-search-glow {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  left: 6px;
+  height: 52px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, rgb(var(--k-rgb, 255 255 255) / 0.13), rgba(255, 255, 255, 0.05) 55%);
+  box-shadow: inset 2px 0 0 rgb(var(--k-rgb, 255 255 255) / 0.85), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 150ms var(--fh-ease), height 150ms var(--fh-ease), opacity 140ms var(--fh-ease);
+}
+
+.fh-search-glow.fh-on {
+  opacity: 1;
+}
+
+.fh-search-tile {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgb(var(--k-rgb) / 0.13);
+  box-shadow: inset 0 0 0 1px rgb(var(--k-rgb) / 0.24);
+  color: var(--k);
+}
+
+.fh-search-flag {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  font-size: 13px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.6));
+}
+
+.fh-search-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fh-search-label,
+.fh-search-sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fh-search-label {
+  color: rgba(233, 238, 244, 0.8);
+  font: 500 13.5px/1.25 var(--fh-font);
+}
+
+.fh-search-label mark {
+  background: none;
+  color: #fff;
+  font-weight: 700;
+}
+
+.fh-search-sub {
+  color: var(--fh-muted);
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.fh-search-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+
+.fh-search-recent {
+  display: grid;
+  color: var(--fh-muted);
+}
+
+.fh-search-kind {
+  padding: 4px 6px 3px;
+  border-radius: 5px;
+  background: rgb(var(--k-rgb) / 0.12);
+  color: var(--k);
+  font: 700 9.5px/1 var(--fh-font);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* The list opening: its rows slide in one after another. */
+.fh-search.fh-enter .fh-search-row {
+  animation: fh-search-row-in 300ms var(--fh-ease) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+
+@keyframes fh-search-row-in {
+  from { opacity: 0; transform: translateY(-5px); }
+}
+
+/* "Recent" over the past picks, with Clear. */
+.fh-search-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 10px;
+  color: var(--fh-faint);
+  font: 700 10px/1 var(--fh-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fh-search-link {
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fh-accent);
+  font: 600 11.5px/1 var(--fh-font);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-search-link:hover {
+  background: var(--fh-accent-soft);
+}
+
+.fh-search-link:focus-visible,
+.fh-search-chip:focus-visible,
+.fh-search-cancel:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+/* Network trouble: what did not load, and Retry. */
+.fh-search-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 9px 6px 9px 11px;
+  border: 1px solid rgba(242, 181, 58, 0.26);
+  border-radius: 10px;
+  background: rgba(242, 181, 58, 0.08);
+  color: #f3d9a4;
+  font-size: 12px;
+  line-height: 1.4;
+  animation: fh-search-fade 220ms var(--fh-ease);
+}
+
+.fh-search-notice > .fh-icon {
+  flex: none;
+  color: var(--fh-warn);
+}
+
+.fh-search-notice-t {
+  flex: 1;
+}
+
+.fh-search-notice-t b {
+  color: #ffe4ad;
+  font-weight: 600;
+}
+
+.fh-search-notice .fh-search-link {
+  color: var(--fh-warn);
+}
+
+.fh-search-notice .fh-search-link:hover {
+  background: rgba(242, 181, 58, 0.14);
+}
+
+/* Loading: skeleton rows, and a line with a loader. */
+.fh-search-state-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px 8px;
+  color: var(--fh-muted);
+  font-size: 12px;
+}
+
+.fh-search-state-line .fh-spin {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
+.fh-search-skel-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 52px;
+  padding: 0 10px 0 8px;
+}
+
+.fh-search-skel-tile {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.fh-search-skel-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.fh-search-skel-lines > :first-child { width: 58%; height: 11px; }
+.fh-search-skel-lines > :last-child { width: 36%; height: 9px; }
+.fh-search-skel-row:nth-child(2) .fh-search-skel-lines > :first-child { width: 44%; }
+.fh-search-skel-row:nth-child(3) .fh-search-skel-lines > :first-child { width: 66%; }
+.fh-search-skel-row:nth-child(2) { opacity: 0.7; }
+.fh-search-skel-row:nth-child(3) { opacity: 0.45; }
+
+/* No match. */
+.fh-search-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 24px 26px 22px;
+  text-align: center;
+  animation: fh-search-fade 240ms var(--fh-ease);
+}
+
+.fh-search-empty-art {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 7px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.02));
+  box-shadow: inset 0 0 0 1px var(--fh-hairline);
+  color: var(--fh-muted);
+}
+
+.fh-search-empty-t {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--fh-text);
+  font: 600 13.5px/1.3 var(--fh-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fh-search-empty-s {
+  max-width: 320px;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* An empty box with no past picks: what it finds, and examples to try. */
+.fh-search-hint {
+  padding: 10px 8px 8px;
+  animation: fh-search-fade 240ms var(--fh-ease);
+}
+
+.fh-search-hint-t {
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fh-search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fh-search-chip {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fh-text);
+  font: 600 12px/1 var(--fh-font);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease), border-color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-search-chip:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--fh-hover);
+}
+
+@keyframes fh-search-fade {
+  from { opacity: 0; transform: translateY(3px); }
+}
+
+/* The keys, and where flights come from. */
+.fh-search-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px 8px;
+  border-top: 1px solid var(--fh-hairline);
+  color: var(--fh-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.fh-search-keys {
+  display: flex;
+  gap: 12px;
+}
+
+.fh-search-keys .fh-kbd {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 9.5px;
+}
+
+.fh-search-scope {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fh-search-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+  .fh-search-key,
+  .fh-search-keys {
+    display: none;
+  }
+}
+
+/* Phones: a Search tab in the bottom bar opens a sheet over everything: the field in a pill at the top with Cancel, the
+   list filling the rest. Text of 16 px in the field: iPhone Safari zooms into anything smaller. */
+@media (max-width: 640px) {
+  .fh-search {
+    display: none;
+  }
+
+  .fh-search.fh-glass.fh-blur.fh-open {
+    inset: 0;
+    z-index: 45;
+    display: flex;
+    width: auto;
+    padding-top: env(safe-area-inset-top, 0px);
+    border: 0;
+    border-radius: 0;
+    background: rgba(10, 13, 20, 0.97);
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    transition: none;
+    animation: fh-search-sheet-in 240ms var(--fh-ease);
+  }
+
+  .fh-search-bar {
+    gap: 4px;
+    height: 60px;
+    padding: 0 6px 0 calc(12px + env(safe-area-inset-left, 0px));
+    border-bottom: 1px solid var(--fh-hairline);
+  }
+
+  .fh-search-field {
+    height: 42px;
+    padding: 0 4px 0 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.075);
+  }
+
+  .fh-search-input {
+    font-size: 16px;
+  }
+
+  .fh-search-clear {
+    width: 36px;
+    height: 36px;
+  }
+
+  .fh-search-cancel {
+    display: block;
+    flex: none;
+    height: 44px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: var(--fh-accent);
+    font: 600 15px/1 var(--fh-font);
+    cursor: pointer;
+  }
+
+  .fh-search .fh-search-drop {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    opacity: 1;
+    transition: none;
+  }
+
+  .fh-search .fh-search-drop-in {
+    flex: 1;
+    border-top: 0;
+  }
+
+  .fh-search-scroll {
+    flex: 1;
+    max-height: none;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .fh-search-row,
+  .fh-search-skel-row {
+    gap: 12px;
+    height: 62px;
+  }
+
+  .fh-search-glow {
+    right: 8px;
+    left: 8px;
+  }
+
+  .fh-search-tile,
+  .fh-search-skel-tile {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .fh-search-flag {
+    font-size: 15px;
+  }
+
+  .fh-search-label {
+    font-size: 15.5px;
+  }
+
+  .fh-search-sub {
+    font-size: 13px;
+  }
+
+  .fh-search-kind {
+    font-size: 10px;
+  }
+
+  .fh-search-head {
+    padding: 8px 4px 6px 10px;
+    font-size: 11px;
+  }
+
+  .fh-search-link {
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+
+  .fh-search-notice,
+  .fh-search-hint-t,
+  .fh-search-empty-s,
+  .fh-search-state-line {
+    font-size: 13.5px;
+  }
+
+  .fh-search-empty-t {
+    font-size: 16px;
+  }
+
+  .fh-search-chip {
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 18px;
+    font-size: 14px;
+  }
+
+  .fh-search-foot {
+    display: none;
+  }
+}
+
+@keyframes fh-search-sheet-in {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-search,
+  .fh-search *:not(.fh-spin):not(.fh-skel) {
+    transition: none !important;
+    animation: none !important;
+  }
+}

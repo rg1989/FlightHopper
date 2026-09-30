@@ -48,6 +48,12 @@ const P: Record<string, string> = {
   check: 'm5 12.5 4.5 4.5L19 7.5',
   refresh: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 3.5V8h4.5M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20.5V16h-4.5',
   search: 'M10.5 17.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20.5 20.5l-5-5',
+  // A control tower (the search's airports): the cab on its shaft.
+  tower: 'M6.5 4.5h11l-1.5 5h-8l-1.5-5ZM12 2.5v2M9.5 9.5l-1 11M14.5 9.5l1 11M6 20.5h12',
+  // A flag on its pole (the search's countries).
+  flag: 'M5.5 21V3.5M5.5 4.5h12l-2.5 4.5 2.5 4.5h-12',
+  // A clock face (the search's past picks).
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
   // A plane seen from above, nose up.
   plane: 'M12 2.5c.9 0 1.5 1 1.5 2.5v4.5l7.5 4.5v2l-7.5-2.3v4.8l2 1.6v1.6L12 20.7l-3.5 1v-1.6l2-1.6v-4.8L3 16v-2l7.5-4.5V5c0-1.5.6-2.5 1.5-2.5Z',
   // A folded map: the top-down view.

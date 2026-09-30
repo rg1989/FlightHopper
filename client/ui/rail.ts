@@ -5,8 +5,9 @@
 // is a tab bar along the bottom with a short label under each icon, which scrolls sideways when the tabs do not fit, and
 // a panel is a sheet above it that a downward swipe on its header closes. An item with a spot is not on the rail: it is
 // a button of its own, in a glass square, at that spot (rail.css): 'under' just under the rail, 'corner' at the bottom
-// right, 'bottom' at the bottom centre. On phones there is no
-// room for them: every button is a tab in the one bottom strip, in item order (it scrolls sideways when they do not fit).
+// right, 'bottom' at the bottom centre; 'phone' nowhere (the thing it opens has its own place there, e.g. the search box at
+// the top centre). On phones there is no room for them: every button is a tab in the one bottom strip, in item order (it
+// scrolls sideways when they do not fit).
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -18,7 +19,7 @@ export interface RailItem {
   group?: number // a thin divider goes between groups
   /** Opens a panel titled `title`; mount() fills its body (and may add controls to its header) once, at start. */
   panel?: { title: string; wide?: boolean; mount(body: HTMLElement, head: HTMLElement): void }
-  spot?: 'under' | 'corner' | 'bottom' // a button of its own there, not on the rail
+  spot?: 'under' | 'corner' | 'bottom' | 'phone' // a button of its own there, not on the rail; 'phone': a tab on phones only
   action?(): void
 }
 
@@ -89,11 +90,13 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     b.append(el('span', 'fh-ibtn-label', item.short)) // shown in the phone tab strip only (rail.css)
     if (item.panel) b.setAttribute('aria-expanded', 'false')
     b.addEventListener('click', () => (item.panel ? api.open(openId === item.id ? null : item.id) : item.action?.()))
-    if (own) {
+    if (item.spot === 'phone') {
+      // only in the phone strip (arrange)
+    } else if (own) {
       const square = el('div', 'fh-corner-b fh-glass fh-blur')
       square.dataset.id = item.id
       square.append(b)
-      spots[item.spot!].append(square)
+      spots[item.spot as 'under' | 'corner' | 'bottom'].append(square)
       owned.push({ b, square })
     } else {
       rail.append(b)
@@ -124,7 +127,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
   const arrange = (): void => {
     if (phone.matches) for (const item of items) rail.append(buttons.get(item.id)!)
     else {
-      rail.replaceChildren(...railKids)
+      rail.replaceChildren(...railKids) // a phone-only tab leaves with the rest
       for (const o of owned) o.square.append(o.b)
     }
   }

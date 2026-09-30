@@ -1,8 +1,8 @@
 /* client/ui/layout.css */
 /* Where the overlays sit. client/app.ts builds .fh-ui[data-mode=browse|chase] over the globe with:
      the rail and its panel (rail.css, right edge; on phones a bottom tab bar and sheets), the flight card
-     (flightCard.css, top-left when an aircraft is focused; on phones above the tab bar), the toast (ui.css, top
-     centre), the ?bench=1 overlay; while a scenario plays ([data-scenario=<id>], data-mode chase) its play bar, captions
+     (flightCard.css, top-left when an aircraft is focused; on phones above the tab bar), the search box (searchBox.css,
+     top centre; on phones a sheet from its tab), the toast (ui.css, top centre), the ?bench=1 overlay; while a scenario plays ([data-scenario=<id>], data-mode chase) its play bar, captions
      and ending (playbar.css, captions.css, ending.css).
    Under it, in the globe's element: the chase traffic's brackets (.fh-traffic, below) and the flight-data frame
    (.fh-frame, flightFrame.css), so every panel and the ending's veil cover them.

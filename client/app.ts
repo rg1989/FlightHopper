@@ -10,7 +10,8 @@
 // - Scenario (the Scenarios panel's Play, or ?scenario=<id>&t=<s>): a recorded flight played from static files
 //   (scenario/run.ts) in the chase view: only its aircraft, no polls, no card (the frame carries the data), no 3-D
 //   buildings (they are modern), its era imagery, the sun at its instant. Esc or exit goes back to the map over it.
-// The tools (status, aircraft list, scene, altitude colours, scenarios, about) sit behind a rail of icon buttons (ui/rail.ts).
+// The tools (status, aircraft list, scene, altitude colours, scenarios, about) sit behind a rail of icon buttons (ui/rail.ts);
+// the search (places, flights in view, recordings, scenarios) is a box at the top centre (ui/searchBox.ts).
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
@@ -72,6 +73,8 @@ import { badgeView } from './ui/imageryBadge.ts'
 import { mountStatusPanel, sourceName, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readScenario, readView, writeUrl, type Orbit } from './ui/urlState.ts'
 import { mountTable, type TableHandle } from './ui/table.ts'
+import { mountSearchBox, type SearchBoxHandle } from './ui/searchBox.ts'
+import type { Item as SearchItem } from './search/search.ts'
 import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
 import './ui/theme.css'
 import './ui/layout.css'
@@ -91,6 +94,7 @@ const DEFAULT_AIRPORT = 'LLBG' // a ?hex= link without ?at= starts over it (the 
 // The first view without ?at=, ?airport= or ?hex=: all of Israel (the author's home), so its traffic loads first; a
 // reload keeps ?at=.
 const HOME_BOX: RectDeg = { south: 29.45, north: 33.35, west: 34.2, east: 35.9 }
+const COUNTRY_MIN_HEIGHT_M = 60_000 // a search pick of a small country (Singapore) still shows its surroundings
 const URL_EVERY_MS = 1000 // how often the address bar follows the view (history.replaceState)
 // After a selection snaps the render delay, the delay shrinks at 0.05 s/s: at the default 0.2 s/s a small shrink (the
 // arrival age's p90 moving by tenths of a second) showed as a 20 % speed-up lurch. It grows at the default 0.2 s/s, so an
@@ -106,7 +110,7 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
-const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-search'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -411,11 +415,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
   let scenarioPanel!: ScenarioPanelHandle
+  let searchBox!: SearchBoxHandle
   // The Scenarios panel asks for its list at mount; it gets it once the panel is first opened, not at start.
   let openedScenarios!: () => void
   const scenariosOpened = new Promise<void>((resolve) => (openedScenarios = resolve))
   let scenariosSeen = false
   const rail = mountRail(ui, [
+    // Phones only: the search box's tab (wider screens have the box itself at the top centre).
+    { id: 'search', icon: 'search', label: 'Search', short: 'Search', spot: 'phone', action: () => searchBox.open() },
     // The live status (source, refresh, coverage, imagery) in a line over the list of the aircraft in view; the button
     // carries the count, the feed's dot and its loading light.
     { id: 'aircraft', icon: 'list', label: 'Aircraft in view and live status', short: 'Aircraft', panel: {
@@ -471,6 +478,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const settings = mountSettings(ui, { env: import.meta.env, store, controls: !matchMedia('(pointer: coarse)').matches })
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
+  // Airports, cities, countries, the flights in view, recordings and scenarios (ui/searchBox.ts): top centre, / to focus.
+  searchBox = mountSearchBox(ui, {
+    placesUrl: `${base}search/places.json`,
+    flights: () => onScreen,
+    recordings: () => api.recordings().then((r) => r ?? []),
+    scenarios: () => listScenarios(base),
+    store,
+    onPick: (item) => goTo(item),
+  })
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
   const card = mountFlightCard(ui, {
     onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor,
@@ -668,6 +684,24 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (matchMedia('(max-width: 860px)').matches) rail.close()
     const e = fleet.get(hex)
     if (!chasing && e !== undefined) enterBrowse(viewer, e, { heightM: viewer.camera.positionCartographic.height })
+  }
+
+  /**
+   * A search pick: a replay plays; a flight in view is focused as a list row is; a place leaves a scenario, the chase
+   * and the focus for the top-down map over it (a country: its box fitted to the screen).
+   */
+  function goTo(item: SearchItem): void {
+    const g = item.go
+    if (g.to === 'play') return void startScenario(g.id, { play: true })
+    if (g.to === 'flight') return pickFromList(g.hex)
+    exitScenario()
+    traffic?.close()
+    select(null)
+    const c = viewer.canvas
+    chaseCam.release()
+    if (g.to === 'place') enterBrowse(viewer, g, { heightM: g.heightM })
+    else enterBrowse(viewer, { lat: (g.south + g.north) / 2, lon: (g.west + g.east) / 2 }, { heightM: Math.max(COUNTRY_MIN_HEIGHT_M, heightToFit(g, c.clientWidth, c.clientHeight, 1.15)) })
+    if (matchMedia('(max-width: 860px)').matches) rail.close() // the map, not a panel over it
   }
 
   /** The selected aircraft in the 3-D chase view (on), or back to the top-down map over it (off). */
@@ -1198,6 +1232,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       flightFrame.destroy()
       frameLayer.remove()
       scenarioPanel.destroy()
+      searchBox.destroy()
       toggles.destroy()
       outage.destroy()
       card.destroy()

@@ -10,6 +10,7 @@ interface Section {
 // ponytail: keys only (the user's call, 2026-09-30); the mouse, trackpad and touch gestures are not listed.
 const KEYS: Section[] = [
   { title: 'Anywhere', rows: [
+    ['/', 'Search airports, cities, countries, the flights in view, recordings and scenarios (also Cmd+K)'],
     ['Esc', 'One step back: a panel, a card, the layout, the chase or a scenario, then the selection'],
     ['M', 'Map or satellite, for the view on screen (in a scenario it mutes)'],
     ['R', 'Roads and places over the satellite'],
