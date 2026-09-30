@@ -96,3 +96,22 @@ test('list: every recording, newest first, with its header, span, count, how it 
   for (const bad of ['../x.jsonl', 'active.json', '2026-09-30/../../etc.jsonl', '2026-09-30/x.jsonl', '']) assert.equal(log.read(bad), null, bad)
   assert.deepEqual(new FlightLog({ dir: join(dir, 'none'), source: 'adsbfi' }).list(), [])
 })
+
+test('a route learnt after the start gets a line of its own and is listed, even once the aircraft forgets its callsign', () => {
+  const clock = { t: T0 }
+  const dir = mkdtempSync(join(tmpdir(), 'fh-flights-'))
+  let route: string | null = null
+  const log = new FlightLog({ dir, source: 'adsbfi', nowMs: () => clock.t, routeOf: () => route })
+  const rec = log.start('738abc', { ...INFO, route: null }, [sample(T0)])
+  log.tick()
+  route = 'LLBG-EGLL'
+  assert.equal(log.list()[0].route, 'LLBG-EGLL', 'under way: the route known now')
+  log.tick()
+  log.tick()
+  route = null // landed: no callsign, so no route any more
+  log.stop('738abc')
+  assert.equal(log.list()[0].route, 'LLBG-EGLL', 'ended: its route line')
+  const kinds = readFileSync(join(dir, rec.file), 'utf8').trim().split('\n').map((l) => Object.keys(JSON.parse(l))[0])
+  assert.deepEqual(kinds, ['flight', 's', 'route', 'end'], 'one route line, written once')
+  assert.equal(new FlightLog({ dir, source: 'adsbfi' }).read(rec.file)?.info.route, 'LLBG-EGLL')
+})
