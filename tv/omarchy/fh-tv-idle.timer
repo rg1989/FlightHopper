@@ -1,0 +1,9 @@
+[Unit]
+Description=Check every 2 minutes whether the TV has left FlightHopper
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

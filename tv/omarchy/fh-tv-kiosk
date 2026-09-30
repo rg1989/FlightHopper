@@ -1,0 +1,10 @@
+#!/bin/bash
+# The FlightHopper kiosk for the TV. fh-tv-start runs it through Hyprland, so Hyprland owns it, and a window rule in
+# ~/.config/hypr/flighthopper-tv.lua puts it full-screen on FHTV. Device scale 3 on the 4K output: the page lays out at 1280x720 CSS
+# px, readable from the sofa. ?tv=1 turns on the app's remote-control navigation.
+exec chromium --ozone-platform=wayland --class=flighthopper-tv \
+  --user-data-dir="$HOME/.local/share/flighthopper-tv/chrome" \
+  --kiosk --no-first-run --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble \
+  --password-store=basic --disable-features=Translate --autoplay-policy=no-user-gesture-required \
+  --ignore-gpu-blocklist --enable-gpu-rasterization --force-device-scale-factor=3 \
+  "http://localhost:8787/?tv=1"

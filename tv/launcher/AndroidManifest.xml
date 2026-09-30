@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FlightHopper's tile on the TV: opens the FlightHopper stream from omarchy in (patched) Moonlight, nothing else. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.flighthopper.tv" android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="28" />
+  <uses-feature android:name="android.software.leanback" android:required="false" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <application android:label="FlightHopper" android:icon="@drawable/icon" android:banner="@drawable/banner">
+    <activity android:name=".Launch" android:exported="true" android:excludeFromRecents="true" android:noHistory="true"
+      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

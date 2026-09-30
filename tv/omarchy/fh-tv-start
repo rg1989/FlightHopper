@@ -1,0 +1,15 @@
+#!/bin/bash
+# Sunshine prep command ("do") of the FlightHopper app: the TV's 3840x2160 screen (headless Hyprland output FHTV, placed
+# and sized by ~/.config/hypr/flighthopper-tv.lua) and the kiosk on it (fh-tv-kiosk). Idempotent: a resumed stream
+# finds both already there.
+# A locked Omarchy shows its lock screen on every screen, the TV's too, and the remote's OK would go into its password
+# box. Refuse, so Sunshine tells Moonlight the app could not start: unlock Omarchy first.
+omarchy-hyprland-session-locked && { echo "Omarchy is locked: unlock it first" >&2; exit 1; }
+hyprctl monitors | grep -q '^Monitor FHTV ' || hyprctl output create headless FHTV >/dev/null
+if ! pgrep -f 'flighthopper-tv/[c]hrome' >/dev/null; then
+  hyprctl dispatch "hl.dsp.exec_cmd(\"$HOME/.local/bin/fh-tv-kiosk\")" >/dev/null
+  for _ in $(seq 50); do hyprctl clients | grep -q 'class: flighthopper-tv' && break; sleep 0.2; done
+fi
+# The kiosk must hold the keyboard focus: the TV remote arrives as a keyboard (Sunshine uinput) on the focused window.
+hyprctl dispatch 'hl.dsp.focus({ window = "class:^flighthopper-tv$" })' >/dev/null
+exit 0

@@ -1,0 +1,6 @@
+[Unit]
+Description=Quit the FlightHopper TV app when the TV has left it
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/fh-tv-idle

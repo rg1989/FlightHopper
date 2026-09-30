@@ -1,0 +1,20 @@
+#!/bin/bash
+# Quits the FlightHopper app in Sunshine once the TV has left it: Home on the remote only pauses the stream, and the
+# kiosk would go on rendering and polling adsb.fi (from the same IP as the Mac) until the next stream. Run every 2 min
+# by fh-tv-idle.timer; quits when the last stream event in Sunshine's log is a disconnect older than IDLE_MIN minutes.
+# Sunshine's API close runs the app's undo (fh-tv-stop).
+IDLE_MIN=${IDLE_MIN:-10}
+LOG="$HOME/.config/sunshine/sunshine.log"
+pgrep -f 'flighthopper-tv/[c]hrome' >/dev/null || exit 0
+last=$(grep -E 'CLIENT (DIS)?CONNECTED' "$LOG" | tail -1)
+# ponytail: no stream event since Sunshine started (a kiosk opened by hand) counts as idle from the log's first line.
+[ -z "$last" ] && last=$(head -1 "$LOG")
+[[ $last == *'CLIENT CONNECTED'* ]] && exit 0
+ts=$(sed -E 's/^\[([0-9-]+ [0-9:]+)\.[0-9]+\].*/\1/' <<<"$last")
+age=$(( $(date +%s) - $(date -d "$ts" +%s) ))
+(( age < IDLE_MIN * 60 )) && exit 0
+curl -sk -u "admin:$(cat "$HOME/.config/sunshine/.webui-pass")" -X POST https://localhost:47990/api/apps/close >/dev/null
+# A kiosk Sunshine did not start (opened by hand) is not its app to close.
+sleep 5
+pgrep -f 'flighthopper-tv/[c]hrome' >/dev/null && exec "$HOME/.local/bin/fh-tv-stop"
+exit 0
