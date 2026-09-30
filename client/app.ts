@@ -12,6 +12,8 @@
 //   buildings (they are modern), its era imagery, the sun at its instant. Esc or exit goes back to the map over it.
 // The tools (status, aircraft list, scene, altitude colours, scenarios, about) sit behind a rail of icon buttons (ui/rail.ts);
 // the search (places, flights in view, recordings, scenarios) is a box at the top centre (ui/searchBox.ts).
+// With ?tv=1 a TV remote (arrows, OK, Back, Menu) drives all of it (ui/remote.ts), with preset views for the chase
+// camera (ui/chasePresets.ts); without it nothing of that runs.
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
@@ -27,7 +29,7 @@ import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
 import { BenchRecorder } from './bench/overlay.ts'
 import { Fleet, heightM } from './browse/fleet.ts'
-import { BROWSE_HEIGHT_M, containsDeg, enterBrowse, exitBrowse, heightToFit, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
+import { BROWSE_HEIGHT_M, browseDrag, browsePinch, containsDeg, enterBrowse, exitBrowse, heightToFit, isBrowsing, viewRectangleDeg } from './scene/browseCamera.ts'
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
@@ -63,6 +65,8 @@ import { FOCUS_ASK_MS, entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountMapKey } from './ui/mapKey.ts'
 import { mountRail } from './ui/rail.ts'
+import { PICK_PX, cameraStep, mountRemote, tvMode } from './ui/remote.ts'
+import { mountChasePresets } from './ui/chasePresets.ts'
 import { PhotoCache } from './ui/photo.ts'
 import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel.ts'
 import { mountSettings } from './ui/settings.ts'
@@ -109,7 +113,7 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
-const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search, .fh-presets'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -328,8 +332,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // with tiles loaded rebuilds every tile (PoC: up to 2 s).
   // Cesium ion failing at start (its token refused, or ion down): the keyless terrain or imagery took its place.
   const ionFell: { what: 'terrain' | 'imagery'; why: string }[] = []
+  const tv = tvMode(location.search)
   const viewerWithTopography = async (): Promise<[Viewer, Topography]> => {
     const v = await createViewer(root, cfg, { onIonFallback: (what, why) => ionFell.push({ what, why }) })
+    // The TV (?tv=1) draws the 3-D view at device pixels, as sharp as its overlays at any device scale: Cesium's
+    // default draws at CSS pixels and stretches them.
+    if (tv) v.useBrowserRecommendedResolution = false
     return [v, new Topography(v.scene, prefs.topo)]
   }
   const [[viewer, topo], airports, manifest] = await Promise.all([
@@ -586,6 +594,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const globe = viewer.scene.globe
   // Clearance above the ground drawn this frame: globe.getHeight answers last frame's while the relief grows or sinks.
   const chaseCam = new ChaseCamera(viewer, { groundAt: (c) => topo.ground(globe.getHeight(c), tf, camGround, c) })
+  // ?tv=1: the chase camera's preset views and their Auto tour, through its orbit (?cam=); frame() steps them. They hang
+  // under the rail's Layers square: the frame's room loses least there, beside the rail it already keeps off.
+  const presets = !tv ? null : mountChasePresets(ui.querySelector<HTMLElement>('.fh-under') ?? ui, {
+    get: () => ({ headingDeg: chaseCam.orbit.headingOffsetDeg, pitchDeg: chaseCam.orbit.pitchDeg, rangeM: chaseCam.orbit.rangeM }),
+    set: (o) => chaseCam.orbit.set(o.headingDeg, o.pitchDeg, o.rangeM),
+  })
   const api = new ApiClient(cfg.apiBase)
   const fleet = new Fleet()
   let registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
@@ -728,6 +742,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     sun.setEnabled(on && prefs.light) // chase only (D9): browse stays the unlit street map
     if (!on) flightFrame.edit(false)
     ui.dataset.mode = on ? 'chase' : 'browse'
+    // The TV: the 3-D view clear of panels (a remote cannot push one aside), the focus on its camera views.
+    if (on && presets !== null) {
+      rail.close()
+      presets.focus()
+    }
   }
 
   /** Every scene-toggle change, from a button or a key: apply it, store it, show it. */
@@ -848,6 +867,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     tf = topo.update(now) // first: the factor and plane drawn this frame, before any terrain reading
     const dtS = lastFrameMs === null ? 0 : Math.min(1, (now - lastFrameMs) / 1000)
     lastFrameMs = now
+    presets?.update(now, chasing) // the TV's preset glide or tour: the orbit before the chase camera reads it
     const shown = statusShown(status, failedPolls)
     let all = NO_ENTRIES
     let s: RenderState | null = null
@@ -1162,21 +1182,23 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   viewer.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
   const mouse = new ScreenSpaceEventHandler(viewer.scene.canvas)
   const tapPx = matchMedia('(pointer: coarse)').matches ? 36 : 3 // a fingertip covers far more than a small icon
+  /**
+   * A chase traffic model's bracket square at p (CSS px on the canvas) opens its card (in place of another: one at most)
+   * and closes a panel, which would cover it. False when no square is there. Not while the frame's cards are arranged.
+   */
+  const openTrafficAt = (p: Cartesian2): boolean => {
+    const hit = traffic === null || flightFrame.editing ? null : traffic.hitAt(p.x, p.y)
+    if (hit === null) return false
+    if (hit !== traffic!.openHex) trafficRaw = null // the last aircraft's object, until this one's arrives
+    traffic!.open(hit)
+    rail.close()
+    trafficClick = Cartesian2.clone(p)
+    return true
+  }
   mouse.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
-    // Chase traffic first: a click in a model's bracket square opens its card (in place of another: one at most) and
-    // closes a panel, which would cover it; a click anywhere else closes an open one, and does nothing more. Not while
-    // the frame's cards are being arranged.
-    if (traffic !== null && !flightFrame.editing) {
-      const hit = traffic.hitAt(e.position.x, e.position.y)
-      if (hit !== null) {
-        if (hit !== traffic.openHex) trafficRaw = null // the last aircraft's object, until this one's arrives
-        traffic.open(hit)
-        rail.close()
-        trafficClick = Cartesian2.clone(e.position)
-        return
-      }
-      if (traffic.close()) return
-    }
+    // Chase traffic first (openTrafficAt); a click anywhere else closes an open one, and does nothing more.
+    if (openTrafficAt(e.position)) return
+    if (!flightFrame.editing && traffic?.close()) return
     const hex = fleetLayer.pick(e.position, tapPx)
     // A runway end spells itself out (a tap on a phone, where nothing hovers) until the next click elsewhere.
     const onRunway = runways.hover(hex === null ? e.position : null, tapPx)
@@ -1208,17 +1230,20 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
+  /**
+   * Esc (and the TV remote's Back) steps back one level: an open panel, then a traffic card, edit mode, then a scenario
+   * or the chase (to the map), then the focus. (The Settings dialog keeps every key while open: Esc closes it alone.)
+   */
+  const back = (): void => {
+    if (rail.close() || traffic?.close()) return
+    if (flightFrame.editing) flightFrame.edit(false)
+    else if (run !== null || loadingScenario !== null) exitScenario()
+    else if (chasing) setChase(false)
+    else select(null)
+  }
   const onKey = (e: KeyboardEvent): void => {
-    // Esc steps back one level: an open panel, then a traffic card, edit mode, then a scenario or the chase (to the map),
-    // then the focus. (The Settings dialog keeps every key while open: Esc closes it alone.)
-    if (e.key === 'Escape') {
-      if (!rail.close() && !traffic?.close()) {
-        if (flightFrame.editing) flightFrame.edit(false)
-        else if (run !== null || loadingScenario !== null) exitScenario()
-        else if (chasing) setChase(false)
-        else select(null)
-      }
-    } else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
+    if (e.key === 'Escape') back()
+    else if ((e.key === 'b' || e.key === 'B') && bench) bench.download()
     else {
       // T, L, X: they apply in the chase view (D9, D11), and can be set beforehand. M: map or satellite, for the view on
       // screen. R: roads and places. W: weather.
@@ -1228,6 +1253,31 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
   }
   window.addEventListener('keydown', onKey)
+  // ?tv=1: the TV remote drives it all (ui/remote.ts): its map mode moves the camera as a mouse would (the map by
+  // browseDrag and browsePinch round the centre, the chase by its orbit), and its OK picks at the crosshair as a click
+  // there would: a traffic bracket, else an aircraft (not the one already selected: then OK zooms in).
+  const remote = tv ? mountRemote(ui, {
+    chasing: () => chasing,
+    move: (m, dtS) => {
+      const c = viewer.canvas
+      const s = cameraStep(m, dtS, c.clientWidth, c.clientHeight, chasing)
+      const o = chaseCam.orbit
+      if (chasing) {
+        presets?.cancel() // a camera key ends a preset's glide and the Auto tour
+        o.set(o.headingOffsetDeg + s.headingDeg, o.pitchDeg + s.pitchDeg, o.rangeM / s.zoom)
+      } else if (s.zoom !== 1) browsePinch(viewer, s.zoom, c.clientWidth / 2, c.clientHeight / 2)
+      else browseDrag(viewer, -s.dx, -s.dy) // the map follows a drag: the view goes the other way
+    },
+    pick: () => {
+      const at = new Cartesian2(viewer.canvas.clientWidth / 2, viewer.canvas.clientHeight / 2)
+      if (openTrafficAt(at)) return true
+      const hex = fleetLayer.pick(at, PICK_PX)
+      if (hex === null || hex === selected) return false
+      select(hex)
+      return true
+    },
+    back,
+  }) : null
   if (urlScenario !== null) void startScenario(urlScenario.id, { t: urlScenario.t ?? undefined, cam: urlView.cam, fromUrl: true })
 
   return {
@@ -1236,6 +1286,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       stopped = true
       removeFrame()
       window.removeEventListener('keydown', onKey)
+      remote?.destroy()
+      presets?.destroy()
       viewer.canvas.removeEventListener('pointerleave', onLeave)
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()

@@ -1,0 +1,141 @@
+/* client/ui/remote.css */
+/* TV mode (?tv=1; remote.ts sets html[data-tv]): what the remote needs, readable from the sofa. No pointer (the stream
+   would show a stray one); a bold ring on the focused control (every focus is the remote's there, so :focus); an icon
+   button's name beside it while it has the focus (there is no hover); map mode's crosshair and hint. */
+html[data-tv],
+html[data-tv] * {
+  cursor: none !important;
+}
+
+html[data-tv] :focus {
+  outline: 3px solid var(--fh-accent) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 16px 4px rgba(90, 169, 255, 0.55) !important;
+}
+
+/* The search box: the ring round the whole box (its field and its open list), not round the field, which its bar clips. */
+html[data-tv] .fh-search-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html[data-tv] .fh-search:focus-within {
+  outline: 3px solid var(--fh-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 16px 4px rgba(90, 169, 255, 0.55);
+}
+
+/* A row of a scrolling list, a box of text that scrolls: the ring inside it, which what holds it would clip outside. */
+html[data-tv] :is(.fh-row, .fh-card-more, .fh-scn-details):focus {
+  outline-offset: -3px !important;
+  box-shadow: inset 0 0 14px rgba(90, 169, 255, 0.45) !important;
+}
+
+/* The focused icon button's name, where a hover shows it (rail.css): left of the rail and the corner squares, above the
+   bottom one, under a panel's header buttons; under any other icon button (its title), above in the play bar. Also
+   while a panel is open: the remote reads the rail by them. */
+html[data-tv] .fh-ibtn[data-tip]:focus::after,
+html[data-tv] .fh-ibtn[title]:focus::after {
+  content: attr(title);
+  display: block;
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: var(--fh-glass-strong);
+  border: 1px solid var(--fh-hairline);
+  box-shadow: var(--fh-shadow);
+  color: var(--fh-text);
+  font: 13px/1.3 var(--fh-font);
+  white-space: pre;
+  pointer-events: none;
+}
+
+html[data-tv] .fh-ibtn[data-tip]:focus::after {
+  content: attr(data-tip);
+}
+
+html[data-tv] :is(.fh-rail, .fh-under, .fh-corner) .fh-ibtn[data-tip]:focus::after {
+  top: 50%;
+  right: calc(100% + 12px);
+  left: auto;
+  transform: translateY(-50%);
+}
+
+html[data-tv] .fh-spot-bottom .fh-ibtn[data-tip]:focus::after,
+html[data-tv] .fh-playbar .fh-ibtn[title]:focus::after {
+  top: auto;
+  bottom: calc(100% + 10px);
+}
+
+html[data-tv] .fh-panel-head .fh-ibtn[data-tip]:focus::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* Map mode: the crosshair at the centre, its ring the square an OK searches (remote.ts PICK_PX), and a tick on each
+   side. */
+.fh-remote-cross {
+  position: absolute;
+  z-index: 25;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.fh-remote-cross::before,
+.fh-remote-cross::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 64px;
+  height: 2px;
+  background: linear-gradient(90deg, #fff 0 12px, transparent 12px 52px, #fff 52px);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+  transform: translate(-50%, -50%);
+}
+
+.fh-remote-cross::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+/* The keys, one line at the bottom centre: over the instrument-layout button, and over a scenario's play bar and
+   captions. */
+.fh-remote-hint {
+  position: absolute;
+  z-index: 25;
+  bottom: 64px;
+  left: 50%;
+  padding: 8px 14px;
+  border-radius: 10px;
+  color: var(--fh-muted);
+  font: 14px/1.3 var(--fh-font);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.fh-remote-hint b {
+  color: var(--fh-text);
+  font-weight: 650;
+}
+
+.fh-ui[data-scenario] .fh-remote-hint {
+  bottom: calc(var(--fh-playbar-space, 88px) + 64px);
+}
+
+.fh-remote-cross[hidden],
+.fh-remote-hint[hidden] {
+  display: none;
+}

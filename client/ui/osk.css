@@ -1,0 +1,86 @@
+/* client/ui/osk.css */
+/* The TV's on-screen keyboard (osk.ts): a glass panel at the bottom centre, in the top layer (a popover: the UA's
+   popover box is undone here). Big keys for a sofa 3 m away, the highlighted one filled with the accent; the line above
+   them echoes the field. While it is open (html[data-osk]) the search box's list stops above it. */
+.fh-osk {
+  position: fixed;
+  inset: auto 0 12px;
+  width: max-content;
+  height: auto;
+  margin: 0 auto;
+  padding: 10px;
+  overflow: visible;
+  background: rgb(13, 17, 25); /* opaque: the map's labels, or a dialog's text, must not show through the keys */
+  color: var(--fh-text);
+  font: 600 19px/1 var(--fh-font);
+}
+
+.fh-osk-line {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  margin-bottom: 8px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.3);
+  font-weight: 500;
+  white-space: pre;
+}
+
+.fh-osk-caret {
+  flex: none;
+  width: 2px;
+  height: 21px;
+  margin: 0 1px;
+  background: var(--fh-accent);
+  animation: fh-osk-blink 1s steps(1) infinite;
+}
+
+@keyframes fh-osk-blink {
+  50% { opacity: 0; }
+}
+
+.fh-osk-hint {
+  color: var(--fh-muted);
+  font-size: 16px;
+}
+
+.fh-osk-keys {
+  display: grid;
+  grid-template-columns: repeat(var(--fh-osk-cols), 40px);
+  grid-auto-rows: 36px;
+  gap: 5px;
+}
+
+.fh-osk-key {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.09);
+  transition: background var(--fh-fast) var(--fh-ease), color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-osk-wide {
+  font-size: 16px;
+}
+
+.fh-osk-key[data-kind='back'] {
+  font-size: 22px;
+}
+
+.fh-osk-key[data-kind='done'] {
+  color: var(--fh-accent);
+}
+
+.fh-osk-key.fh-on {
+  background: var(--fh-accent);
+  color: #06111f;
+  box-shadow: 0 0 0 2px #fff, 0 0 16px 4px rgba(90, 169, 255, 0.55);
+}
+
+/* The search box's results above the keyboard, which stands 221 px tall 12 px over the bottom: under the bar (44) and
+   over the list's foot and gaps (~46); never taller than without it (searchBox.css). */
+html[data-osk] .fh-search-scroll {
+  max-height: min(452px, calc(100vh - var(--fh-top) - 44px - 46px - 221px - 12px));
+}

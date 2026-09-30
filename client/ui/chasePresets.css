@@ -1,0 +1,52 @@
+/* client/ui/chasePresets.css */
+/* The chase camera's preset views (chasePresets.ts, the TV only): a column of glass pills hung in the rail's under
+   stack (rail.css .fh-under), right-aligned under the Layers square and above the corner buttons: the flight card is
+   top-left, the aircraft and its flight-data frame in the middle (which keeps off it: app.ts FRAME_COVERS, where beside
+   the rail it costs the frame least), a scenario's play bar and captions along the bottom. Shown in the chase view
+   only, and not while a panel is open (the panel stands where it would). The view on screen is filled with the accent;
+   while Auto tours, the view it is on carries a dot. */
+html[data-tv] .fh-under {
+  align-items: flex-end;
+}
+
+.fh-presets {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  pointer-events: auto;
+}
+
+.fh-ui:not([data-mode='chase']) .fh-presets,
+.fh-rail.fh-has-open ~ .fh-under .fh-presets {
+  display: none;
+}
+
+.fh-preset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 104px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  color: var(--fh-text);
+  font: 600 14px/1 var(--fh-font);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease), color var(--fh-fast) var(--fh-ease);
+}
+
+.fh-preset[aria-pressed='true'] {
+  background: #173356; /* the accent's soft fill over the glass, opaque: the ground under it must not show through */
+  border-color: var(--fh-accent);
+  color: #fff;
+}
+
+.fh-preset.fh-touring::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--fh-accent);
+}

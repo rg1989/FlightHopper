@@ -30,6 +30,12 @@ test('writeUrl: browse drops hex, chase and cam; defaults write nothing; small h
   assert.equal(writeUrl('', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS }), '')
 })
 
+test('writeUrl: the TV kiosk\'s ?tv=1 stays through every view, a scenario too', () => {
+  assert.equal(writeUrl('?tv=1', { at: { lat: 1, lon: 2, heightKm: 30 }, hex: 'a1b2c3', chase: true, cam: { headingDeg: 1, pitchDeg: 2, rangeM: 3 }, prefs: DEFAULT_PREFS }), '?tv=1&at=1.0000,2.0000,30&hex=a1b2c3&chase=1&cam=1,2,3')
+  assert.equal(writeUrl('?tv=1&at=1,2,3', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS, scenario: { id: 'demo', t: 5 } }), '?tv=1&scenario=demo&t=5')
+  assert.equal(writeUrl('?tv=1&scenario=demo&t=5', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS }), '?tv=1')
+})
+
 test('writeUrl: a running scenario writes its id, t in whole seconds and the orbit; no at, hex or chase', () => {
   const url = writeUrl('?bench=1&at=1,2,3&hex=a1b2c3&chase=1&scenarioBase=/harness/fixtures/', {
     at: { lat: 35.5, lon: 139.8, heightKm: 1 }, hex: 'a1b2c3', chase: true, cam: { headingDeg: 12.4, pitchDeg: -12.2, rangeM: 150.4 }, prefs: DEFAULT_PREFS,

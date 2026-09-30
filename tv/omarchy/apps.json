@@ -1,0 +1,20 @@
+{
+  "env": {
+    "PATH": "$(PATH):$(HOME)/.local/bin"
+  },
+  "apps": [
+    {
+      "name": "FlightHopper",
+      "image-path": "/home/rgv250cc/.local/share/flighthopper-tv/boxart.png",
+      "prep-cmd": [
+        {
+          "do": "/home/rgv250cc/.local/bin/fh-tv-start",
+          "undo": "/home/rgv250cc/.local/bin/fh-tv-stop"
+        }
+      ],
+      "auto-detach": "true",
+      "wait-all": "true",
+      "exit-timeout": "5"
+    }
+  ]
+}
