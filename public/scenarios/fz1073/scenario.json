@@ -56,9 +56,9 @@
     },
     {
       "id": "MEDIA",
-      "title": "News reports of 30 September 2026 (see the research file)",
-      "url": "https://www.theweek.in/news/middle-east/2026/09/30/did-flydubai-pilot-attempt-suicide-mid-air-israeli-media-reports-high-speed-dangerous-dive.html",
-      "note": "Secondary sources. The dive's depth (about 17,000 ft) and what happened in the cockpit are as reported, not established."
+      "title": "Flightradar24 figures for the unreceived minutes as published by the press (Al Jazeera Arabic; The Times of Israel, \"What we know about the flydubai plane incident\"), and news reports of 30 September 2026",
+      "url": "https://www.timesofisrael.com/liveblog_entry/what-we-know-about-the-flydubai-plane-incident",
+      "note": "Secondary sources. Al Jazeera: 30,875 ft at 05:22:07, 16,750 ft at 05:22:36 (https://www.aljazeera.net/news/2026/9/30/). The Times of Israel: a brief climb to 21,650 ft, then under 14,000 ft, then about 15,000 ft. What happened in the cockpit is as reported, not established."
     }
   ]
 }

@@ -8,9 +8,10 @@
 //     1,000 ft within a second (static-pressure errors in violent manoeuvres; the ground speed falls 441 → 377 kt in
 //     5 s): those altitudes count for little (ALT_SD_UPSET_FT); the two receptions at 05:22:13 agree on 27,950 ft,
 //     descending at ~21,000 ft/min;
-//   - 05:22:13–05:31:26, no receiver heard it: the smoothest path between the two ends that keeps their positions and
-//     velocities, and a height that follows the dive down to the bottom Israeli media reported from tracking data
-//     (BOTTOM_FT, about a minute after it steepened), then down to 15,000 ft, level where reception resumes. q=R.
+//   - 05:22:13–05:31:26, no open receiver heard it: over the ground, the smoothest path between the two ends that keeps
+//     their positions and velocities, at ~395 kt through the dive; in height, Flightradar24's figures as the press
+//     published them (GAP_KNOTS: the dive to 16,750 ft at 05:22:36, a brief climb to 21,650 ft, a dip below 14,000 ft,
+//     then about 15,000 ft). Only the dive's two ends have published times; the climb's and the dip's are estimates. q=R.
 // The attitude is the app's flight-mechanics model (client/track/attitude.ts) on that path, with an upset's limits
 // around the dive: the recorded attitude is not published, and the aircraft certainly pitched more sharply than the path.
 //
@@ -31,8 +32,32 @@ const END = hms('05:53:31')
 const UPSET_FROM = hms('05:21:44') // the pressure altitude stops making sense
 const HEARD_AGAIN = hms('05:31:26')
 const LAST_BEFORE_GAP = hms('05:22:13.4')
-const BOTTOM_FT = Number(process.env.BOTTOM_FT ?? 17_000) // the dive's low point, as reported (see scenario.json MEDIA)
-const BOTTOM_T = hms('05:22:48') // ~1 min after the dive steepened, at the ~21,000 ft/min last heard
+// The gap's height (pressure altitude): a smooth curve (cubic Hermite: height and rate at each knot) through
+// Flightradar24's figures as the press published them (scenario.json MEDIA). Al Jazeera: 30,875 ft at 05:22:07 and
+// 16,750 ft at 05:22:36 (29,000 ft/min on average; linear between them it passes 27,953 ft at 05:22:13, where adsb.lol
+// heard 27,950). The Times of Israel: then "a brief climb to 21,650 ft", then "under 14,000 ft" (ynet: about 14,000),
+// then about 15,000 ft; The Week: vertical speed from −30,000 to +10,000 ft/min. The climb's and the dip's times are
+// estimates (a zoom at ≤ 10,000 ft/min; the dip halfway to reception); the pull-outs stay within ~2.3 g.
+const GAP_KNOTS: Array<[string, number, number]> = [ // [time, ft, ft/min]
+  ['05:22:13.4', 27_950, -28_000],
+  ['05:22:28', 20_300, -30_000],
+  ['05:22:36', 16_750, -12_000],
+  ['05:22:41', 16_300, 0],
+  ['05:23:25', 21_650, 0],
+  ['05:25:40', 13_900, 0],
+  ['05:27:30', 15_025, 0],
+  ['05:31:26', 15_025, 0],
+]
+function gapBaro(t: number): { ft: number; fpm: number } {
+  const k = GAP_KNOTS.map(([at, ft, fpm]) => ({ t: hms(at), ft, r: fpm / 60 }))
+  const i = Math.max(1, Math.min(k.length - 1, k.findIndex((x) => x.t >= t)))
+  const [a, b] = [k[i - 1], k[i]]
+  const h = b.t - a.t
+  const u = Math.min(1, Math.max(0, (t - a.t) / h))
+  const [h00, h10, h01, h11] = [2 * u ** 3 - 3 * u ** 2 + 1, u ** 3 - 2 * u ** 2 + u, -2 * u ** 3 + 3 * u ** 2, u ** 3 - u ** 2]
+  const [d00, d10, d01, d11] = [6 * u ** 2 - 6 * u, 3 * u ** 2 - 4 * u + 1, -6 * u ** 2 + 6 * u, 3 * u ** 2 - 2 * u]
+  return { ft: h00 * a.ft + h10 * h * a.r + h01 * b.ft + h11 * h * b.r, fpm: ((d00 * a.ft + d10 * h * a.r + d01 * b.ft + d11 * h * b.r) / h) * 60 }
+}
 const POS_SD_M = 15 // NACp 8–9: the aircraft's own GPS position, 95 % within 30–93 m
 const VEL_SD_MS = 2
 const ALT_SD_FT = 25
@@ -113,7 +138,7 @@ for (const x of heights) {
   vObs.push({ t: x.t, hFt: x.geom !== null ? (x.geom * FT - geoidN(x.lat, x.lon)) / FT : mslOf(x.baro, x.lat, x.lon), sdFt: x.sdFt, sdT: 0.5 })
 }
 // The dive as last heard (two receptions agree): ~21,000 ft/min down.
-rObs.push({ t: LAST_BEFORE_GAP, vFtS: -21_312 / 60, sdFtS: 60 })
+rObs.push({ t: LAST_BEFORE_GAP, vFtS: -28_000 / 60, sdFtS: 60 }) // (its own reading: −21,312 ft/min, a lagging static)
 // The gap: the reported low point (a flight level: a tracker shows pressure altitude), the pull-out from it, then down to
 // 15,000 ft, level where reception resumes. How it got there is not known: the gentlest way is drawn.
 /** Pressure altitude → above MSL, by the GNSS − pressure difference the flight itself measured near that height. */
@@ -123,13 +148,13 @@ function mslOf(baroFt: number, lat: number, lon: number): number {
   const d = pick.reduce((s, x) => s + x.d, 0) / pick.length
   return (((baroFt + d) * FT) - geoidN(lat, lon)) / FT
 }
-const HEARD_AGAIN_BARO = 15_025
-vObs.push({ t: BOTTOM_T, hFt: mslOf(BOTTOM_FT, 29.8, 38.2), sdFt: 1_000, sdT: 5 })
-rObs.push({ t: BOTTOM_T + 12, vFtS: 0, sdFtS: 25 })
-for (let t = BOTTOM_T + 30; t < HEARD_AGAIN - 10; t += 20) {
-  const u = (t - (BOTTOM_T + 30)) / (HEARD_AGAIN - 10 - (BOTTOM_T + 30))
-  vObs.push({ t, hFt: mslOf(BOTTOM_FT + u * (HEARD_AGAIN_BARO - BOTTOM_FT), 30.2, 38.1), sdFt: 400, sdT: 0 })
-  rObs.push({ t, vFtS: 0, sdFtS: 15 })
+// (mslOf's GNSS − pressure difference is ~+900 ft at FL150 and ~+2,000 ft at FL300: the day was warm.)
+for (let t = LAST_BEFORE_GAP + 1; t < HEARD_AGAIN; t += 1) {
+  const g = gapBaro(t)
+  const msl = mslOf(g.ft, 30.1, 38.15)
+  const dMsl = mslOf(g.ft + g.fpm / 60, 30.1, 38.15) - msl // ft/s: the rate above MSL
+  vObs.push({ t, hFt: msl, sdFt: 150, sdT: 0 })
+  rObs.push({ t, vFtS: dMsl, sdFtS: 15 })
 }
 vObs.sort((a, b) => a.t - b.t)
 // Over the ground the gap is 95 km, flown in 9 min 13 s at the ~330 kt both ends had: close to the straight line. The
@@ -144,7 +169,13 @@ vObs.sort((a, b) => a.t - b.t)
   for (let t = LAST_BEFORE_GAP + 150; t <= HEARD_AGAIN - 120; t += 30) {
     hObs.push({ t, p: null, rp: 0, v: ve, rv: 12 ** 2 }, { t, p: null, rp: 0, v: vn, rv: 12 ** 2 })
   }
-  // (hObs alternates east, north; keep both in time order)
+  // In the dive itself the ground speed stays near its last reading (393 kt, track 298° at 05:22:04): at 29,000 ft/min
+  // down that is ~Mach 0.84 through the air, an overspeed. (Reports of "nearly 600 kt" would be ~Mach 1.07: not a
+  // 737's, and not taken.)
+  for (let t = LAST_BEFORE_GAP + 2; t <= hms('05:22:40'); t += 4) {
+    const trk = (300 + ((t - LAST_BEFORE_GAP) / 27) * 10) / DEG // turning on right, as it was
+    hObs.push({ t, p: null, rp: 0, v: 395 * KT * Math.sin(trk), rv: 15 ** 2 }, { t, p: null, rp: 0, v: 395 * KT * Math.cos(trk), rv: 15 ** 2 })
+  }
 }
 
 /** The aircraft's wind (m/s, the vector it blows toward): its reports within ±90 s averaged; in the gap, those near the
@@ -182,7 +213,7 @@ function casAt(t: number): number | null {
 const Q_H = 1
 const Q_V = 1
 const LIM_H = { v: 400, a: 35 }
-const LIM_V = { v: 130, a: 35 } // ~25,600 ft/min; 4.5 g
+const LIM_V = { v: 180, a: 40 } // ~35,000 ft/min (the published figures average 29,000 ft/min over 29 s); ~5 g
 const kv = fuseHeight(vObs, rObs, { q: Q_V, lim: LIM_V, casAt, energyFrom: START, energyTo: END })
 const airAt = (t: number): { air: number; hM: number } | null => {
   const cas = casAt(t)
@@ -231,7 +262,7 @@ for (let t = START; t <= END + 1e-9; t += SUB) {
   const turn = gs > 3 ? ((n.v * e.a - e.v * n.a) / (gs * gs)) * DEG : 0
   const along = gs > 3 ? (e.v * e.a + n.v * n.a) / gs : 0
   const cas = casAt(t)
-  const upset = t > UPSET_FROM - 40 && t < BOTTOM_T + 90
+  const upset = t > UPSET_FROM - 40 && t < hms('05:27:30')
   const pr = aeroPitchRoll({
     gsMs: gs, vsMs: h.v, turnRateDegS: turn, alongMs2: along, easKt: cas, altM: h.p, onGround: false, category: 'A3',
   }, upset ? UPSET_LIMITS : NORMAL_LIMITS)
