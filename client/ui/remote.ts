@@ -4,20 +4,25 @@
 // and ContextMenu (Menu); a held key repeats. One keydown listener on the window, in the capture phase, takes them
 // first, and a key it acts on goes no further (the scenario player's ←/→ do not fire as well). Two modes:
 // - UI: a control has the focus, ringed bold (remote.css). An arrow moves it to the nearest control that way (pickNext);
-//   a control that owns some arrows keeps them: a text field ←/→ (its caret), a slider ←/→, a settings tab ←/→. The
-//   box the focus is in (a panel, a card, the play bar) comes first. OK clicks it (a slider: its Space). Back is the
-//   app's Esc, one step back; then the focus goes to the rail button of the panel that closed, stays where it was, or
-//   goes to the first rail button. An arrow with nowhere to go, or Menu, hands the remote to the map. A modal dialog
+//   a control that owns some arrows keeps them: a slider ←/→, a settings tab ←/→, the search box ↑/↓ (its results).
+//   The box the focus is in (a panel, a card, the play bar) comes first. OK clicks it (a slider: its Space). Back is
+//   the app's Esc, one step back; then the focus goes to the rail button of the panel that closed, stays where it was,
+//   or goes to the first rail button. An arrow with nowhere to go, or Menu, hands the remote to the map. A modal dialog
 //   (Settings) keeps the focus inside it and its own Esc.
+// - Typing: OK on a text field (the search box, the aircraft list's filter, a rename) opens the on-screen keyboard
+//   (osk.ts) on it; while it is open the arrows move its highlight, OK types, Back closes it. The field keeps the focus
+//   throughout. The search box then picks with ↑/↓ and OK as its own keys (OK opens the keyboard again while no result
+//   is under them); Back clears its text, then leaves it.
 // - Map: a crosshair at the centre and a hint at the bottom. The top-down map pans (a press a tenth of the view, a held
 //   arrow on and on) and zooms (OK in, OK held HOLD_MS out); the chase camera orbits (←/→), tilts (↑/↓) and comes
 //   closer or goes farther, through the orbit a mouse drives (?cam=). OK over an aircraft (in the chase, a traffic
 //   bracket) picks it as a click there would. Back or Menu gives the focus back to the control it came from.
 // The app does the moving (hooks), by cameraStep: every change goes through its usual paths (URL, polls, loading veil).
-// Left out of the arrows' reach: the search box (typing needs a keyboard, and its list closes with its field's focus;
-// with a keyboard, / still opens it and its keys are its own) and links that open a new tab (no remote key leaves one).
+// Left out of the arrows' reach: the search box's own buttons (its list closes with its field's focus) and links that
+// open a new tab (no remote key leaves one).
 // A focus lost to the page (its control went: a panel closed, the list refreshed, a button replaced) comes back near
 // where it was, at once after a key and within WATCH_MS otherwise.
+import { mountOsk, typeInto, type TextField } from './osk.ts'
 import './remote.css'
 
 export type Dir = 'up' | 'down' | 'left' | 'right'
@@ -25,11 +30,14 @@ export type RemoteKey = Dir | 'ok' | 'back' | 'menu'
 export type Mode = 'ui' | 'map'
 export type Motion = Dir | 'in' | 'out'
 /**
- * What has the focus, as the keys see it: a text field, a slider, a tab, a box of text that scrolls, the search box (a
- * keyboard's), anything else.
+ * What has the focus, as the keys see it: a text field, a slider, a tab, a box of text that scrolls, the search box
+ * (with a result under its keys: result), anything else.
  */
-export type Control = 'text' | 'range' | 'tab' | 'scroll' | 'keyboard' | 'other'
-export type Action = 'pass' | 'none' | 'move' | 'scroll' | 'click' | 'back' | 'map' | 'ui' | 'camera' | 'ok'
+export type Control = 'text' | 'range' | 'tab' | 'scroll' | 'search' | 'result' | 'other'
+/** The on-screen keyboard's: open it, move its highlight, type, close it; and the search box's text away (clear). */
+export type Action =
+  | 'pass' | 'none' | 'move' | 'scroll' | 'click' | 'back' | 'map' | 'ui' | 'camera' | 'ok'
+  | 'keyboard' | 'key' | 'type' | 'done' | 'clear'
 
 export interface Box {
   x: number
@@ -49,6 +57,7 @@ const HELD_MS = 1000 // a held key repeats (after ~0.5 s, then ~30 times a secon
 export const PICK_PX = 40 // the crosshair's ring (remote.css), the square an OK looks for an aircraft in
 const RESTORE_PX = 120 // a lost focus goes to a control at most this far from where it was, else to the first rail button
 const WATCH_MS = 400
+const KEY_REPEAT_MS = 120 // a held arrow moves the keyboard's highlight a key this often (the key repeat is ~30 a second)
 const SCROLL_SHARE = 0.6 // ↑/↓ on a box of text scroll this much of what shows
 const EDGE_PX = 1 // boxes this far into each other still count as side by side (sub-pixel layout)
 const ACROSS_UP_DOWN = 2 // pickNext: weight of the gap across the way, moving up or down …
@@ -103,22 +112,27 @@ export function pickNext(from: Box, cands: readonly Box[], dir: Dir): number {
 }
 
 /**
- * What a remote key does. UI mode: the arrows move the focus (a text field, slider or tab keeps ←/→: pass; a box of text
- * scrolls with ↑/↓, to its end), OK clicks (a text field's Enter is its own), Back steps back (a text field's and a
- * modal dialog's Esc are their own), Menu goes to map mode (none from a modal dialog); the search box, which only a
- * keyboard reaches, keeps every key but Menu. Map mode: the arrows move the camera, OK is OK (a press or a hold: the
- * caller times it), Back and Menu go back to UI mode.
+ * What a remote key does. UI mode: the arrows move the focus (a slider or tab keeps ←/→: pass; a box of text scrolls
+ * with ↑/↓, to its end), OK clicks, Back steps back (a modal dialog's Esc is its own), Menu goes to map mode (none from
+ * a modal dialog). A text field: OK opens the on-screen keyboard, Back is its own Esc. The search box keeps
+ * ↑/↓ (its results) and OK while a result is under them; else OK opens the keyboard; Back clears it, then leaves it.
+ * The keyboard open (osk): the arrows move its highlight, OK types, Back closes it. Map mode: the arrows move the camera, OK
+ * is OK (a press or a hold: the caller times it), Back and Menu go back to UI mode.
  */
-export function remoteAction(key: RemoteKey, mode: Mode, ctx: { control: Control; modal: boolean }): Action {
+export function remoteAction(key: RemoteKey, mode: Mode, ctx: { control: Control; modal: boolean; osk?: boolean }): Action {
   if (mode === 'map') return key === 'ok' ? 'ok' : key === 'back' || key === 'menu' ? 'ui' : 'camera'
   const { control, modal } = ctx
   if (key === 'menu') return modal ? 'none' : 'map'
-  if (control === 'keyboard') return 'pass'
-  if (key === 'back') return modal || control === 'text' ? 'pass' : 'back'
-  if (key === 'ok') return control === 'text' ? 'pass' : 'click'
+  if (ctx.osk === true) return key === 'ok' ? 'type' : key === 'back' ? 'done' : 'key'
   const sideways = key === 'left' || key === 'right'
+  if (control === 'search' || control === 'result') {
+    if (key === 'ok') return control === 'search' ? 'keyboard' : 'pass'
+    return key === 'back' ? 'clear' : sideways ? 'move' : 'pass'
+  }
+  if (key === 'back') return modal || control === 'text' ? 'pass' : 'back'
+  if (key === 'ok') return control === 'text' ? 'keyboard' : 'click'
   if (control === 'scroll') return sideways ? 'move' : 'scroll'
-  return sideways && control !== 'other' ? 'pass' : 'move'
+  return sideways && (control === 'range' || control === 'tab') ? 'pass' : 'move'
 }
 
 export interface CameraStep {
@@ -167,7 +181,7 @@ export interface RemoteHandle {
 const SCROLLS = '.fh-card-more, .fh-scn-details'
 const FOCUSABLE = `button, input, select, textarea, a[href], [tabindex], .fh-row, ${SCROLLS}`
 const NATIVE = 'button, input, select, textarea, a[href], [tabindex]'
-const SKIP = '.fh-search, a[target="_blank"]'
+const SKIP = '.fh-search button, a[target="_blank"]'
 // The boxes an arrow looks in first, before the rest of the page: from a panel's header ↓ goes into the panel, not to
 // the rail beside it.
 const GROUP = '.fh-panel, .fh-card, .fh-playbar, .fh-frame, .fh-outage-card, .fh-ending-card'
@@ -184,7 +198,7 @@ const boxOf = (el: Element): Box => {
 
 function control(el: Element | null): Control {
   if (!(el instanceof HTMLElement)) return 'other'
-  if (el.closest('.fh-search') !== null) return 'keyboard'
+  if (el.closest('.fh-search') !== null) return el.hasAttribute('aria-activedescendant') ? 'result' : 'search'
   if (el.matches(SCROLLS)) return 'scroll'
   if (el instanceof HTMLInputElement) return el.type === 'range' ? 'range' : TEXT.has(el.type) ? 'text' : 'other'
   if (el instanceof HTMLTextAreaElement || el.isContentEditable) return 'text'
@@ -199,10 +213,13 @@ function rendered(el: Element): boolean {
   return s.visibility !== 'hidden' && s.opacity !== '0'
 }
 
-/** A control the arrows may go to: not a text field either (a remote cannot type; the aircraft list's filter). */
+/** A control the arrows may go to. */
 function usable(el: Element): el is HTMLElement {
-  return el instanceof HTMLElement && !el.matches(':disabled') && el.closest(SKIP) === null && el.closest('[inert]') === null && control(el) !== 'text' && rendered(el)
+  return el instanceof HTMLElement && !el.matches(':disabled') && el.closest(SKIP) === null && el.closest('[inert]') === null && rendered(el)
 }
+
+/** A field to type in: the focus comes back to one only by the arrows (the search box opens its list with it). */
+const typed = (el: Element | null): boolean => ['text', 'search', 'result'].includes(control(el))
 
 /**
  * Scrolls each scrolling box round el the least that shows all of it (scrollIntoView's block: 'nearest'), which
@@ -242,6 +259,7 @@ function scrollText(el: HTMLElement, down: boolean): boolean {
 export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
   const html = document.documentElement
   html.dataset.tv = ''
+  const osk = mountOsk(ui)
   const cross = document.createElement('div')
   cross.className = 'fh-remote-cross'
   const hint = document.createElement('div')
@@ -278,13 +296,14 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
 
   /**
    * The focus back near where it was lost: the rail button of the panel it was in, now closed; else the control nearest
-   * where it was (one that took its place), not a text field; else the first rail button (in a dialog, its first control).
+   * where it was (one that took its place), not a field to type in; else the first rail button (in a dialog, its first
+   * control).
    */
   function restore(): void {
     const m = modal()
     const b = m === null && last?.panel != null && openPanel() !== last.panel ? railButton(last.panel) : null
     if (b !== null && usable(b)) return focus(b)
-    const cands = candidates().filter((el) => control(el) !== 'text')
+    const cands = candidates().filter((el) => !typed(el))
     let near: HTMLElement | null = null
     let nearD = m === null ? RESTORE_PX : Infinity
     if (last !== null) {
@@ -321,7 +340,7 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
       const b = railButton(open)
       if (b !== null && usable(b)) return focus(b)
     }
-    if (lost() || control(document.activeElement) === 'text') focus(firstRail())
+    if (lost() || typed(document.activeElement)) focus(firstRail())
   }
 
   function paintHint(): void {
@@ -337,6 +356,7 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
   }
 
   function toMap(): void {
+    osk.close()
     const a = document.activeElement
     from = a instanceof HTMLElement && a !== document.body ? a : null
     from?.blur()
@@ -378,6 +398,8 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
     raf = moving.size > 0 ? requestAnimationFrame(tick) : 0
   }
 
+  let keyAt = 0 // the keyboard's highlight last moved, or its ⌫ last repeated
+
   // OK in map mode: on its release, a pick or a zoom in; held HOLD_MS, a zoom out instead (and again every HOLD_MS).
   let okDownAt: number | null = null
   let okSeen = 0
@@ -412,7 +434,7 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
   const onKeyDown = (e: KeyboardEvent): void => {
     const key = remoteKey(e)
     if (key === null) return
-    const act = remoteAction(key, mode, { control: control(document.activeElement), modal: modal() !== null })
+    const act = remoteAction(key, mode, { control: control(document.activeElement), modal: modal() !== null, osk: osk.field !== null })
     if (act === 'pass') return
     e.preventDefault()
     e.stopImmediatePropagation()
@@ -453,6 +475,27 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
       case 'ui':
         if (!e.repeat) toUi()
         return
+      case 'keyboard':
+        if (!e.repeat) osk.open(document.activeElement as TextField)
+        return
+      case 'key':
+        if (e.repeat && now - keyAt < KEY_REPEAT_MS) return
+        keyAt = now
+        return osk.move(key as Dir)
+      case 'type': // a held OK repeats ⌫ alone, at the pace of a held arrow
+        if (e.repeat && now - keyAt < KEY_REPEAT_MS) return
+        keyAt = now
+        return osk.press(e.repeat)
+      case 'done':
+        if (!e.repeat) osk.close()
+        return
+      case 'clear': {
+        if (e.repeat) return
+        const f = document.activeElement as TextField
+        if (f.value !== '') typeInto(f, '') // as the keyboard's Clear: the box's own input handler puts no result under the keys
+        else f.blur() // the box closes; the focus comes back near it
+        return
+      }
       case 'camera': {
         paintHint()
         const s = moving.get(key as Dir)
@@ -492,7 +535,10 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
   window.addEventListener('blur', onBlur)
   window.addEventListener('contextmenu', noMenu, true)
   document.addEventListener('focusin', onFocusIn)
-  const watch = setInterval(() => mode === 'ui' && lost() && restore(), WATCH_MS)
+  const watch = setInterval(() => {
+    if (osk.field !== null && document.activeElement !== osk.field) osk.close() // its field went (a rename saved)
+    if (mode === 'ui' && lost()) restore()
+  }, WATCH_MS)
   focus(firstRail())
 
   return {
@@ -504,6 +550,7 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('contextmenu', noMenu, true)
       document.removeEventListener('focusin', onFocusIn)
+      osk.destroy()
       cross.remove()
       hint.remove()
       delete html.dataset.tv

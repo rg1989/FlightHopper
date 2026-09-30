@@ -13,6 +13,18 @@ html[data-tv] :focus {
   box-shadow: 0 0 16px 4px rgba(90, 169, 255, 0.55) !important;
 }
 
+/* The search box: the ring round the whole box (its field and its open list), not round the field, which its bar clips. */
+html[data-tv] .fh-search-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html[data-tv] .fh-search:focus-within {
+  outline: 3px solid var(--fh-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 16px 4px rgba(90, 169, 255, 0.55);
+}
+
 /* A row of a scrolling list, a box of text that scrolls: the ring inside it, which what holds it would clip outside. */
 html[data-tv] :is(.fh-row, .fh-card-more, .fh-scn-details):focus {
   outline-offset: -3px !important;

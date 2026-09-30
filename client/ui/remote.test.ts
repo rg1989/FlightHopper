@@ -92,12 +92,10 @@ test('remoteAction: UI mode', () => {
   assert.equal(ui('ok'), 'click')
   assert.equal(ui('back'), 'back')
   assert.equal(ui('menu'), 'map')
-  // A text field keeps ←/→ (the caret), Enter and Esc (its own); ↑/↓ leave it.
-  assert.equal(ui('left', 'text'), 'pass')
-  assert.equal(ui('right', 'text'), 'pass')
-  assert.equal(ui('up', 'text'), 'move')
-  assert.equal(ui('down', 'text'), 'move')
-  assert.equal(ui('ok', 'text'), 'pass')
+  // A text field: OK opens the on-screen keyboard, Esc is its own; every arrow leaves it (the keyboard types at the end:
+  // no caret to move).
+  for (const d of ['up', 'down', 'left', 'right'] as const) assert.equal(ui(d, 'text'), 'move')
+  assert.equal(ui('ok', 'text'), 'keyboard')
   assert.equal(ui('back', 'text'), 'pass')
   // A slider and a tab keep ←/→.
   assert.equal(ui('left', 'range'), 'pass')
@@ -109,14 +107,32 @@ test('remoteAction: UI mode', () => {
   assert.equal(ui('down', 'scroll'), 'scroll')
   assert.equal(ui('up', 'scroll'), 'scroll')
   assert.equal(ui('left', 'scroll'), 'move')
-  // The search box, which only a keyboard reaches: every key is its own but Menu.
-  for (const k of ['up', 'down', 'left', 'right', 'ok', 'back'] as const) assert.equal(ui(k, 'keyboard'), 'pass')
-  assert.equal(ui('menu', 'keyboard'), 'map')
+  // The search box: ↑/↓ are its own (its results), OK opens the keyboard until a result is under them, then picks it;
+  // Back clears it, then leaves it; ←/→ leave it.
+  for (const c of ['search', 'result'] as const) {
+    assert.equal(ui('up', c), 'pass')
+    assert.equal(ui('down', c), 'pass')
+    assert.equal(ui('left', c), 'move')
+    assert.equal(ui('back', c), 'clear')
+    assert.equal(ui('menu', c), 'map')
+  }
+  assert.equal(ui('ok', 'search'), 'keyboard')
+  assert.equal(ui('ok', 'result'), 'pass')
   // A modal dialog: Esc is the dialog's (it closes), and the map stays out of reach.
   assert.equal(ui('back', 'other', true), 'pass')
   assert.equal(ui('menu', 'other', true), 'none')
   assert.equal(ui('down', 'other', true), 'move')
   assert.equal(ui('ok', 'other', true), 'click')
+})
+
+test('remoteAction: the on-screen keyboard open takes the arrows, OK and Back; Menu still goes to the map', () => {
+  const osk = (key: Parameters<typeof remoteAction>[0], modal = false): string => remoteAction(key, 'ui', { control: 'search', modal, osk: true })
+  for (const d of ['up', 'down', 'left', 'right'] as const) assert.equal(osk(d), 'key')
+  assert.equal(osk('ok'), 'type')
+  assert.equal(osk('back'), 'done')
+  assert.equal(osk('back', true), 'done', 'in a dialog too: Back closes the keyboard, not the dialog')
+  assert.equal(osk('menu'), 'map')
+  assert.equal(osk('menu', true), 'none')
 })
 
 test('remoteAction: map mode', () => {

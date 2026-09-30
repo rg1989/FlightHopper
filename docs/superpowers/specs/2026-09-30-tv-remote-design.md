@@ -27,9 +27,9 @@ Two modes.
 - Arrows move focus spatially to the nearest visible, enabled, focusable control in that direction (the usual scoring:
   distance along the axis plus a penalty for the perpendicular offset; only candidates whose rect lies in that
   half-plane). The focused control scrolls into view (`block: 'nearest'`).
-- Controls that own arrows keep them: range sliders (Left/Right change the value; Up/Down navigate), text fields
-  (Left/Right move the caret; Up/Down leave the field), and lists that already handle Up/Down (the aircraft table)
-  keep Up/Down inside the list and Left/Right leave it.
+- Controls that own arrows keep them: range sliders (Left/Right change the value; Up/Down navigate), the search box
+  (Up/Down pick among its results), and lists that already handle Up/Down (the aircraft table) keep Up/Down inside the
+  list and Left/Right leave it. Every arrow leaves a plain text field (the on-screen keyboard types at the end: no caret).
 - Enter clicks the focused control (native for buttons; make it so for everything clickable).
 - Escape (Back) runs the app's existing Esc chain (panel → traffic card → edit mode → scenario/chase → focus) and then
   puts focus on a sensible control (the rail button of the panel that closed, else the first rail button).
@@ -57,14 +57,33 @@ Two modes.
 - A bold focus ring on every focusable control (accent outline + soft glow, readable from 3 m), `:focus-visible`.
 - Icon-only buttons show their tooltip (`data-tip`) while focused, so the rail is readable without hover.
 - No mouse cursor (`cursor: none` everywhere): the stream would otherwise show a stray pointer.
-- The kiosk renders at device-scale 1.5 (1280×720 CSS px on a 1920×1080 output): check every layout at 1280×720.
+- The kiosk renders at 1920×1080 CSS px, device scale 1 (the stream is 1080p: the TV's Wi-Fi carries ~9 Mbit/s):
+  check every layout there, compact, covering little of the 3-D view.
 
 ## Reachability audit
 
 Every action a mouse can reach must be reachable by D-pad + OK: rail and corner buttons, every panel's controls and list
 rows (aircraft table, search results, recordings, scenarios, layers, settings tabs and switches), the flight card and
-traffic card buttons, the play bar. Aircraft on the map are reached through the aircraft list or map-mode pick. Typing
-(search) is out of scope: no keyboard on the remote; the search box must at least not trap focus.
+traffic card buttons, the play bar. Aircraft on the map are reached through the aircraft list or map-mode pick.
+
+## Typing: the on-screen keyboard (added)
+
+OK on a text field (the search box, the aircraft list's filter, a rename, a Settings key) opens an on-screen keyboard
+bound to it (`client/ui/osk.ts`): a glass panel at the bottom centre, in the top layer (a popover, so over a modal
+dialog too), with an alphabetical 13-column grid: 0–9 and ⌫, a–m, n–z, Space / Clear / Done. The field keeps the DOM
+focus throughout (the search box closes its list without it); the arrows move the keyboard's highlight, OK types it
+(the value, then an `input` event, as typing), Back or Done closes it. The search box then picks with ↑/↓ and OK as
+its own keys (OK opens the keyboard again while no result is highlighted); Back clears its text, then leaves it.
+
+## Chase camera presets (added)
+
+In the chase view only, a column of pills under the rail's Layers square (`client/ui/chasePresets.ts`): Behind (the
+chase's own start), Left side, Right side, Front, Above, Wide, and Auto (a tour through them, 4 s glides, 15 s on
+each). A pick glides the orbit there in 1.2 s (eased; the heading the short way round, the range in proportion)
+through `chaseCam.orbit`, never a jump; a map-mode camera key, another preset or Auto again ends the tour. The view on
+screen is marked. The flight-data frame keeps off the column (beside the rail it costs the frame least). Entering the
+chase closes an open panel and puts the focus on the marked preset. The 3-D view draws at device pixels
+(`useBrowserRecommendedResolution = false`).
 
 ## Code shape
 
