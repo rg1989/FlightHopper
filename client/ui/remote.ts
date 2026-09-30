@@ -199,9 +199,9 @@ function rendered(el: Element): boolean {
   return s.visibility !== 'hidden' && s.opacity !== '0'
 }
 
-/** A control the arrows may go to. */
+/** A control the arrows may go to: not a text field either (a remote cannot type; the aircraft list's filter). */
 function usable(el: Element): el is HTMLElement {
-  return el instanceof HTMLElement && !el.matches(':disabled') && el.closest(SKIP) === null && el.closest('[inert]') === null && rendered(el)
+  return el instanceof HTMLElement && !el.matches(':disabled') && el.closest(SKIP) === null && el.closest('[inert]') === null && control(el) !== 'text' && rendered(el)
 }
 
 /**
@@ -431,7 +431,17 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
         const a = document.activeElement as HTMLElement
         // A slider has nothing to click: OK is its Space (the play bar's scrubber and volume: play or pause).
         if (control(a) === 'range') a.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }))
-        else a.click()
+        else {
+          const was = openPanel()
+          a.click()
+          // A rail button that opened its panel hands the focus into it: its first list row, else its first control.
+          const id = openPanel()
+          if (id !== null && id !== was) requestAnimationFrame(() => {
+            const p = document.querySelector<HTMLElement>('.fh-panel:not([hidden])')
+            const inside = candidates().filter((c) => p?.contains(c) && c.closest('.fh-panel-head') === null)
+            focus(inside.find((c) => c.matches('.fh-row')) ?? inside[0] ?? null)
+          })
+        }
         return
       }
       case 'back':
