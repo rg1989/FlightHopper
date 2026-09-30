@@ -53,3 +53,10 @@ test('the shipped manifest: E190s and E195s (and their E2s) fly the E190 model; 
   for (const t of ['E190', 'E195', 'E290', 'E295']) assert.equal(shipped.for(t, 'A3').id, 'e190', t)
   for (const t of ['E170', 'E175', 'E75L', 'E75S', 'E135', 'E145', 'E45X']) assert.equal(shipped.for(t, 'A3').id, 'e75l', t)
 })
+
+test('the shipped manifest: the 707 and DC-8 families (tankers, AWACS, E-6) fly the four-engine model, not a twin', () => {
+  const shipped = new ModelPicker(JSON.parse(readFileSync(new URL('../../public/models/manifest.json', import.meta.url), 'utf8')))
+  for (const t of ['K35R', 'K35E', 'C135', 'R135', 'E3TF', 'E3CF', 'E6', 'B703', 'B701', 'B720', 'DC86', 'DC87']) assert.equal(shipped.for(t, 'A5').id, 'b744', t)
+  for (const t of ['P8', 'E737']) assert.equal(shipped.for(t, 'A5').id, 'b738', t) // 737 airframes
+  assert.equal(shipped.for('K46', 'A5').id, 'b789', 'the KC-46 is a 767: the widebody twin')
+})

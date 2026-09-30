@@ -34,15 +34,20 @@ export const WHITE: Livery = { code: null, design: WHITE_DESIGN }
 
 const known = (code: string): boolean => code in DESIGNS || code in TABLE.liveries
 
+/** Military aircraft without an airline livery: an all-over grey (USAF AMC gray, FS 36173, as most air arms' transports and tankers wear). */
+export const MILITARY = '_MIL'
+
 /**
- * The livery a callsign flies in: its operator, or the brand a subsidiary or single-partner regional flies as; null
- * (plain white) when not in the table. Where the design has schemes by registration (Design.variants), "CODE~scheme".
+ * The livery a callsign flies in: its operator, or the brand a subsidiary or single-partner regional flies as; not in
+ * the table, MILITARY for a military aircraft (readsb dbFlags), else null (plain white). Where the design has schemes by
+ * registration (Design.variants), "CODE~scheme".
  */
-export function liveryCode(callsign: string | null, reg: string | null = null): string | null {
+export function liveryCode(callsign: string | null, reg: string | null = null, military = false): string | null {
+  const none = military ? MILITARY : null
   const op = operatorOf(callsign)
-  if (op === null) return null
+  if (op === null) return none
   const code = TABLE.aliases[op] ?? op
-  if (!known(code)) return null
+  if (!known(code)) return none
   const d = DESIGNS[code]
   const v = d?.variants ? variantOf(d, reg) : null
   return v === null ? code : `${code}~${v}`

@@ -846,7 +846,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       } else {
         const ci = chaseInfo ?? (selected === null ? null : fleet.get(selected)?.info) ?? null
         if (model !== null && pick !== null && model.use(pick.for(ci?.typeCode ?? null, ci?.category ?? null))) sun.attachModel(model.model)
-        model?.paint(liveryCode(ci?.callsign ?? null, ci?.reg ?? null))
+        model?.paint(liveryCode(ci?.callsign ?? null, ci?.reg ?? null, ci?.military))
         // The gear as a crew would have it (gear.ts), from the height over the ground drawn under the aircraft.
         const want = gearWanted(liveGear, { onGround: placed.onGround, aglFt: groundM === null ? null : (s.hM - groundM) / FT, vsFpm: placed.vsFpm, gsKt: placed.gsKt })
         if (liveGear === null) model?.snapGear(want)

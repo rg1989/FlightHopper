@@ -7,7 +7,7 @@ import { DESIGNS } from '../livery/designs/index.ts'
 import { drawDesign, profileOf } from '../livery/kit.ts'
 import type { Op } from '../livery/kit.ts'
 import type { ModelManifest, ModelManifestEntry } from '../types.ts'
-import { liveryCode, liveryFromSpec, liveryOf, LiveryShaders, paintShaderText, paintVertexText, TABLE, WHITE } from './livery.ts'
+import { liveryCode, MILITARY, liveryFromSpec, liveryOf, LiveryShaders, paintShaderText, paintVertexText, TABLE, WHITE } from './livery.ts'
 
 const root = new URL('../../', import.meta.url)
 const manifest: ModelManifest = JSON.parse(readFileSync(new URL('public/models/manifest.json', root), 'utf8'))
@@ -30,6 +30,15 @@ test('livery code: the operator, its brand for a subsidiary or single-partner re
   assert.equal(liveryCode(null), null)
   assert.equal(liveryOf(null), WHITE)
   assert.equal(liveryOf('XXX'), WHITE)
+})
+
+test('a military aircraft without an airline livery flies in grey, not white; one with an airline callsign keeps it', () => {
+  assert.equal(liveryCode(null, '59-1472', true), MILITARY)
+  assert.equal(liveryCode('RCH871', null, true), MILITARY) // USAF Air Mobility Command's "Reach": no airline livery
+  assert.equal(liveryCode('DLH681', null, true), 'DLH')
+  assert.equal(liveryCode(null, null, false), null)
+  assert.notEqual(liveryOf(MILITARY), WHITE)
+  assert.notEqual(liveryOf(MILITARY).design.base, WHITE.design.base)
 })
 
 test('a colours-only table livery draws the old regions: base, belly, fin, fin2, decals at the paint map boxes', () => {
