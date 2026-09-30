@@ -12,5 +12,9 @@ export default defineConfig({
       targets: ['ThirdParty', 'Workers', 'Assets', 'Widgets'].map((d) => ({ src: `${cesiumSource}/${d}`, dest: cesiumBaseUrl, rename: { stripBase: 4 } })),
     }),
   ],
-  server: { proxy: { '/api': `http://127.0.0.1:${process.env.API_PORT ?? 8787}` } }, // the Makefile's API_PORT
+  server: {
+    proxy: { '/api': `http://127.0.0.1:${process.env.API_PORT ?? 8787}` }, // the Makefile's API_PORT
+    // `tailscale serve` hands the tailnet's requests on with this Mac's *.ts.net name as the host (Vite blocks unknown hosts).
+    allowedHosts: ['.ts.net'],
+  },
 })
