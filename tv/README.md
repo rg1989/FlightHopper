@@ -6,7 +6,8 @@ The TV remote drives the app: the page runs with `?tv=1` (`client/ui/remote.ts`)
 
 ```
 TV remote → Moonlight (tv/moonlight: OK → Enter, Back → Esc) → Sunshine (omarchy) → uinput keyboard → Hyprland →
-Chromium kiosk on the headless output FHTV (3840x2160, device scale 3 = 1280x720 CSS px) → http://localhost:8787/?tv=1
+Chromium kiosk on the headless output FHTV (3840x2160, device scale 4 = 960x540 CSS px, Android TV's 10-foot size)
+→ http://localhost:8787/?tv=1
 ```
 
 On the TV: the **FlightHopper** tile (tv/launcher) opens the stream straight away. Home leaves it (it keeps running
