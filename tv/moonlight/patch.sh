@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds moonlight-tv.apk: Moonlight for Android v12.2 with two changes for a TV remote that is a keyboard-class device
+# Builds moonlight-tv.apk: Moonlight for Android v12.2 with three changes for a TV remote that is a keyboard-class device
 # (the Xiaomi RC: sources 0x301, not a gamepad), where stock Moonlight drops OK (DPAD_CENTER has no key mapping) and
 # quits the stream on Back:
 #   1. KeyboardTranslator.translate: DPAD_CENTER (23) → Enter, BACK (4) → Escape on the host.
@@ -18,7 +18,7 @@ rm -rf build && mkdir build
 curl -sfL -o build/moonlight.apk "https://github.com/moonlight-stream/moonlight-android/releases/download/$V/app-nonRoot-release.apk"
 apktool d -q -f -o build/src build/moonlight.apk
 python3 - build/src "$RES" "$CODEC" <<'PY'
-import sys, pathlib
+import re, sys, pathlib
 src = pathlib.Path(sys.argv[1]) / 'smali/com/limelight'
 res, codec = sys.argv[2], sys.argv[3]
 def patch(rel, old, new, count):
@@ -47,9 +47,16 @@ for rel in ('preferences/PreferenceConfiguration.smali', 'preferences/StreamSett
     s = p.read_text()
     assert s.count('"1280x720"') == 1, rel
     p.write_text(s.replace('"1280x720"', f'"{res}"'))
+# 3. ControllerHandler.isGameControllerDevice ends with "a keyboard that is not alphabetic is a game controller", so the
+#    Xiaomi RC (keyboard type 1, sources 0x301) went out as gamepad 0, which Sunshine never allocated and dropped
+#    ("ControllerNumber [0] not allocated"): no remote button reached the page. adb's `input keyevent` (the virtual,
+#    alphabetic keyboard) worked, which hid it. Real gamepads are caught earlier (joystick axes, SOURCE_GAMEPAD).
+p = src / 'binding/input/ControllerHandler.smali'
+t, n = re.subn(r'(const/4 v1, 0x2(?:\s+\.line \d+)*\s+if-eq p0, v1, :cond_6(?:\s+\.line \d+)*\s+)return v0', r'\g<1>return v3', p.read_text())
+assert n == 1, 'isGameControllerDevice'
+p.write_text(t)
 # Settings' XML defaults too: Moonlight writes them into its preferences on first start (PcView setDefaultValues), and
 # from then on those win over the code's.
-import re
 x = pathlib.Path(sys.argv[1]) / 'res/xml/preferences.xml'
 t = x.read_text()
 for key, value in (('list_resolution', res), ('video_format', codec)):
