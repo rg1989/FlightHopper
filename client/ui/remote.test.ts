@@ -77,6 +77,12 @@ test('pickNext: sideways, a control in the row beats a nearer one above or below
   const nearHigher = box(150, 20, 40, 30)
   assert.equal(pickNext(from, [nearHigher, inRowFar], 'right'), 1)
   assert.equal(pickNext(from, [nearHigher], 'right'), 0, 'still reachable when nothing is in the row')
+  // The corner's Settings: ← goes to the layout button level with it across the screen, not to the play bar's exit
+  // just below its row.
+  const settings = box(1227, 613)
+  const exit = box(1171, 658)
+  const layout = box(12, 590, 46, 46)
+  assert.equal(pickNext(settings, [exit, layout], 'left'), 1)
 })
 
 test('remoteAction: UI mode', () => {
@@ -99,6 +105,10 @@ test('remoteAction: UI mode', () => {
   assert.equal(ui('ok', 'range'), 'click')
   assert.equal(ui('right', 'tab'), 'pass')
   assert.equal(ui('up', 'tab'), 'move')
+  // A box of text that scrolls (the card's details): ↑/↓ scroll it (to its end, then on), ←/→ leave it.
+  assert.equal(ui('down', 'scroll'), 'scroll')
+  assert.equal(ui('up', 'scroll'), 'scroll')
+  assert.equal(ui('left', 'scroll'), 'move')
   // The search box, which only a keyboard reaches: every key is its own but Menu.
   for (const k of ['up', 'down', 'left', 'right', 'ok', 'back'] as const) assert.equal(ui(k, 'keyboard'), 'pass')
   assert.equal(ui('menu', 'keyboard'), 'map')

@@ -13,8 +13,8 @@ html[data-tv] :focus {
   box-shadow: 0 0 16px 4px rgba(90, 169, 255, 0.55) !important;
 }
 
-/* A row of a scrolling list: the ring inside it, which the list would clip outside. */
-html[data-tv] .fh-row:focus {
+/* A row of a scrolling list, a box of text that scrolls: the ring inside it, which what holds it would clip outside. */
+html[data-tv] :is(.fh-row, .fh-card-more, .fh-scn-details):focus {
   outline-offset: -3px !important;
   box-shadow: inset 0 0 14px rgba(90, 169, 255, 0.45) !important;
 }

@@ -4,10 +4,11 @@
 // and ContextMenu (Menu); a held key repeats. One keydown listener on the window, in the capture phase, takes them
 // first, and a key it acts on goes no further (the scenario player's ←/→ do not fire as well). Two modes:
 // - UI: a control has the focus, ringed bold (remote.css). An arrow moves it to the nearest control that way (pickNext);
-//   a control that owns some arrows keeps them: a text field ←/→ (its caret), a slider ←/→, a settings tab ←/→. OK
-//   clicks it. Back is the app's Esc, one step back; then the focus goes to the rail button of the panel that closed,
-//   stays where it was, or goes to the first rail button. An arrow with nowhere to go, or Menu, hands the remote to the
-//   map. A modal dialog (Settings) keeps the focus inside it and its own Esc.
+//   a control that owns some arrows keeps them: a text field ←/→ (its caret), a slider ←/→, a settings tab ←/→. The
+//   box the focus is in (a panel, a card, the play bar) comes first. OK clicks it (a slider: its Space). Back is the
+//   app's Esc, one step back; then the focus goes to the rail button of the panel that closed, stays where it was, or
+//   goes to the first rail button. An arrow with nowhere to go, or Menu, hands the remote to the map. A modal dialog
+//   (Settings) keeps the focus inside it and its own Esc.
 // - Map: a crosshair at the centre and a hint at the bottom. The top-down map pans (a press a tenth of the view, a held
 //   arrow on and on) and zooms (OK in, OK held HOLD_MS out); the chase camera orbits (←/→), tilts (↑/↓) and comes
 //   closer or goes farther, through the orbit a mouse drives (?cam=). OK over an aircraft (in the chase, a traffic
@@ -23,9 +24,12 @@ export type Dir = 'up' | 'down' | 'left' | 'right'
 export type RemoteKey = Dir | 'ok' | 'back' | 'menu'
 export type Mode = 'ui' | 'map'
 export type Motion = Dir | 'in' | 'out'
-/** What has the focus, as the keys see it: a text field, a slider, a tab, the search box (a keyboard's), anything else. */
-export type Control = 'text' | 'range' | 'tab' | 'keyboard' | 'other'
-export type Action = 'pass' | 'none' | 'move' | 'click' | 'back' | 'map' | 'ui' | 'camera' | 'ok'
+/**
+ * What has the focus, as the keys see it: a text field, a slider, a tab, a box of text that scrolls, the search box (a
+ * keyboard's), anything else.
+ */
+export type Control = 'text' | 'range' | 'tab' | 'scroll' | 'keyboard' | 'other'
+export type Action = 'pass' | 'none' | 'move' | 'scroll' | 'click' | 'back' | 'map' | 'ui' | 'camera' | 'ok'
 
 export interface Box {
   x: number
@@ -45,9 +49,11 @@ const HELD_MS = 1000 // a held key repeats (after ~0.5 s, then ~30 times a secon
 export const PICK_PX = 40 // the crosshair's ring (remote.css), the square an OK looks for an aircraft in
 const RESTORE_PX = 120 // a lost focus goes to a control at most this far from where it was, else to the first rail button
 const WATCH_MS = 400
+const SCROLL_SHARE = 0.6 // ↑/↓ on a box of text scroll this much of what shows
 const EDGE_PX = 1 // boxes this far into each other still count as side by side (sub-pixel layout)
 const ACROSS_UP_DOWN = 2 // pickNext: weight of the gap across the way, moving up or down …
-const ACROSS_SIDEWAYS = 30 // … and sideways (the W3C spatial-navigation weights: a row's controls first)
+const ACROSS_SIDEWAYS = 30 // … and sideways (the W3C spatial-navigation weights) …
+const OUT_OF_ROW = 1e6 // … where, as in Android's FocusFinder, a control level with it always wins over one that is not
 const ALIGN = 0.01 // … and of the centres' offset across it, which only breaks ties
 
 /** ?tv=1: the kiosk's URL. */
@@ -69,7 +75,8 @@ export function remoteKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; 
 /**
  * The candidate the focus moves to from `from` going dir (its index), or -1 when none lies that way. A candidate must
  * lie wholly beyond from's edge that way (EDGE_PX of overlap allowed); the nearest wins by the gap along the way plus
- * the gap across it (0 where they overlap across) times ACROSS_*, ties to the best aligned.
+ * the gap across it (0 where they overlap across) times ACROSS_*, ties to the best aligned. Sideways, one level with
+ * from (overlapping across) beats any that is not.
  */
 export function pickNext(from: Box, cands: readonly Box[], dir: Dir): number {
   const vertical = dir === 'up' || dir === 'down'
@@ -86,7 +93,7 @@ export function pickNext(from: Box, cands: readonly Box[], dir: Dir): number {
     if (along < -EDGE_PX) continue
     const [b0, b1] = vertical ? [c.x, c.x + c.w] : [c.y, c.y + c.h]
     const gap = Math.max(0, b0 - a1, a0 - b1)
-    const score = Math.max(0, along) + gap * weight + Math.abs(a0 + a1 - b0 - b1) * 0.5 * ALIGN
+    const score = Math.max(0, along) + gap * weight + (!vertical && gap > 0 ? OUT_OF_ROW : 0) + Math.abs(a0 + a1 - b0 - b1) * 0.5 * ALIGN
     if (score < bestScore) {
       best = i
       bestScore = score
@@ -96,10 +103,11 @@ export function pickNext(from: Box, cands: readonly Box[], dir: Dir): number {
 }
 
 /**
- * What a remote key does. UI mode: the arrows move the focus (a text field, slider or tab keeps ←/→: pass), OK clicks
- * (a text field's Enter is its own), Back steps back (a text field's and a modal dialog's Esc are their own), Menu goes to
- * map mode (none from a modal dialog); the search box, which only a keyboard reaches, keeps every key but Menu. Map
- * mode: the arrows move the camera, OK is OK (a press or a hold: the caller times it), Back and Menu go back to UI mode.
+ * What a remote key does. UI mode: the arrows move the focus (a text field, slider or tab keeps ←/→: pass; a box of text
+ * scrolls with ↑/↓, to its end), OK clicks (a text field's Enter is its own), Back steps back (a text field's and a
+ * modal dialog's Esc are their own), Menu goes to map mode (none from a modal dialog); the search box, which only a
+ * keyboard reaches, keeps every key but Menu. Map mode: the arrows move the camera, OK is OK (a press or a hold: the
+ * caller times it), Back and Menu go back to UI mode.
  */
 export function remoteAction(key: RemoteKey, mode: Mode, ctx: { control: Control; modal: boolean }): Action {
   if (mode === 'map') return key === 'ok' ? 'ok' : key === 'back' || key === 'menu' ? 'ui' : 'camera'
@@ -108,8 +116,9 @@ export function remoteAction(key: RemoteKey, mode: Mode, ctx: { control: Control
   if (control === 'keyboard') return 'pass'
   if (key === 'back') return modal || control === 'text' ? 'pass' : 'back'
   if (key === 'ok') return control === 'text' ? 'pass' : 'click'
-  if ((key === 'left' || key === 'right') && control !== 'other') return 'pass'
-  return 'move'
+  const sideways = key === 'left' || key === 'right'
+  if (control === 'scroll') return sideways ? 'move' : 'scroll'
+  return sideways && control !== 'other' ? 'pass' : 'move'
 }
 
 export interface CameraStep {
@@ -154,9 +163,14 @@ export interface RemoteHandle {
 
 // What the arrows move the focus to. A list row (the aircraft list's) takes clicks but not the focus on the desktop:
 // focus() gives it a tabindex here.
-const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex], .fh-row'
+// So is a box of text that scrolls with nothing focusable in it (the card's details, a scenario's), which ↑/↓ scroll.
+const SCROLLS = '.fh-card-more, .fh-scn-details'
+const FOCUSABLE = `button, input, select, textarea, a[href], [tabindex], .fh-row, ${SCROLLS}`
 const NATIVE = 'button, input, select, textarea, a[href], [tabindex]'
 const SKIP = '.fh-search, a[target="_blank"]'
+// The boxes an arrow looks in first, before the rest of the page: from a panel's header ↓ goes into the panel, not to
+// the rail beside it.
+const GROUP = '.fh-panel, .fh-card, .fh-playbar, .fh-frame, .fh-outage-card, .fh-ending-card'
 const TEXT = new Set(['text', 'search', 'password', 'email', 'url', 'tel', 'number'])
 const HINTS: Readonly<Record<'map' | 'chase', readonly [string, string][]>> = {
   map: [['◀ ▲ ▼ ▶', 'move'], ['OK', 'zoom in / pick'], ['hold OK', 'zoom out'], ['Back', 'done']],
@@ -171,6 +185,7 @@ const boxOf = (el: Element): Box => {
 function control(el: Element | null): Control {
   if (!(el instanceof HTMLElement)) return 'other'
   if (el.closest('.fh-search') !== null) return 'keyboard'
+  if (el.matches(SCROLLS)) return 'scroll'
   if (el instanceof HTMLInputElement) return el.type === 'range' ? 'range' : TEXT.has(el.type) ? 'text' : 'other'
   if (el instanceof HTMLTextAreaElement || el.isContentEditable) return 'text'
   return el.getAttribute('role') === 'tab' ? 'tab' : 'other'
@@ -204,6 +219,23 @@ function reveal(el: HTMLElement): void {
     if (r.top < top) p.scrollTop -= top - r.top
     else if (r.bottom > bottom) p.scrollTop += Math.min(r.bottom - bottom, r.top - top)
   }
+}
+
+/**
+ * Scrolls a box of text a step (SCROLL_SHARE of what shows) that way: itself where it scrolls, else the box it scrolls
+ * in, until its edge that way shows. False when that edge already shows: the arrow moves on.
+ */
+function scrollText(el: HTMLElement, down: boolean): boolean {
+  let box: HTMLElement | null = el
+  while (box !== null && box !== document.body && !/^(auto|scroll)$/.test(getComputedStyle(box).overflowY)) box = box.parentElement
+  if (box === null || box === document.body) return false
+  const r = el.getBoundingClientRect()
+  const b = box.getBoundingClientRect()
+  const hidden = box === el ? (down ? el.scrollHeight - el.clientHeight - el.scrollTop : el.scrollTop)
+    : down ? r.bottom - (b.top + box.clientTop + box.clientHeight) : b.top + box.clientTop - r.top
+  if (hidden < 1) return false
+  box.scrollTop += (down ? 1 : -1) * Math.min(hidden, Math.round(box.clientHeight * SCROLL_SHARE))
+  return true
 }
 
 /** Mounts the crosshair and hint in ui and takes the remote's keys until destroy(). The focus starts on the rail. */
@@ -270,13 +302,16 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
     focus(near ?? (m === null ? firstRail() : (cands[0] ?? null)))
   }
 
-  /** The focus to the nearest control dir of it; false when there is none. */
+  /** The focus to the nearest control dir of it, in its own box first (GROUP); false when there is none. */
   function moveFocus(dir: Dir): boolean {
-    const a = document.activeElement
-    const cands = candidates().filter((c) => c !== a)
-    const i = pickNext(boxOf(a!), cands.map(boxOf), dir)
-    if (i >= 0) focus(cands[i])
-    return i >= 0
+    const a = document.activeElement!
+    const all = candidates().filter((c) => c !== a)
+    const group = a.closest(GROUP)
+    for (const cands of group === null ? [all] : [all.filter((c) => group.contains(c)), all]) {
+      const i = pickNext(boxOf(a), cands.map(boxOf), dir)
+      if (i >= 0) return (focus(cands[i]), true)
+    }
+    return false
   }
 
   function back(): void {
@@ -318,24 +353,27 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
     from = null
   }
 
-  // Camera motions under way: a press runs one for STEP_S; a held key keeps it running until its release (or HELD_MS
-  // with no repeat: a release that never came).
-  const moving = new Map<Motion, { until: number; held: boolean; seen: number }>()
+  // Camera motions under way, frame by frame: a press owes one STEP_S of motion, whatever the frame rate; a held key
+  // keeps it going until its release (or HELD_MS with no repeat: a release that never came).
+  const moving = new Map<Motion, { owedS: number; held: boolean; seen: number }>()
   let raf = 0
   let lastT = 0
   function run(m: Motion, held: boolean): void {
     const now = performance.now()
-    moving.set(m, { until: now + STEP_S * 1000, held, seen: now })
+    moving.set(m, { owedS: STEP_S, held, seen: now })
     if (raf !== 0) return
     lastT = now
     raf = requestAnimationFrame(tick)
   }
   function tick(t: number): void {
-    const dtS = Math.min(0.1, Math.max(0, (t - lastT) / 1000))
+    const dtS = Math.min(STEP_S, Math.max(0, (t - lastT) / 1000)) // a stall does not jump the camera
     lastT = t
     for (const [m, s] of moving) {
-      if (t < s.until || (s.held && t - s.seen < HELD_MS)) hooks.move(m, dtS)
-      else moving.delete(m)
+      const holding = s.held && t - s.seen < HELD_MS
+      const d = holding ? dtS : Math.min(dtS, s.owedS)
+      s.owedS = Math.max(0, s.owedS - dtS)
+      if (d > 0) hooks.move(m, d)
+      if (!holding && s.owedS === 0) moving.delete(m)
     }
     raf = moving.size > 0 ? requestAnimationFrame(tick) : 0
   }
@@ -381,13 +419,21 @@ export function mountRemote(ui: HTMLElement, hooks: RemoteHooks): RemoteHandle {
     if (mode === 'ui' && lost() && act !== 'back' && act !== 'map') return restore() // show where the focus is first
     const now = performance.now()
     switch (act) {
+      case 'scroll':
+        if (scrollText(document.activeElement as HTMLElement, key === 'down')) return
+      // falls through: at its end, the arrow moves on
       case 'move':
         // A held arrow stops at the last control; only a press goes on to the map.
         if (!moveFocus(key as Dir) && !e.repeat && modal() === null) toMap()
         return
-      case 'click':
-        if (!e.repeat) (document.activeElement as HTMLElement).click()
+      case 'click': {
+        if (e.repeat) return
+        const a = document.activeElement as HTMLElement
+        // A slider has nothing to click: OK is its Space (the play bar's scrubber and volume: play or pause).
+        if (control(a) === 'range') a.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }))
+        else a.click()
         return
+      }
       case 'back':
         if (!e.repeat) back()
         return
