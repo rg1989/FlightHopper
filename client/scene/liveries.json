@@ -26,7 +26,7 @@
   "ANE": "IBE"
  },
  "liveries": {
-  "_MIL": {"base": "#6c7277", "fin": "#6c7277", "engine": "#5d6368"},
+  "_MIL": {"base": "#6c7277", "fin": "#6c7277", "engine": "#5d6368", "wing": "#6c7277"},
   "UAL": {
    "base": "#f3f5f8",
    "belly": "#2a4a8f",

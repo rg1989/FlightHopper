@@ -39,6 +39,7 @@ test('a military aircraft without an airline livery flies in grey, not white; on
   assert.equal(liveryCode(null, null, false), null)
   assert.notEqual(liveryOf(MILITARY), WHITE)
   assert.notEqual(liveryOf(MILITARY).design.base, WHITE.design.base)
+  assert.equal(liveryOf(MILITARY).design.wing, liveryOf(MILITARY).design.base, 'grey wings too, not the airliners\' light grey')
 })
 
 test('a colours-only table livery draws the old regions: base, belly, fin, fin2, decals at the paint map boxes', () => {
@@ -63,7 +64,7 @@ test('Air Astana (KZR): white, its midnight-blue fin, light engines; colours onl
 test('table: colours are #rrggbb, aliases land on liveries, every decal file exists with a source', () => {
   const hex = /^#[0-9a-f]{6}$/
   for (const [code, l] of Object.entries(TABLE.liveries)) {
-    for (const k of ['base', 'belly', 'fin', 'fin2', 'engine'] as const) {
+    for (const k of ['base', 'belly', 'fin', 'fin2', 'engine', 'wing'] as const) {
       const v = l[k]
       if (v !== undefined) assert.match(v, hex, `${code}.${k}`)
     }

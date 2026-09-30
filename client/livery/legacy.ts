@@ -11,6 +11,7 @@ export interface LiveryEntry {
   fin: string
   fin2?: string
   engine?: string
+  wing?: string // wings and tailplane (default: the kit's light grey)
   title?: boolean // public/liveries/<code>-title.png
   finLogo?: boolean // public/liveries/<code>-fin.png
 }
@@ -25,6 +26,7 @@ export interface Flat {
   finUrl: string | null
   titleUrl: string | null
   bodyUrl: string | null // a scenario's body wrap over Paint.body
+  wing?: string
 }
 
 const FAR = 200 // metres: past any model's box
@@ -53,7 +55,7 @@ export function drawFlat(k: Kit, f: Flat): void {
 
 export function flatDesign(code: string, name: string, f: Flat): Design {
   return {
-    code, name, base: f.base, engineColor: f.engine,
+    code, name, base: f.base, engineColor: f.engine, wing: f.wing,
     side: (k) => drawFlat(k, f),
     engine: (k) => k.fill(f.engine),
   }
@@ -65,6 +67,7 @@ export function tableDesign(code: string, l: LiveryEntry, baseUrl: string): Desi
   return flatDesign(code, `${code} (colours)`, {
     base: l.base, belly: l.belly ?? l.base, fin: l.fin, fin2: l.fin2 ?? l.fin, engine: l.engine ?? l.base,
     finUrl: l.finLogo === true ? `${url}-fin.png` : null, titleUrl: l.title === true ? `${url}-title.png` : null, bodyUrl: null,
+    wing: l.wing,
   })
 }
 
