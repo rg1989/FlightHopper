@@ -119,6 +119,41 @@ test('flights in view: callsign, registration, type and airline match; a flight 
   assert.ok(top('la', [places, flights]).includes('flight:e80123'))
 })
 
+test('flights in view: the flight number on the ticket finds the callsign the aircraft sends (LY315 → ELY315)', () => {
+  assert.deepEqual(top('LY315', [flights]), ['flight:738abc'])
+  assert.deepEqual(top('ly 315', [flights]), ['flight:738abc'])
+  assert.deepEqual(top('LA705', [flights]), ['flight:e80123'])
+  const fz = flightCandidates([{ hex: '896608', info: info('896608', 'FDB8455', {}) }])
+  assert.equal(matchScore('FZ8455', fz[0]!), 100)
+})
+
+test('flights in view: every sensible way of typing FZ8455 puts it first, among look-alikes and places', () => {
+  const pool = flightCandidates([
+    { hex: '896608', info: info('896608', 'FDB8455', { reg: 'A6-FKR', typeCode: 'B38M', route: 'OMDB-OETB' }) },
+    { hex: '8965d1', info: info('8965d1', 'FDB1073', { reg: 'A6-FKF', typeCode: 'B38M', route: 'OMDB-LLBG' }) },
+    { hex: '896001', info: info('896001', 'FDB845', { typeCode: 'B38M' }) }, // FZ845: a prefix of FZ8455
+    { hex: '4b1801', info: info('4b1801', 'SWR8455', { typeCode: 'A320' }) }, // another airline's 8455
+    { hex: '738010', info: info('738010', 'ELY010', { reg: '4X-EDF', typeCode: 'B789' }) },
+  ])
+  const first = (q: string): string | undefined => top(q, [places, pool])[0]
+  for (const q of [
+    'FZ8455', 'fz8455', 'FZ 8455', 'fz-8455', 'FZ.8455', ' FZ8455 ', // the ticket
+    'FDB8455', 'fdb 8455', 'FDB-8455', // the callsign
+    'flydubai 8455', 'Flydubai 8455', 'Fly Dubai 8455', 'fly dubai 8455', // the airline and the number
+    'A6-FKR', 'a6fkr', '896608', // registration, transponder hex
+  ]) assert.equal(first(q), 'flight:896608', q)
+  // While typing, it is on the list from the airline code on, and first once the number is whole.
+  for (const q of ['FZ8', 'FZ84', 'FZ845']) assert.ok(top(q, [places, pool]).includes('flight:896608'), q)
+  assert.equal(first('FZ845'), 'flight:896001') // FZ845 is its own flight
+  // The number alone: both 8455s, flydubai's with them.
+  assert.deepEqual(top('8455', [places, pool]).slice(0, 2).sort(), ['flight:4b1801', 'flight:896608'])
+  // "flydubai" lists all three of its flights, and none of the others.
+  assert.deepEqual(top('flydubai', [places, pool]).filter((k) => k.startsWith('flight:')).sort(),
+    ['flight:896001', 'flight:8965d1', 'flight:896608'])
+  // Leading zeros: callsign ELY010 is LY010 on some tickets, LY10 on others.
+  for (const q of ['LY10', 'LY010', 'ly 10', 'ELY10', 'ELY010', 'El Al 10', 'Elal 10', 'ELAL 10']) assert.equal(first(q), 'flight:738010', q)
+})
+
 test('recordings and scenarios: by name, callsign, route or title; they play', () => {
   const rec: RecordingInfo = {
     file: '2026-09-30/002932Z-ITY810-4cae1d.jsonl', name: 'Rome evening', hex: '4cae1d', callsign: 'ITY810', reg: 'EI-IMX',

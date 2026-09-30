@@ -3,8 +3,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { AIRLINES_DAT, buildAirlines, formatAirlines, main } from './build-airlines.ts'
+import { dirname, join } from 'node:path'
+import { AIRLINES_DAT, buildAirlines, buildIata, formatAirlines, main } from './build-airlines.ts'
 
 // Real OpenFlights airlines.dat rows (copied 2026-09-22), reordered so the Swiss duplicate comes higher id first.
 // Columns: id, name, alias, IATA, ICAO, callsign, country, active; \N = null.
@@ -49,6 +49,10 @@ test('buildAirlines: defunct (N), lower-case n, N/A, \\N and junk codes are drop
   for (const code of ['ABE', 'LSM', 'N/A', '\\N', String.raw`\\'\\`]) assert.equal(Object.hasOwn(names, code), false, code)
 })
 
+test('buildIata: {ICAO: IATA} from the same rows, the IATA code a real 2-character one', () => {
+  assert.deepEqual(buildIata(DAT), { ELY: 'LY', SWR: 'LX', TYR: 'VO', UAE: 'EK' })
+})
+
 test('buildAirlines: no data rows → empty map', () => {
   assert.deepEqual(buildAirlines(''), {})
 })
@@ -77,6 +81,7 @@ test('main: downloads airlines.dat once into the cache and writes the JSON', asy
     assert.deepEqual(names, EXPECTED)
     assert.deepEqual(urls, [AIRLINES_DAT])
     assert.equal(readFileSync(out, 'utf8'), formatAirlines(EXPECTED))
+    assert.deepEqual(JSON.parse(readFileSync(join(dirname(out), 'airlines-iata.json'), 'utf8')), buildIata(DAT))
     assert.equal(readFileSync(join(cache, 'airlines.dat'), 'utf8'), DAT)
 
     const offline = (async () => {

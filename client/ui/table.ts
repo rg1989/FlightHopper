@@ -10,6 +10,7 @@
 // - a header click or a search re-sorts that copy at once;
 // - only the rows in the scroll viewport plus OVERSCAN exist in the DOM. Row i always uses row element i % poolSize,
 //   so scrolling rewrites only the rows that come into view, and a cell is written only when its text changes.
+import { flightNumbersOf } from '../../shared/airlines.ts'
 import type { FleetEntry } from '../types.ts'
 import { STALE_AGE_S } from './format.ts'
 import { icon } from './icons.ts'
@@ -95,14 +96,19 @@ export function sortRows(rows: readonly FleetEntry[], key: TableKey, desc: boole
 
 const has = (v: string | null | undefined, q: string): boolean => v != null && v.toLowerCase().includes(q)
 
-/** The rows whose callsign, hex, registration, type or squawk contains the query (trimmed, any case). New array. */
+/**
+ * The rows whose callsign, hex, registration, type or squawk contains the query (trimmed, any case), or whose ticket
+ * number does (FZ8455 is FDB8455; spaces and dashes aside). New array.
+ */
 export function filterRows(rows: readonly FleetEntry[], query: string): FleetEntry[] {
   const q = query.trim().toLowerCase()
   if (q === '') return rows.slice()
+  const qc = q.replace(/[\s-]+/g, '')
   const out: FleetEntry[] = []
   for (const e of rows) {
     const i = e.info
-    if (has(e.hex, q) || has(i?.callsign, q) || has(i?.reg, q) || has(i?.typeCode, q) || has(i?.squawk, q)) out.push(e)
+    if (has(e.hex, q) || has(i?.callsign, q) || has(i?.reg, q) || has(i?.typeCode, q) || has(i?.squawk, q) ||
+      flightNumbersOf(i?.callsign ?? null).some((n) => has(n, qc))) out.push(e)
   }
   return out
 }

@@ -1,14 +1,15 @@
 // client/search/search.ts
 // What the search box (ui/searchBox.ts) finds, and how it ranks it: one list, best first, each row with its kind.
 // - Places (public/search/places.json, tools/build-places.ts): airports with scheduled flights, cities of 15 000+ people,
-//   countries. Flights: only those in view (the fleet has nothing else). Recordings and scenarios: their lists.
+//   countries. Flights: only those in view (the fleet has nothing else), by callsign or ticket number (FZ8455 is
+//   FDB8455). Recordings and scenarios: their lists.
 // - A row's score is how well it matches (an exact code 100, an exact name 90, a name's initials 85 — "LA" is Los
 //   Angeles —, a name's start 75, a word's start 60, all the words' starts 55, inside a word 30; other names such as an
 //   airport's city count 0.85 of that) plus how much it matters (a big airport, a big city, a flight in view), plus 30
 //   when it was picked before.
 // - Past picks (localStorage, ui/searchBox.ts) keep only what a row shows and where it goes: a place still opens from
 //   them before the places load; a flight or a recording shows only while it is still there.
-import { airlineOf } from '../../shared/airlines.ts'
+import { airlineOf, flightNumbersOf, numberOf } from '../../shared/airlines.ts'
 import type { RecordingInfo } from '../../shared/api.ts'
 import { countryOf } from '../../shared/icaoCountry.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
@@ -167,15 +168,21 @@ export function placeCandidates(p: Places): Candidate[] {
 
 const route = (r: string | null): string => (r ?? '').replace(/\s*-\s*/g, '–')
 
+/** 'Fly Dubai 8455' and 'FlyDubai 8455': found by the airline as written or run together ('Elal 290'), the number, or both. */
+const withNumber = (airline: string | null, callsign: string | null): string[] =>
+  airline === null ? [] : [airline, airline.replace(/ /g, '')].map((a) => [a, numberOf(callsign)].filter(Boolean).join(' '))
+
 /** The flights in view. One without a callsign goes by its hex. */
 export function flightCandidates(entries: readonly { hex: string; info: AircraftInfo | null }[]): Candidate[] {
   return entries.map(({ hex, info: i }) => {
-    const airline = airlineOf(i?.callsign ?? null)
+    const cs = i?.callsign ?? null
+    const airline = airlineOf(cs)
     return candidate({
       key: `flight:${hex}`, kind: 'flight', label: i?.callsign ?? hex.toUpperCase(),
       sub: [airline, i?.typeCode, i?.reg, route(i?.route ?? null)].filter(Boolean).join(' · '), iso2: countryOf(hex)?.iso2 ?? null,
       go: { to: 'flight', hex },
-    }, { codes: [i?.callsign, i?.reg, hex, i?.typeCode], alt: [airline, i?.route] }, 18)
+    }, { codes: [i?.callsign, ...flightNumbersOf(cs), i?.reg, hex, i?.typeCode],
+      alt: [...withNumber(airline, cs), i?.route] }, 18)
   })
 }
 
@@ -189,7 +196,8 @@ export function recordingCandidates(list: readonly RecordingInfo[]): Candidate[]
       key: `recording:${r.file}`, kind: 'recording', label: r.name ?? r.callsign ?? r.hex.toUpperCase(),
       sub: [r.name === null ? null : r.callsign, route(r.route), day(at.getFullYear(), at.getMonth(), at.getDate())].filter(Boolean).join(' · '),
       iso2: countryOf(r.hex)?.iso2 ?? null, go: { to: 'play', id: recordingId(r.file) },
-    }, { codes: [r.callsign, r.reg, r.typeCode], names: [r.name], alt: [airlineOf(r.callsign), r.route] }, 16)
+    }, { codes: [r.callsign, ...flightNumbersOf(r.callsign), r.reg, r.typeCode], names: [r.name],
+      alt: [...withNumber(airlineOf(r.callsign), r.callsign), r.route] }, 16)
   })
 }
 

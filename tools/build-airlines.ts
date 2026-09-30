@@ -1,7 +1,10 @@
 // tools/build-airlines.ts
-// Builds shared/airlines.json ({ICAO airline designator: name}) from the OpenFlights airline database.
+// Builds shared/airlines.json ({ICAO airline designator: name}) and shared/airlines-iata.json ({ICAO: IATA}, for
+// ticket flight numbers: FZ8455 is the callsign FDB8455) from the OpenFlights airline database.
 //
 //   node tools/build-airlines.ts [--out shared/airlines.json] [--cache node_modules/.cache/openflights]
+//
+// airlines-iata.json goes next to --out.
 //
 // Source: https://openflights.org/data (airlines.dat), Open Database License 1.0; contents under the Database
 // Contents License 1.0. Attribution: "Airline names: OpenFlights (ODbL)". airlines.dat (~400 KB) is downloaded once
@@ -23,15 +26,24 @@ const COLUMNS = 'id,name,alias,iata,icao,callsign,country,active'
  * a wrong name on an old designator, and the upgrade path is a curated source (e.g. ICAO Doc 8585) when it matters.
  */
 export function buildAirlines(dat: string): Record<string, string> {
-  const best = new Map<string, { id: number; name: string }>()
+  return pick(dat, (r) => r.name)
+}
+
+/** {ICAO designator: IATA code} from the rows buildAirlines keeps; a row without a 2-character IATA code drops out. */
+export function buildIata(dat: string): Record<string, string> {
+  return pick(dat, (r) => (/^[A-Z0-9]{2}$/.test(r.iata) ? r.iata : ''))
+}
+
+function pick(dat: string, value: (r: Record<string, string>) => string): Record<string, string> {
+  const best = new Map<string, { id: number; v: string }>()
   for (const r of parseCsv(`${COLUMNS}\n${dat}`)) {
     const name = r.name.trim()
     if (r.active !== 'Y' || !/^[A-Z]{3}$/.test(r.icao) || name === '' || name === '\\N') continue
     const id = Number(r.id)
     const prev = best.get(r.icao)
-    if (!prev || id < prev.id) best.set(r.icao, { id, name })
+    if (!prev || id < prev.id) best.set(r.icao, { id, v: value({ ...r, name }) })
   }
-  return Object.fromEntries([...best].sort(([a], [b]) => (a < b ? -1 : 1)).map(([code, { name }]) => [code, name]))
+  return Object.fromEntries([...best].filter(([, { v }]) => v !== '').sort(([a], [b]) => (a < b ? -1 : 1)).map(([code, { v }]) => [code, v]))
 }
 
 /** JSON with one entry per line, so diffs of the committed file stay readable. */
@@ -68,6 +80,10 @@ export async function main(argv: string[], fetchFn: typeof fetch = fetch): Promi
   mkdirSync(dirname(values.out), { recursive: true })
   writeFileSync(values.out, text)
   console.log(`wrote ${values.out}: ${n} airlines, ${Buffer.byteLength(text)} bytes`)
+  const iata = buildIata(dat)
+  const iataOut = join(dirname(values.out), 'airlines-iata.json')
+  writeFileSync(iataOut, formatAirlines(iata))
+  console.log(`wrote ${iataOut}: ${Object.keys(iata).length} IATA codes`)
   return names
 }
 

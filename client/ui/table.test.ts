@@ -84,6 +84,17 @@ test('filterRows: case-insensitive substring of callsign, hex, registration, typ
   assert.deepEqual(hexes(filterRows(rows, 'kjfk')), []) // the route is not searched
 })
 
+test('filterRows: the ticket number finds the callsign (FZ8455 → FDB8455), spaces and dashes aside', () => {
+  const rows = [
+    entry('896608', {}, { callsign: 'FDB8455', reg: 'A6-FKR' }),
+    entry('738a1b', {}, { callsign: 'ELY001' }),
+    entry('4ca9f2', {}, { callsign: 'RYR12AB' }),
+  ]
+  for (const q of ['FZ8455', 'fz 8455', 'FZ-8455', 'FZ84', 'fdb 8455', '8455']) assert.deepEqual(hexes(filterRows(rows, q)), ['896608'], q)
+  for (const q of ['LY001', 'LY1', 'ly 1', 'ELY1']) assert.deepEqual(hexes(filterRows(rows, q)), ['738a1b'], q)
+  assert.deepEqual(hexes(filterRows(rows, 'FR12')), []) // an alphanumeric callsign has no ticket number to find
+})
+
 test('filterRows: an empty or blank query keeps every row, in a new array', () => {
   const rows = [entry('a'), entry('b')]
   for (const q of ['', '   ']) {
