@@ -94,6 +94,23 @@ test('no motion when parked on the ground (< 3 kt) or when track or speed is unk
   assert.equal(g('a00001').altFt, null)
 })
 
+test('on the ground with no track, the true heading steers: a taxiing aircraft moves and points nose first', () => {
+  // live LLBG surface reports carry true_heading and no track (738056, 2026-09-30: gs 18.5, track null, thdg 78.75)
+  const f = new Fleet()
+  f.ingest([
+    smp({ hex: 'a00001', onGround: true, altBaroFt: null, altGeomFt: null, gsKt: 18.5, trackDeg: null, trueHeadingDeg: 78.75 }),
+    smp({ hex: 'a00002', trackDeg: null, trueHeadingDeg: 78.75 }), // airborne: heading is not the track (wind)
+  ])
+  f.entries(T0 + 10_000)
+  const taxi = f.get('a00001')!
+  assert.equal(taxi.trackDeg, 78.75)
+  near(distanceNm(32, 34.8, taxi.lat, taxi.lon), (18.5 * 10) / 3600, 1e-9)
+  near(bearingDeg(32, 34.8, taxi.lat, taxi.lon), 78.75, 1e-6)
+  const air = f.get('a00002')!
+  assert.equal(air.trackDeg, null)
+  assert.equal(air.lat, 32)
+})
+
 test('altitude fields: altFt = baro ?? geom; hM = geom (v2 HAE) else baro + N; vsFpm = baro rate ?? geom rate', () => {
   const f = new Fleet()
   f.ingest([

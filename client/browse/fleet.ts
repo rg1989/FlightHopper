@@ -63,12 +63,13 @@ function load(slot: Slot, s: Sample): void {
   slot.lon = s.lon
   e.hM = heightM(s)
   e.altFt = s.altBaroFt ?? s.altGeomFt
+  // Surface reports carry true_heading and no track; a taxiing aircraft goes where its nose points (as Track.#reported).
+  const trk = s.trackDeg ?? (s.onGround ? s.trueHeadingDeg : null)
   e.onGround = s.onGround
-  e.trackDeg = s.trackDeg
+  e.trackDeg = trk
   e.gsKt = s.gsKt
   e.vsFpm = s.baroRateFpm ?? s.geomRateFpm
   e.quality = s.quality
-  const trk = s.trackDeg
   const gs = s.gsKt
   slot.moving = trk !== null && gs !== null && gs > 0 && !(s.onGround && gs < PARKED_KT)
   if (!slot.moving) return
