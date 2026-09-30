@@ -69,12 +69,69 @@
   overscroll-behavior: contain;
 }
 
-.fh-settings-section-t {
-  margin: 0 0 6px;
-  color: var(--fh-faint);
-  font: 600 10.5px/1.2 var(--fh-font);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+/* The tabs under the title: API keys, Controls. The chosen one underlined in the accent. */
+.fh-settings-tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--fh-hairline);
+}
+
+.fh-settings-tabs[hidden],
+.fh-settings-section[hidden] {
+  display: none;
+}
+
+.fh-settings-tab {
+  position: relative;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--fh-muted);
+  font: 600 13px/1 var(--fh-font);
+  cursor: pointer;
+}
+
+.fh-settings-tab:hover {
+  color: var(--fh-text);
+}
+
+.fh-settings-tab[aria-selected='true'] {
+  color: var(--fh-text);
+}
+
+.fh-settings-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: -1px;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--fh-accent);
+}
+
+.fh-settings-tab:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: -4px;
+  border-radius: 8px;
+}
+
+/* The shortcuts (info.css) inside the body's own padding. */
+.fh-settings-controls .fh-info-sec {
+  padding: 12px 0;
+}
+
+.fh-settings-controls .fh-info-sec:first-child {
+  padding-top: 0;
+}
+
+@media (pointer: coarse) {
+  .fh-settings-tab {
+    min-height: 44px;
+  }
 }
 
 .fh-settings-intro {

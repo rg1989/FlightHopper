@@ -5,10 +5,12 @@
 // imagery are built with the viewer, so a reload applies it. A key goes to its own provider only: the check sends it in
 // the Authorization header; in use, it travels in the URLs those services ask for (Esri's tiles take ?token=, Cesium
 // asks ion's asset endpoint with ?access_token=). It never goes into the app's own URL, a log or the page (an
-// .env.local key is never shown). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
-// X and a click on the backdrop close it.
+// .env.local key is never shown). A second tab, Controls, lists the keyboard shortcuts (info.ts; left out on touch
+// screens, opts.controls false). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
+// X and a click on the backdrop close it. It opens on the API keys tab unless asked otherwise.
 import { KEYS_KEY, keySources, readSavedKeys, writeSavedKeys, type KeySource, type SavedKeys } from '../config.ts'
 import { icon } from './icons.ts'
+import { mountInfoPanel } from './info.ts'
 import './settings.css'
 
 export type KeyId = 'arcgis' | 'ion'
@@ -110,10 +112,14 @@ export interface SettingsOpts {
   store: Storage | null // localStorage; null where it is blocked (nothing can be saved)
   fetch?: typeof fetch
   reload?: () => void
+  controls?: boolean // the Controls tab (the keyboard shortcuts); default true
 }
 
+export type SettingsTab = 'keys' | 'controls'
+
 export interface SettingsHandle {
-  open(): void
+  /** Opens on this tab (default: API keys). */
+  open(tab?: SettingsTab): void
   /** A key failed while the app used it: what fell back to its keyless source and why, on its status line. */
   setFallback(id: KeyId, what: KeyUse, why: string): void
   destroy(): void
@@ -156,10 +162,52 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   const body = h('div', 'fh-settings-body')
   const section = h('section', 'fh-settings-section')
   section.append(
-    h('h3', 'fh-settings-section-t', 'API keys'),
     h('p', 'fh-settings-intro', 'FlightHopper runs without keys, on Re:Earth terrain and EOX 10 m imagery. A key saved here stays in this browser, goes only to its own provider, and takes over from .env.local when the page reloads.'),
   )
-  body.append(section)
+  const controls = h('section', 'fh-settings-section fh-settings-controls')
+  mountInfoPanel(controls)
+  // The tabs, under the title (the WAI-ARIA tab pattern: ← → Home End move between them, the focus goes with the tab).
+  const tabList = h('div', 'fh-settings-tabs')
+  tabList.setAttribute('role', 'tablist')
+  tabList.setAttribute('aria-label', 'Settings')
+  const tabs: { id: SettingsTab; tab: HTMLButtonElement; panel: HTMLElement }[] = []
+  for (const [id, label, panel] of [['keys', 'API keys', section], ['controls', 'Controls', controls]] as const) {
+    if (id === 'controls' && opts.controls === false) continue
+    const tab = h('button', 'fh-settings-tab', label)
+    tab.type = 'button'
+    tab.id = `fh-settings-tab-${id}`
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-controls', `fh-settings-panel-${id}`)
+    panel.id = `fh-settings-panel-${id}`
+    panel.setAttribute('role', 'tabpanel')
+    panel.setAttribute('aria-labelledby', tab.id)
+    tab.addEventListener('click', () => show(id))
+    tabList.append(tab)
+    body.append(panel)
+    tabs.push({ id, tab, panel })
+  }
+  function show(id: SettingsTab, focus = false): void {
+    for (const t of tabs) {
+      const on = t.id === id
+      t.tab.setAttribute('aria-selected', String(on))
+      t.tab.tabIndex = on ? 0 : -1
+      t.panel.hidden = !on
+      if (on && focus) t.tab.focus()
+    }
+    body.scrollTop = 0
+  }
+  /** ← → Home End on a tab: the tab before or after it (round), the first or the last. */
+  function tabKey(e: KeyboardEvent): boolean {
+    const i = tabs.findIndex((t) => t.tab === e.target)
+    if (i < 0) return false
+    const n = tabs.length
+    const to = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i + n - 1) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1
+    if (to < 0) return false
+    e.preventDefault()
+    show(tabs[to].id, true)
+    return true
+  }
+  tabList.hidden = tabs.length < 2 // one tab: no tab row
 
   const foot = h('footer', 'fh-settings-foot')
   foot.hidden = true
@@ -169,7 +217,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   reloadIcon.append(icon('refresh', 16))
   reload.append(reloadIcon, h('span', '', 'Reload now'))
   foot.append(h('p', 'fh-settings-foot-t', 'Keys apply when the page reloads.'), reload)
-  box.append(head, body, foot)
+  box.append(head, tabList, body, foot)
   dialog.append(box)
   root.append(dialog)
 
@@ -311,7 +359,10 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   // While it is open, no key reaches the app's own handlers (Esc leaves the chase, T L X toggle the scene), wherever the
   // focus is: stopped on its way down, at the window. What keys do by default still happens: typing, Enter saving, and
   // Esc closing the dialog (the browser's, not a listener's).
-  const keep = (e: KeyboardEvent): void => e.stopPropagation()
+  const keep = (e: KeyboardEvent): void => {
+    e.stopPropagation() // stopped here, at the window, it reaches no element in the dialog either: the tabs' keys go now
+    tabKey(e)
+  }
   let downOnBackdrop = false // a drag that starts in the box and ends outside it is no backdrop click
   dialog.addEventListener('pointerdown', (e) => (downOnBackdrop = e.target === dialog))
   dialog.addEventListener('click', (e) => {
@@ -326,7 +377,8 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   })
 
   return {
-    open() {
+    open(tab = 'keys') {
+      show(tabs.some((t) => t.id === tab) ? tab : 'keys')
       if (dialog.open) return
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
       for (const k of keys) k.reset()

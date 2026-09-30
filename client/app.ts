@@ -60,7 +60,6 @@ import { FAILS_DOWN, mountOutage, outageFor } from './ui/outage.ts'
 import type { Lookup } from './ui/detail.ts'
 import { entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
-import { mountInfoPanel } from './ui/info.ts'
 import { mountMapKey } from './ui/mapKey.ts'
 import { mountRail } from './ui/rail.ts'
 import { PhotoCache } from './ui/photo.ts'
@@ -450,8 +449,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (!flightFrame.editing) traffic?.close()
       flightFrame.edit(!flightFrame.editing)
     } },
-    // The keys; not where there are none (a touch screen).
-    ...(matchMedia('(pointer: coarse)').matches ? [] : [{ id: 'controls', icon: 'keyboard', label: 'Keyboard shortcuts', short: 'Keys', group: 2, panel: { title: 'Keyboard shortcuts', mount: (b: HTMLElement) => mountInfoPanel(b) } } as const]),
     { id: 'settings', icon: 'settings', label: 'Settings', short: 'Settings', spot: 'corner', action: () => settings.open() },
     // Not where the page cannot go full screen (iPhone Safari).
     ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', spot: 'corner', action: () => toggleFullscreen() } as const] : []),
@@ -470,7 +467,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const imagery0 = badgeView(ionImagery ? { source: 'eox', fallback: ionImagery.why } : imageryStatus(cfg))
   statusPanel.setImagery(imagery0.text, imagery0.state)
   // The API keys (the rail's gear): saved in this browser, they win over .env.local at the next load.
-  const settings = mountSettings(ui, { env: import.meta.env, store })
+  // Its Controls tab lists the keyboard shortcuts; not where there are none (a touch screen).
+  const settings = mountSettings(ui, { env: import.meta.env, store, controls: !matchMedia('(pointer: coarse)').matches })
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased

@@ -1,5 +1,5 @@
 // client/ui/info.ts
-// The Controls panel: the keyboard shortcuts.
+// The keyboard shortcuts, in the Settings dialog's Controls tab (settings.ts).
 import './info.css'
 
 interface Section {
