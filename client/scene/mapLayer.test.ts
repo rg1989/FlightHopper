@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ImageryLayer, ImageryLayerCollection, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
 import type { Viewer } from 'cesium'
-import { OSM_CREDIT_HTML, OSM_URL, makeMapLayer } from './mapLayer.ts'
+import { DARK_URLS, OSM_CREDIT_HTML, OSM_URL, makeMapLayer } from './mapLayer.ts'
 
 /** Just the imagery collection, with a satellite-like base layer already in it. Nothing here touches the network. */
 function fakeViewer() {
@@ -12,10 +12,10 @@ function fakeViewer() {
   return { imageryLayers, base, viewer: { imageryLayers } as unknown as Viewer }
 }
 
-test('makeMapLayer: one OpenStreetMap layer on top of the base layer, standard tile URL, zoom ≤ 19', () => {
+test('makeMapLayer: the OpenStreetMap layer (and the dark one) on top of the base layer, standard tile URL, zoom ≤ 19', () => {
   const { imageryLayers, base, viewer } = fakeViewer()
   makeMapLayer(viewer)
-  assert.equal(imageryLayers.length, 2)
+  assert.equal(imageryLayers.length, 4)
   assert.equal(imageryLayers.get(0), base, 'the satellite layer stays underneath')
   const provider = imageryLayers.get(1).imageryProvider as OpenStreetMapImageryProvider
   assert.ok(provider instanceof OpenStreetMapImageryProvider)
@@ -59,11 +59,28 @@ test('destroy removes only the street map and is idempotent; another tile server
   const { imageryLayers, base, viewer } = fakeViewer()
   const map = makeMapLayer(viewer)
   const layer = imageryLayers.get(1)
+  const darkLayers = [imageryLayers.get(2), imageryLayers.get(3)]
   map.destroy()
   map.destroy()
   assert.equal(imageryLayers.length, 1)
+  assert.ok(darkLayers.every((l) => l.isDestroyed()))
   assert.equal(imageryLayers.get(0), base)
   assert.equal(layer.isDestroyed(), true)
   makeMapLayer(viewer, 'https://tiles.example.org/osm')
   assert.equal((imageryLayers.get(1).imageryProvider as OpenStreetMapImageryProvider).url, 'https://tiles.example.org/osm/{z}/{x}/{y}.png')
+})
+
+test('dark: swaps the light layer for Esri Dark Gray (base + labels), only while shown; the hidden theme loads no tiles', () => {
+  const { imageryLayers, viewer } = fakeViewer()
+  const map = makeMapLayer(viewer)
+  const [light, dark, labels] = [imageryLayers.get(1), imageryLayers.get(2), imageryLayers.get(3)]
+  assert.deepEqual([dark, labels].map((l) => (l.imageryProvider as UrlTemplateImageryProvider).url), DARK_URLS)
+  assert.equal(labels.show, dark.show)
+  assert.deepEqual([map.dark, light.show, dark.show], [false, true, false])
+  map.dark = true
+  assert.deepEqual([map.dark, light.show, dark.show], [true, false, true])
+  map.show = false
+  assert.deepEqual([map.show, light.show, dark.show], [false, false, false])
+  map.show = true
+  assert.deepEqual([light.show, dark.show], [false, true])
 })

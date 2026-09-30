@@ -18,29 +18,60 @@ const OSM_MAX_ZOOM = 19 // the standard layer's deepest zoom; browse never zooms
 const BRIGHTNESS = 0.85
 const SATURATION = 0.6
 
+// The dark theme: Esri's Dark Gray Canvas, its base and its labels on top, keyless on services.arcgisonline.com with
+// CORS * like the roads overlays (checked 2026-09-30; CARTO's Dark Matter now watermarks keyless tiles). Drawn as is:
+// the altitude colours already stand out on it. Copyright: Esri, HERE, Garmin, (c) OpenStreetMap contributors.
+export const DARK_URLS = [
+  'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+]
+const DARK_MAX_ZOOM = 16 // the canvas has no detail past it; Cesium upsamples (browse stops near z15)
+
 export interface MapLayer {
   show: boolean
   destroy(): void
+}
+
+/** The street map: show, and dark picks its theme. Only the shown theme's layers load tiles. */
+export interface StreetMap extends MapLayer {
+  dark: boolean
 }
 
 /**
  * Adds the street map on top of the viewer's imagery (the satellite base layer stays underneath). It starts shown, because
  * the app starts in browse: set show = false for chase. url replaces the OSM tile server ({z}/{x}/{y}.png is appended).
  */
-export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): MapLayer {
+export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
   const provider = new OpenStreetMapImageryProvider({ url, maximumLevel: OSM_MAX_ZOOM, credit: new Credit(OSM_CREDIT_HTML, true) })
   const layer = viewer.imageryLayers.addImageryProvider(provider)
   layer.brightness = BRIGHTNESS
   layer.saturation = SATURATION
+  const darkLayers = DARK_URLS.map((u) => viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url: u, maximumLevel: DARK_MAX_ZOOM })))
+  let show = true
+  let dark = false
+  const apply = (): void => {
+    layer.show = show && !dark
+    for (const l of darkLayers) l.show = show && dark
+  }
+  apply()
   return {
     get show(): boolean {
-      return layer.show
+      return show
     },
     set show(v: boolean) {
-      layer.show = v
+      show = v
+      apply()
+    },
+    get dark(): boolean {
+      return dark
+    },
+    set dark(v: boolean) {
+      dark = v
+      apply()
     },
     destroy(): void {
       viewer.imageryLayers.remove(layer, true) // a second call finds nothing to remove
+      for (const l of darkLayers) viewer.imageryLayers.remove(l, true)
     },
   }
 }

@@ -74,11 +74,12 @@ function mount(prefs: ScenePrefs) {
   const note = all(root).find((e) => e.className === 'fh-scene-note')!
   const spinner = all(root).find((e) => e.className === 'fh-spin')!
   const [roads, wx] = ['Roads & places', 'Weather'].map(sw)
-  const [mapB, satB] = all(root).filter((e) => e.className === 'fh-seg-b')
+  const [mapB, satB, lightB, darkB] = all(root).filter((e) => e.className === 'fh-seg-b')
+  const theme = all(root).find((e) => e.attrs['aria-label'] === 'Map theme')!
   const wxLine = all(root).find((e) => e.className === 'fh-wx-line')!
   const wxMore = all(root).find((e) => e.className === 'fh-wx-more')!
   const view = all(root).find((e) => e.className === 'fh-scene-view')!
-  return { root, topo, light, glass, roads, wx, mapB, satB, wxLine, wxMore, view, t, changes, checked, note, spinner }
+  return { root, topo, light, glass, roads, wx, mapB, satB, lightB, darkB, theme, wxLine, wxMore, view, t, changes, checked, note, spinner }
 }
 
 test('switch rows: Roads (R), Weather (W), 3-D terrain (T), Sun (L), See-through buildings (X), real buttons with a label each', () => {
@@ -192,6 +193,23 @@ test('the base picker sets the pref of the view on screen: mapTop top-down, mapC
   assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, mapChase: true })
   t.update({ ...DEFAULT_PREFS, mapChase: true })
   assert.equal(mapB.attrs['aria-pressed'], 'true')
+})
+
+test('the map theme, Light or Dark, shows under Map only and sets dark for both views', () => {
+  const { lightB, darkB, theme, satB, t, changes } = mount({ ...DEFAULT_PREFS })
+  assert.deepEqual([theme.hidden, lightB.attrs['aria-pressed'], darkB.attrs['aria-pressed']], [false, 'true', 'false'])
+  lightB.click() // already light
+  assert.equal(changes.length, 0)
+  darkB.click()
+  assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, dark: true })
+  t.update({ ...DEFAULT_PREFS, dark: true })
+  assert.deepEqual([lightB.attrs['aria-pressed'], darkB.attrs['aria-pressed']], ['false', 'true'])
+  satB.click()
+  t.update({ ...DEFAULT_PREFS, dark: true, mapTop: false })
+  assert.equal(theme.hidden, true) // the satellite has no theme
+  t.setChasing(true)
+  t.update({ ...DEFAULT_PREFS, dark: true, mapTop: false, mapChase: true })
+  assert.equal(theme.hidden, false)
 })
 
 test('weather: its legend shows while on, and setWeather writes the status line', () => {

@@ -6,7 +6,8 @@
 // the Authorization header; in use, it travels in the URLs those services ask for (Esri's tiles take ?token=, Cesium
 // asks ion's asset endpoint with ?access_token=). It never goes into the app's own URL, a log or the page (an
 // .env.local key is never shown). A second tab, Controls, lists the keyboard shortcuts (info.ts; left out on touch
-// screens, opts.controls false). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
+// screens, opts.controls false). A third, Display, picks the map's theme, Light or Dark (the same pref as the Layers
+// panel's; the app owns it: onDark asks, setDark shows). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
 // X and a click on the backdrop close it. It opens on the API keys tab unless asked otherwise.
 import { KEYS_KEY, keySources, readSavedKeys, writeSavedKeys, type KeySource, type SavedKeys } from '../config.ts'
 import { icon } from './icons.ts'
@@ -113,15 +114,19 @@ export interface SettingsOpts {
   fetch?: typeof fetch
   reload?: () => void
   controls?: boolean // the Controls tab (the keyboard shortcuts); default true
+  dark?: boolean // the map's theme at mount (Display tab)
+  onDark?(dark: boolean): void
 }
 
-export type SettingsTab = 'keys' | 'controls'
+export type SettingsTab = 'keys' | 'display' | 'controls'
 
 export interface SettingsHandle {
   /** Opens on this tab (default: API keys). */
   open(tab?: SettingsTab): void
   /** A key failed while the app used it: what fell back to its keyless source and why, on its status line. */
   setFallback(id: KeyId, what: KeyUse, why: string): void
+  /** The map's theme changed (here or in the Layers panel). */
+  setDark(dark: boolean): void
   destroy(): void
 }
 
@@ -166,12 +171,32 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   )
   const controls = h('section', 'fh-settings-section fh-settings-controls')
   mountInfoPanel(controls)
+  // Display: the map theme, as the Layers panel's Light | Dark.
+  const display = h('section', 'fh-settings-section')
+  const themeLabel = h('div', 'fh-key-title', 'Map theme')
+  themeLabel.id = 'fh-settings-theme'
+  const theme = h('div', 'fh-seg fh-settings-seg')
+  theme.setAttribute('role', 'group')
+  theme.setAttribute('aria-labelledby', themeLabel.id)
+  let dark = opts.dark ?? false
+  const themeBtns = ([['Light', false], ['Dark', true]] as const).map(([text, on]) => {
+    const b = h('button', 'fh-seg-b', text)
+    b.type = 'button'
+    b.addEventListener('click', () => on !== dark && opts.onDark?.(on))
+    theme.append(b)
+    return { b, on }
+  })
+  const showDark = (): void => {
+    for (const { b, on } of themeBtns) b.setAttribute('aria-pressed', String(on === dark))
+  }
+  showDark()
+  display.append(themeLabel, theme, h('p', 'fh-settings-intro', 'The street map in either view. Also in the Layers panel, under Map.'))
   // The tabs, under the title (the WAI-ARIA tab pattern: ← → Home End move between them, the focus goes with the tab).
   const tabList = h('div', 'fh-settings-tabs')
   tabList.setAttribute('role', 'tablist')
   tabList.setAttribute('aria-label', 'Settings')
   const tabs: { id: SettingsTab; tab: HTMLButtonElement; panel: HTMLElement }[] = []
-  for (const [id, label, panel] of [['keys', 'API keys', section], ['controls', 'Controls', controls]] as const) {
+  for (const [id, label, panel] of [['keys', 'API keys', section], ['display', 'Display', display], ['controls', 'Controls', controls]] as const) {
     if (id === 'controls' && opts.controls === false) continue
     const tab = h('button', 'fh-settings-tab', label)
     tab.type = 'button'
@@ -390,6 +415,10 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       if (!f.what.includes(what)) f.what.push(what)
       failures.set(id, f)
       for (const k of keys) k.sync()
+    },
+    setDark(on) {
+      dark = on
+      showDark()
     },
     destroy() {
       window.removeEventListener('keydown', keep, true)

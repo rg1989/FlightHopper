@@ -160,6 +160,10 @@
   font: 600 13.5px/1.3 var(--fh-font);
 }
 
+.fh-seg.fh-settings-seg {
+  margin: 8px 0 10px; /* .fh-seg (sceneToggles.css) is inset for the Layers panel */
+}
+
 .fh-key-link {
   display: inline-flex;
   flex: none;

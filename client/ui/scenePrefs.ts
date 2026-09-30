@@ -1,15 +1,15 @@
 // client/ui/scenePrefs.ts
 /**
- * The user's scene toggles (design D11) and map layers: the URL (?topo=0|1, ?light, ?glass, ?mapTop, ?mapChase, ?roads,
- * ?wx) wins over localStorage['fh.scene.v1'], which wins over the defaults (terrain and sun on, buildings solid, the street
- * map top-down and the satellite in the chase, no roads overlay, no weather). Pure: the app passes location.search, the stored string and the storage, so Node
+ * The user's scene toggles (design D11) and map layers: the URL (?topo=0|1, ?light, ?glass, ?mapTop, ?mapChase, ?dark,
+ * ?roads, ?wx) wins over localStorage['fh.scene.v1'], which wins over the defaults (terrain and sun on, buildings solid, the street
+ * map top-down (light) and the satellite in the chase, no roads overlay, no weather). Pure: the app passes location.search, the stored string and the storage, so Node
  * tests need no DOM. Reading localStorage itself can throw (storage blocked), so the app guards that read.
  */
 import type { ScenePrefs } from '../types.ts'
 
 export const PREFS_KEY = 'fh.scene.v1'
 export const DEFAULT_PREFS: ScenePrefs = Object.freeze({
-  topo: true, light: true, glass: false, mapTop: true, mapChase: false, roads: false, wx: false,
+  topo: true, light: true, glass: false, mapTop: true, mapChase: false, dark: false, roads: false, wx: false,
 })
 export const PREF_KEYS = Object.keys(DEFAULT_PREFS) as (keyof ScenePrefs)[]
 

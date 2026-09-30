@@ -1,6 +1,6 @@
 // client/ui/sceneToggles.ts
 // The Layers panel (the square under the rail). Map: the base for the view on screen, Map or Satellite (M; the top-down
-// view and the chase each keep their own), Roads & places over the satellite (R), Weather on the top-down map (W).
+// view and the chase each keep their own), the map's theme under Map, Light or Dark (both views; Settings › Display too), Roads & places over the satellite (R), Weather on the top-down map (W).
 // 3-D scene (design D11): a switch row each for 3-D terrain (T), Sun (L) and See-through buildings (X). Each row has
 // its icon and key. A click asks the app for the toggled prefs through onChange and changes nothing itself; update()
 // only re-renders. setBusy(true) shows a spinner on the terrain row while the relief grows or sinks; setWeather() shows
@@ -22,7 +22,7 @@ export interface SceneTogglesHandle {
   destroy(): void
 }
 
-type Key = Exclude<keyof ScenePrefs, 'mapTop' | 'mapChase'>
+type Key = Exclude<keyof ScenePrefs, 'mapTop' | 'mapChase' | 'dark'>
 interface Row { key: Key; icon: IconName; label: string; hint: string; shortcut: string }
 const LAYER_ROWS: Row[] = [
   { key: 'roads', icon: 'road', label: 'Roads & places', hint: 'Roads, streets and city names over the satellite', shortcut: 'R' },
@@ -87,19 +87,28 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   const seg = h('div', 'fh-seg')
   seg.setAttribute('role', 'group')
   seg.setAttribute('aria-label', 'Base map')
-  const segBtn = (text: string, map: boolean): HTMLButtonElement => {
+  const segBtn = (into: HTMLElement, text: string, key: () => 'mapTop' | 'mapChase' | 'dark', on: boolean): HTMLButtonElement => {
     const b = h('button', 'fh-seg-b', text)
     b.type = 'button'
-    b.addEventListener('click', () => prefs[baseKey(chasing)] !== map && opts.onChange({ ...prefs, [baseKey(chasing)]: map }))
-    seg.append(b)
+    b.addEventListener('click', () => prefs[key()] !== on && opts.onChange({ ...prefs, [key()]: on }))
+    into.append(b)
     return b
   }
-  const mapBtn = segBtn('Map', true)
-  const satBtn = segBtn('Satellite', false)
+  const mapBtn = segBtn(seg, 'Map', () => baseKey(chasing), true)
+  const satBtn = segBtn(seg, 'Satellite', () => baseKey(chasing), false)
+  // The street map's theme, only while the view shows the map.
+  const theme = h('div', 'fh-seg')
+  theme.setAttribute('role', 'group')
+  theme.setAttribute('aria-label', 'Map theme')
+  const lightBtn = segBtn(theme, 'Light', () => 'dark', false)
+  const darkBtn = segBtn(theme, 'Dark', () => 'dark', true)
   const showBase = (): void => {
     const map = prefs[baseKey(chasing)]
     mapBtn.setAttribute('aria-pressed', String(map))
     satBtn.setAttribute('aria-pressed', String(!map))
+    theme.hidden = !map
+    lightBtn.setAttribute('aria-pressed', String(!prefs.dark))
+    darkBtn.setAttribute('aria-pressed', String(prefs.dark))
     baseView.textContent = chasing ? 'Chase view' : 'Top-down view'
   }
   showBase()
@@ -116,7 +125,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   wxLine.hidden = true
   wxMore.append(legend, wxLine)
   wxMore.hidden = !prefs.wx
-  layers.append(baseHead, seg, roadsRow, wxRow, wxMore)
+  layers.append(baseHead, seg, theme, roadsRow, wxRow, wxMore)
 
   // 3-D scene.
   const scene = h('div', 'fh-scene')
@@ -132,7 +141,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
       for (const r of ROWS) {
         if (next[r.key] !== prefs[r.key]) switches.get(r.key)!.setAttribute('aria-checked', String(next[r.key]))
       }
-      const base = next[baseKey(chasing)] !== prefs[baseKey(chasing)]
+      const base = next[baseKey(chasing)] !== prefs[baseKey(chasing)] || next.dark !== prefs.dark
       if (next.wx !== prefs.wx) wxMore.hidden = !next.wx
       prefs = { ...next }
       if (base) showBase()

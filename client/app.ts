@@ -475,7 +475,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   statusPanel.setImagery(imagery0.text, imagery0.state)
   // The API keys (the rail's gear): saved in this browser, they win over .env.local at the next load.
   // Its Controls tab lists the keyboard shortcuts; not where there are none (a touch screen).
-  const settings = mountSettings(ui, { env: import.meta.env, store, controls: !matchMedia('(pointer: coarse)').matches })
+  const settings = mountSettings(ui, {
+    env: import.meta.env, store, controls: !matchMedia('(pointer: coarse)').matches,
+    dark: prefs.dark, onDark: (dark) => setPrefs({ ...prefs, dark }),
+  })
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
   // Airports, cities, countries, the flights in view, recordings and scenarios (ui/searchBox.ts): top centre, / to focus.
@@ -571,6 +574,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
     map.show = onMap
+    map.dark = prefs.dark
     roads.show = prefs.roads && !onMap
     weather.show = prefs.wx && !chasing
     if (chasing && prefs.wx) toggles.setWeather('On the top-down map, for now')
@@ -736,6 +740,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     applyLayers()
     writeScenePrefs(next, store)
     toggles.update(next)
+    settings.setDark(next.dark)
   }
 
   /**
