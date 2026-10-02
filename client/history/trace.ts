@@ -5,6 +5,7 @@
 import type { TraceReply } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Sample } from '../../shared/types.ts'
+import { callsignAt } from './aircraftDay.ts'
 
 const FT = 0.3048
 
@@ -19,7 +20,10 @@ export interface TracePoint {
 
 const altOf = (a: number | 'g' | null): number | null => (typeof a === 'number' ? a : null)
 
-/** Every point as a Sample, in time order. Unknown fields null, as the files do not carry them. */
+/**
+ * Every point as a Sample, in time order, each with the callsign the aircraft sent at its time. Unknown fields null, as the
+ * files do not carry them.
+ */
 export function traceSamples(tr: TraceReply): Sample[] {
   return tr.t.map((t, i) => {
     const tMs = Math.round(tr.t0Ms + t * 1000)
@@ -27,7 +31,7 @@ export function traceSamples(tr: TraceReply): Sample[] {
       hex: tr.hex, tMs, rxMs: tMs, lat: tr.lat[i], lon: tr.lon[i], onGround: tr.alt[i] === 'g',
       altBaroFt: altOf(tr.alt[i]), altGeomFt: null, gsKt: tr.gs[i], trackDeg: tr.trk[i], trueHeadingDeg: null,
       rollDeg: tr.roll[i], baroRateFpm: tr.vs[i], geomRateFpm: null, navQnhHpa: null, version: null, nic: null,
-      quality: 'adsb2', nM: tr.nM[i], callsign: tr.callsign, typeCode: tr.typeCode, reg: tr.reg,
+      quality: 'adsb2', nM: tr.nM[i], callsign: callsignAt(tr, tMs), typeCode: tr.typeCode, reg: tr.reg,
     }
   })
 }

@@ -284,6 +284,32 @@ test('info takes the newest held slot’s callsign and squawk, each from an olde
   assert.equal(i.squawk, '7000')
 })
 
+test('info gives the type the server knows: the newest held slot’s, whatever order the slots were added in; null when none has one', () => {
+  const row: Pt[] = [[0, 32, 34.8, 1000, 100], [10, 32, 34.81, 1000, 100]]
+  const f = new HistoryFeed()
+  f.add(slot([track('a1b2c3', row, { type: 'A20N' }), track('def456', row)], T1), HOME) // the newer slot first
+  f.add(slot([track('a1b2c3', row, { type: 'A320' }), track('def456', row)], T0), HOME)
+  assert.equal(f.info('a1b2c3')!.typeCode, 'A20N', 'the newest wins')
+  assert.equal(f.info('def456')!.typeCode, null, 'no slot knows it')
+  assert.equal(f.info('def456')!.callsign, null, 'and nothing else changed with it')
+})
+
+test('info’s type comes from an older slot when the newer one has none (an address the table lacked then), though it has the rest', () => {
+  const row: Pt[] = [[0, 32, 34.8, 1000, 100], [10, 32, 34.81, 1000, 100]]
+  const f = new HistoryFeed()
+  f.add(slot([track('a1b2c3', row, { type: 'B738', callsign: 'OLD1', squawk: '7000' })], T0), HOME)
+  f.add(slot([track('a1b2c3', row, { type: null, callsign: 'NEW2', squawk: '2000' })], T1), HOME)
+  const i = f.info('a1b2c3')!
+  assert.deepEqual([i.typeCode, i.callsign, i.squawk], ['B738', 'NEW2', '2000'], 'each from the newest slot that has one')
+})
+
+test('a track from a server older than the type field has no type: null, not undefined', () => {
+  const old = { ...track('a1b2c3', [[0, 32, 34.8, 1000, 100]]), type: undefined } as unknown as HistoryTrack
+  const f = new HistoryFeed()
+  f.add(slot([old]), HOME)
+  assert.equal(f.info('a1b2c3')!.typeCode, null)
+})
+
 test('covers: a slot held for a circle covers a circle that lies wholly inside it', () => {
   const f = new HistoryFeed()
   f.add(slot([]), HOME) // 32, 34.8, 100 nm

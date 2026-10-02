@@ -20,6 +20,14 @@ test('a trace becomes samples in time order, with its identity and the geoid N o
   assert.deepEqual([s[1].hex, s[1].callsign, s[1].reg, s[1].typeCode, s[1].rxMs], ['4691c4', 'AEE4266', 'SX-DND', 'A320', s[1].tMs])
 })
 
+test('each sample carries the callsign the aircraft sent at its time, not the leg’s last', () => {
+  const renamed: TraceReply = { ...TR, callsign: 'AEE4267', calls: [[0, 'AEE4266'], [4.5, 'AEE4267']] }
+  assert.deepEqual(traceSamples(renamed).map((x) => x.callsign), ['AEE4266', 'AEE4267', 'AEE4267'], 'the point at the change has the new one')
+  const late: TraceReply = { ...TR, callsign: 'AEE4267', calls: [[4.5, 'AEE4266'], [9, 'AEE4267']] } // heard first 4.5 s in
+  assert.deepEqual(traceSamples(late).map((x) => x.callsign), ['AEE4266', 'AEE4266', 'AEE4267'], 'before the first call: the first')
+  assert.deepEqual(traceSamples({ ...TR, callsign: 'AEE4267', calls: [] }).map((x) => x.callsign), ['AEE4267', 'AEE4267', 'AEE4267'], 'no calls: the leg’s')
+})
+
 test('the path points carry the time, the altitude for the colour and the height drawn (baro + N, ground: N)', () => {
   const p = tracePath(TR)
   assert.deepEqual(p.map((x) => [x.tMs, x.altFt, x.onGround]), [[1_790_086_432_000, null, true], [1_790_086_436_500, 37000, false], [1_790_086_441_000, null, false]])

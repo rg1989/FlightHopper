@@ -190,8 +190,9 @@ export class HistoryFeed {
   }
 
   /**
-   * What the files know of it: callsign and squawk (the rest null, military false, route null), each from the newest held
-   * slot that has one; null when no held slot has the hex. A fresh object each call.
+   * What the files know of it: callsign, squawk and type (HistoryTrack.type: the server's address table gave it), each from
+   * the newest held slot that has one; the rest null, military false, route null. Null when no held slot has the hex. A
+   * fresh object each call.
    * ponytail: no time argument, so it answers from the newest held slot whatever the replay time: a callsign (or squawk)
    * that changed between held slots shows the later one. Upgrade: take the replay time and prefer the slot that holds it.
    */
@@ -199,17 +200,19 @@ export class HistoryFeed {
     let found = false
     let callsign: string | null = null
     let squawk: string | null = null
+    let typeCode: string | null = null
     for (let i = this.#order.length - 1; i >= 0; i--) {
       const r = this.#order[i].byHex.get(hex)
       if (r === undefined) continue
       found = true
       callsign ??= r.tr.callsign
       squawk ??= r.tr.squawk
-      if (callsign !== null && squawk !== null) break
+      typeCode ??= r.tr.type ?? null // a server older than the field sends none
+      if (callsign !== null && squawk !== null && typeCode !== null) break
     }
     if (!found) return null
     return {
-      hex, callsign, reg: null, typeCode: null, category: null, squawk, emergency: null, military: false, route: null,
+      hex, callsign, reg: null, typeCode, category: null, squawk, emergency: null, military: false, route: null,
     }
   }
 
