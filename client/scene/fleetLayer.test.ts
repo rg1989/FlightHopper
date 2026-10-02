@@ -181,6 +181,72 @@ test('entries older than their staleS are hidden, and shown again when fresh', (
   assert.equal(bb(f, 'bbbbbb').show, true)
 })
 
+// A ghost: History's selected aircraft where it was last heard (client/types.ts FleetEntry.ghost).
+/** The colour with its alpha put to 1: what an altitude colour looks like faded. */
+const opaque = (c: Color): Color => new Color(c.red, c.green, c.blue, 1)
+
+test('a ghost is placed whatever its age and drawn at about 45% opacity in its altitude colour; an ordinary entry is as ever', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const aged = { ageS: 7_200, staleS: 60 } // two hours since it was heard: an ordinary entry that old is hidden
+  layer.update([fe('aaaaaa', { ...aged, altFt: 12_000, ghost: true, lat: 47, lon: 11 }), fe('bbbbbb', { ...aged, lat: 48 }), fe('cccccc', { lat: 49, altFt: 12_000 })], null, null)
+  const [a, c] = [bb(f, 'aaaaaa'), bb(f, 'cccccc')]
+  assert.equal(a.show, true, 'shown at any age')
+  assert.ok(Cartesian3.equalsEpsilon(layer.positionOf('aaaaaa')!, Cartesian3.fromDegrees(11, 47, 10_000), 0, 1e-6), 'placed where it was heard')
+  assert.equal(bb(f, 'bbbbbb').show, false, 'an ordinary entry of that age stays hidden')
+  assert.equal(layer.positionOf('bbbbbb'), undefined)
+  near(a.color.alpha, 0.45, 1e-6, 'about 45% opaque')
+  assert.ok(opaque(a.color).equalsEpsilon(Color.fromCssColorString(altitudeColor(12_000, false)), 1e-6), 'its altitude colour kept')
+  assert.equal(c.color.alpha, 1, 'an ordinary entry is opaque')
+  assert.ok(c.color.equalsEpsilon(Color.fromCssColorString(altitudeColor(12_000, false)), 1e-6))
+  assert.equal(a.scale, 1, 'not selected: its own size')
+})
+
+test('a selected ghost keeps the selected ring and size', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  layer.update([fe('aaaaaa', { ageS: 7_200, ghost: true })], 'aaaaaa', null)
+  const a = bb(f, 'aaaaaa')
+  assert.equal(a.scale, SELECTED_SCALE)
+  assert.equal(halo(f).show, true)
+  assert.ok(halo(f).position.equals(a.position), 'the ring sits on it')
+  assert.equal(halo(f).id, 'aaaaaa')
+  assert.equal(label(f).show, true, 'and its label')
+  layer.update([fe('aaaaaa', { ageS: 7_200, ghost: true })], null, null)
+  assert.equal(halo(f).show, false, 'deselected: no ring')
+})
+
+test('a ghost keeps the colour of the ground and of an unknown altitude, faded as well', () => {
+  const f = fakeViewer(100)
+  const layer = new FleetLayer(f.viewer)
+  layer.update([fe('aaaaaa', { ghost: true, onGround: true, altFt: null }), fe('bbbbbb', { ghost: true, altFt: null, lat: 48 })], null, null)
+  const cases: [string, Color][] = [['aaaaaa', Color.fromCssColorString(altitudeColor(null, true))], ['bbbbbb', Color.fromCssColorString(altitudeColor(null, false))]]
+  for (const [hex, solid] of cases) {
+    const c = bb(f, hex).color
+    near(c.alpha, 0.45, 1e-6, hex)
+    assert.ok(opaque(c).equalsEpsilon(solid, 1e-6), hex)
+  }
+})
+
+test('a ghost that is heard again is drawn opaque, one that goes quiet again fades; a billboard it leaves is not faded for the next hex', () => {
+  const f = fakeViewer()
+  const layer = new FleetLayer(f.viewer)
+  const ghost = fe('aaaaaa', { altFt: 12_000, ageS: 7_200, ghost: true })
+  layer.update([ghost], 'aaaaaa', null)
+  const a = bb(f, 'aaaaaa')
+  near(a.color.alpha, 0.45, 1e-6)
+  layer.update([fe('aaaaaa', { altFt: 12_000 })], 'aaaaaa', null)
+  assert.equal(a.color.alpha, 1, 'heard again: an ordinary entry')
+  layer.update([ghost], 'aaaaaa', null)
+  near(a.color.alpha, 0.45, 1e-6, 'quiet again')
+  layer.update([], null, null)
+  assert.equal(a.show, false, 'not handed any more: gone')
+  assert.equal(halo(f).show, false)
+  layer.update([fe('dddddd', { altFt: 12_000 })], null, null)
+  assert.equal(bb(f, 'dddddd'), a, 'the freed billboard is reused')
+  assert.equal(bb(f, 'dddddd').color.alpha, 1, 'and drawn opaque')
+})
+
 test('hexes that leave are hidden and their billboards reused for new hexes (no vertex-array rebuild churn)', () => {
   const f = fakeViewer()
   const layer = new FleetLayer(f.viewer)

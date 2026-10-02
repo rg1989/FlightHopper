@@ -30,11 +30,13 @@ const GROUND_STEP_DEG = 0.002 // re-sample the terrain under a ground aircraft a
 const GROUND_REFRESH_FRAMES = 600 // … and every ~10 s anyway, as finer terrain tiles load
 const GROUND_RETRY_FRAMES = 30 // tile not loaded yet, or the terrain flat: try again in ~0.5 s (staggered per aircraft)
 
-/** One shared Color per colour-table entry: frames allocate none. */
-const COLORS: readonly Color[] = Array.from(
-  { length: COLOR_COUNT },
-  (_, i) => new Color(ALTITUDE_RGBA[i * 4], ALTITUDE_RGBA[i * 4 + 1], ALTITUDE_RGBA[i * 4 + 2], ALTITUDE_RGBA[i * 4 + 3]),
-)
+const GHOST_ALPHA = 0.45 // a ghost (FleetEntry.ghost) is drawn this opaque
+/** One shared Color per colour-table entry, then the same colours again at GHOST_ALPHA (a ghost's): frames allocate none. */
+const COLORS: readonly Color[] = Array.from({ length: COLOR_COUNT * 2 }, (_, i) => {
+  const c = (i % COLOR_COUNT) * 4
+  const fade = i < COLOR_COUNT ? 1 : GHOST_ALPHA
+  return new Color(ALTITUDE_RGBA[c], ALTITUDE_RGBA[c + 1], ALTITUDE_RGBA[c + 2], ALTITUDE_RGBA[c + 3] * fade)
+})
 const HALO_COLOR = Color.fromCssColorString('#ffd23f')
 const LABEL_BG = Color.fromCssColorString('#16181d')
 /** Icons shrink to half size between 300 km and 8,000 km from the camera (continental views stay readable). */
@@ -87,6 +89,8 @@ interface Slot {
  * frames; each frame only writes the properties that changed. Aircraft that leave are hidden and their billboards
  * pooled for the next new hex (adding or removing a billboard makes Cesium rebuild the whole vertex array).
  * One reused Label shows the hovered (else selected) callsign; one reused ring marks the selected aircraft.
+ * A ghost entry (FleetEntry.ghost: History's selected aircraft where it was last heard) is placed whatever its age and drawn
+ * at GHOST_ALPHA in its altitude colour. It is the only entry of its hex: the app hands one for a hex the fleet no longer places.
  */
 export class FleetLayer {
   #scene: Scene
@@ -165,9 +169,9 @@ export class FleetLayer {
       const s = this.#byHex.get(e.hex) ?? this.#add(e.hex)
       if (s.frame !== frame) touched++
       s.frame = frame
-      // The Fleet's own age limit per aircraft (it prunes them later); the chased one gives way to its 3-D model. In
-      // chase (models), only the traffic drawn as 3-D models is placed, with its icon hidden.
-      s.placed = e.ageS <= e.staleS && !(modelShown && e.hex === selectedHex) &&
+      // The Fleet's own age limit per aircraft (it prunes them later), which a ghost is not held to; the chased one gives
+      // way to its 3-D model. In chase (models), only the traffic drawn as 3-D models is placed, with its icon hidden.
+      s.placed = (e.ghost === true || e.ageS <= e.staleS) && !(modelShown && e.hex === selectedHex) &&
         (models === null || e.hex === selectedHex || models.has(e.hex))
       const visible = s.placed && !(models !== null && models.has(e.hex))
       if (visible !== s.show) {
@@ -299,7 +303,7 @@ export class FleetLayer {
       b.rotation = 0
       s.rot = 0
     }
-    const c = altitudeIndex(e.altFt, e.onGround)
+    const c = altitudeIndex(e.altFt, e.onGround) + (e.ghost === true ? COLOR_COUNT : 0) // a ghost: the faded half of COLORS
     if (c !== s.color) {
       b.color = COLORS[c]
       s.color = c
