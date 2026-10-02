@@ -126,3 +126,15 @@
   background: rgb(13 17 25 / 0.78);
   filter: none;
 }
+
+/* History (app.ts, history/bar.ts): the time bar takes the play bar's place along the bottom. The map key stands on it;
+   on phones the flight card does too (it sits on the tab bar otherwise). */
+.fh-ui[data-history] .fh-mapkey {
+  bottom: calc(var(--fh-playbar-space) + 8px);
+}
+
+@media (max-width: 640px) {
+  .fh-ui[data-history] .fh-card:not(.fh-tcard) {
+    bottom: calc(var(--fh-playbar-space) + 8px);
+  }
+}
