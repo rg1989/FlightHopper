@@ -5,13 +5,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { TraceReply } from '../../shared/api.ts'
-import { bearingDeg, distanceNm } from '../../shared/geo.ts'
+import { bearingDeg, destination, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
 import {
-  MapMoves, atClock, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, insetContains, keepLegs, placeSelected,
-  replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, inArea, inSight,
+  keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './selected.ts'
 
 const MIN = 60_000
@@ -258,6 +258,13 @@ test('placeSelected: in a hole, its altitude unknown when either end’s is, on 
   assert.ok(Math.abs(ground.hM - 21) < 1e-9, 'the geoid between the two points (the layer puts it on the ground)')
 })
 
+/** Where a canvas 1,000 × 700 px that shows box draws (lat, lon): a flat stand-in for the camera. */
+const drawn = (box: { west: number; south: number; east: number; north: number }, lat: number, lon: number): { x: number; y: number } => ({
+  x: ((lon - box.west) / (box.east - box.west)) * 1000,
+  y: ((box.north - lat) / (box.north - box.south)) * 700,
+})
+const CANVAS = { x: 0, y: 0, w: 1000, h: 700 }
+
 test('bring into view and follow use the estimate in a hole: a jump into it flies there; playing through it keeps following', () => {
   const placed = (t: number): FleetEntry => {
     const own = entry('xxxxxx')
@@ -266,14 +273,14 @@ test('bring into view and follow use the estimate in a hole: a jump into it flie
   }
   const israel = { west: 33, south: 29, east: 36, north: 32.5 }
   const jump = placed(T + 10_000 + 10 * MIN)
-  const inside = insetContains(israel, jump.lat, jump.lon)
+  const inside = inArea(drawn(israel, jump.lat, jump.lon), CANVAS)
   assert.equal(inside, false)
   assert.equal(flyOver({ bring: true, playing: false, wasInside: false, inside, moved: false }), true, 'flies over the estimate')
   const a = placed(T + 10_000 + 2 * MIN)
   const view = { west: a.lon - 0.5, south: a.lat - 0.5, east: a.lon + 0.5, north: a.lat + 0.5 } // about 60 nm across
-  assert.equal(insetContains(view, a.lat, a.lon), true)
+  assert.equal(inArea(drawn(view, a.lat, a.lon), CANVAS), true)
   const b = placed(T + 10_000 + 8 * MIN) // ~46 nm on: out of the view less its inset
-  const left = insetContains(view, b.lat, b.lon)
+  const left = inArea(drawn(view, b.lat, b.lon), CANVAS)
   assert.equal(left, false)
   assert.equal(flyOver({ bring: false, playing: true, wasInside: true, inside: left, moved: false }), true, 'followed through the hole')
 })
@@ -295,29 +302,126 @@ test('placeSelected: out is reused (cleared, then written), the fleet’s array 
   assert.deepEqual(fleet.map((e) => e.hex), ['aaaaaa', '738abc'])
 })
 
-test('insetContains: inside the view less a tenth of its height and width on each side', () => {
-  const r = { west: 34, south: 31, east: 36, north: 33 }
-  assert.equal(insetContains(r, 32, 35), true)
-  assert.equal(insetContains(r, 31.25, 35.75), true, 'just inside the inset')
-  assert.equal(insetContains(r, 31.15, 35), false, 'in the outer tenth (south)')
-  assert.equal(insetContains(r, 32.9, 35), false, 'north')
-  assert.equal(insetContains(r, 32, 34.1), false, 'west')
-  assert.equal(insetContains(r, 32, 35.9), false, 'east')
-  assert.equal(insetContains(r, 34, 35), false, 'outside the view')
-  assert.equal(insetContains(null, 32, 35), false, 'the globe out of view')
-  assert.equal(insetContains(r, Number.NaN, 35), false)
+test('inArea: inside the clear area less a tenth of its width and height on each side', () => {
+  const area = { x: 340, y: 190, w: 1000, h: 600 } // right of the card, under the search box, above the bar: inset 100 px across, 60 down
+  assert.equal(inArea({ x: 840, y: 490 }, area), true, 'the middle')
+  assert.equal(inArea({ x: 440, y: 250 }, area), true, 'the inset’s top-left corner')
+  assert.equal(inArea({ x: 1240, y: 730 }, area), true, 'and its bottom-right')
+  for (const p of [{ x: 439.9, y: 490 }, { x: 1240.1, y: 490 }, { x: 840, y: 249.9 }, { x: 840, y: 730.1 }]) {
+    assert.equal(inArea(p, area), false, `${JSON.stringify(p)}: in the outer tenth`)
+  }
+  assert.equal(inArea({ x: 1700, y: 490 }, area), false, 'off the canvas')
+  assert.equal(inArea(undefined, area), false, 'not seen at all (behind the camera, or the globe’s curve)')
+  assert.equal(inArea({ x: Number.NaN, y: 490 }, area), false)
+  assert.equal(inArea({ x: 5, y: 5 }, { x: 5, y: 5, w: 0, h: 0 }), false, 'nothing clear: nothing inside')
+  assert.equal(inArea({ x: 340, y: 190 }, area, 0), true, 'no inset: the edge counts')
+  assert.equal(inArea({ x: 339.9, y: 190 }, area, 0), false)
+  assert.equal(inArea({ x: 840, y: 490 }, area, 0.5), true, 'the inset reaching the middle leaves the middle')
+  assert.equal(inArea({ x: 841, y: 490 }, area, 0.5), false)
 })
 
-test('insetContains: a view across the antimeridian, and one that spans every longitude', () => {
-  const r = { west: 170, south: -10, east: -170, north: 10 } // 20° wide across 180°
-  assert.equal(insetContains(r, 0, 180), true)
-  assert.equal(insetContains(r, 0, -175), true)
-  assert.equal(insetContains(r, 0, 171), false, 'in the west tenth')
-  assert.equal(insetContains(r, 0, -171), false, 'in the east tenth')
-  assert.equal(insetContains(r, 0, 0), false)
-  const world = { west: -180, south: -80, east: 180, north: 80 }
-  assert.equal(insetContains(world, 0, -179), true, 'every longitude is in view')
-  assert.equal(insetContains(world, 75, 0), false, 'its latitudes still count')
+test('inArea: an aircraft that flew under the card is not in view, though the canvas, less its tenth, still holds it', () => {
+  const canvas = { x: 0, y: 0, w: 1440, h: 900 }
+  const clear = { x: 340, y: 8, w: 1016, h: 800 } // what the card (12–332 px across, 12–180 down), the bar and the rail leave
+  const flying = { x: 600, y: 300 }
+  const underCard = { x: 200, y: 130 } // 60× later: the card hides it
+  assert.deepEqual([inArea(flying, canvas), inArea(underCard, canvas)], [true, true], 'the canvas alone: it stays "in view" under the card')
+  assert.deepEqual([inArea(flying, clear), inArea(underCard, clear)], [true, false], 'the clear area: it left')
+  const base = { busy: false, bring: false, had: true, at: true, playing: true, moved: false, dayKnown: true, nowhere: false }
+  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(underCard, clear) }), { fly: 'follow', bring: false }, 'followed out from under it')
+  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(flying, clear) }), { fly: null, bring: false })
+})
+
+test('areaMiddle: the middle of the clear area; none when nothing is clear', () => {
+  assert.deepEqual(areaMiddle({ x: 340, y: 190, w: 1000, h: 600 }), { x: 840, y: 490 })
+  assert.equal(areaMiddle({ x: 8, y: 8, w: 0, h: 500 }), null)
+  assert.equal(areaMiddle({ x: 8, y: 8, w: 500, h: 0 }), null)
+})
+
+test('inSight: over the globe’s curve, not behind it: a camera sees to its horizon, and past it as far as the aircraft’s own reaches', () => {
+  const rad = (d: number): number => (d * Math.PI) / 180
+  // 300 km up, the horizon is 17.2° of arc away (1,900 km); an aircraft at 11 km adds 3.4°.
+  assert.equal(inSight(300_000, 11_000, 0), true, 'straight below')
+  assert.equal(inSight(300_000, 11_000, rad(20)), true, 'beyond the camera’s horizon, but the aircraft is up there')
+  assert.equal(inSight(300_000, 11_000, rad(21)), false)
+  assert.equal(inSight(300_000, 0, rad(17)), true, 'on the ground: only the camera’s own horizon')
+  assert.equal(inSight(300_000, 0, rad(18)), false)
+  // Its far side projects onto the canvas (the antipode at its centre), from a global view as from a regional one: hidden.
+  for (const m of [300_000, 2_000_000, 10_000_000]) assert.equal(inSight(m, 11_000, Math.PI), false, `the antipode, seen from ${m} m`)
+  assert.equal(inSight(10_000_000, 11_000, rad(60)), true, 'a global view sees 60° round')
+  assert.equal(inSight(10_000_000, 11_000, rad(100)), false)
+  assert.equal(inSight(300_000, 11_000, Number.NaN), false)
+  assert.equal(inSight(-5, -5, 0), true, 'below the ellipsoid counts as on it')
+})
+
+// A straight-down pinhole camera on a 1,440 × 900 px canvas whose wider side spans 60° (Cesium's default), flat over the few
+// hundred km a screen holds: the ground under a pixel, and where an aircraft hM up is drawn.
+type Eye = { lat: number; lon: number; m: number }
+const M_DEG = (3440.065 * 1852 * Math.PI) / 180 // m per degree of latitude (shared/geo.ts's sphere)
+const cosLat = (lat: number): number => Math.cos((lat * Math.PI) / 180)
+const mPerPx = (depthM: number): number => (2 * depthM * Math.tan(Math.PI / 6)) / 1440
+const groundAt = (eye: Eye, px: { x: number; y: number }): { lat: number; lon: number } => ({
+  lat: eye.lat - ((px.y - 450) * mPerPx(eye.m)) / M_DEG,
+  lon: eye.lon + ((px.x - 720) * mPerPx(eye.m)) / (M_DEG * cosLat(eye.lat)),
+})
+const drawnAt = (eye: Eye, at: { lat: number; lon: number; hM: number }): { x: number; y: number } => ({
+  x: 720 + ((at.lon - eye.lon) * M_DEG * cosLat(eye.lat)) / mPerPx(eye.m - at.hM),
+  y: 450 - ((at.lat - eye.lat) * M_DEG) / mPerPx(eye.m - at.hM),
+})
+
+test('cameraTarget: the camera looks where the aircraft is drawn at the middle of the clear area, its height allowed for', () => {
+  const eye: Eye = { lat: 32, lon: 35, m: 60_000 }
+  const area = { x: 340, y: 190, w: 1000, h: 600 } // its middle is 120 px right of the canvas’s centre and 40 px under it
+  const mid = areaMiddle(area)!
+  const under = groundAt(eye, { x: 720, y: 450 })
+  const middle = groundAt(eye, mid)
+  const jet = { lat: 32.6, lon: 35.9, hM: 11_000 }
+  const to = cameraTarget(jet, eye.m, under, middle)
+  const seen = drawnAt({ ...to, m: eye.m }, jet)
+  assert.ok(Math.hypot(seen.x - mid.x, seen.y - mid.y) < 1, `drawn at ${JSON.stringify(seen)}, not at ${JSON.stringify(mid)}`)
+  // Left out (the ground's own distance), the aircraft would rest 22 % of that offset too far out: ~28 px.
+  const plain = cameraTarget({ ...jet, hM: 0 }, eye.m, under, middle)
+  const out = drawnAt({ ...plain, m: eye.m }, jet)
+  assert.ok(Math.hypot(out.x - mid.x, out.y - mid.y) > 20, `${JSON.stringify(out)}`)
+  // An aircraft on the ground, or high over a high camera: the ground’s own distance, to a pixel.
+  for (const [hM, m] of [[0, 60_000], [11_000, 300_000], [0, 2_000]] as const) {
+    const e: Eye = { ...eye, m }
+    const t = cameraTarget({ ...jet, hM }, m, groundAt(e, { x: 720, y: 450 }), groundAt(e, mid))
+    const d = drawnAt({ ...t, m }, { ...jet, hM })
+    assert.ok(Math.hypot(d.x - mid.x, d.y - mid.y) < 1, `${hM} m up, camera at ${m} m: ${JSON.stringify(d)}`)
+  }
+})
+
+test('cameraTarget: no ground at the area’s middle, or none clear: the aircraft’s own place, the canvas’s centre as before', () => {
+  const jet = { lat: 32.6, lon: 35.9, hM: 11_000 }
+  const here = { lat: 32, lon: 35 }
+  assert.deepEqual(cameraTarget(jet, 60_000, here, null), { lat: 32.6, lon: 35.9 })
+  const same = cameraTarget(jet, 60_000, here, here) // the middle is the centre: nothing to move by
+  assert.ok(Math.abs(same.lat - jet.lat) < 1e-9 && Math.abs(same.lon - jet.lon) < 1e-9, JSON.stringify(same))
+})
+
+test('cameraTarget: an aircraft above the camera is not drawn: the camera goes under it; no camera height: the ground’s distance', () => {
+  const jet = { lat: 32.6, lon: 35.9, hM: 70_000 }
+  const under = { lat: 32, lon: 35 }
+  const middle = destination(32, 35, 90, 3)
+  const above = cameraTarget(jet, 60_000, under, middle)
+  assert.ok(Math.abs(above.lat - jet.lat) < 1e-9 && Math.abs(above.lon - jet.lon) < 1e-9, JSON.stringify(above))
+  const flat = cameraTarget(jet, 0, under, middle)
+  assert.ok(Math.abs(distanceNm(flat.lat, flat.lon, jet.lat, jet.lon) - 3) < 1e-6, 'a view with no height: the distance as it is')
+})
+
+test('cameraTarget: the offset is kept as a distance across the antimeridian and towards a pole', () => {
+  const under = { lat: 10, lon: 179.5 }
+  const east = destination(under.lat, under.lon, 90, 12) // the area’s middle: 12 nm east of the centre, over the antimeridian
+  const at = { lat: 10.2, lon: -179.9, hM: 0 }
+  const to = cameraTarget(at, 100_000, under, east)
+  assert.ok(Math.abs(distanceNm(to.lat, to.lon, at.lat, at.lon) - 12) < 1e-6, 'as far from the aircraft as the middle is from the centre')
+  assert.ok(Math.abs(bearingDeg(to.lat, to.lon, at.lat, at.lon) - 90) < 0.5, 'the aircraft stands east of it')
+  assert.ok(to.lon > 179.8 && to.lon < 180, `west of the aircraft, on the other side of 180°: ${to.lon}`)
+  const north = destination(85, 0, 0, 20) // 20 nm north of the centre, near the pole
+  const pole = cameraTarget({ lat: 80, lon: 40, hM: 0 }, 100_000, { lat: 85, lon: 0 }, north)
+  assert.ok(Math.abs(distanceNm(pole.lat, pole.lon, 80, 40) - 20) < 1e-6)
+  assert.ok(pole.lat < 80 && Math.abs(pole.lon - 40) < 1e-6, `due south of the aircraft: ${JSON.stringify(pole)}`)
 })
 
 test('MapMoves: a pointer held on the map is moving it, and for 1.5 s after it lifts; a wheel or trackpad gesture for 1.5 s', () => {

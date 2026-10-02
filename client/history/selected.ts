@@ -8,14 +8,15 @@
 import type { TraceReply } from '../../shared/api.ts'
 import { bearingDeg, destination, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
-import type { RectDeg } from '../scene/browseCamera.ts'
+import type { Rect } from '../scene/flightFrame.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import type { ReplayStatus } from '../ui/flightCard.ts'
 import { callsignAt, dayState, legEndMs, pointsUpTo, type DayState } from './aircraftDay.ts'
 import { heightM, traceInfo } from './trace.ts'
 
 const BEFORE_MS = 12 * 3_600_000 // a day is asked with this much before it: where the aircraft stood when it began
-const VIEW_INSET = 0.1 // an aircraft within this share of the view's height or width from an edge is out of view
+const VIEW_INSET = 0.1 // an aircraft within this share of the clear map's height or width from an edge is out of view
+const EARTH_R = 6_378_137 // m: the globe's curve, for what can be seen over it
 const MOVED_MS = 1500 // the map does not follow an aircraft while the person moves it, nor this long after
 const AHEAD_MS = 120_000 // the chase asks for where its aircraft will be this far on, before its view outruns what is loaded
 const KT_MS = 1852 / 3600
@@ -202,17 +203,52 @@ export function placeSelected(entries: readonly FleetEntry[], hex: string, ds: D
 }
 
 /**
- * Whether (lat, lon) is inside the view r less VIEW_INSET of its height and width on each side (r null: the globe is out
- * of view, so no). A view that spans every longitude (the globe, a pole) holds them all.
+ * Whether the screen point p (CSS px from the canvas's top-left; undefined: not seen at all) is inside area less VIEW_INSET
+ * of its width and height on each side. The area is the part of the canvas that no card, panel, bar or button covers
+ * (app.ts mapClear), so an aircraft under one of them is not inside it, however far from the canvas's edges. An empty area
+ * holds nothing.
  */
-export function insetContains(r: RectDeg | null, lat: number, lon: number, inset = VIEW_INSET): boolean {
-  if (r === null) return false
-  const dLat = (r.north - r.south) * inset
-  if (!(lat >= r.south + dLat && lat <= r.north - dLat)) return false
-  const span = r.west <= r.east ? r.east - r.west : r.east + 360 - r.west
-  if (span >= 359) return Number.isFinite(lon)
-  const x = (((lon - r.west) % 360) + 360) % 360 // east of the view's west edge
-  return x >= span * inset && x <= span * (1 - inset)
+export function inArea(p: { x: number; y: number } | undefined, area: Rect, inset = VIEW_INSET): boolean {
+  if (p === undefined || !(area.w > 0 && area.h > 0)) return false
+  const dx = area.w * inset
+  const dy = area.h * inset
+  return p.x >= area.x + dx && p.x <= area.x + area.w - dx && p.y >= area.y + dy && p.y <= area.y + area.h - dy
+}
+
+/** The middle of area (CSS px from the canvas's top-left); null for an empty one: the map then centres on the canvas as before. */
+export function areaMiddle(area: Rect): { x: number; y: number } | null {
+  return area.w > 0 && area.h > 0 ? { x: area.x + area.w / 2, y: area.y + area.h / 2 } : null
+}
+
+/**
+ * Whether an aircraft hM up can be seen from a camera camM up, their nadirs angleRad apart (the angle at the Earth's
+ * centre): not when the globe's curve is between them. A point behind the globe still projects onto the canvas (from a
+ * high enough view, the antipode lies at its centre), so the projection alone does not say. The line between the two clears
+ * the sphere while the angle is within the sum of their horizons, each acos(R / (R + height)).
+ * ponytail: the globe a sphere of the equatorial radius, its horizon ≤ 0.3 % off (an aircraft right at the limb). Upgrade:
+ * Cesium's EllipsoidalOccluder, which its typings leave out.
+ */
+export function inSight(camM: number, hM: number, angleRad: number): boolean {
+  const horizon = (m: number): number => Math.acos(EARTH_R / (EARTH_R + Math.max(0, m)))
+  return angleRad <= horizon(camM) + horizon(hM)
+}
+
+/**
+ * Where the top-down camera (north up, straight down, camM up) looks so that the aircraft at `at` is drawn at the middle of
+ * the clear area, not at the canvas's centre: `at` less the ground between the two. That ground runs from `under` (the
+ * ground at the canvas's centre) to `middle` (the ground at the area's middle; null: none to be had, so the canvas's
+ * centre); the target is as far from the aircraft the other way along the same bearing. The aircraft is hM up, nearer the
+ * camera than the ground under it, so it is drawn camM / (camM − hM) times as far from the centre as that ground is: the
+ * distance is scaled by the inverse (an aircraft at 11 km seen from 60 km: by 0.82), or it would rest that much too far out.
+ * ponytail: the flat camera's parallax; from a view thousands of km up the curve leaves it a few px off (measured: 6 px at
+ * 3,000 km). Upgrade: pick the ground under the middle at the aircraft's own height.
+ */
+export function cameraTarget(at: { lat: number; lon: number; hM: number }, camM: number, under: { lat: number; lon: number },
+  middle: { lat: number; lon: number } | null): { lat: number; lon: number } {
+  if (middle === null) return { lat: at.lat, lon: at.lon }
+  const k = camM > 0 ? Math.max(0, 1 - at.hM / camM) : 1
+  const back = (bearingDeg(under.lat, under.lon, middle.lat, middle.lon) + 180) % 360
+  return destination(at.lat, at.lon, back, distanceNm(under.lat, under.lon, middle.lat, middle.lon) * k)
 }
 
 /**
@@ -250,9 +286,9 @@ export class MapMoves {
 }
 
 /**
- * Whether the map flies over the selected aircraft this frame (top-down; the app knows its position). A jump in time,
- * entering History or selecting (bring): when it is out of view. While playing: when it was in view last frame and is not
- * now, and the person is not moving the map (moved: MapMoves.recent). One they panned away from stays away.
+ * Whether the map flies over the selected aircraft this frame (top-down; the app knows where it is drawn: inside is inArea).
+ * A jump in time, entering History or selecting (bring): when it is out of view. While playing: when it was in view last
+ * frame and is not now, and the person is not moving the map (moved: MapMoves.recent). One they panned away from stays away.
  */
 export function flyOver(o: { bring: boolean; playing: boolean; wasInside: boolean; inside: boolean; moved: boolean }): boolean {
   if (o.inside) return false
@@ -366,8 +402,9 @@ export function restartsTrack(was: TraceReply | 'feed' | 'none' | null, next: Tr
  * 'follow') or not (null), and whether a pending bring stays pending. Nothing while the map flies already or a scrubber
  * seek rests (busy). Bring: a jump, entering History or selecting (bring), and its first position after none (had false,
  * at true: before its first leg to heard, a day answer placing it), unless the person moved the map in the last 1.5 s;
- * flyOver says when (out of view; while playing, followed out of it). A pending bring ends once its day for that time
- * says where it was (dayKnown and at) or that it was nowhere (nowhere: before its first leg, none that day).
+ * flyOver says when (out of view: outside the clear part of the map, inArea; while playing, followed out of it). A pending
+ * bring ends once its day for that time says where it was (dayKnown and at) or that it was nowhere (nowhere: before its
+ * first leg, none that day).
  */
 export function viewMove(o: { busy: boolean; bring: boolean; had: boolean; at: boolean; playing: boolean; wasInside: boolean;
   inside: boolean; moved: boolean; dayKnown: boolean; nowhere: boolean }): { fly: 'bring' | 'follow' | null; bring: boolean } {

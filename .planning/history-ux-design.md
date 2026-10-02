@@ -29,9 +29,12 @@ replay time t the selected aircraft is in one of four states (`client/history/ai
 The callsign shown (card, label, list) for the selected aircraft is the leg's callsign at t (`calls`). Its legs show on
 the timeline (D3), so where it flew is one glance and one click away.
 After a jump in time (or entering History, or selecting), the map brings the selected aircraft into view when its
-position at t (heard or quiet) is off screen: the top-down camera flies over it at the same height. While playing, an
-aircraft that was on screen and reaches the edge is followed (the view re-centres on it), except while the person moves
-the map (a pointer down, a wheel or trackpad gesture in the last 1.5 s). The chase needs no such help.
+position at t (heard or quiet) is not in view: the top-down camera flies over it at the same height. In view means drawn
+inside the part of the screen that nothing covers (the aircraft card, the time bar, the rail and its open panel, the search
+box, the map key), less a tenth of that part on each side; the camera puts the aircraft at the middle of that part, not of
+the screen. While playing, an aircraft that was in view and leaves it (the edge, or under a card or a panel) is followed
+(the view re-centres on it the same way), except while the person moves the map (a pointer down, a wheel or trackpad
+gesture in the last 1.5 s). The chase needs no such help.
 Chase in 3-D is offered only while heard.
 
 ## D3 The timeline (C7, C8, C17, C19, C31)

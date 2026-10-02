@@ -21,7 +21,7 @@
 // Every aircraft goes into the Fleet (newest sample, dead-reckoned: cheap enough for thousands a frame). Only the
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
-import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
+import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, SceneTransforms, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import type { Viewer } from 'cesium'
 import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
@@ -49,8 +49,8 @@ import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
 import { SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
-  MapMoves, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, insetContains, keepLegs, placeSelected, replayStatus,
-  restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight, keepLegs,
+  placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './history/selected.ts'
 import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
@@ -129,7 +129,18 @@ const NO_ENTRIES: readonly FleetEntry[] = []
 const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
+// A new overlay goes in MAP_COVERS too (History's top-down map keeps its aircraft clear of the same).
 const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search, .fh-presets'
+// What covers the top-down map in History, where its aircraft must not come to rest: FRAME_COVERS less what History never shows
+// (captions, event title, TV presets, the outage pill) and with the search box's bar, not its list (that slides open and shut
+// over most of the map: it must not move the map under the person typing). The History bar is a .fh-playbar, an open rail
+// panel a .fh-panel. Then the map key, which the chase hides (its box is empty there), so the frame has no use for it: cut
+// last, as safeArea cuts each cover from the side that keeps the most room, and a small one before the bar can take a strip of
+// the whole height.
+// ponytail: the clear part is that one rectangle, so ground beside a small cover that was cut away counts as covered.
+// Upgrade: the largest empty rectangle.
+const MAP_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-playbar, .fh-search-bar'
+const MAP_KEY_COVER = '.fh-mapkey'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
@@ -495,7 +506,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     legsShown: readonly TraceReply[] // the legs on the bar (amber)
     pathLeg: TraceReply | null | undefined // the leg the flown path shows (null none; undefined: the feed's samples meanwhile)
     bring: boolean // bring the selected aircraft into view (a jump), until its day for that time is known
-    inside: boolean // it was inside the view (inset) last frame: playing, the map follows it out of it
+    inside: boolean // it was in view (drawn in the clear part of the map, inset) last frame: playing, the map follows it out of it
     flyUntilMs: number // the map is flying over it until then (performance.now(); -Infinity: not): no other flight meanwhile
     hadAt: boolean // it was drawn last frame (a first position after none brings it into view)
     askedMs: number // performance.now() of the frame's last ask for half hours (-Infinity: ask at the next frame)
@@ -513,6 +524,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let hist: HistoryMode | null = null
   let room = NO_ROOM // the flight-data frame's safe area and what covers the canvas, as last measured
   let safeAtMs = -Infinity
+  let mapSafe = NO_ROOM.safe // History's top-down map: the part of the canvas nothing covers, as last measured
+  let mapSafeAtMs = -Infinity
 
   // Overlays live in one element so stop() removes them together (mountAttribution returns no handle). layout.css
   // places them; data-mode switches what browse and chase show.
@@ -641,6 +654,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const keyB = new Cartesian2()
   const keyGa = new Cartesian3()
   const keyGb = new Cartesian3()
+  const seenWC = new Cartesian3() // History: the selected aircraft's place in the world and where it is drawn on the canvas (screenOf)
+  const seenAt = new Cartesian2()
+  const pixel = new Cartesian2() // a canvas pixel whose ground groundAt asks for
+  const pixelGround = new Cartesian3()
   /** Metres per CSS pixel on the ground at the screen's centre (the scale the key shows), or null where that is sky. */
   const groundScale = (): number | null => {
     const r = viewer.canvas.getBoundingClientRect()
@@ -994,11 +1011,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * History, top-down: the selected aircraft into view after a jump (h.bring: once its position at the replay time is
    * known, and again when its day for that time comes, which may put it elsewhere) or at its first position after none,
-   * and followed while playing when it leaves the view (selected.ts viewMove). The map flies over it at the height it has
-   * and asks for the half hours of where it lands as it takes off (v: this frame's view, whose size it keeps). Not in the
-   * chase, which needs no help, nor while a scrubber seek rests or a flight is under way.
+   * and followed while playing when it leaves the view (selected.ts viewMove). In view is where the person can see it: drawn
+   * inside the part of the canvas that no card, panel, bar or button covers (mapClear), less a tenth of that part on each
+   * side (selected.ts inArea). The map flies over it at the height it has, to the middle of that part (centredOn), and asks
+   * for the half hours of where it lands as it takes off (v: this frame's view, whose size it keeps). Not in the chase, which
+   * needs no help, nor while a scrubber seek rests or a flight is under way.
    */
-  function keepInView(h: HistoryMode, now: number, t: number, day: SelectedDay | null, ds: DayState | null, rect: RectDeg | null, v: Circle): void {
+  function keepInView(h: HistoryMode, now: number, t: number, day: SelectedDay | null, ds: DayState | null, v: Circle): void {
     const at = histAt
     const had = h.hadAt
     h.hadAt = at !== undefined
@@ -1007,7 +1026,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       h.inside = false
       return
     }
-    const inside = at !== undefined && insetContains(rect, at.lat, at.lon)
+    const area = mapClear(now)
+    const inside = at !== undefined && inArea(screenOf(at), area)
     const m = viewMove({
       busy: now < h.flyUntilMs || h.seekRestMs !== null, bring: h.bring, had, at: at !== undefined, playing: h.clock.playing,
       wasInside: h.inside, inside, moved: moves.recent(now), dayKnown: ds !== null && day !== null && day.startMs === h.dayOfT.startMs,
@@ -1017,9 +1037,44 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     h.inside = inside
     if (m.fly === null || at === undefined) return
     const flyS = m.fly === 'bring' ? BRING_FLY_S : FOLLOW_FLY_S
-    enterBrowse(viewer, at, { heightM: viewer.camera.positionCartographic.height, flyS })
+    const to = centredOn(at, area)
+    enterBrowse(viewer, to, { heightM: viewer.camera.positionCartographic.height, flyS })
     h.flyUntilMs = now + flyS * 1000
-    askSlots(h, t, { lat: at.lat, lon: at.lon, nm: v.nm })
+    askSlots(h, t, { lat: to.lat, lon: to.lon, nm: v.nm })
+  }
+
+  /**
+   * Where e, History's selected aircraft, is drawn on the canvas (CSS px from its top-left); undefined where it is not seen:
+   * behind the camera, or behind the globe's curve (selected.ts inSight: its projection would still land on the canvas).
+   * ponytail: projected at hM, which on the ground is the geoid; the layer draws a ground aircraft on the terrain, up to ~3 km
+   * higher: a little off from a zoom a few km above a high airport. Upgrade: the layer's own drawn position.
+   */
+  function screenOf(e: FleetEntry): Cartesian2 | undefined {
+    const cam = viewer.camera
+    const p = Cartesian3.fromDegrees(e.lon, e.lat, e.hM, Ellipsoid.WGS84, seenWC)
+    if (!inSight(cam.positionCartographic.height, e.hM, Cartesian3.angleBetween(cam.positionWC, p))) return undefined
+    return SceneTransforms.worldToWindowCoordinates(viewer.scene, p, seenAt)
+  }
+
+  /** The ground (degrees) under the canvas pixel (x, y) (CSS px from its top-left); null where the globe is not under it. */
+  function groundAt(x: number, y: number): { lat: number; lon: number } | null {
+    pixel.x = x
+    pixel.y = y
+    const hit = viewer.camera.pickEllipsoid(pixel, undefined, pixelGround)
+    const g = hit === undefined ? undefined : Cartographic.fromCartesian(hit)
+    return g === undefined ? null : { lat: CesiumMath.toDegrees(g.latitude), lon: CesiumMath.toDegrees(g.longitude) }
+  }
+
+  /**
+   * Where the map looks to draw e at the middle of the clear area (selected.ts cameraTarget): the ground under that pixel
+   * against the ground at the canvas's centre, both read from the camera as it is. The aircraft's own place where there is none.
+   */
+  function centredOn(e: FleetEntry, area: Rect): { lat: number; lon: number } {
+    const c = viewer.canvas
+    const m = areaMiddle(area)
+    const under = groundAt(c.clientWidth / 2, c.clientHeight / 2)
+    const middle = m === null ? null : groundAt(m.x, m.y)
+    return under === null ? { lat: e.lat, lon: e.lon } : cameraTarget(e, viewer.camera.positionCartographic.height, under, middle)
   }
 
   /** Opens History at tMs (null: the start of the newest published half hour), paused unless play. */
@@ -1456,7 +1511,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const h = hist
       if (h.clock.atEnd(now)) h.clock.pause(now) // the newest published moment: there is no further
       if (h.seekRestMs !== null && now >= h.seekRestMs) jumped(h) // a scrubber seek at rest
-      viewRect = viewRectangleDeg(viewer) // once a frame: the wait, the asks, keepInView and the list read it
+      viewRect = viewRectangleDeg(viewer) // once a frame: the wait, the asks and the list read it
       const v = viewCircle(viewRect)
       const wait = waitFor(h, h.clock.now(now), v)
       histLoading = wait.ring
@@ -1497,7 +1552,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       card.setReplay(replayStatus(ds, t, quietS))
       trafficCard.setReplay(replayStatus(null, t, quietS))
       statusPanel.setHistory({ loading: histLoading })
-      keepInView(h, now, t, day, ds, viewRect, v)
+      keepInView(h, now, t, day, ds, v)
       askWhenDue(h, now, t, v, ds) // after keepInView: a flight it starts asks where it lands
     } else if (api.ready) {
       const tServerMs = api.serverNowMs()
@@ -1663,16 +1718,28 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   const removeFrame = viewer.scene.preUpdate.addEventListener(frame)
 
+  /** The canvas's safe area (safeArea) and what covers it (CSS px from its top-left): the elements the selectors find, in turn, as laid out now. */
+  function measureRoom(...selectors: string[]): Room {
+    const c = viewer.canvas.getBoundingClientRect()
+    const covers = selectors.flatMap((s) => [...ui.querySelectorAll(s)]).map((el) => {
+      const r = el.getBoundingClientRect()
+      return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height }
+    })
+    return { safe: safeArea(c.width, c.height, covers), covers }
+  }
+
   /** The flight-data frame's safe area (safeArea) and its covers: re-measured at most every SAFE_EVERY_MS, as it reads the layout. */
   function frameRoom(now: number): Room {
     if (now - safeAtMs < SAFE_EVERY_MS) return room
     safeAtMs = now
-    const c = viewer.canvas.getBoundingClientRect()
-    const covers = [...ui.querySelectorAll(FRAME_COVERS)].map((el) => {
-      const r = el.getBoundingClientRect()
-      return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height }
-    })
-    return (room = { safe: safeArea(c.width, c.height, covers), covers })
+    return (room = measureRoom(FRAME_COVERS))
+  }
+
+  /** History's top-down map: the part of the canvas no overlay covers (safeArea over MAP_COVERS, the key last), re-measured as often as the frame's. */
+  function mapClear(now: number): Rect {
+    if (now - mapSafeAtMs < SAFE_EVERY_MS) return mapSafe
+    mapSafeAtMs = now
+    return (mapSafe = measureRoom(MAP_COVERS, MAP_KEY_COVER).safe)
   }
 
   /** Centre and radius of the view poll: browse, around the visible map; else the chased aircraft, else the globe point at the canvas centre, else below the camera. */
