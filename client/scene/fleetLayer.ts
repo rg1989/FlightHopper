@@ -89,8 +89,9 @@ interface Slot {
  * frames; each frame only writes the properties that changed. Aircraft that leave are hidden and their billboards
  * pooled for the next new hex (adding or removing a billboard makes Cesium rebuild the whole vertex array).
  * One reused Label shows the hovered (else selected) callsign; one reused ring marks the selected aircraft.
- * A ghost entry (FleetEntry.ghost: History's selected aircraft where it was last heard) is placed whatever its age and drawn
- * at GHOST_ALPHA in its altitude colour. It is the only entry of its hex: the app hands one for a hex the fleet no longer places.
+ * A ghost entry (FleetEntry.ghost: History's selected aircraft not heard at the replay time) is placed whatever its age
+ * and drawn at GHOST_ALPHA in its altitude colour. It is the only entry of its hex: the app hands one for a hex the fleet
+ * no longer places.
  */
 export class FleetLayer {
   #scene: Scene

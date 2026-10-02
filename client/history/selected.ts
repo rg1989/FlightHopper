@@ -1,18 +1,19 @@
 // client/history/selected.ts
 // The selected aircraft in History (design D2), as app.ts draws and words it at a replay time t, from its day of flights
 // (aircraftDay.ts): the entry the map draws for it (its track's state while heard, a faded ghost where it was last heard
-// while quiet, none before its first flight or on a day it did not fly; until its day is known, the fleet's own), what it
-// is called then, the card's status line, the span of its day asked for, and when the map brings it into view or follows
-// it. Pure: the app owns the camera, the clock and the requests.
+// while quiet, the same moving along a hole of its leg where it is estimated to be, none before its first flight or on a
+// day it did not fly; until its day is known, the fleet's own), what it is called then, the card's status line, the span
+// of its day asked for, and when the map brings it into view or follows it. Pure: the app owns the camera, the clock and
+// the requests.
 import type { TraceReply } from '../../shared/api.ts'
+import { bearingDeg, destination, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { RectDeg } from '../scene/browseCamera.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import type { ReplayStatus } from '../ui/flightCard.ts'
-import { callsignAt, legEndMs, type DayState } from './aircraftDay.ts'
-import { traceInfo } from './trace.ts'
+import { callsignAt, legEndMs, pointsUpTo, type DayState } from './aircraftDay.ts'
+import { heightM, traceInfo } from './trace.ts'
 
-const FT = 0.3048
 const BEFORE_MS = 12 * 3_600_000 // a day is asked with this much before it: where the aircraft stood when it began
 const VIEW_INSET = 0.1 // an aircraft within this share of the view's height or width from an edge is out of view
 const MOVED_MS = 1500 // the map does not follow an aircraft while the person moves it, nor this long after
@@ -42,10 +43,12 @@ export function atClock(ms: number, t: number): string {
 /**
  * The card's status line at t (flightCard.ts setReplay). Heard, or its day not known yet: the replay's clock, and the
  * files' quiet rule for a sample (quietS). Quiet: since when it was not heard ("On the ground since" when its leg ended
- * there). Before its first leg: until when. No leg that day: that.
+ * there); so in a hole of its leg (its numbers there are the estimate's). Before its first leg: until when. No leg that
+ * day: that.
  */
 export function replayStatus(ds: DayState | null, t: number, quietS: number): ReplayStatus {
   if (ds === null || ds.kind === 'heard') return { text: `Replay · ${hhmm(new Date(t))}`, state: 'replay', quietS }
+  if (ds.kind === 'gap') return { text: `Last heard ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
   if (ds.kind === 'quiet') return { text: `${ds.ground ? 'On the ground' : 'Not heard'} since ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
   if (ds.kind === 'before') return { text: `Not heard until ${atClock(ds.untilMs, t)}`, state: 'none' }
   return { text: 'Not heard this day', state: 'none' }
@@ -101,14 +104,12 @@ function ghostAt(e: FleetEntry, hex: string, leg: TraceReply, t: number, info: A
   const i = leg.t.length - 1
   if (i < 0) return undefined
   const alt = leg.alt[i]
-  const onGround = alt === 'g'
-  const altFt = typeof alt === 'number' ? alt : null
   e.hex = hex
   e.lat = leg.lat[i]
   e.lon = leg.lon[i]
-  e.hM = onGround || altFt === null ? leg.nM[i] : altFt * FT + leg.nM[i]
-  e.altFt = altFt
-  e.onGround = onGround
+  e.hM = heightM(alt, leg.nM[i])
+  e.altFt = typeof alt === 'number' ? alt : null
+  e.onGround = alt === 'g'
   e.trackDeg = leg.trk[i]
   e.gsKt = leg.gs[i]
   e.vsFpm = leg.vs[i]
@@ -123,11 +124,50 @@ function ghostAt(e: FleetEntry, hex: string, leg: TraceReply, t: number, info: A
 }
 
 /**
+ * e as a ghost where the aircraft is estimated to be at t inside a hole of its leg (ds: between the points either side):
+ * that share of the time along the great circle from one to the other (where the flown path draws the hole dotted),
+ * its track the bearing from one to the other, its altitude that share of the way (unknown when either end's is not a
+ * number; on the ground when both are), its speed the distance over the time, its vertical rate the climb over it. Its
+ * height as drawn goes from one point's to the other's as the dotted line does. Aged from the point before the hole.
+ */
+function gapAt(e: FleetEntry, hex: string, ds: Extract<DayState, { kind: 'gap' }>, t: number, info: AircraftInfo | null): FleetEntry {
+  const leg = ds.leg
+  const i = pointsUpTo(leg, ds.sinceMs) - 1 // the point before the hole; the next one ends it
+  const j = i + 1
+  const ms = ds.untilMs - ds.sinceMs // more than a minute: a hole
+  const f = (t - ds.sinceMs) / ms
+  const nm = distanceNm(leg.lat[i], leg.lon[i], leg.lat[j], leg.lon[j])
+  const trk = bearingDeg(leg.lat[i], leg.lon[i], leg.lat[j], leg.lon[j])
+  const at = destination(leg.lat[i], leg.lon[i], trk, f * nm)
+  const a = leg.alt[i]
+  const b = leg.alt[j]
+  const hA = heightM(a, leg.nM[i])
+  e.hex = hex
+  e.lat = at.lat
+  e.lon = at.lon
+  e.hM = hA + (heightM(b, leg.nM[j]) - hA) * f
+  e.altFt = typeof a === 'number' && typeof b === 'number' ? a + (b - a) * f : null
+  e.onGround = a === 'g' && b === 'g'
+  e.trackDeg = trk
+  e.gsKt = nm / (ms / 3_600_000)
+  e.vsFpm = typeof a === 'number' && typeof b === 'number' ? (b - a) / (ms / 60_000) : null
+  e.ageS = (t - ds.sinceMs) / 1000
+  e.staleS = Infinity
+  e.gapS = 0
+  e.quality = 'adsb2'
+  e.info = info
+  e.att = null
+  e.ghost = true
+  return e
+}
+
+/**
  * The entries the map draws in History, written into out (cleared first; entries, the Fleet's reused array, is never
  * changed): every one but the selected aircraft's (hex), then its own as its day says at t (ds; null: not known yet, the
  * fleet's stays). Heard: its track's state s, written into own (no state yet: the fleet's). Quiet: a ghost at its leg's
- * last point, written into own (fleetLayer.ts places it at any age, faded; it must be the only entry of its hex). Before
- * its first leg, or no leg that day: not drawn. Returns its entry as drawn, else undefined. Allocates nothing.
+ * last point, written into own (fleetLayer.ts places it at any age, faded; it must be the only entry of its hex). In a
+ * hole of its leg: the same ghost where it is estimated to be (gapAt). Before its first leg, or no leg that day: not
+ * drawn. Returns its entry as drawn, else undefined. Allocates nothing but, in a hole, geo.ts destination's place.
  */
 export function placeSelected(entries: readonly FleetEntry[], hex: string, ds: DayState | null, t: number, s: RenderState | null,
   info: AircraftInfo | null, out: FleetEntry[], own: FleetEntry): FleetEntry | undefined {
@@ -142,6 +182,7 @@ export function placeSelected(entries: readonly FleetEntry[], hex: string, ds: D
   if (ds === null) mine = fleet
   else if (ds.kind === 'heard') mine = s === null ? fleet : fromState(own, hex, s, info)
   else if (ds.kind === 'quiet') mine = ghostAt(own, hex, ds.leg, t, info)
+  else if (ds.kind === 'gap') mine = gapAt(own, hex, ds, t, info)
   if (mine !== undefined) out.push(mine)
   return mine
 }

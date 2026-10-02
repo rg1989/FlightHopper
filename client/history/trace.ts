@@ -20,6 +20,11 @@ export interface TracePoint {
 
 const altOf = (a: number | 'g' | null): number | null => (typeof a === 'number' ? a : null)
 
+/** A point's height as drawn: baro + N in WGS84 ellipsoidal metres; on the ground or unknown, N (the geoid). */
+export function heightM(alt: number | 'g' | null, nM: number): number {
+  return typeof alt === 'number' ? alt * FT + nM : nM
+}
+
 /**
  * Every point as a Sample, in time order, each with the callsign the aircraft sent at its time. Unknown fields null, as the
  * files do not carry them.
@@ -38,14 +43,10 @@ export function traceSamples(tr: TraceReply): Sample[] {
 
 /** The flown path's points, in time order. */
 export function tracePath(tr: TraceReply): TracePoint[] {
-  return tr.t.map((t, i) => {
-    const altFt = altOf(tr.alt[i])
-    const onGround = tr.alt[i] === 'g'
-    return {
-      tMs: Math.round(tr.t0Ms + t * 1000), lat: tr.lat[i], lon: tr.lon[i],
-      hM: onGround || altFt === null ? tr.nM[i] : altFt * FT + tr.nM[i], altFt, onGround,
-    }
-  })
+  return tr.t.map((t, i) => ({
+    tMs: Math.round(tr.t0Ms + t * 1000), lat: tr.lat[i], lon: tr.lon[i], hM: heightM(tr.alt[i], tr.nM[i]),
+    altFt: altOf(tr.alt[i]), onGround: tr.alt[i] === 'g',
+  }))
 }
 
 /** Its identity for the card and the fleet: the trace knows callsign, registration and type. */

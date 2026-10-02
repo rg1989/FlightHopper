@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { TraceReply } from '../../shared/api.ts'
+import { bearingDeg, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
@@ -80,6 +81,15 @@ test('replayStatus: a moment on another day than the replay time carries its wee
   const evening = leg(at(2026, 9, 1, 22, 0), [0, 58 * 60]) // Thu 22:00 to 22:58
   const t = at(2026, 9, 2, 6, 30) // Fri 06:30
   assert.equal(replayStatus(dayState([evening], t), t, 60).text, 'Not heard since Thu 22:58')
+})
+
+test('replayStatus: in a hole of its leg, when it was last heard (the point before the hole), its weekday on another day', () => {
+  const l = leg(at(2026, 9, 2, 5, 0), [0, 10, 3550, 3560], { lat: [32, 32.01, 33.5, 33.51] }) // a hole 05:00:10 to 05:59:10
+  const t = at(2026, 9, 2, 5, 30)
+  assert.deepEqual(replayStatus(dayState([l], t), t, 60), { text: 'Last heard 05:00', state: 'quiet' })
+  const late = leg(at(2026, 9, 1, 23, 58), [0, 10, 900], { lat: [32, 32.01, 33] }) // Thu 23:58:10 to Fri 00:13
+  const t2 = at(2026, 9, 2, 0, 5)
+  assert.deepEqual(replayStatus(dayState([late], t2), t2, 60), { text: 'Last heard Thu 23:58', state: 'quiet' })
 })
 
 test('selectedInfo: null until its day is known (the fleet’s info stands)', () => {
@@ -184,6 +194,73 @@ test('placeSelected: a ghost on the ground stands on the geoid (the layer puts i
   const own = entry('xxxxxx')
   placeSelected([], '738abc', dayState([l], t), t, null, null, [], own)
   assert.deepEqual([own.onGround, own.altFt, own.hM, own.ghost], [true, null, 18.2, true])
+})
+
+// A hole of 20 min (10 s to 1,210 s in) from 32° N 34° E at 30,000 ft to 34° N 36° E at 20,000 ft: about 150 nm.
+const GAP = leg(T, [0, 10, 1210, 1220], {
+  lat: [31.99, 32, 34, 34.01], lon: [33.99, 34, 36, 36.01], alt: [30_000, 30_000, 20_000, 20_000], trk: [45, 45, 40, 40],
+  gs: [480, 480, 440, 440], vs: [0, 0, 0, 0], nM: [19, 20, 22, 23],
+})
+const GAP_NM_ALL = distanceNm(32, 34, 34, 36)
+
+test('placeSelected: in a hole of its leg, a ghost where it is estimated to be, moving with the replay; the only entry of its hex', () => {
+  const info: AircraftInfo = { ...FEED, callsign: 'ISR595' }
+  const own = entry('xxxxxx')
+  const out: FleetEntry[] = []
+  const t = T + 10_000 + 10 * MIN // half way through the hole
+  const got = placeSelected([entry('738abc'), entry('aaaaaa')], '738abc', dayState([GAP], t), t, state(), info, out, own)
+  assert.equal(got, own, 'its track’s state, should one be held, does not count: there is none in a hole')
+  assert.deepEqual(out.map((e) => e.hex), ['aaaaaa', '738abc'])
+  assert.ok(Math.abs(distanceNm(32, 34, own.lat, own.lon) - GAP_NM_ALL / 2) < 1e-6, 'half the way from the point before…')
+  assert.ok(Math.abs(distanceNm(own.lat, own.lon, 34, 36) - GAP_NM_ALL / 2) < 1e-6, '…and half to the point after: on the great circle')
+  assert.equal(own.trackDeg, bearingDeg(32, 34, 34, 36), 'the bearing from one to the other')
+  assert.equal(own.altFt, 25_000)
+  assert.equal(own.vsFpm, -500, '10,000 ft down in 20 min')
+  assert.ok(Math.abs(own.gsKt! - GAP_NM_ALL * 3) < 1e-9, 'the distance over the time')
+  assert.ok(Math.abs(own.hM - (30_000 * 0.3048 + 20 + 20_000 * 0.3048 + 22) / 2) < 1e-9, 'on the dotted line’s height')
+  assert.deepEqual([own.onGround, own.ageS, own.staleS, own.gapS, own.info, own.att, own.ghost, own.quality], [false, 600, Infinity, 0, info, null, true, 'adsb2'])
+  const t2 = T + 10_000 + 5 * MIN // a quarter: it moves as the replay plays
+  placeSelected([], '738abc', dayState([GAP], t2), t2, null, info, [], own)
+  assert.ok(Math.abs(distanceNm(32, 34, own.lat, own.lon) - GAP_NM_ALL / 4) < 1e-6)
+  assert.equal(own.altFt, 27_500)
+  assert.equal(own.ageS, 300)
+})
+
+test('placeSelected: in a hole, its altitude unknown when either end’s is, on the ground only when both ends are', () => {
+  const t = T + 10_000 + 10 * MIN
+  const est = (alt: (number | 'g' | null)[]): FleetEntry => {
+    const own = entry('xxxxxx')
+    const l = { ...GAP, alt }
+    placeSelected([], '738abc', dayState([l], t), t, null, null, [], own)
+    return own
+  }
+  for (const alt of [[30_000, 30_000, null, null], [30_000, 'g', 20_000, 20_000], [null, null, null, null]] as (number | 'g' | null)[][]) {
+    const e = est(alt)
+    assert.deepEqual([e.altFt, e.vsFpm, e.onGround], [null, null, false], JSON.stringify(alt))
+  }
+  const ground = est(['g', 'g', 'g', 'g']) // both ends on the ground (a hole while it taxied)
+  assert.deepEqual([ground.altFt, ground.vsFpm, ground.onGround, ground.ghost], [null, null, true, true])
+  assert.ok(Math.abs(ground.hM - 21) < 1e-9, 'the geoid between the two points (the layer puts it on the ground)')
+})
+
+test('bring into view and follow use the estimate in a hole: a jump into it flies there; playing through it keeps following', () => {
+  const placed = (t: number): FleetEntry => {
+    const own = entry('xxxxxx')
+    placeSelected([], '738abc', dayState([GAP], t), t, null, null, [], own)
+    return own
+  }
+  const israel = { west: 33, south: 29, east: 36, north: 32.5 }
+  const jump = placed(T + 10_000 + 10 * MIN)
+  const inside = insetContains(israel, jump.lat, jump.lon)
+  assert.equal(inside, false)
+  assert.equal(flyOver({ bring: true, playing: false, wasInside: false, inside, moved: false }), true, 'flies over the estimate')
+  const a = placed(T + 10_000 + 2 * MIN)
+  const view = { west: a.lon - 0.5, south: a.lat - 0.5, east: a.lon + 0.5, north: a.lat + 0.5 } // about 60 nm across
+  assert.equal(insetContains(view, a.lat, a.lon), true)
+  const b = placed(T + 10_000 + 8 * MIN) // ~46 nm on: out of the view less its inset
+  const left = insetContains(view, b.lat, b.lon)
+  assert.equal(left, false)
+  assert.equal(flyOver({ bring: false, playing: true, wasInside: true, inside: left, moved: false }), true, 'followed through the hole')
 })
 
 test('placeSelected: before its first leg, or no leg this day, it is not drawn (the fleet’s entry goes too)', () => {

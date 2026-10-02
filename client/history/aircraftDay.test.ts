@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { TraceReply } from '../../shared/api.ts'
-import { callsignAt, dayState, legEndMs, legSpans } from './aircraftDay.ts'
+import { isGap } from '../scene/pathGap.ts'
+import { callsignAt, dayState, legEndMs, legMs, legSpans, pointsUpTo } from './aircraftDay.ts'
 import { legFeeds } from './policy.ts'
 
 const MIN = 60_000
@@ -85,6 +86,65 @@ test('heard is exactly where policy’s legFeeds says a leg feeds the track, ms 
       assert.equal(dayState(day, t).kind === 'heard', day.some((l) => legFeeds(l, t)), `at ${t - H} ms`)
     }
   }
+})
+
+// Heard every 10 s, then not from 20 s in until 1,220 s (20 min on, 1.68° north: about 100 nm), then every 10 s again:
+// a receiver's hole, as south of Crete.
+const HOLE = leg(H, [0, 10, 20, 1220, 1230], { lat: [32, 32.01, 32.02, 33.7, 33.71] })
+const SINCE = H + 20_000
+const UNTIL = H + 1_220_000
+
+test('a hole in a leg: gap strictly inside it, with the points either side; heard at both of them and around it', () => {
+  const gap = { kind: 'gap', leg: HOLE, sinceMs: SINCE, untilMs: UNTIL }
+  assert.deepEqual(dayState([HOLE], SINCE), { kind: 'heard', leg: HOLE }, 'at the point before the hole')
+  assert.deepEqual(dayState([HOLE], SINCE + 1), gap, 'just after it')
+  assert.deepEqual(dayState([HOLE], H + 10 * MIN), gap)
+  assert.deepEqual(dayState([HOLE], UNTIL - 1), gap, 'just before the point after it')
+  assert.deepEqual(dayState([HOLE], UNTIL), { kind: 'heard', leg: HOLE }, 'at the point after the hole')
+  for (const t of [H, H + 15_000, UNTIL + 5_000, UNTIL + 10_000 + MIN]) {
+    assert.deepEqual(dayState([HOLE], t), { kind: 'heard', leg: HOLE }, `${(t - H) / 1000} s in`)
+  }
+  assert.equal(dayState([HOLE], UNTIL + 10_000 + MIN + 1).kind, 'quiet', 'after the leg as ever')
+})
+
+test('heard keeps every moment of a leg with a hole that legFeeds gives it, but the hole', () => {
+  for (let t = H - 2_000; t <= UNTIL + 10_000 + MIN + 2_000; t += 997) {
+    const kind = dayState([HOLE], t).kind
+    const inside = t > SINCE && t < UNTIL
+    assert.equal(kind, inside ? 'gap' : legFeeds(HOLE, t) ? 'heard' : t < H ? 'before' : 'quiet', `${t - H} ms in`)
+  }
+})
+
+test('a short step is never a gap, however far it goes; a long one that hardly moves is not either (parked, taxiing)', () => {
+  const at = (l: TraceReply, s: number): string => dayState([l], H + s * 1000).kind
+  assert.equal(at(leg(H, [0, 60], { lat: [32, 32.17] }), 30), 'heard', 'exactly a minute, 10 nm on')
+  assert.equal(at(leg(H, [0, 59], { lat: [32, 32.8] }), 30), 'heard', 'under a minute, 48 nm on')
+  assert.equal(at(leg(H, [0, 900], { alt: ['g', 'g'], lat: [32, 32.003] }), 450), 'heard', '15 min on the ground, 0.2 nm on')
+  assert.equal(at(leg(H, [0, 900], { lat: [32, 32.0316] }), 450), 'heard', '15 min in the air, 1.9 nm on (a holding pattern)')
+  assert.equal(at(leg(H, [0, 60.1], { lat: [32, 32.035] }), 30), 'gap', 'just over a minute and 2 nm: a hole')
+})
+
+test('two holes in a row: a gap in each, heard only at the point between them', () => {
+  const l = leg(H, [0, 100, 200], { lat: [32, 32.1, 32.2] }) // 6 nm each 100 s
+  assert.deepEqual(dayState([l], H + 50_000), { kind: 'gap', leg: l, sinceMs: H, untilMs: H + 100_000 })
+  assert.deepEqual(dayState([l], H + 100_000), { kind: 'heard', leg: l })
+  assert.deepEqual(dayState([l], H + 150_000), { kind: 'gap', leg: l, sinceMs: H + 100_000, untilMs: H + 200_000 })
+})
+
+test('a gap is exactly a step the flown path draws dotted (pathGap.ts isGap, on the points’ whole ms)', () => {
+  const l = leg(H, [0, 30.4, 95.5, 160.6, 400, 1000.3], { lat: [32, 32.01, 32.05, 32.06, 32.2, 32.21], alt: [3000, 3000, 3000, 'g', 'g', 'g'] })
+  for (let i = 0; i + 1 < l.t.length; i++) {
+    const p = (k: number) => ({ tMs: legMs(l.t0Ms, l.t[k]), lat: l.lat[k], lon: l.lon[k] })
+    const t = Math.floor((p(i).tMs + p(i + 1).tMs) / 2)
+    assert.equal(dayState([l], t).kind === 'gap', isGap(p(i), p(i + 1)), `step ${i}`)
+  }
+})
+
+test('a leg’s points at or before a time, as their whole ms place them', () => {
+  const x = leg(0, [0, 16.1, 32.2]) // 32.2 × 1000 is 32200.000000000004 in floating point
+  assert.deepEqual([-1, 0, 16_099, 16_100, 32_199, 32_200, 99_999].map((t) => pointsUpTo(x, t)), [0, 1, 1, 2, 2, 3, 3])
+  assert.equal(pointsUpTo(leg(H, []), H), 0)
+  assert.equal(legMs(0, 32.2), 32_200)
 })
 
 test('a leg’s span runs from its first point to its last, in whole ms', () => {

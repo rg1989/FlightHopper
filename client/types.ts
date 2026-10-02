@@ -165,9 +165,9 @@ export interface FleetEntry {
   // Chase traffic with its own Track (app.ts): the smoothed attitude, its position and speeds written over the entry's
   // dead reckoning for this frame. Absent or null: from the newest sample (traffic.ts trafficHpr).
   att?: { headingDeg: number; pitchDeg: number; rollDeg: number } | null
-  // History: the selected aircraft where it was last heard, while the replay time finds it quiet (history/aircraftDay.ts).
-  // app.ts hands it to the fleet layer as one extra entry; the layer places it whatever its age (ageS and staleS do not
-  // hide it) and draws it faded. An ordinary entry leaves it out.
+  // History: the selected aircraft not heard at the replay time: where it was last heard (quiet), or where it is estimated
+  // to be in a hole of its leg (gap; history/aircraftDay.ts). app.ts hands it to the fleet layer as one extra entry; the
+  // layer places it whatever its age (ageS and staleS do not hide it) and draws it faded. An ordinary entry leaves it out.
   ghost?: boolean
 }
 

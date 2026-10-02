@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Cartesian3, Cartographic } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { altitudeRgba, GROUND_INDEX, UNKNOWN_INDEX } from './altitudeColor.ts'
-import { arc, countUpTo, decimate, firstHeardText, GAP_NM, GAP_S, greatCircle, groundHeights, indexRgba, PATH_LIFT_M, pathRuns } from './routeLine.ts'
+import { arc, countUpTo, cutInGap, decimate, firstHeardText, GAP_NM, GAP_S, greatCircle, groundHeights, indexRgba, PATH_LIFT_M, pathRuns } from './routeLine.ts'
 import type { PathPoint, PathRun } from './routeLine.ts'
 
 test('greatCircle: both ends, ~20 nm steps, every point on the shortest way (TLV → LHR passes over the Alps, not Turkey)', () => {
@@ -124,6 +124,17 @@ test('pathRuns: a cut inside a gap\'s step leaves the gap out (its far end is no
     { gap: true, color: null, t: [10, 200] },
     { gap: false, color: 300, t: [200] },
   ])
+})
+
+test('cutInGap: a cut inside a hole’s step joins the aircraft dotted; not in a heard step, nor once the far end is reached', () => {
+  const pts = [pt(0, 0, 30_000), pt(10, 1, 30_000), pt(200, 20, 30_000), pt(210, 21, 30_000)]
+  const inGap = (cutMs: number): boolean => cutInGap(pts, countUpTo(pts, cutMs))
+  assert.equal(inGap(5_000), false, 'a heard step')
+  assert.equal(inGap(100_000), true, 'inside the hole: its far end is not drawn yet')
+  assert.equal(inGap(200_000), false, 'its far end reached: the hole is a gap run of the path')
+  assert.equal(inGap(205_000), false)
+  assert.equal(inGap(-1), false, 'before the first point: nothing to join')
+  assert.equal(inGap(Infinity), false, 'live: the whole path, no step after it')
 })
 
 test('pathRuns: a gap is more than GAP_S and more than GAP_NM; exactly either is not one', () => {

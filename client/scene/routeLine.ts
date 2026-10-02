@@ -10,6 +10,9 @@ import type { Label, PointPrimitive, Polyline, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import type { RoutePlace } from '../../shared/info.ts'
 import { altitudeIndex, altitudeRgba, GROUND_INDEX, STEP_FT, UNKNOWN_INDEX } from './altitudeColor.ts'
+import { isGap } from './pathGap.ts'
+
+export { GAP_NM, GAP_S } from './pathGap.ts' // the rule for a hole (a step longer than both), drawn dotted here
 
 export interface LinePoint {
   lat: number
@@ -33,11 +36,6 @@ export interface PathRun {
   color: number // the altitudeIndex it is drawn in: its 1,000 ft band's floor, GROUND_INDEX or UNKNOWN_INDEX (a gap: UNKNOWN_INDEX, unused)
   points: PathPoint[]
 }
-
-// A step longer than both was not heard: a gap. One of them alone is not: a parked or taxiing aircraft goes quiet for
-// minutes a few hundred metres on, and a cruising jet covers 5 nm between two fixes 40 s apart.
-export const GAP_S = 60
-export const GAP_NM = 2
 
 /** The colour a step to p is drawn in: p's altitudeIndex down to its 1,000 ft band's floor; ground and unknown are bands of their own. */
 function bandOf(p: PathPoint): number {
@@ -76,7 +74,7 @@ export function pathRuns(points: readonly PathPoint[], cutMs: number): PathRun[]
       continue
     }
     const q = points[i - 1]
-    if (p.tMs - q.tMs > GAP_S * 1000 && distanceNm(q.lat, q.lon, p.lat, p.lon) > GAP_NM) {
+    if (isGap(q, p)) {
       runs.push({ gap: true, color: UNKNOWN_INDEX, points: [q, p] })
       runs.push((run = { gap: false, color, points: [p] }))
     } else if (color === run.color) run.points.push(p)
@@ -86,6 +84,15 @@ export function pathRuns(points: readonly PathPoint[], cutMs: number): PathRun[]
     } else runs.push((run = { gap: false, color, points: [q, p] }))
   }
   return runs
+}
+
+/**
+ * The cut is inside a hole of the path (points in time order, n of them at or before the cut: countUpTo): the step from
+ * the last of those to the next is a gap. History's replay time there finds the aircraft between two points no receiver
+ * heard between: the line from the last one to it is that hole's.
+ */
+export function cutInGap(points: readonly PathPoint[], n: number): boolean {
+  return n > 0 && n < points.length && isGap(points[n - 1], points[n])
 }
 
 /** On the ground the path stands this far above the drawn ground: at hM (the geoid's) it is under it, and hidden. */
@@ -254,6 +261,7 @@ export class RouteLine {
   #nFlown = 0
   #nGaps = 0
   #join: Polyline // the last flown point → the aircraft, in the last run's colour
+  #joinGap: Polyline // …dotted instead when the aircraft is inside a hole (History: the replay time is in one)
   #leadIn: Polyline // the origin airport → the first point
   #ahead: Polyline
   #dot: PointPrimitive
@@ -284,6 +292,7 @@ export class RouteLine {
     this.#points = p.add(new PointPrimitiveCollection())
     this.#labels = p.add(new LabelCollection())
     this.#join = this.#lines.add(flownLine())
+    this.#joinGap = this.#lines.add(dottedLine())
     this.#leadIn = this.#lines.add(dottedLine())
     this.#ahead = this.#lines.add({ width: 3, material: Material.fromType(Material.PolylineDashType, { color: AHEAD, gapColor: AHEAD_GAP, dashLength: 16 }), show: false })
     this.#dot = this.#points.add({ pixelSize: 9, color: AHEAD, outlineColor: Color.WHITE, outlineWidth: 2, show: false, disableDepthTestDistance: Number.POSITIVE_INFINITY })
@@ -295,8 +304,9 @@ export class RouteLine {
   /**
    * at: the selected aircraft where it is drawn (null: nothing to show, e.g. none selected or the 3-D chase); a fleet
    * entry will do (its altFt is not needed: the join keeps the last run's colour). path: its points in time order; the
-   * part after cutMs is not drawn (cutMs: Infinity live, the replay time in history). dest, origin: where its route ends
-   * and starts (null: unknown, no line ahead, no lead-in).
+   * part after cutMs is not drawn (cutMs: Infinity live, the replay time in history); a cut inside a hole (cutInGap)
+   * joins the aircraft dotted, along the great circle where the hole's line runs once its far end is reached. dest,
+   * origin: where its route ends and starts (null: unknown, no line ahead, no lead-in).
    * Redrawn at most every REDRAW_MS (at once for another path or route), and only when something moved: a point added
    * or cut, the aircraft by STILL_DEG, the route. Otherwise nothing is allocated.
    * ponytail: the line ahead keeps the aircraft's height all the way, the lead-in the first point's (a descent or climb
@@ -322,7 +332,7 @@ export class RouteLine {
     if (newPath) this.#grounds.clear()
     if (newPoints || newGround) this.#drawPath(path, cutMs, nowMs)
     if (newPath || newOrigin) this.#drawLeadIn(first, origin)
-    if (newPoints || newGround || moved) this.#drawJoin(last, at)
+    if (newPoints || newGround || moved) this.#drawJoin(last, at, cutInGap(path, n))
     if (moved || newDest) this.#drawAhead(at, dest)
     this.#first = first
     this.#last = last
@@ -425,12 +435,17 @@ export class RouteLine {
     if (this.#firstLabel.text !== text) this.#firstLabel.text = text
   }
 
-  /** The last flown point to the aircraft. From a point on read ground both ends stand on it (the aircraft's hM there is the geoid's). */
-  #drawJoin(p: PathPoint | null, at: LinePoint): void {
-    this.#join.show = p !== null
+  /**
+   * The last flown point to the aircraft. From a point on read ground both ends stand on it (the aircraft's hM there is
+   * the geoid's). Inside a hole (unheard) dotted, along the great circle as the hole's own line.
+   */
+  #drawJoin(p: PathPoint | null, at: LinePoint, unheard: boolean): void {
+    this.#join.show = p !== null && !unheard
+    this.#joinGap.show = p !== null && unheard
     if (p === null) return
     const h = this.#lastLift
-    this.#join.positions = [Cartesian3.fromDegrees(p.lon, p.lat, h ?? p.hM), Cartesian3.fromDegrees(at.lon, at.lat, h ?? at.hM)]
+    if (unheard) this.#joinGap.positions = arc({ lat: p.lat, lon: p.lon, hM: h ?? p.hM }, { lat: at.lat, lon: at.lon, hM: h ?? at.hM })
+    else this.#join.positions = [Cartesian3.fromDegrees(p.lon, p.lat, h ?? p.hM), Cartesian3.fromDegrees(at.lon, at.lat, h ?? at.hM)]
   }
 
   /** The dashed great circle to the destination, with its dot and code. */

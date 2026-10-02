@@ -450,7 +450,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const aimAt = new Cartesian3() // the chased aircraft's middle, where the chase camera looks
   const onScreen: FleetEntry[] = [] // reused every frame
   // History, every frame (history/selected.ts placeSelected): the fleet's entries with the selected aircraft's own as its
-  // day says (its track's state, or a ghost where it was last heard, written into histOwn), that entry, its card's numbers.
+  // day says (its track's state, or a ghost where it was last heard or is estimated to be in a hole of its leg, written into
+  // histOwn), that entry, its card's numbers.
   const histAll: FleetEntry[] = []
   const histOwn: FleetEntry = {
     hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 0,
@@ -873,8 +874,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * History, every frame: the feed's samples up to t into the fleet (after a seek, from back(step) before t), and the
    * selected aircraft's up to t + lookahead(step) into its track, as its day says (ds): heard, its leg's (its trace: 1–4 s
-   * points with track, rate and roll, where the files have 10 s points without them); not heard, none (no track: it is
-   * drawn where it was last heard); its day not known yet, the feed's.
+   * points with track, rate and roll, where the files have 10 s points without them); not heard (a hole in its leg too),
+   * none (no track: it is drawn where it was last heard, or estimated to be); its day not known yet, the feed's.
    * The chase traffic is drawn from the fleet (its samples already point at their next position): no tracks of its own,
    * which on 10 s samples would stop between them.
    */
@@ -970,8 +971,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
 
   /**
    * History, every frame: the selected aircraft's flights on the bar (amber; none selected: none), and its flown path:
-   * the leg it is heard on or was last (cut at the replay time by the line), none before its first or on a day it did
-   * not fly; until its day is known, the feed's samples (historyTick).
+   * the leg it is heard on, is in a hole of, or was last on (cut at the replay time by the line), none before its first
+   * or on a day it did not fly; until its day is known, the feed's samples (historyTick).
    */
   function showSelectedDay(h: HistoryMode, day: SelectedDay | null, ds: DayState | null): void {
     const legs = day?.legs ?? NO_LEGS
@@ -979,7 +980,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       h.legsShown = legs
       h.bar.setLegs(legSpans(legs))
     }
-    const leg = ds === null ? undefined : ds.kind === 'heard' || ds.kind === 'quiet' ? ds.leg : null
+    const leg = ds === null ? undefined : ds.kind === 'heard' || ds.kind === 'gap' || ds.kind === 'quiet' ? ds.leg : null
     if (leg === h.pathLeg) return
     h.pathLeg = leg
     if (leg !== undefined) selPath = leg === null ? [] : tracePath(leg)
@@ -1455,7 +1456,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
           histCardS = ts
         } else {
           s = chasing ? chased : null // no track: a chase that is on stays where it was (as live's "Signal lost"); Esc leaves it
-          histCardS = ds.kind === 'quiet' && histAt !== undefined ? entryState(histAt) : null // its last known numbers
+          // Its last known numbers, or in a hole of its leg the estimate's (both dimmed: the card says not heard).
+          histCardS = (ds.kind === 'quiet' || ds.kind === 'gap') && histAt !== undefined ? entryState(histAt) : null
         }
       } else {
         histAt = undefined
