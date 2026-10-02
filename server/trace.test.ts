@@ -47,11 +47,12 @@ function leg(json: unknown, atMs: number): TraceReply {
   return r
 }
 
-test('traceUrl: the live file within the last 24 h, else the day file of the UTC date', () => {
+test('traceUrl: the live file within the last 25 h (it keeps 24 h + 60 min), else the day file of the UTC date', () => {
   const live = 'https://adsb.lol/data/traces/d1/trace_full_8965d1.json'
   assert.equal(traceUrl(BASE, '8965d1', NOW - HOUR, NOW), live)
-  assert.equal(traceUrl(BASE, '8965d1', NOW - 24 * HOUR + 1, NOW), live, '1 ms inside the window')
-  assert.equal(traceUrl(BASE, '8965d1', NOW - 24 * HOUR, NOW), 'https://adsb.lol/globe_history/2026/10/01/traces/d1/trace_full_8965d1.json')
+  assert.equal(traceUrl(BASE, '8965d1', NOW - 24 * HOUR, NOW), live, 'a day ago: still in the live file')
+  assert.equal(traceUrl(BASE, '8965d1', NOW - 25 * HOUR + 1, NOW), live, '1 ms inside the window')
+  assert.equal(traceUrl(BASE, '8965d1', NOW - 25 * HOUR, NOW), 'https://adsb.lol/globe_history/2026/10/01/traces/d1/trace_full_8965d1.json')
   assert.equal(traceUrl(BASE, '8965d1', NOW - 30 * 24 * HOUR, NOW), 'https://adsb.lol/globe_history/2026/09/02/traces/d1/trace_full_8965d1.json')
 })
 
@@ -81,6 +82,21 @@ test('traceReply: the leg flying at atMs, the last one starting at or before it'
 test('traceReply: the whole leg comes back, the points after atMs too (the client cuts)', () => {
   assert.equal(leg(FILE, LEG1_MS).t.length, 3)
   assert.equal(leg(FILE, LEG2_MS + 1000).t.length, 3)
+})
+
+test('traceReply: only flag 2 starts a leg; stale (1), geometric altitude (8) and both (9) in the middle of one do not', () => {
+  const flagged = {
+    timestamp: DAY_S,
+    trace: [
+      row(100, 32, 34.8, 1000),
+      row(110, 32.01, 34.81, 1100, { flags: 1 }),
+      row(120, 32.02, 34.82, 1200, { flags: 9 }),
+      row(130, 32.03, 34.83, 1300, { flags: 8 }),
+      row(140, 32.04, 34.84, 1400, { flags: 11 }), // new leg (2) with stale (1) and geometric altitude (8) set too
+    ],
+  }
+  assert.deepEqual(leg(flagged, DAY_S * 1000 + 100_000).alt, [1000, 1100, 1200, 1300], 'leg 1 keeps all four points')
+  assert.deepEqual(leg(flagged, DAY_S * 1000 + 140_000).alt, [1400], 'flag 2 among other bits still starts leg 2')
 })
 
 test('traceReply: columns of a leg: t, 5-decimal lat/lon, alt g/number/null, 0.1 speeds, vs whichever kind, roll', () => {
@@ -176,9 +192,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 /** A fetch that records each call (url and headers) and answers with what `reply` returns or throws. */
 function fakeHost(reply: (url: string) => Response | Promise<Response>) {
-  const calls: { url: string; headers: Headers }[] = []
+  const calls: { url: string; headers: Headers; signal: AbortSignal | null | undefined }[] = []
   const fetchFn = (async (url: string, init?: RequestInit) => {
-    calls.push({ url, headers: new Headers(init?.headers) })
+    calls.push({ url, headers: new Headers(init?.headers), signal: init?.signal })
     return reply(url)
   }) as unknown as typeof fetch
   return { calls, fetchFn }
@@ -188,7 +204,7 @@ function storeOn(fetchFn: typeof fetch, clock: { t: number }, base?: string) {
   return new TraceStore({ base, userAgent: 'test-agent', fetchFn, nowMs: () => clock.t })
 }
 
-test('TraceStore: the live file for a time within 24 h, the day file for an older one; its user-agent and gzip', async () => {
+test('TraceStore: the live file for a time within 25 h, the day file for an older one; its user-agent, gzip and a time limit', async () => {
   const { calls, fetchFn } = fakeHost(() => json(FILE))
   const store = storeOn(fetchFn, { t: NOW })
   await store.get('4691C4', NOW - HOUR) // upper case is fine
@@ -200,6 +216,7 @@ test('TraceStore: the live file for a time within 24 h, the day file for an olde
   for (const c of calls) {
     assert.equal(c.headers.get('user-agent'), 'test-agent')
     assert.equal(c.headers.get('accept-encoding'), 'gzip')
+    assert.ok(c.signal instanceof AbortSignal && !c.signal.aborted, 'a stuck download ends by itself')
   }
 })
 
@@ -264,12 +281,13 @@ test('TraceStore: a 404 is null, and remembered as long as a file would be', asy
   assert.equal(calls.length, 4)
 })
 
-test('TraceStore: a network error, a bad status (even with a JSON body) or a body that is not JSON is null and not remembered', async () => {
-  let mode: 'down' | 'busy' | 'junk' | 'ok' = 'down'
+test('TraceStore: a network error, a bad status (even with a JSON body), a body that is not JSON or a gzip that is cut is null and not remembered', async () => {
+  let mode: 'down' | 'busy' | 'junk' | 'cut' | 'ok' = 'down'
   const { calls, fetchFn } = fakeHost(() => {
     if (mode === 'down') throw new Error('ECONNRESET')
     if (mode === 'busy') return json({ error: 'Too Many Requests' }, 429)
     if (mode === 'junk') return new Response('<html>not a trace</html>', { status: 200 })
+    if (mode === 'cut') return new Response(gzipSync(JSON.stringify(FILE)).subarray(0, 40), { status: 200 }) // gzip, but cut short
     return json(FILE)
   })
   const store = storeOn(fetchFn, { t: NOW })
@@ -278,11 +296,30 @@ test('TraceStore: a network error, a bad status (even with a JSON body) or a bod
   assert.equal(await store.get(HEX, LEG1_MS), null)
   mode = 'junk'
   assert.equal(await store.get(HEX, LEG1_MS), null)
+  mode = 'cut'
+  assert.equal(await store.get(HEX, LEG1_MS), null)
   mode = 'ok'
   assert.equal((await store.get(HEX, LEG1_MS))?.t0Ms, LEG1_MS)
-  assert.equal(calls.length, 4, 'each failure was asked again at once')
+  assert.equal(calls.length, 5, 'each failure was asked again at once')
   await store.get(HEX, LEG1_MS)
-  assert.equal(calls.length, 4, 'the good answer is kept')
+  assert.equal(calls.length, 5, 'the good answer is kept')
+})
+
+test('TraceStore: the body of an answer that is not 200 is not read, it is cancelled', async () => {
+  for (const status of [404, 429, 500, 201]) {
+    const seen = { cancelled: false }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{}'))
+        // It ends by itself, so a store that reads it fails the check below instead of waiting for ever.
+        setTimeout(() => { try { controller.close() } catch { /* cancelled first, as it should be */ } }, 20)
+      },
+      cancel() { seen.cancelled = true },
+    })
+    const { fetchFn } = fakeHost(() => new Response(body, { status }))
+    assert.equal(await storeOn(fetchFn, { t: NOW }).get(HEX, LEG1_MS), null, String(status))
+    assert.equal(seen.cancelled, true, `status ${status}`)
+  }
 })
 
 test('TraceStore: a body that is still gzip (no Content-Encoding to undo) is unzipped', async () => {
@@ -336,15 +373,33 @@ test('TraceStore: a file fetched again after it expired counts as the newest whe
   assert.equal(calls.length, 53, 'the oldest left')
 })
 
-test('TraceStore: a hex that is not 6 hex digits (optionally after ~), or a time that is not a number, is null with no request', async () => {
+test('TraceStore: a hex that is not 6 hex digits (optionally after ~) is null with no request', async () => {
   const { calls, fetchFn } = fakeHost(() => json(FILE))
   const store = storeOn(fetchFn, { t: NOW })
   for (const hex of ['', 'abc', '4691c45', 'g691c4', '4691c4 ', '4691c4/../x', '../../etc/passwd', '4691c4.json', '~~4691c4']) {
     assert.equal(await store.get(hex, LEG1_MS), null, JSON.stringify(hex))
   }
-  assert.equal(await store.get(HEX, Number.NaN), null)
-  assert.equal(await store.get(HEX, Number.POSITIVE_INFINITY), null)
   assert.equal(calls.length, 0)
   await store.get('~ABC123', LEG1_MS)
   assert.deepEqual(calls.map((c) => c.url), ['https://adsb.lol/globe_history/2026/09/22/traces/23/trace_full_~abc123.json'])
+})
+
+test('TraceStore: a time that is no date from the year 2000 to 9999 is null with no request', async () => {
+  const { calls, fetchFn } = fakeHost(() => json(FILE))
+  const store = storeOn(fetchFn, { t: NOW })
+  const outside = [
+    Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY,
+    -1e16, // beyond what a Date holds: toISOString throws
+    Date.UTC(-1, 0, 1), // year -1: "-000001" in an ISO string, a malformed URL
+    Date.UTC(1999, 11, 31, 23, 59, 59, 999),
+    Date.UTC(10000, 0, 1), // "+010000"
+  ]
+  for (const at of outside) assert.equal(await store.get(HEX, at), null, String(at))
+  assert.equal(calls.length, 0)
+  await store.get(HEX, Date.UTC(2000, 0, 1))
+  await store.get(HEX, Date.UTC(9999, 11, 31, 23, 59, 59, 999))
+  assert.deepEqual(calls.map((c) => c.url), [
+    'https://adsb.lol/globe_history/2000/01/01/traces/c4/trace_full_4691c4.json',
+    'https://adsb.lol/data/traces/c4/trace_full_4691c4.json', // the far future is "within 25 h" of now
+  ])
 })

@@ -1,5 +1,5 @@
 // server/trace.ts
-// One aircraft's flown path from adsb.lol's trace files (keyless, ODbL 1.0): the live file of the last 24 h
+// One aircraft's flown path from adsb.lol's trace files (keyless, ODbL 1.0): the live file of the last 25 h
 //   <base>/data/traces/<xx>/trace_full_<hex>.json
 // or the file of one UTC day
 //   <base>/globe_history/YYYY/MM/DD/traces/<xx>/trace_full_<hex>.json            (<xx> = the last two hex digits)
@@ -11,12 +11,15 @@
 // file (2026-10-02): 14 columns a row, `flight` in an acObj padded to 8 characters, a day file's timestamp is its UTC
 // midnight and a live file's is its first point.
 
-import { gunzipSync } from 'node:zlib'
+import { promisify } from 'node:util'
+import { gunzip } from 'node:zlib'
 import type { TraceReply } from '../shared/api.ts'
 import { geoidN } from '../shared/geoid.ts'
 
+const gunzipAsync = promisify(gunzip) // off the event loop: a day file is a few MB unzipped
+
 export const TRACE_BASE = 'https://adsb.lol'
-const LIVE_WINDOW_MS = 24 * 3_600_000
+const LIVE_WINDOW_MS = 25 * 3_600_000 // the live file keeps 24 h + 60 min; tar1090 turns to a day file 60 min after its UTC day ends
 /** A leg that ended longer ago than this has landed long since: nothing is flying on it. */
 const LANDED_MS = 6 * 3_600_000
 const LIVE_TTL_MS = 30_000 // the live file grows by the second
@@ -29,7 +32,7 @@ const HEX = /^~?[0-9a-f]{6}$/
 
 const isLive = (atMs: number, nowMs: number) => nowMs - atMs < LIVE_WINDOW_MS
 
-/** The live file (atMs within the last 24 h) or the day file of atMs's UTC date. `hex` is lowercase, `~` kept. */
+/** The live file (atMs within the last 25 h) or the day file of atMs's UTC date. `hex` is lowercase, `~` kept. */
 export function traceUrl(base: string, hex: string, atMs: number, nowMs: number): string {
   const file = `traces/${hex.slice(-2)}/trace_full_${hex}.json`
   if (isLive(atMs, nowMs)) return `${base}/data/${file}`
@@ -110,14 +113,16 @@ export interface TraceStoreOpts {
 }
 
 /** A downloaded body as text: the files are stored gzip; the host says so (fetch undoes it), but raw gzip bytes are unzipped too. */
-function bodyText(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes)
+async function bodyText(bytes: Uint8Array): Promise<string> {
+  const plain = bytes[0] === 0x1f && bytes[1] === 0x8b ? await gunzipAsync(bytes) : bytes
+  return new TextDecoder().decode(plain)
 }
 
 /**
  * Fetches trace files and cuts the leg flying at the asked time (traceReply). The parsed file is kept per URL (a live file 30 s,
  * a day file 1 h, at most 50 files), so a replay selecting several aircraft, or one aircraft at several times, costs one request
- * per file. A 404 is kept as long as a file would be; a network error, a bad status or a body that is not JSON is not kept.
+ * per file. A 404 is kept as long as a file would be; a network error, a bad status, a gzip that is cut or a body that is not
+ * JSON is not kept (and the body of an answer that is not 200 is not read).
  * Gets for one file at the same moment share one request.
  */
 export class TraceStore {
@@ -135,10 +140,11 @@ export class TraceStore {
     this.#now = o.nowMs ?? Date.now
   }
 
-  /** null: no trace (404, or a failed fetch), a hex that is not an address, or no leg at atMs. */
+  /** null: no trace (404, or a failed fetch), a hex that is not an address, a time that is no date from 2000 to 9999, or no leg at atMs. */
   async get(hex: string, atMs: number): Promise<TraceReply | null> {
     const h = hex.toLowerCase()
-    if (!HEX.test(h) || !Number.isFinite(atMs)) return null
+    const year = new Date(atMs).getUTCFullYear() // NaN when atMs is no date: NaN, ±Infinity, beyond ±8.64e15
+    if (!HEX.test(h) || !(year >= 2000 && year <= 9999)) return null // outside it toISOString gives no 4-digit year
     const now = this.#now()
     const json = await this.#file(traceUrl(this.#base, h, atMs, now), isLive(atMs, now) ? LIVE_TTL_MS : DAY_TTL_MS)
     return json === null ? null : traceReply(json, h, atMs)
@@ -163,14 +169,14 @@ export class TraceStore {
         headers: { 'user-agent': this.#userAgent, 'accept-encoding': 'gzip' },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       })
-      if (res.status === 404) {
-        this.#keep(url, ttlMs, null)
+      if (res.status !== 200) {
+        void res.body?.cancel().catch(() => {}) // not read: let the connection go
+        if (res.status === 404) this.#keep(url, ttlMs, null)
         return null
       }
-      if (!res.ok) return null
-      json = JSON.parse(bodyText(new Uint8Array(await res.arrayBuffer())))
+      json = JSON.parse(await bodyText(new Uint8Array(await res.arrayBuffer())))
     } catch {
-      return null // network error, timeout, or a body that is not JSON
+      return null // network error, timeout, a gzip that is cut, or a body that is not JSON
     }
     this.#keep(url, ttlMs, json)
     return json
