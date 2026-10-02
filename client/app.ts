@@ -49,8 +49,8 @@ import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
 import { KnownHexes, SlotBlock, SlotFailure, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
-  MapMoves, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight, keepLegs,
-  placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, aheadOf, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight,
+  keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './history/selected.ts'
 import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
@@ -510,7 +510,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     legsShown: readonly TraceReply[] // the legs on the bar (amber)
     pathLeg: TraceReply | null | undefined // the leg the flown path shows (null none; undefined: the feed's samples meanwhile)
     bring: boolean // bring the selected aircraft into view (a jump), until its day for that time is known
-    inside: boolean // it was in view (drawn in the clear part of the map, inset) last frame: playing, the map follows it out of it
+    inside: boolean // in view last frame (the clear part of the map, inset), or a flight over it began: playing, followed out of it
     flyUntilMs: number // the map is flying over it until then (performance.now(); -Infinity: not): no other flight meanwhile
     hadAt: boolean // it was drawn last frame (a first position after none brings it into view)
     askedMs: number // performance.now() of the frame's last ask for half hours (-Infinity: ask at the next frame)
@@ -1021,9 +1021,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    * known, and again when its day for that time comes, which may put it elsewhere) or at its first position after none,
    * and followed while playing when it leaves the view (selected.ts viewMove). In view is where the person can see it: drawn
    * inside the part of the canvas that no card, panel, bar or button covers (mapClear), less a tenth of that part on each
-   * side (selected.ts inArea). The map flies over it at the height it has, to the middle of that part (centredOn), and asks
-   * for the half hours of where it lands as it takes off (v: this frame's view, whose size it keeps). Not in the chase, which
-   * needs no help, nor while a scrubber seek rests or a flight is under way.
+   * side (selected.ts inArea). The map flies over it at the height it has, to the middle of that part (centredOn), aimed
+   * where it will be as the flight lands (selected.ts aheadOf: the replay goes on meanwhile), and asks for the half hours
+   * of where it lands as it takes off (v: this frame's view, whose size it keeps). Not in the chase, which needs no help,
+   * nor while a scrubber seek rests or a flight is under way (in view stays what it was then: viewMove).
    */
   function keepInView(h: HistoryMode, now: number, t: number, day: SelectedDay | null, ds: DayState | null, v: Circle): void {
     const at = histAt
@@ -1042,10 +1043,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       nowhere: ds?.kind === 'before' || ds?.kind === 'none',
     })
     h.bring = m.bring
-    h.inside = inside
+    h.inside = m.inside
     if (m.fly === null || at === undefined) return
     const flyS = m.fly === 'bring' ? BRING_FLY_S : FOLLOW_FLY_S
-    const to = centredOn(at, area)
+    const runs = h.clock.playing && !h.clock.stalled // the replay the flight takes: none while paused or waiting for data
+    const to = centredOn(aheadOf(at, ds, t, runs ? flyS * 1000 * h.clock.rate : 0), area)
     enterBrowse(viewer, to, { heightM: viewer.camera.positionCartographic.height, flyS })
     h.flyUntilMs = now + flyS * 1000
     askSlots(h, t, { lat: to.lat, lon: to.lon, nm: v.nm })
@@ -1077,7 +1079,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    * Where the map looks to draw e at the middle of the clear area (selected.ts cameraTarget): the ground under that pixel
    * against the ground at the canvas's centre, both read from the camera as it is. The aircraft's own place where there is none.
    */
-  function centredOn(e: FleetEntry, area: Rect): { lat: number; lon: number } {
+  function centredOn(e: { lat: number; lon: number; hM: number }, area: Rect): { lat: number; lon: number } {
     const c = viewer.canvas
     const m = areaMiddle(area)
     const under = groundAt(c.clientWidth / 2, c.clientHeight / 2)

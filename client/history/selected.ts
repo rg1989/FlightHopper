@@ -311,6 +311,20 @@ export function estimateState(e: FleetEntry): RenderState {
 }
 
 /**
+ * Where the aircraft is on leg at `at`: along a hole of it as the estimate goes, else its last point by then (past the
+ * leg's end, where it ends); null before its first point.
+ */
+function onLegAt(leg: TraceReply, at: number): { lat: number; lon: number } | null {
+  const then = dayState([leg], at)
+  if (then.kind === 'gap') {
+    const p = inHole(then, at)
+    return { lat: p.lat, lon: p.lon }
+  }
+  const n = pointsUpTo(leg, at)
+  return n === 0 ? null : { lat: leg.lat[n - 1], lon: leg.lon[n - 1] }
+}
+
+/**
  * Where History's asks are centred in the chase (app.ts): where the chased aircraft will be about AHEAD_MS of replay after
  * t, on its leg (heard or in a hole of it: its last point by then, or along a hole as the estimate goes; past the leg's
  * end, where it ends), so its view is asked for before it outruns what is loaded. Null off a leg (its day not known,
@@ -318,14 +332,28 @@ export function estimateState(e: FleetEntry): RenderState {
  */
 export function chaseAskAt(ds: DayState | null, t: number): { lat: number; lon: number } | null {
   if (ds === null || (ds.kind !== 'heard' && ds.kind !== 'gap')) return null
-  const at = t + AHEAD_MS
-  const then = dayState([ds.leg], at)
-  if (then.kind === 'gap') {
-    const p = inHole(then, at)
-    return { lat: p.lat, lon: p.lon }
+  return onLegAt(ds.leg, t + AHEAD_MS)
+}
+
+/**
+ * Where the selected aircraft, drawn as e at t (placeSelected's entry), will be drawn aheadMs of replay later: the map's
+ * flight over it (app.ts keepInView) aims there, as the replay goes on while the map flies (at 60x a 0.6 s flight is 36 s,
+ * which at a close zoom carried it out of view again before the map got there). In a hole of its leg (ds gap): the
+ * estimate then (past the hole, its leg's point by then: onLegAt). Quiet: where it was last heard, which does not move.
+ * Otherwise (heard: its track's state; its day not known yet: the fleet's own) along its track at its speed, as the fleet
+ * dead-reckons it (never past its staleS); its height kept.
+ */
+export function aheadOf(e: FleetEntry, ds: DayState | null, t: number, aheadMs: number): { lat: number; lon: number; hM: number } {
+  const here = { lat: e.lat, lon: e.lon, hM: e.hM }
+  if (!(aheadMs > 0) || ds?.kind === 'quiet') return here
+  if (ds?.kind === 'gap') {
+    const p = onLegAt(ds.leg, t + aheadMs)
+    return p === null ? here : { lat: p.lat, lon: p.lon, hM: e.hM }
   }
-  const n = pointsUpTo(ds.leg, at)
-  return n === 0 ? null : { lat: ds.leg.lat[n - 1], lon: ds.leg.lon[n - 1] }
+  const s = Math.min(aheadMs / 1000, e.staleS - e.ageS)
+  if (e.trackDeg === null || e.gsKt === null || !(e.gsKt > 0) || !(s > 0)) return here
+  const p = destination(e.lat, e.lon, e.trackDeg, (e.gsKt * s) / 3600)
+  return { lat: p.lat, lon: p.lon, hM: e.hM }
 }
 
 /**
@@ -399,17 +427,20 @@ export function restartsTrack(was: TraceReply | 'feed' | 'none' | null, next: Tr
 
 /**
  * keepInView's rule for this frame (top-down, with a selection; app.ts flies): over the selected aircraft ('bring' or
- * 'follow') or not (null), and whether a pending bring stays pending. Nothing while the map flies already or a scrubber
- * seek rests (busy). Bring: a jump, entering History or selecting (bring), and its first position after none (had false,
- * at true: before its first leg to heard, a day answer placing it), unless the person moved the map in the last 1.5 s;
- * flyOver says when (out of view: outside the clear part of the map, inArea; while playing, followed out of it). A pending
- * bring ends once its day for that time says where it was (dayKnown and at) or that it was nowhere (nowhere: before its
- * first leg, none that day).
+ * 'follow') or not (null), whether a pending bring stays pending, and whether it counts as in view next frame (its
+ * wasInside then). Nothing while the map flies already or a scrubber seek rests (busy), and in view stays what it was:
+ * the aircraft moves on under the flight (at 60x a 0.6 s flight is 36 s of replay), and where it is drawn meanwhile must
+ * not read as the person panning away from it. Bring: a jump, entering History or selecting (bring), and its first
+ * position after none (had false, at true: before its first leg to heard, a day answer placing it), unless the person
+ * moved the map in the last 1.5 s; flyOver says when (out of view: outside the clear part of the map, inArea; while
+ * playing, followed out of it). A flight puts it in view (it is aimed where the aircraft will be as it lands: aheadOf), so
+ * one that lands short of it is followed again. A pending bring ends once its day for that time says where it was
+ * (dayKnown and at) or that it was nowhere (nowhere: before its first leg, none that day).
  */
 export function viewMove(o: { busy: boolean; bring: boolean; had: boolean; at: boolean; playing: boolean; wasInside: boolean;
-  inside: boolean; moved: boolean; dayKnown: boolean; nowhere: boolean }): { fly: 'bring' | 'follow' | null; bring: boolean } {
-  if (o.busy) return { fly: null, bring: o.bring }
+  inside: boolean; moved: boolean; dayKnown: boolean; nowhere: boolean }): { fly: 'bring' | 'follow' | null; bring: boolean; inside: boolean } {
+  if (o.busy) return { fly: null, bring: o.bring, inside: o.wasInside }
   const bring = o.bring || (!o.had && o.at && !o.moved)
   const fly = o.at && flyOver({ bring, playing: o.playing, wasInside: o.wasInside, inside: o.inside, moved: o.moved })
-  return { fly: fly ? (bring ? 'bring' : 'follow') : null, bring: o.bring && !(o.dayKnown && (o.at || o.nowhere)) }
+  return { fly: fly ? (bring ? 'bring' : 'follow') : null, bring: o.bring && !(o.dayKnown && (o.at || o.nowhere)), inside: fly || o.inside }
 }

@@ -10,8 +10,8 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
 import {
-  MapMoves, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, inArea, inSight,
-  keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, aheadOf, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, inArea,
+  inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './selected.ts'
 
 const MIN = 60_000
@@ -328,8 +328,8 @@ test('inArea: an aircraft that flew under the card is not in view, though the ca
   assert.deepEqual([inArea(flying, canvas), inArea(underCard, canvas)], [true, true], 'the canvas alone: it stays "in view" under the card')
   assert.deepEqual([inArea(flying, clear), inArea(underCard, clear)], [true, false], 'the clear area: it left')
   const base = { busy: false, bring: false, had: true, at: true, playing: true, moved: false, dayKnown: true, nowhere: false }
-  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(underCard, clear) }), { fly: 'follow', bring: false }, 'followed out from under it')
-  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(flying, clear) }), { fly: null, bring: false })
+  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(underCard, clear) }), { fly: 'follow', bring: false, inside: true }, 'followed out from under it')
+  assert.deepEqual(viewMove({ ...base, wasInside: inArea(flying, clear), inside: inArea(flying, clear) }), { fly: null, bring: false, inside: true })
 })
 
 test('areaMiddle: the middle of the clear area; none when nothing is clear', () => {
@@ -575,20 +575,77 @@ test('trackSource and restartsTrack: the feed until its day is known, its leg wh
 
 test('viewMove: a jump brings it in, playing follows it out of the view; nothing while the map flies or a seek rests', () => {
   const base = { busy: false, bring: false, had: true, at: true, playing: false, wasInside: false, inside: false, moved: false, dayKnown: true, nowhere: false }
-  assert.deepEqual(viewMove({ ...base, bring: true }), { fly: 'bring', bring: false }, 'a jump, its day known: brought in, done')
-  assert.deepEqual(viewMove({ ...base, bring: true, dayKnown: false }), { fly: 'bring', bring: true }, 'brought in again when its day comes')
-  assert.deepEqual(viewMove({ ...base, bring: true, inside: true }), { fly: null, bring: false }, 'in view already')
-  assert.deepEqual(viewMove({ ...base, bring: true, at: false, nowhere: true }), { fly: null, bring: false }, 'nowhere that day: done')
-  assert.deepEqual(viewMove({ ...base, bring: true, at: false }), { fly: null, bring: true }, 'not placed yet: pending')
-  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true }), { fly: 'follow', bring: false }, 'playing, it just left the view')
-  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true, moved: true }), { fly: null, bring: false }, 'the person moves the map')
-  assert.deepEqual(viewMove({ ...base, bring: true, busy: true }), { fly: null, bring: true }, 'the map flies already, or a seek rests')
+  assert.deepEqual(viewMove({ ...base, bring: true }), { fly: 'bring', bring: false, inside: true }, 'a jump, its day known: brought in, done')
+  assert.deepEqual(viewMove({ ...base, bring: true, dayKnown: false }), { fly: 'bring', bring: true, inside: true }, 'brought in again when its day comes')
+  assert.deepEqual(viewMove({ ...base, bring: true, inside: true }), { fly: null, bring: false, inside: true }, 'in view already')
+  assert.deepEqual(viewMove({ ...base, bring: true, at: false, nowhere: true }), { fly: null, bring: false, inside: false }, 'nowhere that day: done')
+  assert.deepEqual(viewMove({ ...base, bring: true, at: false }), { fly: null, bring: true, inside: false }, 'not placed yet: pending')
+  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true }), { fly: 'follow', bring: false, inside: true }, 'playing, it just left the view')
+  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true, moved: true }), { fly: null, bring: false, inside: false }, 'the person moves the map: panned away from')
+  assert.deepEqual(viewMove({ ...base, bring: true, busy: true }), { fly: null, bring: true, inside: false }, 'the map flies already, or a seek rests')
 })
 
 test('viewMove: its first position after none brings it in (before its first leg to heard, a day answer placing it), unless the map was moved', () => {
   const first = { busy: false, bring: false, had: false, at: true, playing: true, wasInside: false, inside: false, moved: false, dayKnown: true, nowhere: false }
-  assert.deepEqual(viewMove(first), { fly: 'bring', bring: false })
-  assert.deepEqual(viewMove({ ...first, inside: true }), { fly: null, bring: false }, 'in view: nothing to do')
-  assert.deepEqual(viewMove({ ...first, moved: true }), { fly: null, bring: false }, 'the person moved the map in the last 1.5 s')
-  assert.deepEqual(viewMove({ ...first, had: true }), { fly: null, bring: false }, 'it had one: outside already, left alone')
+  assert.deepEqual(viewMove(first), { fly: 'bring', bring: false, inside: true })
+  assert.deepEqual(viewMove({ ...first, inside: true }), { fly: null, bring: false, inside: true }, 'in view: nothing to do')
+  assert.deepEqual(viewMove({ ...first, moved: true }), { fly: null, bring: false, inside: false }, 'the person moved the map in the last 1.5 s')
+  assert.deepEqual(viewMove({ ...first, had: true }), { fly: null, bring: false, inside: false }, 'it had one: outside already, left alone')
+})
+
+test('viewMove: in view stays what it was while the map flies or a seek rests; a flight puts it in view, so one that lands short is followed again', () => {
+  const base = { busy: false, bring: false, had: true, at: true, playing: true, wasInside: true, inside: false, moved: false, dayKnown: true, nowhere: false }
+  const start = viewMove(base) // it just left the view: followed
+  assert.deepEqual(start, { fly: 'follow', bring: false, inside: true })
+  const under = viewMove({ ...base, busy: true, wasInside: start.inside }) // drawn outside while the map catches up with it
+  assert.deepEqual(under, { fly: null, bring: false, inside: true }, 'not read as the person panning away')
+  assert.deepEqual(viewMove({ ...base, wasInside: under.inside }), { fly: 'follow', bring: false, inside: true }, 'landed short of it (it turned): followed again')
+  assert.deepEqual(viewMove({ ...base, busy: true, wasInside: false, inside: true }), { fly: null, bring: false, inside: false }, 'busy keeps out of view too')
+})
+
+test('aheadOf: along its track at its speed for the replay the flight takes (60x: 36 s in 0.6 s); paused, stalled or with no track or speed, where it is', () => {
+  const heard = entry('738abc', { lat: 32, lon: 34.8, hM: 9000, trackDeg: 90, gsKt: 450, ageS: 0, staleS: Infinity }) // its track's state
+  const ds = dayState([leg(T, [0, 3600])], T + MIN)
+  const want = destination(32, 34.8, 90, 4.5) // 450 kt for 36 s
+  const got = aheadOf(heard, ds, T + MIN, 36_000)
+  assert.ok(Math.abs(got.lat - want.lat) < 1e-12 && Math.abs(got.lon - want.lon) < 1e-12)
+  assert.equal(got.hM, 9000, 'its height kept')
+  assert.deepEqual(aheadOf(heard, ds, T + MIN, 0), { lat: 32, lon: 34.8, hM: 9000 }, 'paused or stalled: no replay passes')
+  assert.deepEqual(aheadOf({ ...heard, trackDeg: null }, ds, T + MIN, 36_000), { lat: 32, lon: 34.8, hM: 9000 })
+  assert.deepEqual(aheadOf({ ...heard, gsKt: 0 }, ds, T + MIN, 36_000), { lat: 32, lon: 34.8, hM: 9000 })
+  // Its day not known yet: the fleet's own entry, which the fleet moves no further than its staleS.
+  const fleet = entry('738abc', { lat: 32, lon: 35, trackDeg: 90, gsKt: 360, ageS: 50, staleS: 60 })
+  const p = aheadOf(fleet, null, T, 36_000)
+  const ten = destination(32, 35, 90, 1) // 10 s left at 360 kt
+  assert.ok(Math.abs(p.lat - ten.lat) < 1e-12 && Math.abs(p.lon - ten.lon) < 1e-12)
+  assert.deepEqual(aheadOf({ ...fleet, ageS: 61 }, null, T, 36_000), { lat: 32, lon: 35, hM: 1000 }, 'past its staleS: it stays')
+})
+
+test('aheadOf: in a hole, the estimate when the flight lands; past the hole, its leg’s point by then; quiet, where it was last heard', () => {
+  const placed = (t: number): FleetEntry => {
+    const own = entry('xxxxxx')
+    placeSelected([], '738abc', dayState([GAP], t), t, null, null, [], own)
+    return own
+  }
+  const t = T + 10_000 + 2 * MIN
+  const now = placed(t)
+  const then = placed(t + 36_000)
+  assert.deepEqual(aheadOf(now, dayState([GAP], t), t, 36_000), { lat: then.lat, lon: then.lon, hM: now.hM }, 'the ghost where it will be')
+  const t2 = T + 1_204_000 // 6 s before the hole ends
+  assert.deepEqual(aheadOf(placed(t2), dayState([GAP], t2), t2, 36_000), { lat: 34.01, lon: 36.01, hM: placed(t2).hM }, 'heard again: its point by then')
+  const l = leg(T, [0, 600])
+  const quiet = entry('xxxxxx')
+  const tq = T + 3 * H
+  placeSelected([], '738abc', dayState([l], tq), tq, null, null, [], quiet)
+  assert.deepEqual(aheadOf(quiet, dayState([l], tq), tq, 36_000), { lat: quiet.lat, lon: quiet.lon, hM: quiet.hM }, 'a ghost does not move')
+})
+
+test('follow at a close zoom at 60x: aimed where the aircraft will be as the map lands, it is in view there; aimed where it was, it is not', () => {
+  const heard = entry('738abc', { lat: 32, lon: 34.8, trackDeg: 90, gsKt: 450, ageS: 0, staleS: Infinity })
+  const ds = dayState([leg(T, [0, 3600])], T + MIN)
+  const view = (c: { lat: number; lon: number }): { west: number; south: number; east: number; north: number } =>
+    ({ west: c.lon - 0.02, east: c.lon + 0.02, south: c.lat - 0.014, north: c.lat + 0.014 }) // about 2 nm across
+  const landed = destination(32, 34.8, 90, 4.5) // where it is drawn as a 0.6 s flight lands at 60x
+  assert.equal(inArea(drawn(view(aheadOf(heard, ds, T + MIN, 36_000)), landed.lat, landed.lon), CANVAS), true, 'aimed ahead: in view')
+  assert.equal(inArea(drawn(view(heard), landed.lat, landed.lon), CANVAS), false, 'aimed where it was: 4.5 nm out of a 2 nm view')
 })
