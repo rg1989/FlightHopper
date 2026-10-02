@@ -4,6 +4,9 @@
 // Predicting · Signal lost · Locating) with the expand toggle beside it, which shows every detail section below
 // (detail.ts detailRows). It replaces the old detail panel, HUD and chase
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
+// In History the status line is the replay's (setReplay: "Replay · 13:10", "Not heard since 10:20"): the app knows where
+// the aircraft stood at that time, so the card never speaks live there (no "Locating…", no red dot), and Chase is
+// offered only with a position.
 // The same card, mounted with `traffic`, shows a chase-traffic aircraft (a click in its brackets): top right, with its
 // distance from the chased aircraft, and Chase to fly behind it instead.
 // With onRecord (the server records flights: FLIGHTS_DIR), a Record button in the header records the aircraft to a
@@ -24,7 +27,23 @@ const REPLAY_QUIET_S = 60 // History: a position older than this at the replay t
 /** A focused aircraft is asked (/api/chase) at least this often whatever the zoom: every poll while it is on screen. */
 export const FOCUS_ASK_MS = 10_000
 
-export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none' | 'replay'
+export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none' | 'replay' | 'quiet'
+
+/** The status dot's colour: theme.css's .fh-dot data-state values, and 'quiet' (flightCard.css: a neutral grey). */
+export type CardDot = 'live' | 'replay' | 'trouble' | 'wait' | 'quiet'
+
+// 'quiet' is History's "no position at this time" (grey, never the live red), whichever way the app says so.
+const DOT_OF: Record<CardState, CardDot> = {
+  live: 'live', predict: 'replay', replay: 'replay', lost: 'trouble', none: 'trouble', locating: 'wait', quiet: 'quiet',
+}
+
+/** History's status line (FlightCardHandle.setReplay). */
+export interface ReplayStatus {
+  text: string
+  state: 'replay' | 'quiet' | 'none'
+  /** 'replay' only: a sample older than this at the replay time was not heard (default a minute; wider for coarse files). */
+  quietS?: number
+}
 
 export interface CardStat {
   key: 'alt' | 'gs' | 'vs' | 'hdg'
@@ -42,8 +61,10 @@ export interface CardView {
   type: string
   stats: CardStat[]
   state: CardState
+  dot: CardDot
   status: string
   range: { dist: string; from: string } | null // a traffic aircraft's card: "7,371 m", "from UAL2478"
+  chaseDisabled: boolean // History with nothing to fly behind: the button that starts a chase is off ("Map" never is)
 }
 
 /** A traffic aircraft's distance from the chased one (m), and the chased one's flight ID. */
@@ -76,10 +97,15 @@ function split(v: string): [string, string] {
  * view's long period no longer keeps a minutes-old position "Live". So is a traffic aircraft (entryState), which also
  * has its range. Still heard without a position (GPS jammed or spoofed, daily around Israel: the upstream drops those
  * positions), lost reads "GPS lost", not "Signal lost".
+ * replay (History): the app says where the aircraft stands at the replay time, and the card never speaks live (no
+ * "Locating…", no "No recent position", no red dot). 'replay': the text, amber; a sample older than quietS (a
+ * minute, wider for coarse files) was not heard, which reads "<text> · not heard" on the grey dot with the numbers
+ * dimmed. 'quiet': the text, grey, the last known numbers dimmed (dashes with no sample). 'none': the text, grey, dashes.
+ * Chase is offered only on a 'replay' sample that was heard (chaseDisabled), and never takes "Map" away.
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
-  sinceSelectS: number, chasing = true, range: CardRange | null = null, replay: string | null = null, replayQuietS = REPLAY_QUIET_S,
+  sinceSelectS: number, chasing = true, range: CardRange | null = null, replay: ReplayStatus | null = null,
 ): CardView {
   const sections = detailRows(s, raw, info, lookup)
   const get = (key: string): string | null => {
@@ -87,12 +113,18 @@ export function cardView(
     return null
   }
   const hex = get('hex')?.toLowerCase() ?? selHex
-  const fields = hudFields(s, status)
+  // History: the numbers are the sample's (none: dashes, whatever sample is held); a position older than the replay's
+  // quietS was not heard (the files hold gaps), which is the only thing that dims a 'replay' card.
+  const nums = replay?.state === 'none' ? null : s
+  const unheard = replay !== null && s !== null && Number.isFinite(s.ageS) && s.ageS > (replay.quietS ?? REPLAY_QUIET_S)
+  const fields = hudFields(nums, status)
   const lostAfterS = Math.max(STALE_AGE_S, 2.5 * Math.min(status.viewEveryS ?? 0, FOCUS_ASK_MS / 1000))
-  const lost = s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfterS)
+  const lost = replay !== null
+    ? replay.state !== 'replay' || unheard
+    : s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfterS)
   // Another aircraft's object (the card has just moved on, its own not in yet) says nothing of this one.
   const own = raw !== null && raw.hex.toLowerCase() === hex ? raw : null
-  const alt = s?.onGround ? { value: 'GND', dim: lost } : stat(fields, 'ALT', lost)
+  const alt = nums?.onGround ? { value: 'GND', dim: lost } : stat(fields, 'ALT', lost)
   const [altV] = split(alt.value)
   const gs = stat(fields, 'GS', lost)
   const vs = stat(fields, 'VS', lost)
@@ -102,14 +134,12 @@ export function cardView(
 
   let state: CardState
   let text: string
-  if (s === null) {
+  if (replay !== null) {
+    state = replay.state === 'replay' && !unheard ? 'replay' : 'quiet'
+    text = replay.state === 'replay' && unheard ? `${replay.text} · not heard` : replay.text
+  } else if (s === null) {
     state = sinceSelectS < LOCATING_S ? 'locating' : 'none'
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
-  } else if (replay !== null) {
-    // History: the status is the replay clock; a position over a minute old was not heard then (the files hold gaps).
-    const quiet = Number.isFinite(s.ageS) && s.ageS > replayQuietS
-    state = quiet ? 'lost' : 'replay'
-    text = quiet ? `${replay} · not heard` : replay
   } else if (lost) {
     state = 'lost'
     // ponytail: `seen` is as of the last chase reply (≤ FOCUS_ASK_MS old), so "GPS" may outlast a real silence by that.
@@ -136,8 +166,10 @@ export function cardView(
       { key: 'hdg', label: 'Track', value: split(hdg.value)[0], unit: hdg.value === DASH ? '' : '°', dim: hdg.dim },
     ],
     state,
+    dot: DOT_OF[state],
     status: text,
     range: range === null ? null : { dist: formatDistanceM(range.distM), from: `from ${range.from}` },
+    chaseDisabled: replay !== null && !chasing && !(state === 'replay' && s !== null),
   }
 }
 
@@ -191,10 +223,16 @@ export interface FlightCardHandle {
    */
   setRecording(hex: string, rec: RecordingState | null | undefined, serverNowMs: number): void
   /**
-   * History: the status line reads text ("Replay · 17:43", amber) instead of Live; null: live again. quietS: a position
-   * older than this at the replay time reads "not heard" (default a minute; wider for coarse files).
+   * History: the status line instead of Live. null: live again.
+   * 'replay': amber dot, the text as given ("Replay · 13:10"); a sample older than quietS at the replay time reads
+   *   "<text> · not heard" with the stats dimmed (as now; the traffic card relies on this).
+   * 'quiet': grey dot, the text as given ("Not heard since 10:20", "On the ground since 10:20"), the stats are the last
+   *   known ones, dimmed.
+   * 'none': grey dot, the text as given ("Not heard until 07:20", "Not heard this day"), the stats '—'.
+   * In History "Chase in 3-D" is off (title "No position at this time") unless the state is 'replay' with a sample that
+   * was heard, and there is no Record button. May be called every frame: an equal status is not a repaint.
    */
-  setReplay(text: string | null, quietS?: number): void
+  setReplay(v: ReplayStatus | null): void
   destroy(): void
 }
 
@@ -276,13 +314,16 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const chaseIcon = h('span', 'fh-pill-icon')
   const chaseText = h('span', '')
   chaseBtn.append(chaseIcon, chaseText)
-  let chaseShown: boolean | null = null
-  const paintChase = (chasing: boolean): void => {
-    if (chaseShown === chasing) return
-    chaseShown = chasing
+  let chaseShown: string | null = null
+  // off: History, no position to fly behind (only the button that starts a chase: the one back to the map stays).
+  const paintChase = (chasing: boolean, off: boolean): void => {
+    const key = `${chasing}/${off}`
+    if (chaseShown === key) return
+    chaseShown = key
     chaseIcon.replaceChildren(icon(chasing ? 'map' : 'plane', 16))
     chaseText.textContent = chasing ? 'Map' : traffic ? 'Chase' : 'Chase in 3-D' // short: the status line and the toggle share the row
-    chaseBtn.title = chasing ? 'Back to the top-down map (Esc)' : traffic ? 'Fly behind this aircraft instead' : 'Fly behind this aircraft in 3-D'
+    chaseBtn.title = off ? 'No position at this time' : chasing ? 'Back to the top-down map (Esc)' : traffic ? 'Fly behind this aircraft instead' : 'Fly behind this aircraft in 3-D'
+    chaseBtn.disabled = off
     chaseBtn.classList.toggle('fh-pill-secondary', chasing)
   }
 
@@ -378,8 +419,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   let curStatus: StatusBrief | null = null
   let curChasing = false
   let curRange: CardRange | null = null
-  let curReplay: string | null = null // History: "Replay · 17:43", else null (live)
-  let curQuietS = REPLAY_QUIET_S // History: past this age a position was "not heard" (scaled to the files' slices)
+  let curReplay: ReplayStatus | null = null // History: "Replay · 17:43" and where the aircraft stands then, else null (live)
   let shown: string | null = null
   let selectedAtMs = 0
   let lastMs = -Infinity
@@ -492,8 +532,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       lk = opts.lookup(hex, cs)
       lkKey = key
     }
-    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange, curReplay, curQuietS)
-    paintChase(curChasing)
+    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange, curReplay)
+    paintChase(curChasing, v.chaseDisabled)
     set(flag, v.flag)
     set(callsign, v.callsign)
     set(type, v.type)
@@ -506,10 +546,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       set(e.unit, st.unit)
       e.box.classList.toggle('fh-dim', st.dim)
     }
-    if (dot.dataset.state !== v.state) {
-      dot.dataset.state = v.state === 'live' ? 'live' : v.state === 'predict' || v.state === 'replay' ? 'replay' : v.state === 'lost' || v.state === 'none' ? 'trouble' : 'wait'
-      statusRow.dataset.state = v.state
-    }
+    if (dot.dataset.state !== v.dot) dot.dataset.state = v.dot
+    if (statusRow.dataset.state !== v.state) statusRow.dataset.state = v.state
     spin.hidden = v.state !== 'locating'
     dot.hidden = v.state === 'locating'
     set(statusText, v.status)
@@ -533,7 +571,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
 
   function paintRec(): void {
     const mine = rec !== null && rec.hex === shown ? rec.state : undefined
-    recBtn.hidden = traffic || opts.onRecord === undefined || shown === null || mine === undefined
+    // Nothing is recorded in the past (History): no button, whatever the server last said.
+    recBtn.hidden = traffic || opts.onRecord === undefined || shown === null || mine === undefined || curReplay !== null
     const on = mine !== null && mine !== undefined
     recBtn.setAttribute('aria-pressed', String(on))
     recBtn.classList.toggle('fh-on', on)
@@ -588,7 +627,9 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     render()
   })
   closeBtn.addEventListener('click', () => opts.onClose())
-  chaseBtn.addEventListener('click', () => opts.onChase(!curChasing))
+  chaseBtn.addEventListener('click', () => {
+    if (!chaseBtn.disabled) opts.onChase(!curChasing) // a disabled button sends no click; this is for one sent anyway
+  })
   linkBtn.addEventListener('click', () => {
     if (shown === null) return
     // The address bar holds the whole view (camera, orbit, toggles: urlState.ts) once it names this aircraft.
@@ -624,10 +665,14 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
     },
-    setReplay(text, quietS = REPLAY_QUIET_S) {
-      if (destroyed || (text === curReplay && quietS === curQuietS)) return
-      curReplay = text
-      curQuietS = quietS
+    setReplay(v) {
+      // The app says it every frame, as a new object: equal in value is not a repaint.
+      const same = v === null
+        ? curReplay === null
+        : curReplay !== null && v.text === curReplay.text && v.state === curReplay.state && v.quietS === curReplay.quietS
+      if (destroyed || same) return
+      curReplay = v === null ? null : { text: v.text, state: v.state, quietS: v.quietS }
+      paintRec() // History has no Record button
       if (hexOf() !== null) render()
     },
     setRecording(hex, state, serverNowMs) {

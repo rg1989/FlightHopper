@@ -187,6 +187,12 @@
   color: #f5d38a;
 }
 
+/* History, no position at the replay time (not heard since / until): a neutral grey dot, never the trouble red, with the
+   status text left in the card's muted grey. --fh-muted keeps 4.8:1 or more on the card's glass over any map, light or dark. */
+.fh-card-status .fh-dot[data-state='quiet'] {
+  background: var(--fh-muted);
+}
+
 /* Expanded: the details, scrolling inside the card. */
 .fh-card-more {
   overflow-y: auto;
@@ -347,6 +353,13 @@
   min-width: 0;
   padding-right: 0; /* the foot's gap spaces it from the toggle */
   padding-bottom: 0;
+}
+
+/* Chase with no position to fly behind (History, the aircraft not heard at the replay time): dimmed; its title says why. */
+.fh-card .fh-pill:disabled {
+  cursor: default;
+  opacity: 0.4;
+  filter: none;
 }
 
 /* The expand toggle: the Chase pill's height, on a tile, so it reads as a button. */

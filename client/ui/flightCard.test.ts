@@ -7,6 +7,7 @@ import { toInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import type { Lookup } from './detail.ts'
+import type { ReplayStatus } from './flightCard.ts'
 import { PhotoCache } from './photo.ts'
 
 // flightCard.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -126,6 +127,7 @@ class FakeEl {
   className = ''
   textContent = ''
   hidden = false
+  disabled = false
   title = ''
   src?: string
   href?: string
@@ -200,7 +202,7 @@ const PHOTO_BODY = {
   }],
 }
 
-function setup(photoGate?: Promise<void>, photoStatus = 200, traffic = false) {
+function setup(photoGate?: Promise<void>, photoStatus = 200, traffic = false, record = false) {
   ;(globalThis as { document?: unknown }).document = {
     createElement: (tag: string) => new FakeEl(tag),
     createElementNS: (_ns: string, tag: string) => new FakeEl(tag),
@@ -219,6 +221,7 @@ function setup(photoGate?: Promise<void>, photoStatus = 200, traffic = false) {
     traffic,
     onClose: () => closed++,
     onChase: (on) => chases.push(on),
+    onRecord: record ? async () => null : undefined, // the server records flights: the Record button may show
     photos: new PhotoCache(fetchFn),
     lookup: (hex, callsign) => {
       lookups.push(`${hex}/${callsign}`)
@@ -464,13 +467,228 @@ test('mountFlightCard: lookup once per hex and callsign, close button, destroy r
   assert.equal(statValue(card, 1), '337')
 }))
 
-test('cardView in a replay: the status is the replay clock (amber), "not heard" once its position is over a minute old', () => {
-  const v = cardView('4691c4', { ...S, ageS: 4 }, null, INFO, LIVE, GR, 30, false, null, 'Replay · 17:43')
-  assert.deepEqual([v.state, v.status], ['replay', 'Replay · 17:43'])
-  assert.ok(v.stats.every((st) => !st.dim || st.value === '—'))
-  const quiet = cardView('4691c4', { ...S, mode: 'stale', ageS: 75 }, null, INFO, LIVE, GR, 30, true, null, 'Replay · 17:43')
-  assert.deepEqual([quiet.state, quiet.status], ['lost', 'Replay · 17:43 · not heard'])
-  assert.equal(cardView('4691c4', null, null, INFO, LIVE, GR, 2, false, null, 'Replay · 17:43').state, 'locating', 'no position yet: as live')
-  const coarse = cardView('4691c4', { ...S, mode: 'stale', ageS: 300 }, null, INFO, LIVE, GR, 30, false, null, 'Replay · 17:43', 750)
-  assert.equal(coarse.state, 'replay', 'a world view\'s 300 s slices: 5 min old is still heard')
+// ---------- History: the replay's status line (setReplay) ----------
+
+const replay = (state: ReplayStatus['state'], text: string, quietS?: number): ReplayStatus => ({ text, state, quietS })
+const R1310 = replay('replay', 'Replay · 13:10')
+/** The chased aircraft's card in History (the map, not the chase), selected for `since` seconds. */
+const inHistory = (s: RenderState | null, r: ReplayStatus | null, chasing = false, since = 30): ReturnType<typeof cardView> =>
+  cardView('4691c4', s, null, INFO, LIVE, GR, since, chasing, null, r)
+const GAP = { ...S, mode: 'stale' as const } // its newest sample is `ageS` old at the replay time
+const dashes = (): string[] => ['Alt —', 'Speed —', 'V/S —', 'Track —'].map((s) => `${s} (dim)`)
+
+test("cardView in History, 'replay': the text as given on the amber dot, the numbers as they are, Chase on", () => {
+  const v = inHistory({ ...S, ageS: 4 }, R1310)
+  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['replay', 'replay', 'Replay · 13:10', false])
+  assert.deepEqual(stats(v), ['Alt 7,975 ft', 'Speed 337 kt', 'V/S -950 fpm', 'Track 102°'])
+  // Only the replay's quietS says "not heard": the live feed's 10 s (view-scaled) say nothing about a half-hour file.
+  for (const chasing of [false, true]) {
+    const between = inHistory({ ...GAP, ageS: 30 }, R1310, chasing)
+    assert.deepEqual([between.state, between.status, between.stats.some((st) => st.dim)], ['replay', 'Replay · 13:10', false], `chasing ${chasing}`)
+  }
 })
+
+test("cardView in History, 'replay' with a sample older than quietS: \"not heard\" on the grey dot, numbers dimmed, Chase off", () => {
+  const v = inHistory({ ...GAP, ageS: 75 }, R1310)
+  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', 'Replay · 13:10 · not heard', true])
+  assert.ok(v.stats.every((st) => st.dim))
+  assert.deepEqual(stats(v), ['Alt 7,975 ft (dim)', 'Speed 337 kt (dim)', 'V/S -950 fpm (dim)', 'Track 102° (dim)'], 'the last known ones')
+  assert.equal(inHistory({ ...GAP, ageS: 60 }, R1310).state, 'replay', 'a minute exactly is still heard')
+  // A coarse file (a world view's 300 s slices: the app says quietS 750) is heard once a slice.
+  const wide = replay('replay', 'Replay · 13:10', 750)
+  const slice = inHistory({ ...GAP, ageS: 300 }, wide)
+  assert.deepEqual([slice.state, slice.status, slice.chaseDisabled, slice.stats.some((st) => st.dim)], ['replay', 'Replay · 13:10', false, false])
+  assert.equal(inHistory({ ...GAP, ageS: 800 }, wide).status, 'Replay · 13:10 · not heard')
+  assert.equal(inHistory({ ...GAP, ageS: Infinity }, R1310).state, 'replay', 'no age to judge by: not called unheard')
+})
+
+test('cardView in History, a traffic aircraft (its fleet entry): the same age rule decides "not heard" and Chase', () => {
+  const r = replay('replay', 'Replay · 13:10', 60)
+  const near = { distM: 7370.6, from: 'UAL2478' }
+  const fresh = cardView('4691c4', entryState({ ...ENTRY, ageS: 4 }), null, INFO, LIVE, GR, 1, false, near, r)
+  assert.deepEqual([fresh.state, fresh.status, fresh.chaseDisabled, fresh.range?.dist], ['replay', 'Replay · 13:10', false, '7,371 m'])
+  const old = cardView('4691c4', entryState({ ...ENTRY, ageS: 75 }), null, INFO, LIVE, GR, 1, false, near, r)
+  assert.deepEqual([old.state, old.dot, old.status, old.chaseDisabled], ['quiet', 'quiet', 'Replay · 13:10 · not heard', true])
+  assert.ok(old.stats.every((st) => st.dim))
+})
+
+test("cardView in History, 'replay' with no sample yet: the text as given, dashes, never \"Locating…\"; Chase off", () => {
+  const v = inHistory(null, R1310)
+  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['replay', 'replay', 'Replay · 13:10', true])
+  assert.deepEqual(stats(v), dashes())
+  assert.equal(inHistory(null, R1310, false, LOCATING_S + 100).status, 'Replay · 13:10', 'however long it has been selected')
+})
+
+test("cardView in History, 'quiet': the text as given on the grey dot, the last known numbers dimmed, dashes with no sample", () => {
+  const since = replay('quiet', 'Not heard since 10:20')
+  const v = inHistory({ ...GAP, ageS: 3000 }, since)
+  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', 'Not heard since 10:20', true])
+  assert.deepEqual(stats(v), ['Alt 7,975 ft (dim)', 'Speed 337 kt (dim)', 'V/S -950 fpm (dim)', 'Track 102° (dim)'])
+  const parked = inHistory({ ...GAP, onGround: true, gsKt: 0, ageS: 3000 }, replay('quiet', 'On the ground since 10:20'))
+  assert.deepEqual([parked.status, parked.stats[0]], ['On the ground since 10:20', { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: true }])
+  const none = inHistory(null, since)
+  assert.deepEqual([none.state, none.dot, none.status, none.chaseDisabled], ['quiet', 'quiet', 'Not heard since 10:20', true])
+  assert.deepEqual(stats(none), dashes())
+  assert.equal(inHistory({ ...S, ageS: 2 }, since).state, 'quiet', 'the app knows better than a fresh-looking sample')
+  assert.ok(inHistory({ ...S, ageS: 2 }, since).stats.every((st) => st.dim))
+})
+
+test("cardView in History, 'none': the text as given on the grey dot, dashes even where a sample is held, who it is kept", () => {
+  for (const text of ['Not heard until 07:20', 'Not heard this day']) {
+    const v = inHistory({ ...S, onGround: true }, replay('none', text))
+    assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', text, true])
+    assert.deepEqual(stats(v), dashes(), 'not GND either: it has no position then')
+    assert.deepEqual([v.callsign, v.sub, v.type], ['AEE4266', 'Aegean Airlines · SX-DND', 'A320'])
+  }
+})
+
+test('cardView in History never speaks live: no "Locating…", no "No recent position", no lost signal, no trouble dot', () => {
+  const samples: (RenderState | null)[] = [null, S, { ...GAP, ageS: 75 }, { ...GAP, ageS: 3000 }]
+  for (const state of ['replay', 'quiet', 'none'] as const) {
+    for (const s of samples) {
+      for (const chasing of [false, true]) {
+        for (const since of [0, LOCATING_S - 1, LOCATING_S, LOCATING_S + 100]) {
+          const where = `${state}, ${s === null ? 'no sample' : `a sample ${s.ageS} s old`}, ${chasing ? 'chasing' : 'on the map'}, selected ${since} s`
+          const v = inHistory(s, replay(state, 'Replay · 13:10'), chasing, since)
+          assert.ok(v.state === 'replay' || v.state === 'quiet', `${where}: state ${v.state}`)
+          assert.ok(v.dot === 'replay' || v.dot === 'quiet', `${where}: dot ${v.dot}`)
+          assert.doesNotMatch(v.status, /Locating|No recent position|Signal lost|GPS lost|Predicting|Live/, where)
+        }
+      }
+    }
+  }
+})
+
+test('cardView: Chase is off in History unless the replay has a sample that was heard; "Map" and the live card never are', () => {
+  const heard = { ...S, ageS: 4 }
+  const cases: [string, ReplayStatus | null, RenderState | null, boolean][] = [
+    ['live, no sample', null, null, false],
+    ['live, signal lost', null, { ...GAP, ageS: 400 }, false],
+    ['replay, heard', R1310, heard, false],
+    ['replay, not heard', R1310, { ...GAP, ageS: 75 }, true],
+    ['replay, no sample', R1310, null, true],
+    ['quiet, with a sample', replay('quiet', 'Not heard since 10:20'), heard, true],
+    ['quiet, no sample', replay('quiet', 'Not heard since 10:20'), null, true],
+    ['none', replay('none', 'Not heard this day'), heard, true],
+  ]
+  for (const [name, r, s, off] of cases) {
+    assert.equal(inHistory(s, r, false).chaseDisabled, off, name)
+    assert.equal(inHistory(s, r, true).chaseDisabled, false, `${name}: chasing, the button reads Map and goes back`)
+  }
+})
+
+test('mountFlightCard in History: the dot and the line follow the replay; Chase is off, with its reason, unless it was heard', () => withClock(() => {
+  const { card, c, chases } = setup()
+  const pill = byClass(card, 'fh-pill')
+  const dot = byClass(card, 'fh-dot')
+  const line = byClass(card, 'fh-card-status')
+  const text = (): string => byClass(card, 'fh-card-status-t').textContent
+  const now = (): unknown[] => [dot.dataset.state, line.dataset.state, text(), pill.disabled, pill.title]
+  const CHASE = 'Fly behind this aircraft in 3-D'
+  c.update('4691c4', { ...S, ageS: 4 }, RAW, INFO, LIVE, false)
+  assert.deepEqual(now(), ['live', 'live', 'Live · ADS-B v2', false, CHASE])
+  c.setReplay(R1310)
+  assert.deepEqual(now(), ['replay', 'replay', 'Replay · 13:10', false, CHASE])
+  pill.fire('click')
+  assert.deepEqual(chases, [true], 'heard: it chases')
+  c.setReplay(replay('quiet', 'Not heard since 10:20'))
+  assert.deepEqual(now(), ['quiet', 'quiet', 'Not heard since 10:20', true, 'No position at this time'])
+  assert.equal(pillText(card), 'Chase in 3-D', 'dimmed, not renamed')
+  pill.fire('click')
+  assert.deepEqual(chases, [true], 'a click that gets through anyway asks for nothing')
+  c.setReplay(replay('none', 'Not heard until 07:20'))
+  assert.deepEqual(now(), ['quiet', 'quiet', 'Not heard until 07:20', true, 'No position at this time'])
+  assert.equal(statValue(card, 1), '—')
+  c.setReplay(R1310)
+  assert.deepEqual(now(), ['replay', 'replay', 'Replay · 13:10', false, CHASE], 'heard again: on again')
+  // In the chase the button reads Map and takes the person back: never off.
+  c.update('4691c4', { ...S, ageS: 4 }, RAW, INFO, LIVE, true)
+  c.setReplay(replay('quiet', 'Not heard since 10:20'))
+  assert.deepEqual([pillText(card), pill.disabled, pill.title], ['Map', false, 'Back to the top-down map (Esc)'])
+  pill.fire('click')
+  assert.deepEqual(chases, [true, false])
+  // Live again: the live card, as it was.
+  c.update('4691c4', { ...S, ageS: 4 }, RAW, INFO, LIVE, false)
+  c.setReplay(null)
+  assert.deepEqual(now(), ['live', 'live', 'Live · ADS-B v2', false, CHASE])
+  c.destroy()
+}))
+
+test('mountFlightCard in History: with no sample the card says so, never "Locating aircraft…" or the trouble dot', () => withClock(() => {
+  const { card, c } = setup()
+  const line = byClass(card, 'fh-card-status')
+  const dot = byClass(line, 'fh-dot')
+  const spin = byClass(line, 'fh-spin') // the status line's, not the photo box's
+  c.update('4691c4', null, null, INFO, LIVE, false) // selected, nothing known of it at this time
+  assert.deepEqual([dot.dataset.state, dot.hidden, spin.hidden, byClass(card, 'fh-card-status-t').textContent], ['wait', true, false, 'Locating aircraft…'], 'live')
+  for (const r of [R1310, replay('quiet', 'Not heard since 10:20'), replay('none', 'Not heard this day')]) {
+    c.setReplay(r)
+    assert.deepEqual([dot.hidden, spin.hidden, byClass(card, 'fh-card-status-t').textContent], [false, true, r.text], r.state)
+    assert.notEqual(dot.dataset.state, 'trouble')
+    assert.equal(statValue(card, 0), '—')
+  }
+  mock.timers.tick(60_000) // however long it stays so
+  c.update('4691c4', null, null, INFO, LIVE, false)
+  assert.equal(byClass(card, 'fh-card-status-t').textContent, 'Not heard this day')
+  c.destroy()
+}))
+
+test('mountFlightCard in History: a changed status (its text, its state, its quietS) shows at once, inside the throttle', () => withClock(() => {
+  const { card, c } = setup()
+  const dot = byClass(card, 'fh-dot')
+  const text = (): string => byClass(card, 'fh-card-status-t').textContent
+  c.update('4691c4', { ...GAP, ageS: 300 }, RAW, INFO, LIVE, false) // its newest sample is 5 min old
+  c.setReplay({ text: 'Replay · 13:10', state: 'replay' })
+  assert.equal(text(), 'Replay · 13:10 · not heard', 'over the default minute')
+  c.setReplay({ text: 'Replay · 13:10', state: 'replay', quietS: 750 })
+  assert.equal(text(), 'Replay · 13:10', 'a coarse file: heard once a slice')
+  c.setReplay({ text: 'Replay · 13:11', state: 'replay', quietS: 750 })
+  assert.equal(text(), 'Replay · 13:11')
+  c.setReplay({ text: 'Replay · 13:11', state: 'quiet', quietS: 750 })
+  assert.deepEqual([text(), dot.dataset.state], ['Replay · 13:11', 'quiet'])
+  c.destroy()
+}))
+
+test('mountFlightCard in History: the same status every frame is not a repaint', () => withClock(() => {
+  const { card, c } = setup()
+  c.update('4691c4', S, RAW, INFO, LIVE, false)
+  c.setReplay({ text: 'Replay · 13:10', state: 'replay' }) // a repaint: the next one waits out the 250 ms throttle
+  mock.timers.tick(300)
+  c.setReplay({ text: 'Replay · 13:10', state: 'replay' }) // the app's per-frame call: a new object, an equal value
+  c.update('4691c4', { ...S, gsKt: 400 }, RAW, INFO, LIVE, false)
+  assert.equal(statValue(card, 1), '400', 'had it repainted, this update would still be held back')
+  c.destroy()
+}))
+
+test('mountFlightCard, traffic, in History: "not heard" by age, and its Chase off then; fresh, it chases the aircraft', () => withClock(() => {
+  const { card, c, chases } = setup(undefined, 200, true)
+  const pill = byClass(card, 'fh-pill')
+  const near = { distM: 7370.6, from: 'UAL2478' }
+  c.update('4691c4', entryState({ ...ENTRY, ageS: 4 }), null, INFO, LIVE, false, near)
+  c.setReplay({ text: 'Replay · 13:10', state: 'replay', quietS: 60 })
+  assert.deepEqual([byClass(card, 'fh-card-status-t').textContent, pill.disabled, pillText(card)], ['Replay · 13:10', false, 'Chase'])
+  pill.fire('click')
+  assert.deepEqual(chases, [true])
+  mock.timers.tick(300)
+  c.update('4691c4', entryState({ ...ENTRY, ageS: 75 }), null, INFO, LIVE, false, near)
+  assert.deepEqual([byClass(card, 'fh-card-status-t').textContent, byClass(card, 'fh-dot').dataset.state], ['Replay · 13:10 · not heard', 'quiet'])
+  assert.deepEqual([pill.disabled, pill.title, pillText(card)], [true, 'No position at this time', 'Chase'])
+  pill.fire('click')
+  assert.deepEqual(chases, [true])
+  c.destroy()
+}))
+
+test('mountFlightCard in History: no Record button, whatever the server last said; back live it is there again', () => withClock(() => {
+  const { card, c } = setup(undefined, 200, false, true)
+  const rec = byClass(card, 'fh-card-recbtn')
+  c.update('4691c4', S, RAW, INFO, LIVE, false)
+  c.setRecording('4691c4', null, 1_000_000) // the server records flights; this one is not being recorded
+  assert.equal(rec.hidden, false)
+  c.setReplay(R1310)
+  assert.equal(rec.hidden, true)
+  c.setRecording('4691c4', null, 1_000_000)
+  assert.equal(rec.hidden, true, 'a later reply does not bring it back')
+  c.setReplay(null)
+  assert.equal(rec.hidden, false)
+  c.destroy()
+}))
