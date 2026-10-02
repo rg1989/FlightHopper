@@ -14,8 +14,8 @@ import './bar.css'
 
 const H_MS = 3_600_000
 const MIN_MS = 60_000
-// ponytail: until the app says what exists (setBounds), the oldest moment is 30 days back, about what adsb.lol keeps
-// (app.ts's HISTORY_DAYS says the same). Upgrade: one shared constant, if the server's own oldest half hour ever lags it.
+// ponytail: until the app says what exists (setBounds), the oldest moment is 30 days back: a guess, short of what adsb.lol
+// keeps; the server's first answer replaces it. Upgrade: none, while the app calls setBounds as soon as it has that answer.
 const DEFAULT_SPAN_MS = 30 * 24 * H_MS
 // ponytail: English day and month names, as the rest of the UI ('Tue 22 Sep'; Intl's en-GB would say 'Sept'). Upgrade:
 // Intl.DateTimeFormat parts for the label when the UI is translated.
