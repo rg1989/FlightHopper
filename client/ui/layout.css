@@ -138,3 +138,17 @@
     bottom: calc(var(--fh-playbar-space) + 8px);
   }
 }
+
+/* The chase's instrument-layout button stands over the bar's left end, as over a scenario's play bar (rail.css). */
+.fh-ui[data-history] .fh-spot-bottom {
+  bottom: calc(var(--fh-playbar-space) + 8px);
+  left: var(--fh-left);
+  transform: none;
+}
+
+/* A short touch landscape (rail.css): the corner buttons sit in a row left of the rail's foot, above the bar. */
+@media (pointer: coarse) and (max-height: 340px) and (min-width: 641px) {
+  .fh-ui[data-history] .fh-corner {
+    bottom: calc(var(--fh-playbar-space) + 8px);
+  }
+}
