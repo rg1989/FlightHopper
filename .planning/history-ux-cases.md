@@ -59,7 +59,7 @@ like "data here" but are not; loading takes a while with no loader while moving 
 - C27 Jump to a time it flew elsewhere: shown there, the map brings it into view.
 - C28 Jump to a time it stood on the ground (transponder on): on the ground at the airport.
 - C29 Jump to a time it was not heard (parked with the transponder off, out of coverage): at its last known spot,
-  faded, "Not heard since HH:MM"; the path is the leg that ended there.
+  faded, "Last heard HH:MM"; the path is the leg that ended there.
 - C30 Before its first point in the data: not on the map, the card says when it is first heard.
 - C31 Its flights on the timeline, so a person sees when it flew and can jump to one.
 - C32 Its flown path continuous where it was heard; dotted only where it was not heard.

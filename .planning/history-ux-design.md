@@ -20,21 +20,26 @@ every leg (TraceReply as now, plus `calls`: its callsign changes) overlapping [f
 25 h and the UTC day files before that, merged (a leg crossing a file edge stays one leg). The `at` mode (one leg, live
 mode's flown path) stays as it is.
 The client asks for the bar's local day with 12 h before it (to know where the aircraft stood at the day's start). At
-replay time t the selected aircraft is in one of four states (`client/history/aircraftDay.ts`, pure):
+replay time t the selected aircraft is in one of five states (`client/history/aircraftDay.ts`, pure):
 - heard: t inside a leg (its first point to a minute after its last): drawn from the leg (as now), card "Replay · HH:MM".
-- quiet: after a leg ended, before the next one: drawn faded at the leg's last point; card "Not heard since HH:MM", or
-  "On the ground since HH:MM" when that point was on the ground. Its path: that leg.
-- before: earlier than its first leg in the range: not drawn; card "Not heard until HH:MM".
+- gap: inside a leg, in a hole no receiver heard (a step its flown path draws dotted): drawn faded where it is estimated
+  to be (along the great circle between the points either side, its altitude and speed between theirs), the card's
+  numbers the estimate's, dimmed; card "Last heard HH:MM" (the point before the hole). Its path: that leg.
+- quiet: after a leg ended, before the next one: drawn faded at the leg's last point; card "Last heard HH:MM" (its ALT
+  says GND when that point was on the ground). Its path: that leg.
+- before: earlier than its first leg in the range: not drawn; card "First heard HH:MM".
 - none: no leg in the range: not drawn; card "Not heard this day".
+A time on another day than the replay's carries its weekday: "Last heard Thu 22:58".
 The callsign shown (card, label, list) for the selected aircraft is the leg's callsign at t (`calls`). Its legs show on
 the timeline (D3), so where it flew is one glance and one click away.
 After a jump in time (or entering History, or selecting), the map brings the selected aircraft into view when its
-position at t (heard or quiet) is not in view: the top-down camera flies over it at the same height. In view means drawn
-inside the part of the screen that nothing covers (the aircraft card, the time bar, the rail and its open panel, the search
-box, the map key), less a tenth of that part on each side; the camera puts the aircraft at the middle of that part, not of
-the screen. While playing, an aircraft that was in view and leaves it (the edge, or under a card or a panel) is followed
-(the view re-centres on it the same way), except while the person moves the map (a pointer down, a wheel or trackpad
-gesture in the last 1.5 s). The chase needs no such help.
+position at t (heard, in a hole or quiet) is not in view: the top-down camera flies over it at the same height. In view
+means drawn inside the part of the screen that nothing covers (the aircraft card, the time bar, the rail and its open
+panel, the search box, the map key), less a tenth of that part on each side; the camera puts the aircraft at the middle
+of that part, not of the screen. While playing, an aircraft that was in view and leaves it (the edge, or under a card or
+a panel) is followed (the view re-centres on it the same way, aimed where it will be as the flight lands: the replay goes
+on meanwhile), except while the person moves the map (a pointer down, a wheel or trackpad gesture in the last 1.5 s).
+The chase needs no such help.
 Chase in 3-D is offered only while heard.
 
 ## D3 The timeline (C7, C8, C17, C19, C31)
@@ -50,11 +55,13 @@ Chase in 3-D is offered only while heard.
   shows the loader and a playing clock stalls (buffers) instead of running over an empty map.
 - A jump (click, Go to, a day arrow, a key) asks at once; a drag asks once it rests (as now, but 300 ms, not a tick).
 - Playing prefetches the next half hour early enough for the speed: max(5 min, rate × 20 s) of replay time ahead.
-- Failures: the bar's note says "Could not load · retrying" (as now) and the loader stops.
+- Failures: the bar's note says "Could not load this time · retrying" while the half hour under the clock fails (one
+  fetched ahead of time says nothing of it), and the loader stops.
 
 ## D5 Limits (C7–C9, C13)
 - Oldest: the server reports the oldest half hour adsb.lol has (`HistoryStatus.oldestSlotMs`), see "Facts" for how.
-  The clock, scrubber, Go to (date min, time min on that day) and chips keep to it.
+  The clock, scrubber, Go to (date min, time min on that day) and chips keep to it. Until a status says, 30 days are
+  assumed; a `?hist=` time further back waits for the first status that reaches it, the address bar keeping it.
 - Newest: as now (the newest published half hour's end); Go to's time max on today; the chips that fall outside are
   disabled. "The last 30 days open in seconds." goes.
 - Playing into the newest moment stops there (as now).
