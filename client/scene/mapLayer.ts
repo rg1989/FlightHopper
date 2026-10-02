@@ -77,7 +77,11 @@ async function night(img: Tile): Promise<Tile> {
     nightPixels(data.data)
     ctx.putImageData(data, 0, 0)
   }
-  return typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap ? createImageBitmap(c) : c
+  if (!(typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap)) return c
+  img.close() // drawn: Cesium never closes the bitmaps it decoded, and this one is not handed on
+  const out = await createImageBitmap(c)
+  c.width = c.height = 0 // its pixels are in the bitmap: free the canvas now, not at the next collection
+  return out
 }
 
 /** The OpenStreetMap tiles in the dark theme's colours (see NIGHT_FILTER). */

@@ -708,6 +708,22 @@ test('a click on the rail goes to the minute the tip says, not where the browser
   assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22)}`])
 })
 
+test('a mouse press whose release never came (a Mac ctrl-click’s menu took it) ends at the next buttonless move', () => {
+  const { bar, view, calls } = mount()
+  bar.setBounds(at(2026, 8, 20), at(2026, 8, 22, 18, 30))
+  bar.update({ tMs: at(2026, 8, 22, 9), playing: false, rate: 1, loading: false })
+  const v = view()
+  place(v)
+  press(v, xAt(14, 30, 50))
+  assert.equal(v.tip.hidden, false)
+  v.range.fire('pointermove', { clientX: xAt(16, 0), pointerId: 1, pointerType: 'mouse', buttons: 0 })
+  assert.equal(v.tip.hidden, true, 'the press is over: no tip frozen at its minute')
+  v.range.fire('keydown', { key: 'Home' })
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22)}`], 'a key seeks where it says, not to the old press’s minute')
+  hover(v, xAt(16, 0))
+  assert.deepEqual([v.tip.hidden, ...says(v)], [false, '16:00'], 'and the hover tip is back')
+})
+
 test('a drag seeks finely as ever, the tip above the thumb saying the minute sought; a finger shows it only while it presses', () => {
   const { bar, view, calls } = mount()
   bar.setBounds(at(2026, 8, 20), at(2026, 8, 24))

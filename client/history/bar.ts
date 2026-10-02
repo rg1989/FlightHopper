@@ -566,6 +566,13 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
         return
       }
       if (e.pointerId !== p.id) return
+      if (e.pointerType === 'mouse' && e.buttons === 0) {
+        // Its release never came here (a Mac ctrl-click's menu takes it): the press is over, its minute no longer stands.
+        press = null
+        hideTip()
+        if (range.hasPointerCapture?.(e.pointerId)) range.releasePointerCapture(e.pointerId)
+        return
+      }
       if (!p.moved && Math.abs(e.clientX - p.x) >= TAP_PX) p.moved = true
       if (!p.moved || p.sought) return // a click so far; or a drag, whose seeks move the tip
       // A drag the scrubber does not make (iOS Safari drags a range only by its thumb): the tip follows the pointer, and
