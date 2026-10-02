@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { TraceReply } from '../../shared/api.ts'
 import { isGap } from '../scene/pathGap.ts'
-import { callsignAt, dayState, legEndMs, legMs, legSpans, pointsUpTo } from './aircraftDay.ts'
+import { callsignAt, dayState, legEndMs, legMs, legSpans, onGroundAt, pointsUpTo } from './aircraftDay.ts'
 import { legFeeds } from './policy.ts'
 
 const MIN = 60_000
@@ -143,6 +143,15 @@ test('a leg’s points at or before a time, as their whole ms place them', () =>
   assert.deepEqual([-1, 0, 16_099, 16_100, 32_199, 32_200, 99_999].map((t) => pointsUpTo(x, t)), [0, 1, 1, 2, 2, 3, 3])
   assert.equal(pointsUpTo(leg(H, []), H), 0)
   assert.equal(legMs(0, 32.2), 32_200)
+})
+
+test('on the ground at a time when its last point at or before it is (the first before any), as the points’ whole ms place them', () => {
+  const x = leg(H, [0, 16.1, 32.2, 600, 1200], { alt: ['g', 'g', 400, 3000, 'g'] }) // takes off, lands
+  const on = (ms: number): boolean => onGroundAt(x, H + ms)
+  assert.deepEqual([-5_000, 0, 16_100, 32_199, 32_200, 599_999, 600_000, 1_199_999, 1_200_000, 9_999_999].map(on),
+    [true, true, true, true, false, false, false, false, true, true])
+  assert.equal(onGroundAt(leg(H, [0, 60], { alt: [null, null] }), H + 30_000), false, 'unknown is not on the ground')
+  assert.equal(onGroundAt(leg(H, []), H), false, 'a leg with no points')
 })
 
 test('a leg’s span runs from its first point to its last, in whole ms', () => {

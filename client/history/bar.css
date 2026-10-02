@@ -5,7 +5,8 @@
    Live; 72 px high. On phones (≤ 640 px) a card above the tab bar in two rows: play, date and clock, speed, calendar and
    Live; the scrubber under them with ‹ › at its two ends. While it is up, --fh-playbar-h and --fh-playbar-space say how
    tall it is and where its top edge is, for what stands on it (layout.css: the map key; on phones the flight card). The
-   Go to popover rises above the bar's left end (on phones across the bar's width). */
+   Go to popover rises above the bar's left end (on phones across the bar's width); the tip over the rail stands above
+   the bar, on the pointer or the dragged thumb. */
 :root:has(.fh-playbar-history) {
   --fh-playbar-h: 72px;
 }
@@ -171,6 +172,99 @@
 .fh-goto-go:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 1px;
+}
+
+/* The tip over the rail (bar.ts): the minute there in the clock's figures and, under it, what the rail shows there: the
+   selected aircraft by a dot in the rail's colours (amber heard; an amber ring in a hole of its flight, where it is only
+   estimated; grey, its words with it, not heard), "No data" in the red of the hatch, why a grey hatch cannot be reached
+   in grey. The Go to popover's glass, radius and shadow; one or two lines, never wrapped. bar.ts places it beside the bar
+   in the overlay (left; bottom: 9 px above the bar, held inside its ends) and its caret on the pointer or the thumb
+   (--fh-caret); over the flight card, the panels and the rail (z 18-20). It fades in, at once with reduced motion. */
+.fh-history-tip {
+  position: absolute;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 11px 7px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fh-tip-in 120ms var(--fh-ease);
+}
+
+.fh-history-tip[hidden] {
+  display: none;
+}
+
+@keyframes fh-tip-in {
+  from { opacity: 0; }
+}
+
+/* The caret: a triangle of the tip's glass under it, over the tip's border where they meet (--fh-caret is measured from
+   the outside of that 1 px border, the triangle's left from its inside). */
+.fh-history-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: calc(var(--fh-caret, 50%) - 1px);
+  width: 12px;
+  height: 6px;
+  margin-left: -6px;
+  background: var(--fh-glass-strong);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.fh-history-tip-time {
+  color: var(--fh-text);
+  font: 600 15px/1.25 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-history-tip-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fh-text);
+  font: 500 12px/1.3 var(--fh-font);
+}
+
+.fh-history-tip-line[hidden] {
+  display: none;
+}
+
+.fh-history-tip-line[data-tone='heard']::before,
+.fh-history-tip-line[data-tone='gap']::before,
+.fh-history-tip-line[data-tone='quiet']::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fh-warn); /* the legs' amber (playbar.css) */
+}
+
+.fh-history-tip-line[data-tone='gap']::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--fh-warn);
+}
+
+.fh-history-tip-line[data-tone='quiet']::before {
+  background: var(--fh-muted);
+}
+
+.fh-history-tip-line[data-tone='quiet'],
+.fh-history-tip-line[data-tone='beyond'] {
+  color: var(--fh-muted);
+}
+
+.fh-history-tip-line[data-tone='missing'] {
+  color: var(--fh-err);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-history-tip {
+    animation: none;
+  }
 }
 
 /* Touch screens: 44 px targets, and 16 px in the fields (iOS zooms the page into anything smaller). */

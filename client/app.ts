@@ -44,13 +44,13 @@ import { Weather } from './scene/weather.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
 import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
-import { localDay, mountHistoryBar, type HistoryBarHandle, type LocalDay } from './history/bar.ts'
+import { localDay, mountHistoryBar, type AircraftLine, type HistoryBarHandle, type LocalDay } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
 import { KnownHexes, SlotBlock, SlotFailure, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
-  MapMoves, aheadOf, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight,
-  keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, aheadOf, aircraftLine, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea,
+  inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './history/selected.ts'
 import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
@@ -951,6 +951,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
+   * History: the selected aircraft at tMs in a few words (selected.ts aircraftLine), for the time bar's tip over the rail:
+   * from its day as the frame has it (selectedDay); null with none selected, or its day not known for tMs.
+   */
+  function describeSelected(tMs: number): AircraftLine | null {
+    const day = hist === null ? null : selectedDay(hist, tMs)
+    return day === null ? null : aircraftLine(dayState(day.legs, tMs), tMs)
+  }
+
+  /**
    * History: the selected aircraft's day of flights (GET /api/trace?hex&from&to over selected.ts daySpan) for the bar's
    * local day of t, asked when it is not answered: on selecting, on entering History with a selection, when the replay
    * reaches another day, and at a time past what an answer for today covered. One ask a day at a time; a reply for
@@ -1111,6 +1120,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       onRate: () => void hist?.clock.nextRate(performance.now()),
       onLive: () => exitHistory(),
       onGoTo: (t) => seekHistory(t, true),
+      describe: (t) => describeSelected(t),
     })
     bar.setBounds(minMs, maxMs) // the clock's guess, until the server's status
     const clock = new HistoryClock(asked, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP)

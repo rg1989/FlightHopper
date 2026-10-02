@@ -1,10 +1,12 @@
 // client/history/bar.dom.test.ts
 // The time bar as mounted: bar.ts with ui/playbar.ts on a fake DOM rich enough for both (bar.test.ts has its pure parts):
 // its tools, bounds and hatches, the day arrows, the scrubber held inside what exists, the loader, the rail's legs and
-// missing half hours, the Go to popover, the focus across a day change, and destroy.
+// missing half hours, the Go to popover, the focus across a day change, destroy, and the tip over the rail (the minute
+// under the pointer or the dragged thumb, the aircraft's line, a click going to that minute).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
+import type { AircraftLine } from './bar.ts'
 
 // bar.ts and playbar.ts import their CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty
 // module.
@@ -12,7 +14,8 @@ registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
 
-interface Ev { type: string; key?: string; detail?: number; target: FNode; defaultPrevented: boolean; stopped: boolean; preventDefault(): void; stopPropagation(): void; pointerId?: number }
+interface Ev { type: string; key?: string; detail?: number; target: FNode; defaultPrevented: boolean; stopped: boolean; preventDefault(): void; stopPropagation(): void; pointerId?: number; clientX?: number; pointerType?: string; button?: number; buttons?: number }
+type EvInit = Partial<Pick<Ev, 'key' | 'detail' | 'pointerId' | 'clientX' | 'pointerType' | 'button' | 'buttons'>>
 
 const doc: { activeElement: FNode | null; listeners: Map<string, ((e: Ev) => void)[]> } = { activeElement: null, listeners: new Map() }
 const win: { listeners: Map<string, ((e: Ev) => void)[]> } = { listeners: new Map() }
@@ -35,6 +38,10 @@ class FNode {
   value = ''
   writes = 0
   attrs: Record<string, string> = {}
+  // Layout, as the test sets it (a fake lays nothing out): getBoundingClientRect's box, the left border, the width.
+  rect = { left: 0, top: 0, width: 0, height: 0 }
+  clientLeft = 0
+  offsetWidth = 0
   #text = ''
   style = { props: {} as Record<string, string>, setProperty: (k: string, v: string): void => void (this.style.props[k] = v) }
   #classes = new Set<string>()
@@ -134,10 +141,13 @@ class FNode {
   getAttribute(k: string): string | null {
     return this.attrs[k] ?? null
   }
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number; right: number; bottom: number } {
+    return { ...this.rect, right: this.rect.left + this.rect.width, bottom: this.rect.top + this.rect.height }
+  }
   addEventListener(type: string, f: (e: Ev) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), f])
   }
-  fire(type: string, init: { key?: string; detail?: number } = {}): Ev {
+  fire(type: string, init: EvInit = {}): Ev {
     const e: Ev = {
       type, ...init, target: this, defaultPrevented: false, stopped: false,
       preventDefault() { this.defaultPrevented = true },
@@ -205,7 +215,7 @@ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
 
 // Loaded only now, after the CSS hook and the fake DOM (static imports would be loaded before either).
 const { mountHistoryBar, localDay } = await import('./bar.ts')
-const { newestSlotMs, SLOT_MS } = await import('../../shared/history.ts')
+const { newestSlotMs, SLOT_MS, slotOf } = await import('../../shared/history.ts')
 
 const at = (y: number, m: number, d: number, h = 0, min = 0, s = 0, ms = 0): number => new Date(y, m, d, h, min, s, ms).getTime()
 const H = 3_600_000
@@ -221,7 +231,7 @@ const pointerDown = (target: FNode): void => {
 
 const NOW = at(2026, 8, 22, 17, 43, 55)
 
-function mount(extra: { now?: number } = {}) {
+function mount(extra: { now?: number; describe?: (tMs: number) => AircraftLine | null } = {}) {
   doc.activeElement = null
   doc.listeners.clear()
   win.listeners.clear()
@@ -232,6 +242,7 @@ function mount(extra: { now?: number } = {}) {
     zone: 'GMT+3', nowMs: () => now,
     onToggle: () => calls.push('toggle'), onSeek: (t: number) => calls.push(`seek ${t}`), onRate: () => calls.push('rate'),
     onLive: () => calls.push('live'), onGoTo: (t: number) => calls.push(`goto ${t}`),
+    describe: extra.describe,
   })
   const view = () => {
     const barEl = one(root, 'fh-playbar')
@@ -240,6 +251,7 @@ function mount(extra: { now?: number } = {}) {
       prev: one(root, 'fh-history-prev'), next: one(root, 'fh-history-next'), cal: one(root, 'fh-history-cal'), pop: one(root, 'fh-goto'),
       range: all(root).find((e) => e.tag === 'input' && e.has('fh-playbar-range'))!,
       rail: one(root, 'fh-playbar-rail'),
+      tip: one(root, 'fh-history-tip'), tipTime: one(root, 'fh-history-tip-time'), tipLine: one(root, 'fh-history-tip-line'),
     }
   }
   return { root, bar, calls, view }
@@ -544,4 +556,225 @@ test('setBounds ignores what is not a range; a note is kept over a day change', 
   assert.equal(text(one(root, 'fh-playbar-notice')), 'No data for this time')
   bar.update({ tMs: at(2026, 8, 23, 1), playing: false, rate: 1, loading: false })
   assert.equal(text(one(root, 'fh-playbar-notice')), 'No data for this time')
+})
+
+// The tip's geometry, as a browser would lay it out: the overlay (root) 1280 × 720, the bar's box 1,100 px wide from
+// x = 40, its top at y = 570, the rail on it 864 px long from x = 100 (a 24 h day: 100 s a px), the tip 120 px wide.
+type View = ReturnType<ReturnType<typeof mount>['view']>
+function place(v: View): void {
+  v.barEl.parent!.rect = { left: 0, top: 0, width: 1280, height: 720 }
+  v.barEl.rect = { left: 40, top: 570, width: 1100, height: 72 }
+  v.rail.rect = { left: 100, top: 603, width: 864, height: 6 }
+  v.tip.offsetWidth = 120
+}
+/** The pointer's clientX over the rail at h:min:s of a 24 h day. */
+const xAt = (h: number, min: number, s = 0): number => 100 + (h * 3600 + min * 60 + s) / 100
+const hover = (v: View, x: number): void => void v.range.fire('pointermove', { clientX: x, pointerType: 'mouse', buttons: 0 })
+const press = (v: View, x: number, id = 1, pointerType = 'mouse', button = 0): void =>
+  void v.range.fire('pointerdown', { clientX: x, pointerId: id, pointerType, button })
+const drag = (v: View, x: number, id = 1, pointerType = 'mouse'): void =>
+  void v.range.fire('pointermove', { clientX: x, pointerId: id, pointerType, buttons: 1 })
+const release = (v: View, x: number, id = 1): void => void v.range.fire('pointerup', { clientX: x, pointerId: id })
+/** The browser moving the scrubber under the pointer (s after the day's start) and saying so. */
+const scrub = (v: View, s: number): void => {
+  v.range.value = String(s)
+  v.range.fire('input')
+}
+/** The tip's words: its time, and its line with the line's tone when it has one. */
+const says = (v: View): string[] => (v.tipLine.hidden ? [text(v.tipTime)] : [text(v.tipTime), text(v.tipLine), v.tipLine.attrs['data-tone']])
+
+test('the tip: the minute under the pointer, above the bar centred on it, held inside its ends; it follows the pointer and goes as it leaves', () => {
+  const { bar, view } = mount()
+  bar.setBounds(at(2026, 8, 20), at(2026, 8, 24))
+  bar.update({ tMs: at(2026, 8, 22, 9), playing: false, rate: 1, loading: false })
+  const v = view()
+  place(v)
+  assert.equal(v.tip.hidden, true, 'none until the pointer comes')
+  assert.equal(v.tip.parent, v.barEl.parent, 'beside the bar, so it can stand over what the bar is under')
+  assert.equal(v.tip.attrs['aria-hidden'], 'true', 'for the eye: the scrubber says the time')
+  hover(v, xAt(14, 30, 50))
+  assert.deepEqual([v.tip.hidden, ...says(v)], [false, '14:30'], 'floored as the clock; nothing selected, nothing hatched: no line')
+  // 582.5 px into the bar's box: the tip from 523 px on it (563 px in the overlay), the caret on the pointer 60 px in; 9 px
+  // above the bar's top (720 − 570 + 9)
+  assert.deepEqual([v.tip.style.props.left, v.tip.style.props['--fh-caret'], v.tip.style.props.bottom], ['563px', '60px', '159px'])
+  hover(v, xAt(15, 30, 50))
+  assert.deepEqual([says(v), v.tip.style.props.left], [['15:30'], '599px'], 'it follows (36 px on)')
+  hover(v, xAt(0, 0) - 5) // the scrubber reaches half a thumb past the rail
+  assert.deepEqual([...says(v), v.tip.style.props.left, v.tip.style.props['--fh-caret']], ['00:00', '40px', '55px'], 'the day’s start, at the bar’s end')
+  hover(v, xAt(24, 0) + 5)
+  assert.deepEqual(says(v), ['23:59'], 'the right end: the day’s last minute')
+  v.range.fire('pointerleave')
+  assert.equal(v.tip.hidden, true)
+  v.range.fire('pointermove', { clientX: xAt(12, 0), pointerType: 'touch', buttons: 0 })
+  assert.equal(v.tip.hidden, true, 'a finger shows it only while it presses')
+  v.range.fire('pointermove', { clientX: xAt(12, 0), pointerType: 'mouse', buttons: 1 })
+  assert.equal(v.tip.hidden, true, 'nor a press from elsewhere passing over (the map dragged)')
+  v.range.fire('pointermove', { clientX: xAt(12, 0), pointerType: 'pen', buttons: 0 })
+  assert.deepEqual([v.tip.hidden, ...says(v)], [false, '12:00'], 'a pen over it')
+})
+
+test('the tip: the selected aircraft at that minute (describe) under the time; the hatches say why; "No data" unless its flight is drawn over it', () => {
+  const asked: number[] = []
+  const describe = (t: number): AircraftLine => {
+    asked.push(t)
+    if (t < at(2026, 8, 22, 8)) return { label: 'Not heard', tone: 'quiet' }
+    if (t < at(2026, 8, 22, 10)) return { label: 'ELY541 · flying', tone: 'heard' }
+    if (t < at(2026, 8, 22, 10, 30)) return { label: 'ELY541 · out of coverage', tone: 'gap' }
+    return { label: 'Not heard · on the ground', tone: 'quiet' }
+  }
+  const { bar, view } = mount({ describe })
+  bar.setBounds(at(2026, 8, 22, 6), at(2026, 8, 22, 18, 30))
+  bar.update({ tMs: at(2026, 8, 22, 9), playing: false, rate: 1, loading: false })
+  const v = view()
+  place(v)
+  hover(v, xAt(9, 15, 30))
+  assert.deepEqual(says(v), ['09:15', 'ELY541 · flying', 'heard'])
+  assert.deepEqual(asked.splice(0), [at(2026, 8, 22, 9, 15)], 'asked for the minute itself, where a click goes')
+  hover(v, xAt(10, 10))
+  assert.deepEqual(says(v), ['10:10', 'ELY541 · out of coverage', 'gap'])
+  hover(v, xAt(13, 0))
+  assert.deepEqual(says(v), ['13:00', 'Not heard · on the ground', 'quiet'])
+  asked.length = 0
+  hover(v, xAt(20, 0))
+  assert.deepEqual(says(v), ['20:00', 'Not published yet', 'beyond'])
+  hover(v, xAt(5, 0))
+  assert.deepEqual(says(v), ['05:00', 'Older than adsb.lol keeps', 'beyond'])
+  assert.deepEqual(asked, [], 'no aircraft line where nothing exists')
+  // the red hatch: half hours adsb.lol lacks
+  const [morning, noon] = [slotOf(at(2026, 8, 22, 8, 40)), slotOf(at(2026, 8, 22, 12, 10))]
+  bar.setMissing([morning, noon])
+  hover(v, xAt(12, 10))
+  assert.deepEqual(says(v), ['12:10', 'No data', 'missing'])
+  hover(v, xAt(8, 40))
+  assert.deepEqual(says(v), ['08:40', 'ELY541 · flying', 'heard'], 'its flight is drawn over the hatch: its line')
+  // what changes under a pointer at rest shows at once
+  hover(v, xAt(12, 10))
+  bar.setMissing([morning])
+  assert.deepEqual(says(v), ['12:10', 'Not heard · on the ground', 'quiet'], 'the half hour is there now')
+  bar.setBounds(at(2026, 8, 22, 6), at(2026, 8, 22, 12))
+  assert.deepEqual(says(v), ['12:10', 'Not published yet', 'beyond'], 'the newest moment as the status says')
+  bar.setLegs([])
+  assert.equal(v.tip.hidden, false, 'still shown')
+})
+
+test('a click on the rail goes to the minute the tip says, not where the browser put the thumb; on the thumb itself too; held inside what exists', () => {
+  const { bar, view, calls } = mount()
+  const newest = at(2026, 8, 22, 18, 30)
+  bar.setBounds(at(2026, 8, 20), newest)
+  bar.update({ tMs: at(2026, 8, 22, 9), playing: false, rate: 1, loading: false })
+  const v = view()
+  place(v)
+  hover(v, xAt(14, 30, 50))
+  assert.deepEqual(says(v), ['14:30'])
+  press(v, xAt(14, 30, 50))
+  assert.deepEqual([v.tip.hidden, ...says(v)], [false, '14:30'], 'shown while pressed')
+  scrub(v, 52_250) // the browser: 14:30:50
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 14, 30)}`])
+  drag(v, xAt(14, 30, 50) + 2) // a hand's tremor: still a click
+  scrub(v, 52_450)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 14, 30)}`])
+  release(v, xAt(14, 30, 50) + 2)
+  assert.deepEqual(calls, [], 'sought already: nothing more on release')
+  assert.equal(v.tip.hidden, true, 'gone on release')
+  hover(v, xAt(14, 30, 50) + 2)
+  assert.equal(v.tip.hidden, false, 'and back with the next move')
+  // a click on the thumb itself: the browser seeks nothing, the release goes to the minute
+  press(v, xAt(8, 20, 20), 2)
+  release(v, xAt(8, 20, 20), 2)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 8, 20)}`])
+  // past the newest moment: to it, the tip above the thumb held there
+  press(v, xAt(20, 0), 3)
+  assert.deepEqual([...says(v), v.tip.style.props['--fh-caret']], ['18:30', '60px'])
+  assert.equal(v.tip.style.props.left, `${40 + Math.round(xAt(18, 30) - 40 - 60)}px`, 'above the thumb, at the newest moment')
+  scrub(v, 66_600) // the bar's own limit holds the thumb at 18:30
+  release(v, xAt(20, 0), 3)
+  assert.deepEqual(calls.splice(0), [`seek ${newest}`])
+  // another button, or a second pointer while one presses: nothing
+  press(v, xAt(10, 0), 4, 'mouse', 2)
+  release(v, xAt(10, 0), 4)
+  press(v, xAt(10, 0), 5)
+  press(v, xAt(11, 0), 6, 'touch')
+  release(v, xAt(11, 0), 6)
+  assert.deepEqual(calls, [], 'a right click, and the second finger')
+  release(v, xAt(10, 0), 5)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 10)}`])
+  // a release that never came here (no pointer capture): the same pointer's next press is a press all the same
+  press(v, xAt(10, 30, 20), 5)
+  press(v, xAt(11, 30, 20), 5)
+  release(v, xAt(11, 30, 20), 5)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 11, 30)}`])
+  // a key on the scrubber seeks as before
+  v.range.fire('keydown', { key: 'Home' })
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22)}`])
+})
+
+test('a drag seeks finely as ever, the tip above the thumb saying the minute sought; a finger shows it only while it presses', () => {
+  const { bar, view, calls } = mount()
+  bar.setBounds(at(2026, 8, 20), at(2026, 8, 24))
+  bar.update({ tMs: at(2026, 8, 22, 9), playing: false, rate: 1, loading: false })
+  const v = view()
+  place(v)
+  press(v, xAt(10, 0, 50))
+  scrub(v, 36_050)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 10)}`], 'a click so far')
+  drag(v, xAt(13, 20, 50))
+  scrub(v, 48_010.3) // the thumb, grabbed a little off its centre
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 13, 20, 10, 300)}`], 'moved: the drag’s own fine seek')
+  assert.deepEqual(says(v), ['13:20'], 'the minute sought, as the clock shows it')
+  assert.equal(v.tip.style.props.left, '520px', 'above the thumb (580.103 px on the rail), not the pointer')
+  drag(v, xAt(10, 0, 50) + 1)
+  scrub(v, 36_150)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 10, 2, 30)}`], 'back within 3 px of the press: a drag still')
+  release(v, xAt(10, 0, 50) + 1)
+  assert.deepEqual(calls, [], 'released: no seek of its own')
+  assert.equal(v.tip.hidden, true)
+  // a finger: none from its moves alone; one while it presses; a tap goes to its minute
+  v.range.fire('pointermove', { clientX: xAt(16, 0), pointerType: 'touch', buttons: 0 })
+  assert.equal(v.tip.hidden, true)
+  press(v, xAt(16, 40, 50), 7, 'touch')
+  assert.deepEqual([v.tip.hidden, ...says(v)], [false, '16:40'])
+  drag(v, xAt(16, 40, 50) + 2, 7, 'touch')
+  release(v, xAt(16, 40, 50) + 2, 7)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 16, 40)}`])
+  assert.equal(v.tip.hidden, true)
+  // a drag the scrubber does not make (iOS Safari moves a range only by its thumb): the tip follows the finger, the release
+  // goes there
+  press(v, xAt(16, 40, 50), 8, 'touch')
+  drag(v, xAt(18, 20, 50), 8, 'touch')
+  assert.deepEqual(says(v), ['18:20'])
+  release(v, xAt(18, 20, 50) + 1, 8)
+  assert.deepEqual(calls.splice(0), [`seek ${at(2026, 8, 22, 18, 20)}`])
+  // a press the browser takes over (pointercancel): no seek, no tip
+  press(v, xAt(12, 0), 9, 'touch')
+  v.range.fire('pointercancel', { pointerId: 9 })
+  release(v, xAt(12, 0), 9)
+  assert.deepEqual([calls, v.tip.hidden], [[], true])
+})
+
+test('the tip goes when the bar is mounted for a new day, and stands on the new bar; none over the open popover; destroy takes it', () => {
+  const { bar, view, root } = mount()
+  bar.setBounds(at(2026, 8, 1), at(2026, 8, 30))
+  bar.update({ tMs: at(2026, 8, 22, 23, 59, 58), playing: true, rate: 1, loading: false })
+  let v = view()
+  place(v)
+  hover(v, xAt(12, 0))
+  assert.equal(v.tip.hidden, false)
+  bar.update({ tMs: at(2026, 8, 23, 0, 0, 1), playing: true, rate: 1, loading: false }) // past midnight: a new bar
+  v = view()
+  assert.deepEqual([v.tip.hidden, all(root).filter((e) => e.has('fh-history-tip')).length], [true, 1])
+  place(v)
+  v.barEl.rect = { left: 60, top: 560, width: 1000, height: 72 } // the new bar's own box
+  hover(v, xAt(12, 0))
+  assert.deepEqual([v.tip.hidden, v.tip.style.props.left, v.tip.style.props.bottom], [false, '472px', '169px'], 'on the new bar: centred on 532 px, 9 px above its top')
+  v.cal.click(0) // Go to by a key, the pointer at rest on the rail
+  assert.equal(v.tip.hidden, true, 'the popover rises where it stood')
+  hover(v, xAt(12, 5))
+  assert.equal(v.tip.hidden, true, 'none while the popover is open')
+  bar.closeGoTo()
+  hover(v, xAt(12, 5))
+  assert.equal(v.tip.hidden, false)
+  bar.destroy()
+  assert.equal(root.children.length, 0, 'with the bar')
+  hover(v, xAt(12, 10))
+  assert.equal(v.tip.hidden, true, 'and shows no more')
 })

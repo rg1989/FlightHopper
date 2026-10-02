@@ -14,7 +14,7 @@ registerHooks({
 })
 const {
   localDay, hourScale, quickTimes, parseLocal, daySegments, dayReach, clampMs, inBounds, dayStep, quickJumps, timeLimits, goMoment,
-  inputDate, inputTime, localClock, dayMs,
+  inputDate, inputTime, localClock, dayMs, railMinute, railLine, tipPlace,
 } = await import('./bar.ts')
 
 const H = 3_600_000
@@ -345,4 +345,77 @@ test('dayMs on the days the clocks change: the edge is still the day\'s last ms'
     assert.equal(dayMs(day, lenS), day.endMs - 1)
     assert.deepEqual(localDay(dayMs(day, lenS)), day)
   }
+})
+
+test('railMinute: a share of the rail to the whole minute there, floored as the clock is; the day’s ends hold (00:00, 23:59)', () => {
+  const day = localDay(at(2026, 5, 15, 12))
+  const f = (h: number, min: number, s = 0): number => (h * 3600 + min * 60 + s) / 86_400
+  assert.equal(railMinute(day, 0), day.startMs)
+  assert.equal(railMinute(day, 0.5), at(2026, 5, 15, 12))
+  assert.equal(railMinute(day, f(14, 29, 59.9)), at(2026, 5, 15, 14, 29), 'floored: 14:29:59.9 is 14:29')
+  assert.equal(railMinute(day, f(14, 30)), at(2026, 5, 15, 14, 30))
+  assert.equal(railMinute(day, 1), at(2026, 5, 15, 23, 59), 'the right edge: the day’s last minute, not the next midnight')
+  assert.equal(railMinute(day, f(23, 59, 30)), at(2026, 5, 15, 23, 59))
+  assert.equal(railMinute(day, -0.2), day.startMs, 'left of the rail (the scrubber’s half-thumb inset)')
+  assert.equal(railMinute(day, 1.3), at(2026, 5, 15, 23, 59), 'right of it')
+  assert.equal(railMinute(day, Number.NaN), day.startMs, 'a rail with no size yet')
+  assert.deepEqual([0, 0.5, 1].map((x) => inputTime(railMinute(day, x))), ['00:00', '12:00', '23:59'])
+})
+
+test('railMinute on the days the clocks change: a whole minute of the local clock, in the day, from 00:00 to 23:59', (t) => {
+  const days = clockChangeDays()
+  if (days.length === 0) return t.skip(`no clock changes in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`)
+  for (const { y, m, d } of days) {
+    const day = localDay(at(y, m, d, 12))
+    assert.equal(railMinute(day, 0), day.startMs)
+    assert.equal(inputTime(railMinute(day, 1)), '23:59')
+    let last = -Infinity
+    for (let i = 0; i <= 1000; i++) {
+      const ms = railMinute(day, i / 1000)
+      const c = new Date(ms)
+      assert.equal(c.getSeconds() * 1000 + c.getMilliseconds(), 0, `${inputTime(ms)} is a whole minute`)
+      assert.deepEqual(localDay(ms), day, `${inputTime(ms)} is in the day`)
+      assert.ok(ms >= last, 'left to right, never back')
+      last = ms
+    }
+  }
+})
+
+test('tipPlace: the tip centred on the pointer, held inside the bar’s ends; its caret on the pointer, clear of its rounded corners', () => {
+  assert.deepEqual(tipPlace(500, 120, 1000), { left: 440, caret: 60 })
+  assert.deepEqual(tipPlace(500.4, 120.6, 1000), { left: 440, caret: 60 }, 'whole pixels: the text stays crisp')
+  assert.deepEqual(tipPlace(40, 120, 1000), { left: 0, caret: 40 }, 'at the bar’s left end')
+  assert.deepEqual(tipPlace(6, 120, 1000), { left: 0, caret: 18 }, 'the caret clear of the corner')
+  assert.deepEqual(tipPlace(960, 120, 1000), { left: 880, caret: 80 }, 'at its right end')
+  assert.deepEqual(tipPlace(999, 120, 1000), { left: 880, caret: 102 })
+  assert.deepEqual(tipPlace(100, 300, 200).left, 0, 'wider than the bar: from its left end')
+})
+
+test('railLine: past the newest moment and before the oldest the zone says why (no aircraft line); both ends exist', () => {
+  const [min, max] = [at(2026, 8, 22, 6), at(2026, 8, 22, 18, 30)]
+  const asked: number[] = []
+  const heard = (tMs: number) => {
+    asked.push(tMs)
+    return { label: 'ELY541 · flying', tone: 'heard' as const }
+  }
+  assert.deepEqual(railLine(max + 60_000, min, max, [], heard), { label: 'Not published yet', tone: 'beyond' })
+  assert.deepEqual(railLine(min - 60_000, min, max, [], heard), { label: 'Older than adsb.lol keeps', tone: 'beyond' })
+  assert.deepEqual(asked, [], 'the aircraft is not asked for a moment that does not exist')
+  assert.deepEqual(railLine(max, min, max, [], heard), { label: 'ELY541 · flying', tone: 'heard' }, 'the newest moment exists')
+  assert.deepEqual(railLine(min, min, max, [], heard), { label: 'ELY541 · flying', tone: 'heard' }, 'and the oldest')
+  assert.equal(railLine(at(2026, 8, 22, 12), min, max, [], () => null), null, 'nothing selected, nothing hatched: no line')
+})
+
+test('railLine: in a half hour adsb.lol lacks "No data", but where the aircraft’s flight is drawn over it (heard, a hole) its line', () => {
+  const [min, max] = [at(2026, 8, 22, 6), at(2026, 8, 22, 18, 30)]
+  const t = at(2026, 8, 22, 12, 10)
+  const slot = slotOf(t)
+  const line = (tone: 'heard' | 'gap' | 'quiet') => () => ({ label: tone, tone })
+  const noData = { label: 'No data', tone: 'missing' }
+  assert.deepEqual(railLine(t, min, max, [slot], () => null), noData)
+  assert.deepEqual(railLine(t, min, max, [slot], line('quiet')), noData, 'not heard: the hatch is what the rail shows')
+  assert.deepEqual(railLine(t, min, max, [slot], line('heard')), { label: 'heard', tone: 'heard' }, 'amber over the hatch')
+  assert.deepEqual(railLine(t, min, max, [slot], line('gap')), { label: 'gap', tone: 'gap' })
+  assert.deepEqual(railLine(slot + SLOT_MS, min, max, [slot], line('quiet')), { label: 'quiet', tone: 'quiet' }, 'the next half hour has data')
+  assert.deepEqual(railLine(slot, min, max, [slot - SLOT_MS], line('quiet')), { label: 'quiet', tone: 'quiet' }, 'the one before ends as it starts')
 })

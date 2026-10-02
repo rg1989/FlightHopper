@@ -45,6 +45,12 @@ export function pointsUpTo(leg: TraceReply, t: number): number {
   return lo
 }
 
+/** Whether the aircraft is on the ground at t on leg: its last point at or before t says so (before its first, the first). */
+export function onGroundAt(leg: TraceReply, t: number): boolean {
+  const n = pointsUpTo(leg, t)
+  return leg.alt[n > 0 ? n - 1 : 0] === 'g'
+}
+
 /**
  * Where the aircraft is at replay time t (legs in time order, none inside another: one aircraft flies one leg at a time).
  * The leg that counts is the last to have started: legs that touch or overlap by a few seconds (a file's edge) hand over

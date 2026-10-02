@@ -2,18 +2,25 @@
 // The history time bar: the scenario play bar (ui/playbar.ts) over one local day, with the hours under the scrubber. Each
 // colour on its rail means one thing: amber, the selected aircraft's flights; red hatch, half hours adsb.lol does not
 // have; grey hatch, before the oldest moment and past the newest, which cannot be reached (a drag, a key or a click
-// there seeks to the bound). A ring turns round the thumb while the time under it loads. Beside the speed: the calendar
-// button with the "Go to" popover, flanked by ‹ › for the day before and after, and Live to return. When the replay
-// leaves the day, the bar is mounted again for the new one. It only asks (onToggle, onSeek, onRate, onLive, onGoTo);
-// the app answers through update(), every frame. The helpers work in the browser's time zone.
+// there seeks to the bound). A ring turns round the thumb while the time under it loads. Over the rail a tip says the
+// minute under the pointer (while the thumb is dragged, the one sought, above it) and what the rail shows there: the
+// selected aircraft's state (describe) or why a hatch is there; a click on the rail goes to that minute. Beside the
+// speed: the calendar button with the "Go to" popover, flanked by ‹ › for the day before and after, and Live to return.
+// When the replay leaves the day, the bar is mounted again for the new one. It only asks (onToggle, onSeek, onRate,
+// onLive, onGoTo, describe); the app answers through update(), every frame. The helpers work in the browser's time zone.
 // Keys: the play bar's own on the scrubber; Esc closes the popover (and only that: the app does not see it).
-import { newestSlotMs, SLOT_MS } from '../../shared/history.ts'
+import { newestSlotMs, SLOT_MS, slotOf } from '../../shared/history.ts'
 import { icon } from '../ui/icons.ts'
 import { mountPlaybar, type PlaybarHandle, type PlaybarSegment } from '../ui/playbar.ts'
 import './bar.css'
 
 const H_MS = 3_600_000
 const MIN_MS = 60_000
+const TIP_EDGE = 18 // px: the tip's caret keeps this far from its ends (its 12 px corner and half the caret)
+const TIP_GAP = 9 // px from the tip to the bar: its 6 px caret in between
+// A press on the scrubber that moves less than this is a click (it goes to the tip's minute), a finger's too: on a phone
+// 10 px is most of an hour of the day, and a drag's tip says the true minute anyway.
+const TAP_PX = 3
 // ponytail: until the app says what exists (setBounds), the oldest moment is 30 days back: a guess, short of what adsb.lol
 // keeps; the server's first answer replaces it. Upgrade: none, while the app calls setBounds as soon as it has that answer.
 const DEFAULT_SPAN_MS = 30 * 24 * H_MS
@@ -33,6 +40,20 @@ export interface LocalDay {
 export interface LegSpan {
   fromMs: number
   toMs: number
+}
+
+/** The selected aircraft at a moment in a few words (HistoryBarOpts.describe), in the rail's colour for it: heard amber,
+ *  gap (in a hole of its flight) an amber ring, quiet (not heard) grey. */
+export interface AircraftLine {
+  label: string // 'ELY541 · flying'
+  tone: 'heard' | 'gap' | 'quiet'
+}
+
+/** The tip's line under the time: the aircraft's, or what the rail shows there (missing: the red hatch of a half hour
+ *  adsb.lol lacks; beyond: the grey hatch before the oldest moment and past the newest). */
+export interface TipLine {
+  label: string
+  tone: AircraftLine['tone'] | 'missing' | 'beyond'
 }
 
 /** The local time y-m-d h:min:s as ms (any year: new Date(y, …) reads 0-99 as 19xx). */
@@ -69,6 +90,37 @@ export function hourScale(day: LocalDay, everyH: number): { t: number; label: st
  *  the next midnight: End or a drag to the edge stays in the day (only playing crosses midnight, and moves the bar on). */
 export function dayMs(day: LocalDay, t: number): number {
   return Math.max(day.startMs, Math.min(Math.round(day.startMs + t * 1000), day.endMs - 1))
+}
+
+/** The whole minute at f, a share of the day's rail (0 its start, 1 its end; outside, the end it is past), as ms: floored
+ *  as the clock is, and inside the day (the right edge is 23:59). The tip says it, and a click on the rail goes to it. */
+export function railMinute(day: LocalDay, f: number): number {
+  const share = Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : 0
+  const ms = dayMs(day, (share * (day.endMs - day.startMs)) / 1000)
+  return day.startMs + Math.floor((ms - day.startMs) / MIN_MS) * MIN_MS // from local midnight: a whole minute of the clock
+}
+
+/** Where the tip stands, x the pointer's (or the thumb's) px from the bar's left edge: its left edge (px from the bar's),
+ *  centred on x and held inside the bar's ends (from the left end, when wider than the bar); its caret (px from the tip's
+ *  left edge) on x, clear of the tip's rounded corners. Whole pixels, so its text stays crisp. */
+export function tipPlace(x: number, tipW: number, barW: number): { left: number; caret: number } {
+  const left = Math.round(Math.max(0, Math.min(x - tipW / 2, barW - tipW)))
+  return { left, caret: Math.round(Math.max(TIP_EDGE, Math.min(x - left, tipW - TIP_EDGE))) }
+}
+
+/**
+ * The tip's line under the time at tMs (the minute it says), as the rail shows it there. Past the newest moment and before
+ * the oldest, why it cannot be reached (no aircraft line: nothing exists there). Else the selected aircraft's line
+ * (aircraft: the app's describe; null, none), except over a half hour adsb.lol lacks where the aircraft's flight is not
+ * drawn over the red hatch (amber: heard, or a hole of it): "No data".
+ */
+export function railLine(tMs: number, minMs: number, maxMs: number, missing: readonly number[],
+  aircraft: (tMs: number) => AircraftLine | null): TipLine | null {
+  if (tMs > maxMs) return { label: 'Not published yet', tone: 'beyond' }
+  if (tMs < minMs) return { label: 'Older than adsb.lol keeps', tone: 'beyond' }
+  const line = aircraft(tMs)
+  if (line !== null && line.tone !== 'quiet') return line
+  return missing.includes(slotOf(tMs)) ? { label: 'No data', tone: 'missing' } : line
 }
 
 /** The Go to popover's quick jumps back from now. */
@@ -208,6 +260,7 @@ export interface HistoryBarOpts {
   onRate(): void
   onLive(): void
   onGoTo(tMs: number): void // Go to (the chips, the form) and the day arrows: a jump
+  describe?(tMs: number): AircraftLine | null // the selected aircraft at tMs, for the tip; null (or none given): no line
 }
 
 export interface HistoryBarHandle {
@@ -351,6 +404,7 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
   /** focus: 'first' puts it on the first chip that can be chosen (the date when none can), 'form' on the popover itself. */
   const openGoTo = (focus: 'first' | 'form' | null): void => {
     if (destroyed || !pop.hidden) return
+    hideTip() // opened by a key while the pointer rests on the rail: the popover rises where the tip stood
     const t = shownMs()
     date.value = inputDate(t)
     time.value = inputTime(t)
@@ -413,6 +467,131 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
   const tools = [prev, cal, next, pop]
   let day = localDay(o.nowMs())
   let mounts = 0
+
+  // The tip over the rail: the minute under the pointer (a mouse or pen over it) or, while the scrubber is pressed (any
+  // pointer; a finger only then), the moment sought, above the thumb; under it what the rail shows there (railLine). It
+  // stands above the bar, so it covers none of its controls, held inside the bar's ends. Beside the bar in root, not in
+  // it: over what the bar is under (the flight card on phones, a tall panel), with no change to the bar's own stacking.
+  // A press is a click until it moves TAP_PX: a click goes to the minute the tip says; a drag seeks finely, as the
+  // scrubber always has.
+  const tip = el('div', 'fh-history-tip fh-glass')
+  tip.hidden = true
+  tip.setAttribute('aria-hidden', 'true') // for the eye: the scrubber says the time
+  const tipTime = el('span', 'fh-history-tip-time fh-num')
+  const tipText = el('span', 'fh-history-tip-line')
+  tip.append(tipTime, tipText)
+  type TipAt = { x: number } | { tMs: number } // the pointer's clientX, or the moment sought (above the thumb)
+  let tipAt: TipAt | null = null // where it stands; null: hidden
+  let tipSays = '' // what it says, so a move writes only what changed
+  // The press on the scrubber (pointer id, from clientX x): moved once it went TAP_PX from there; minute, where its release
+  // goes when the scrubber sought nothing meanwhile (sought: it did).
+  let press: { id: number; x: number; minute: number; moved: boolean; sought: boolean } | null = null
+  let shell: HTMLElement | null = null // the bar's element: the tip stands on it
+  let rail: HTMLElement | null = null // its rail: the minute under a pointer is read from where it is drawn
+  const aircraftAt = (tMs: number): AircraftLine | null => o.describe?.(tMs) ?? null
+
+  /** The minute under clientX on the rail (railMinute); null while the rail has no size. */
+  const minuteAt = (clientX: number): number | null => {
+    const r = rail?.getBoundingClientRect()
+    return r === undefined || !(r.width > 0) ? null : railMinute(day, (clientX - r.left) / r.width)
+  }
+  /** The tip at the pointer (its minute) or above the thumb (the moment sought, its minute as the clock shows it). */
+  const showTip = (at: TipAt): void => {
+    const r = rail?.getBoundingClientRect()
+    if (destroyed || shell === null || r === undefined || !(r.width > 0)) return
+    const tMs = 'x' in at ? railMinute(day, (at.x - r.left) / r.width) : at.tMs
+    const x = 'x' in at ? at.x : r.left + Math.min(1, Math.max(0, (tMs - day.startMs) / (day.endMs - day.startMs))) * r.width
+    const time = inputTime(tMs)
+    const line = railLine(tMs, minMs, maxMs, missing, aircraftAt)
+    const says = `${time} ${line?.tone ?? ''} ${line?.label ?? ''}`
+    if (says !== tipSays) {
+      tipSays = says
+      tipTime.textContent = time
+      tipText.hidden = line === null
+      if (line !== null) {
+        tipText.textContent = line.label
+        tipText.setAttribute('data-tone', line.tone)
+      }
+    }
+    tipAt = at
+    tip.hidden = false // shown before it is measured
+    const b = shell.getBoundingClientRect()
+    const u = root.getBoundingClientRect() // the overlay, borderless: the tip's containing block
+    const p = tipPlace(x - b.left, tip.offsetWidth, b.width)
+    tip.style.setProperty('left', `${Math.round(b.left - u.left + p.left)}px`)
+    tip.style.setProperty('bottom', `${Math.round(u.bottom - b.top) + TIP_GAP}px`)
+    tip.style.setProperty('--fh-caret', `${p.caret}px`)
+  }
+  const hideTip = (): void => {
+    tipAt = null
+    tip.hidden = true
+  }
+  /** What the tip says, again where it stands: the legs, the missing half hours or the bounds changed under it. */
+  const refreshTip = (): void => {
+    if (tipAt !== null) showTip(tipAt)
+  }
+  /** A seek from the scrubber (a drag, a key, a press on the rail), never past what exists. A press that has not moved (a
+   *  click: the browser seeks where it was pressed, finely) goes to the minute the tip said; while one is down the tip
+   *  stands above the thumb, saying where it is. */
+  const seek = (ms: number): void => {
+    const p = press
+    const tMs = clampMs(p === null || p.moved ? ms : p.minute, minMs, maxMs)
+    if (p !== null) {
+      p.sought = true
+      showTip({ tMs })
+    }
+    o.onSeek(tMs)
+  }
+  /** The tip's and the click's listeners on a new bar's scrubber. */
+  const wireTip = (): void => {
+    shell = cal.closest<HTMLElement>('.fh-playbar')
+    rail = shell?.querySelector<HTMLElement>('.fh-playbar-rail') ?? null
+    const range = shell?.querySelector<HTMLInputElement>('.fh-playbar-range') ?? null
+    if (range === null) return
+    range.addEventListener('pointerdown', (e) => {
+      // One press at a time (another finger's is not one), by the main button (a finger, a pen's tip); the same pointer
+      // pressing again means its last release never came here.
+      if ((press !== null && press.id !== e.pointerId) || e.button !== 0) return
+      const minute = minuteAt(e.clientX)
+      if (minute === null) return
+      press = { id: e.pointerId, x: e.clientX, minute, moved: false, sought: false }
+      showTip({ tMs: clampMs(minute, minMs, maxMs) }) // where a click goes: the thumb will be there
+    })
+    range.addEventListener('pointermove', (e) => {
+      const p = press
+      if (p === null) {
+        // A mouse or pen over the rail; not a finger (only while it presses), nor a press from elsewhere passing over (the
+        // map dragged), nor over the open popover.
+        if (e.pointerType !== 'touch' && e.buttons === 0 && pop.hidden) showTip({ x: e.clientX })
+        return
+      }
+      if (e.pointerId !== p.id) return
+      if (!p.moved && Math.abs(e.clientX - p.x) >= TAP_PX) p.moved = true
+      if (!p.moved || p.sought) return // a click so far; or a drag, whose seeks move the tip
+      // A drag the scrubber does not make (iOS Safari drags a range only by its thumb): the tip follows the pointer, and
+      // the release goes there.
+      p.minute = minuteAt(e.clientX) ?? p.minute
+      showTip({ x: e.clientX })
+    })
+    range.addEventListener('pointerleave', () => {
+      if (press === null) hideTip()
+    })
+    range.addEventListener('pointerup', (e) => {
+      const p = press
+      if (p === null || e.pointerId !== p.id) return
+      press = null
+      hideTip()
+      if (!p.sought) o.onSeek(clampMs(p.minute, minMs, maxMs)) // a click on the thumb itself, or a drag it did not make
+    })
+    const cancel = (e: PointerEvent): void => {
+      if (press === null || e.pointerId !== press.id) return
+      press = null
+      hideTip()
+    }
+    range.addEventListener('pointercancel', cancel)
+    range.addEventListener('lostpointercapture', cancel)
+  }
+
   /** The hatch before the oldest moment and past the newest, on this day's rail (none where they are on other days). */
   const applyReach = (b: PlaybarHandle, d: LocalDay): void => {
     const { floorS, limitS } = dayReach(d, minMs, maxMs)
@@ -425,8 +604,8 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
       start: 0, stop: lenS, end: lenS, marks: [], clockLabel: o.zone, title: `Replay · ${d.label}`,
       onToggle: () => o.onToggle(),
       // Its right edge is 23:59:59, not the next day's bar; and never past what exists (the bar's own floor and limit
-      // already hold a drag, a key and a click there: this holds a day that lies wholly outside).
-      onSeek: (t) => o.onSeek(clampMs(dayMs(d, t), minMs, maxMs)),
+      // already hold a drag, a key and a click there: seek holds a day that lies wholly outside).
+      onSeek: (t) => seek(dayMs(d, t)),
       onRate: () => o.onRate(),
       onExit: () => o.onLive(),
       className: mounts++ === 0 ? 'fh-playbar-history' : 'fh-playbar-history fh-playbar-again', // again: no entrance
@@ -436,12 +615,15 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     applyReach(b, d)
     b.setBusy(loading)
     b.setNote(note)
+    wireTip()
     return b
   }
   let bar = mount(day)
+  root.append(tip) // after the bar
   syncArrows()
 
-  /** The replay left the day: the bar for the new one, the keyboard focus kept on the same control. */
+  /** The replay left the day: the bar for the new one, the keyboard focus kept on the same control; the tip goes (and
+   *  with it a press on the old scrubber). */
   const remount = (nextDay: LocalDay): void => {
     const active = document.activeElement
     const old = cal.closest('.fh-playbar')
@@ -449,6 +631,8 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     const same = had !== null && tools.some((t) => t.contains(had)) ? had : null // these move to the new bar
     const cls = had === null || same !== null ? null : (FOCUSABLE.find((c) => had.classList.contains(c)) ?? null)
     const was = bar
+    press = null
+    hideTip()
     day = nextDay
     bar = mount(nextDay)
     syncArrows()
@@ -480,6 +664,7 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
       if (destroyed) return
       applyReach(bar, day)
       syncArrows()
+      refreshTip()
       if (!pop.hidden) {
         syncFields()
         syncChips()
@@ -487,11 +672,15 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     },
     setMissing(slots) {
       missing = [...slots]
-      if (!destroyed) bar.setSegments(daySegments(day, legs, missing))
+      if (destroyed) return
+      bar.setSegments(daySegments(day, legs, missing))
+      refreshTip()
     },
     setLegs(spans) {
       legs = [...spans]
-      if (!destroyed) bar.setSegments(daySegments(day, legs, missing))
+      if (destroyed) return
+      bar.setSegments(daySegments(day, legs, missing))
+      refreshTip() // a new selection, or its day of flights came: the aircraft's line under the pointer
     },
     setNote(text) {
       note = text
@@ -508,8 +697,11 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     destroy() {
       if (destroyed) return
       closeGoTo(false)
+      press = null
+      hideTip()
       destroyed = true
       bar.destroy()
+      tip.remove()
     },
   }
 }

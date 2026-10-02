@@ -10,8 +10,8 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
 import {
-  MapMoves, aheadOf, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, inArea,
-  inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  MapMoves, aheadOf, aircraftLine, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver,
+  historyWait, inArea, inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './selected.ts'
 
 const MIN = 60_000
@@ -105,6 +105,32 @@ test('replayStatus: in a hole of its leg, when it was last heard (the point befo
   const late = leg(at(2026, 9, 1, 23, 58), [0, 10, 900], { lat: [32, 32.01, 33] }) // Thu 23:58:10 to Fri 00:13
   const t2 = at(2026, 9, 2, 0, 5)
   assert.deepEqual(replayStatus(dayState([late], t2), t2, 60), { text: 'Last heard Thu 23:58', state: 'quiet' })
+})
+
+test('aircraftLine: heard, the callsign it sent then and whether its point then is on the ground', () => {
+  // Taxis, takes off, is renamed in the air, lands: heard throughout (no hole), to a minute after its last point.
+  const l = leg(T, [0, 60, 600, 1200, 1800], { alt: ['g', 'g', 3000, 3000, 'g'], callsign: 'ISR44', calls: [[0, 'ISR595'], [900, 'ISR44']] })
+  const say = (s: number): ReturnType<typeof aircraftLine> => aircraftLine(dayState([l], T + s * 1000), T + s * 1000)
+  assert.deepEqual(say(0), { label: 'ISR595 · on the ground', tone: 'heard' }, 'its first point')
+  assert.deepEqual(say(599), { label: 'ISR595 · on the ground', tone: 'heard' }, 'its point then (60 s) is on the ground')
+  assert.deepEqual(say(600), { label: 'ISR595 · flying', tone: 'heard' })
+  assert.deepEqual(say(900), { label: 'ISR44 · flying', tone: 'heard' }, 'the callsign it sent then, not the leg’s first')
+  assert.deepEqual(say(1830), { label: 'ISR44 · on the ground', tone: 'heard' }, 'landed: its last point, still heard for a minute')
+  const anon = leg(T, [0, 600], { callsign: null, calls: [] })
+  assert.deepEqual(aircraftLine(dayState([anon], T + 60_000), T + 60_000), { label: '738ABC · flying', tone: 'heard' }, 'no callsign: its hex')
+})
+
+test('aircraftLine: in a hole of its leg out of coverage (the amber ring); quiet, before its first leg or none that day not heard', () => {
+  const hole = leg(T, [0, 10, 3550, 3560], { lat: [32, 32.01, 33.5, 33.51] }) // a hole from 10 s to 3,550 s, 89 nm on
+  assert.deepEqual(aircraftLine(dayState([hole], T + 1_800_000), T + 1_800_000), { label: 'ISR595 · out of coverage', tone: 'gap' })
+  const parked = leg(T, [0, 600, 1200], { alt: [3000, 400, 'g'] }) // landed: its last point on the ground
+  const lost = leg(T, [0, 600, 1200]) // last heard at 3,000 ft
+  const later = T + 2 * H
+  assert.deepEqual(aircraftLine(dayState([parked], later), later), { label: 'Not heard · on the ground', tone: 'quiet' })
+  assert.deepEqual(aircraftLine(dayState([lost], later), later), { label: 'Not heard', tone: 'quiet' })
+  const first = leg(T, [0, 600], { alt: ['g', 3000] }) // on the ground at its first point: not heard before it all the same
+  assert.deepEqual(aircraftLine(dayState([first], T - H), T - H), { label: 'Not heard', tone: 'quiet' }, 'before its first leg')
+  assert.deepEqual(aircraftLine(dayState([], T), T), { label: 'Not heard', tone: 'quiet' }, 'no leg that day')
 })
 
 test('selectedInfo: null until its day is known (the fleet’s info stands)', () => {

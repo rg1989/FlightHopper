@@ -2,16 +2,17 @@
 // The selected aircraft in History (design D2), as app.ts draws and words it at a replay time t, from its day of flights
 // (aircraftDay.ts): the entry the map draws for it (its track's state while heard, a faded ghost where it was last heard
 // while quiet, the same moving along a hole of its leg where it is estimated to be, none before its first flight or on a
-// day it did not fly; until its day is known, the fleet's own), what it is called then, the card's status line, the span
-// of its day asked for, and when the map brings it into view or follows it. Pure: the app owns the camera, the clock and
-// the requests.
+// day it did not fly; until its day is known, the fleet's own), what it is called then, the card's status line and the
+// time bar tip's words, the span of its day asked for, and when the map brings it into view or follows it. Pure: the app
+// owns the camera, the clock and the requests.
 import type { TraceReply } from '../../shared/api.ts'
 import { bearingDeg, destination, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Rect } from '../scene/flightFrame.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import type { ReplayStatus } from '../ui/flightCard.ts'
-import { callsignAt, dayState, legEndMs, pointsUpTo, type DayState } from './aircraftDay.ts'
+import { callsignAt, dayState, legEndMs, onGroundAt, pointsUpTo, type DayState } from './aircraftDay.ts'
+import type { AircraftLine } from './bar.ts'
 import { heightM, traceInfo } from './trace.ts'
 
 const BEFORE_MS = 12 * 3_600_000 // a day is asked with this much before it: where the aircraft stood when it began
@@ -55,6 +56,21 @@ export function replayStatus(ds: DayState | null, t: number, quietS: number): Re
   if (ds.kind === 'quiet' || ds.kind === 'gap') return { text: `Last heard ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
   if (ds.kind === 'before') return { text: `First heard ${atClock(ds.untilMs, t)}`, state: 'none' }
   return { text: 'Not heard this day', state: 'none' }
+}
+
+/**
+ * The selected aircraft at t in a few words for the time bar's tip (bar.ts describe), in the rail's colours (tone).
+ * Heard: the callsign it sent then (none: its hex) and whether its point then is on the ground, "ELY541 · flying" or
+ * "ELY541 · on the ground"; in a hole of its leg, "ELY541 · out of coverage". Quiet where it was last heard on the
+ * ground, "Not heard · on the ground"; quiet in the air, before its first leg or no leg that day, "Not heard".
+ */
+export function aircraftLine(ds: DayState, t: number): AircraftLine {
+  if (ds.kind === 'heard' || ds.kind === 'gap') {
+    const name = callsignAt(ds.leg, t) ?? ds.leg.hex.toUpperCase()
+    const what = ds.kind === 'gap' ? 'out of coverage' : onGroundAt(ds.leg, t) ? 'on the ground' : 'flying'
+    return { label: `${name} · ${what}`, tone: ds.kind }
+  }
+  return { label: ds.kind === 'quiet' && onGroundAt(ds.leg, ds.sinceMs) ? 'Not heard · on the ground' : 'Not heard', tone: 'quiet' }
 }
 
 const sameInfo = (a: AircraftInfo, b: AircraftInfo): boolean =>
