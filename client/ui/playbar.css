@@ -1,7 +1,9 @@
 /* client/ui/playbar.css */
 /* The scenario play bar (playbar.ts): along the bottom between the left gutter and the rail; on phones on top of the tab
    bar, full width. --fh-playbar-space is how far its top edge sits from the bottom of the screen: the captions (and any
-   overlay that must clear the bar) stand on it. While the ending shows, ending.css lifts the bar above its veil. */
+   overlay that must clear the bar) stand on it. While the ending shows, ending.css lifts the bar above its veil.
+   Its options (the history bar's, history/bar.css): extra controls (tools), a text exit (Live), a scale under the rail,
+   spans on it and a hatched part past a limit. */
 :root {
   --fh-playbar-h: 64px;
   --fh-playbar-space: calc(12px + env(safe-area-inset-bottom, 0px) + var(--fh-playbar-h));
@@ -286,6 +288,127 @@
   grid-area: exit;
 }
 
+/* Exit as a text pill (opts.exitText: the history bar's Live): a hollow dot, then the text. */
+.fh-playbar-exit-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fh-text);
+  font: 600 13px/1 var(--fh-font);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-playbar-exit-text::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--fh-muted);
+  border-radius: 50%;
+}
+
+.fh-playbar-exit-text:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.fh-playbar-exit-text:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+/* Extra controls (opts.tools: the history bar's calendar), between the speed and the exit. */
+.fh-playbar.fh-has-tools {
+  grid-template-columns: auto clamp(150px, 20vw, 230px) minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'play meta track rate tools exit';
+}
+
+.fh-playbar.fh-has-sound.fh-has-tools {
+  grid-template-columns: auto clamp(150px, 20vw, 230px) minmax(0, 1fr) auto auto auto auto;
+  grid-template-areas: 'play meta track sound rate tools exit';
+}
+
+.fh-playbar-tools {
+  grid-area: tools;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The scale (opts.scale: the hours): small labels under the rail, each centred on its time, inset as the rail is. The
+   track gives them room below the scrubber. */
+.fh-playbar.fh-has-scale .fh-playbar-track {
+  margin-bottom: 8px;
+}
+
+.fh-playbar-scale {
+  position: absolute;
+  top: calc(50% + 8px);
+  right: calc(var(--fh-thumb) / 2);
+  left: calc(var(--fh-thumb) / 2);
+  height: 14px;
+  pointer-events: none;
+}
+
+.fh-playbar-scale > span {
+  position: absolute;
+  color: var(--fh-faint);
+  font: 600 10px/14px var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* Spans on the rail (setSegments), under the played part and the dots: ready bright, loading striped and moving,
+   missing a faint red hatch. Past the limit (setLimit) the rail gives way to a faint hatch: not there yet. */
+.fh-playbar-segs {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.fh-playbar-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.fh-playbar-seg[data-state='loading'] {
+  background: linear-gradient(90deg, rgba(90, 169, 255, 0.55) 6px, rgba(90, 169, 255, 0.2) 6px) 0 0 / 12px 100%;
+  animation: fh-playbar-stripes 1s linear infinite;
+}
+
+.fh-playbar-seg[data-state='missing'] {
+  background: repeating-linear-gradient(-45deg, rgba(255, 93, 93, 0.45) 0 2px, transparent 2px 5px);
+}
+
+@keyframes fh-playbar-stripes {
+  to { background-position: 12px 0; }
+}
+
+.fh-playbar-rail.fh-has-limit {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.13) var(--fh-lim), transparent var(--fh-lim));
+}
+
+.fh-playbar-limit {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--fh-lim);
+  border-radius: 0 3px 3px 0;
+  background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.08) 0 2px, transparent 2px 5px);
+}
+
 /* The voices (with audio only): mute and a small volume slider, and over them, for a reenactment, a note in the title's
    small caps that these are not the recorded voices (its title has the full sentence). */
 .fh-playbar.fh-has-sound {
@@ -406,6 +529,22 @@
     height: 40px;
   }
 
+  .fh-playbar-tools > .fh-ibtn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .fh-playbar-exit-text {
+    height: 44px;
+    padding: 0 14px 0 12px;
+    border-radius: 22px;
+    font-size: 14px;
+  }
+
+  .fh-playbar.fh-has-scale .fh-playbar-track {
+    margin-bottom: 2px; /* the 40 px scrubber holds most of the labels */
+  }
+
   /* The device's own buttons set the volume (iOS ignores a page's): mute only. */
   .fh-ibtn.fh-playbar-mute {
     width: 44px;
@@ -472,6 +611,25 @@
     grid-template-areas:
       'meta meta note note note'
       'play track sound rate exit';
+  }
+
+  .fh-playbar.fh-has-tools {
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      'meta meta meta meta meta'
+      'play track rate tools exit';
+  }
+
+  .fh-playbar.fh-has-sound.fh-has-tools {
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'meta meta note note note note'
+      'play track sound rate tools exit';
+  }
+
+  /* Every other label of the scale (the hours 6 h apart). */
+  .fh-playbar-scale > span:nth-child(even) {
+    display: none;
   }
 
   /* The note joins the clock's row, the mute button the controls. */

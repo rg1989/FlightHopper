@@ -54,6 +54,10 @@ const P: Record<string, string> = {
   flag: 'M5.5 21V3.5M5.5 4.5h12l-2.5 4.5 2.5 4.5h-12',
   // A clock face (the search's past picks).
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
+  // A clock face with an arrow turning it back: history (the map in the past).
+  history: 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 3.8v4.6h4.6M12 7.5V12l3 2',
+  // A calendar page with its two rings: go to a date (the history bar).
+  calendar: 'M4.5 6h15v14h-15zM4.5 10h15M8.5 3.5v4M15.5 3.5v4',
   // A plane seen from above, nose up.
   plane: 'M12 2.5c.9 0 1.5 1 1.5 2.5v4.5l7.5 4.5v2l-7.5-2.3v4.8l2 1.6v1.6L12 20.7l-3.5 1v-1.6l2-1.6v-4.8L3 16v-2l7.5-4.5V5c0-1.5.6-2.5 1.5-2.5Z',
   // A folded map: the top-down view.

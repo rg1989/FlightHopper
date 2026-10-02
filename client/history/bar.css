@@ -1,0 +1,261 @@
+/* client/history/bar.css */
+/* The history time bar (bar.ts, on ui/playbar.ts): the play bar's look with the replay's date in amber over the clock,
+   the hours under the scrubber, no played part (the rail shows what is loaded instead), the calendar and Live; 72 px
+   high. On phones (≤ 640 px) a card above the tab bar in two rows: play, date and clock, speed, calendar and Live; the
+   scrubber under them. While it is up, --fh-playbar-h and --fh-playbar-space say how tall it is and where its top edge
+   is, for what stands on it (layout.css: the map key; on phones the flight card). The Go to popover rises above the
+   bar's left end (on phones across the bar's width). */
+:root:has(.fh-playbar-history) {
+  --fh-playbar-h: 72px;
+}
+
+.fh-playbar-history .fh-playbar-title {
+  color: var(--fh-warn);
+}
+
+.fh-playbar-history .fh-playbar-fill {
+  display: none;
+}
+
+/* Mounted again for the next day (bar.ts): it was already there, so no entrance. */
+.fh-playbar.fh-playbar-again {
+  animation: none;
+}
+
+/* While the popover is open the bar, and the popover with it, stands over the flight card, the panels and the rail
+   (z 18-20). */
+.fh-playbar:has(.fh-goto:not([hidden])) {
+  z-index: 21;
+}
+
+/* The Go to popover: quick jumps back, a date and a time (the browser's own pickers), a note and Go. */
+.fh-goto {
+  position: absolute;
+  bottom: calc(100% + 1px + 10px); /* from inside the bar's border: 10 px clear of it */
+  left: -1px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 300px;
+  max-height: calc(100vh - var(--fh-top) - var(--fh-playbar-space) - 10px);
+  max-height: calc(100dvh - var(--fh-top) - var(--fh-playbar-space) - 10px);
+  padding: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: fh-goto-in 150ms var(--fh-ease);
+}
+
+.fh-goto[hidden] {
+  display: none;
+}
+
+/* openGoTo() focuses the popover itself (Tab goes on into it): no ring round the whole card. */
+.fh-goto:focus {
+  outline: none;
+}
+
+@keyframes fh-goto-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+.fh-goto-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px -6px -4px 0;
+  font: 600 14px/1.2 var(--fh-font);
+}
+
+.fh-goto-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fh-goto-chip {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fh-text);
+  font: 500 12px/1 var(--fh-font);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-goto-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fh-goto-chip:focus-visible,
+.fh-goto-input:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: 1px;
+}
+
+.fh-goto-fields {
+  display: grid;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 8px;
+}
+
+.fh-goto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fh-goto-label {
+  overflow: hidden;
+  color: var(--fh-faint);
+  font: 600 10px/1.3 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fh-goto-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  margin: 0;
+  padding: 0 8px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--fh-radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fh-text);
+  font: 500 13px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+  color-scheme: dark; /* the browser's picker and its icon in the dark */
+}
+
+/* A date outside the last 30 days, or a field left empty: the browser says why when Go is pressed. */
+.fh-goto-input:user-invalid {
+  border-color: var(--fh-err);
+}
+
+.fh-goto-note {
+  margin: 0;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fh-goto-go {
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--fh-accent);
+  color: #06111f;
+  font: 600 13px/1 var(--fh-font);
+  cursor: pointer;
+  transition: filter var(--fh-fast) var(--fh-ease);
+}
+
+.fh-goto-go:hover {
+  filter: brightness(1.1);
+}
+
+.fh-goto-go:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+/* Touch screens: 44 px targets, and 16 px in the fields (iOS zooms the page into anything smaller). */
+@media (pointer: coarse) {
+  .fh-goto-chip {
+    height: 44px;
+    padding: 0 15px;
+    border-radius: 22px;
+    font-size: 14px;
+  }
+
+  .fh-goto-input {
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .fh-goto-go {
+    height: 44px;
+    font-size: 15px;
+  }
+
+  .fh-goto-chip,
+  .fh-goto-go {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Phones: a card 8 px in from the edges, above the tab bar, in two rows (the play bar's own phone layout has the clock
+   on a row of its own). The popover spans the bar. */
+@media (max-width: 640px) {
+  :root:has(.fh-playbar-history) {
+    --fh-playbar-h: 96px; /* 1 border + 6 + the 44 px controls row + the 40 px scrubber row + 4 + 1 */
+    --fh-playbar-space: calc(var(--fh-tabbar-h) + 8px + var(--fh-playbar-h));
+  }
+
+  .fh-playbar.fh-playbar-history {
+    right: 8px;
+    bottom: calc(var(--fh-tabbar-h) + 8px);
+    left: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-rows: 44px 40px;
+    grid-template-areas:
+      'play meta rate tools exit'
+      'track track track track track';
+    row-gap: 0;
+    column-gap: 6px;
+    padding: 6px 8px 4px 10px;
+    border-width: 1px;
+    border-radius: var(--fh-radius);
+    box-shadow: var(--fh-shadow);
+  }
+
+  .fh-playbar-history .fh-playbar-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    overflow: hidden; /* on a narrow phone the date is cut short, never drawn under the controls */
+    padding: 0;
+  }
+
+  .fh-playbar-history .fh-playbar-rate {
+    min-width: 44px;
+    padding: 0 6px;
+  }
+
+  .fh-playbar-history .fh-playbar-exit-text {
+    padding: 0 12px 0 10px;
+  }
+
+  .fh-playbar-history .fh-playbar-title {
+    display: block;
+    max-width: 100%;
+  }
+
+  .fh-playbar-history .fh-playbar-clock {
+    font-size: 17px;
+  }
+
+  .fh-goto {
+    right: -1px;
+    bottom: calc(100% + 1px + 8px);
+    width: auto;
+  }
+}
+
+/* Narrow phones: the clock a size down and the date set tighter, so both fit beside the controls. */
+@media (max-width: 380px) {
+  .fh-playbar-history .fh-playbar-clock {
+    font-size: 15px;
+  }
+
+  .fh-playbar-history .fh-playbar-title {
+    letter-spacing: 0.02em;
+  }
+}

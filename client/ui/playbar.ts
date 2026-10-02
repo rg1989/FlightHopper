@@ -4,6 +4,9 @@
 // to one), the voices' mute and volume (with audio only), the speed and exit. It only asks: onToggle, onSeek(t), onRate,
 // onExit, sound.onGain; the app answers through update(), which is cheap to call every frame (it writes only what
 // changed, and leaves the thumb alone under a dragging finger).
+// The history time bar (history/bar.ts) is this bar with options: labels under the rail (scale), spans on it
+// (setSegments), a limit past which it is hatched and cannot be reached (setLimit), extra controls (tools) and Live as a
+// text pill (exitText). Without them it is the scenario bar exactly.
 // Keys on the focused scrubber: ←/→ ±10 s (Shift ±60 s), PgUp/PgDn ±60 s, Home/End, Space play/pause. Every other key,
 // and all keys on the bar's buttons except Space (which presses them), belong to the app's own handler. A mouse or finger
 // press leaves no focus on speed or a tick, so a later Space reaches the app (play/pause) instead of pressing them again.
@@ -39,11 +42,27 @@ export interface PlaybarOpts {
   onRate(): void
   onExit(): void
   sound?: PlaybarSound | null // the scenario's audio is there
+  exitLabel?: string // the exit button's name (default 'Exit scenario')
+  exitText?: string // set: the exit button is a pill with this text ('Live') instead of the × icon
+  tools?: HTMLElement[] // more controls, between the speed and the exit
+  scale?: { t: number; label: string }[] // small labels under the rail (the hours)
+  className?: string // more classes on the bar
+  timeLabel?: string // the scrubber's name (default 'Scenario time')
+}
+
+/** A span on the rail, under the thumb: ready (bright), loading (striped, moving), missing (red hatch). */
+export interface PlaybarSegment {
+  from: number
+  to: number
+  state: 'ready' | 'loading' | 'missing'
 }
 
 export interface PlaybarHandle {
   update(v: PlaybarView): void
   toggleMute(): void // M: nothing without sound
+  setSegments(segs: readonly PlaybarSegment[]): void // replaces the spans; unchanged ones write nothing
+  setLimit(maxT: number | null): void // past maxT the rail is hatched, and a drag, key or mark past it seeks to maxT
+  setTitle(title: string): void
   destroy(): void
 }
 
@@ -162,8 +181,12 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   const stop = Math.max(opts.end, opts.stop)
   const span = Math.max(stop - start, 1e-9)
   const pct = (t: number): number => Math.min(1, Math.max(0, (t - start) / span)) * 100
+  // How far a drag, a key or a mark reaches: stop, or the limit when one is set (setLimit: start ≤ limit < stop).
+  let limit: number | null = null
+  const reach = (t: number): number => Math.min(limit ?? stop, Math.max(start, t))
 
   const bar = h('div', 'fh-playbar fh-glass')
+  for (const c of (opts.className ?? '').split(/\s+/)) if (c !== '') bar.classList.add(c)
   bar.setAttribute('role', 'group')
   bar.setAttribute('aria-label', `Playback: ${opts.title}`)
 
@@ -177,7 +200,8 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   clock.append(time, h('span', 'fh-playbar-zone', opts.clockLabel))
   const phase = h('span', 'fh-playbar-phase')
   phase.hidden = true
-  meta.append(h('span', 'fh-playbar-title', opts.title), clock, phase)
+  const title = h('span', 'fh-playbar-title', opts.title)
+  meta.append(title, clock, phase)
 
   // The scrubber in three layers: the rail (its played part and a dot per mark) under a native range input whose own
   // track is transparent (the thumb and the keys are the browser's), and over it the marks' buttons, round and clear,
@@ -191,7 +215,7 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   range.min = String(start)
   range.max = String(stop)
   range.step = '0.1'
-  range.setAttribute('aria-label', 'Scenario time')
+  range.setAttribute('aria-label', opts.timeLabel ?? 'Scenario time')
   const ticks = h('div', 'fh-playbar-ticks')
   const dots: { t: number; el: HTMLElement }[] = []
   for (const m of opts.marks) {
@@ -206,23 +230,44 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
     tick.setAttribute('data-label', label)
     tick.style.setProperty('left', left)
     tick.addEventListener('click', (e) => {
-      opts.onSeek(m.t)
+      opts.onSeek(reach(m.t))
       dropPointerFocus(tick, e)
     })
     ticks.append(tick)
   }
   track.append(rail, range, ticks)
+  // The scale: small labels under the rail (the hours), for the eye only (the scrubber says the time).
+  if (opts.scale !== undefined && opts.scale.length > 0) {
+    const scale = h('div', 'fh-playbar-scale')
+    scale.setAttribute('aria-hidden', 'true')
+    for (const s of opts.scale) {
+      if (!(s.t >= start && s.t <= stop)) continue
+      const label = h('span', '', s.label)
+      label.style.setProperty('left', `${pct(s.t).toFixed(3)}%`)
+      scale.append(label)
+    }
+    track.append(scale)
+    bar.classList.add('fh-has-scale')
+  }
 
   const rate = button('fh-playbar-rate fh-num', 'Playback speed')
   rate.title = 'Playback speed'
-  const exit = button('fh-ibtn fh-playbar-exit', 'Exit scenario')
-  exit.title = 'Exit scenario'
-  exit.append(icon('x', 18))
+  const exitLabel = opts.exitLabel ?? 'Exit scenario'
+  const exit = button(opts.exitText === undefined ? 'fh-ibtn fh-playbar-exit' : 'fh-playbar-exit fh-playbar-exit-text', exitLabel)
+  exit.title = exitLabel
+  if (opts.exitText === undefined) exit.append(icon('x', 18))
+  else exit.textContent = opts.exitText // a hollow dot before it (CSS); the name keeps the text (WCAG label in name)
 
   const sound = opts.sound ? soundControl(opts.sound, () => opts.onToggle()) : null
   if (sound !== null) bar.classList.add('fh-has-sound')
+  let tools: HTMLElement | null = null
+  if (opts.tools !== undefined && opts.tools.length > 0) {
+    tools = h('div', 'fh-playbar-tools')
+    tools.append(...opts.tools)
+    bar.classList.add('fh-has-tools')
+  }
 
-  bar.append(play, meta, track, ...(sound === null ? [] : [sound.el]), rate, exit)
+  bar.append(play, meta, track, ...(sound === null ? [] : [sound.el]), rate, ...(tools === null ? [] : [tools]), exit)
   root.append(bar)
 
   // What is on screen, so update() writes only what changed.
@@ -233,7 +278,13 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   let shownRate = NaN
   let shownValue = ''
   let shownFill = ''
+  let shownSegs = ''
+  let shownTitle = opts.title
   let dragging = false
+  // The spans and the limit's hatch, in the rail under the played part and the dots: made on first use, so a bar that
+  // never asks (a scenario's) keeps its DOM as it was.
+  let segsEl: HTMLElement | null = null
+  let limitEl: HTMLElement | null = null
 
   const fill = (at: number): void => {
     const f = `${pct(at).toFixed(2)}%`
@@ -252,8 +303,12 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   exit.addEventListener('click', () => opts.onExit())
 
   range.addEventListener('input', () => {
+    let at = Number(range.value)
+    if (limit !== null && at > limit) {
+      at = limit
+      range.value = String(at) // the thumb stops at the limit, under the finger or not
+    }
     shownValue = range.value
-    const at = Number(range.value)
     fill(at)
     opts.onSeek(at)
   })
@@ -296,7 +351,7 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
         return
     }
     e.preventDefault() // the native step (0.1 s) would be too fine to use
-    opts.onSeek(Math.min(stop, Math.max(start, to)))
+    opts.onSeek(reach(to))
   })
   // Space presses a focused bar button (or plays, on the scrubber); the app's Space shortcut must not act on it again.
   bar.addEventListener('keydown', (e) => {
@@ -338,6 +393,45 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
     },
     toggleMute() {
       sound?.toggle()
+    },
+    setSegments(segs) {
+      const key = segs.map((s) => `${s.from} ${s.to} ${s.state}`).join(',')
+      if (key === shownSegs) return
+      shownSegs = key
+      if (segsEl === null) {
+        segsEl = h('div', 'fh-playbar-segs')
+        rail.prepend(segsEl)
+      }
+      const els: HTMLElement[] = []
+      for (const s of segs) {
+        const from = Math.max(start, s.from)
+        const to = Math.min(stop, s.to)
+        if (!(to > from)) continue
+        const el = h('div', 'fh-playbar-seg')
+        el.setAttribute('data-state', s.state)
+        el.style.setProperty('left', `${pct(from).toFixed(3)}%`)
+        el.style.setProperty('width', `${(pct(to) - pct(from)).toFixed(3)}%`)
+        els.push(el)
+      }
+      segsEl.replaceChildren(...els)
+    },
+    setLimit(maxT) {
+      const next = maxT !== null && maxT < stop ? Math.max(start, maxT) : null // NaN: none
+      if (next === limit) return
+      limit = next
+      if (limitEl === null) {
+        limitEl = h('div', 'fh-playbar-limit')
+        rail.prepend(limitEl)
+      }
+      limitEl.hidden = limit === null
+      rail.classList.toggle('fh-has-limit', limit !== null)
+      if (limit !== null) rail.style.setProperty('--fh-lim', `${pct(limit).toFixed(3)}%`)
+    },
+    setTitle(text) {
+      if (text === shownTitle) return
+      shownTitle = text
+      title.textContent = text
+      bar.setAttribute('aria-label', `Playback: ${text}`)
     },
     destroy() {
       bar.remove()
