@@ -727,8 +727,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     roads.show = prefs.roads && !onMap
     places.show = prefs.places && !onMap
     weather.show = prefs.wx && !chasing && hist === null
-    if (hist !== null && prefs.wx) toggles.setWeather('Live only')
-    else if (chasing && prefs.wx) toggles.setWeather('On the top-down map, for now')
+    if (hist !== null && prefs.wx) toggles.setWeather('Live only') // the chase has no weather row to say anything on
     else if (!prefs.wx) toggles.setWeather(null)
   }
   applyLayers()
