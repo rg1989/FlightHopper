@@ -95,8 +95,8 @@ test('traceReply: only flag 2 starts a leg; stale (1), geometric altitude (8) an
       row(140, 32.04, 34.84, 1400, { flags: 11 }), // new leg (2) with stale (1) and geometric altitude (8) set too
     ],
   }
-  assert.deepEqual(leg(flagged, DAY_S * 1000 + 100_000).alt, [1000, 1100, 1200, 1300], 'leg 1 keeps all four points')
-  assert.deepEqual(leg(flagged, DAY_S * 1000 + 140_000).alt, [1400], 'flag 2 among other bits still starts leg 2')
+  assert.deepEqual(leg(flagged, DAY_S * 1000 + 100_000).lat, [32, 32.01, 32.02, 32.03], 'leg 1 keeps all four points')
+  assert.deepEqual(leg(flagged, DAY_S * 1000 + 140_000).lat, [32.04], 'flag 2 among other bits still starts leg 2')
 })
 
 test('traceReply: columns of a leg: t, 5-decimal lat/lon, alt g/number/null, 0.1 speeds, vs whichever kind, roll', () => {
@@ -116,6 +116,22 @@ test('traceReply: columns of a leg: t, 5-decimal lat/lon, alt g/number/null, 0.1
   assert.deepEqual(r2.trk, [90, null, 91])
   assert.deepEqual(r2.vs, [null, null, -64])
   assert.deepEqual(r2.roll, [null, null, 1.5], 'a row without the trailing columns has no roll')
+})
+
+test('traceReply: a geometric altitude (flags & 8) is turned into the baro-like MSL feet the client expects: ft - nM / 0.3048', () => {
+  // The client shows alt × 0.3048 + nM as the height above the ellipsoid, which is right for a baro altitude (MSL) only.
+  const rows = [
+    row(100, 32.014728, 34.865836, 1000), // baro: as it is
+    row(110, 32.02, 34.88, 5000, { flags: 8 }), // geometric: nM 19.7 here
+    row(120, 32.03, 34.9, 5000, { flags: 9 }), // geometric and stale: nM 19.8
+    row(130, 32.03, 34.9, 'ground', { flags: 8 }), // on the ground it stays 'g'
+    row(140, 32.03, 34.9, null, { flags: 8 }), // no altitude stays null
+    row(150, 32.03, 34.9, 3000, { flags: 4 }), // flag 4 is the vertical rate: the altitude is baro
+  ]
+  const r = leg({ timestamp: DAY_S, trace: rows }, DAY_S * 1000 + 100_000)
+  assert.deepEqual(r.nM, [19.6, 19.7, 19.8, 19.8, 19.8, 19.8])
+  assert.deepEqual(r.alt, [1000, 4935, 4935, 'g', null, 3000])
+  for (const i of [1, 2]) assert.ok(Math.abs((r.alt[i] as number) * 0.3048 + r.nM[i] - 5000 * 0.3048) < 0.2, `the client's alt × ft + N gives the geometric height again at ${i}`)
 })
 
 test('traceReply: nM is the geoid N at each point, to 0.1 m', () => {
@@ -371,6 +387,39 @@ test('TraceStore: a file fetched again after it expired counts as the newest whe
   assert.equal(calls.length, 52, 'the refreshed one stayed')
   await store.get(hexes[1], LEG1_MS)
   assert.equal(calls.length, 53, 'the oldest left')
+})
+
+test('TraceStore: expired files are dropped when a new one is kept, so a valid old file is not pushed out in their place', async () => {
+  const clock = { t: NOW }
+  const { calls, fetchFn } = fakeHost(() => json(FILE))
+  const store = storeOn(fetchFn, clock)
+  await store.get(HEX, LEG1_MS) // a day file: kept an hour, the oldest entry
+  const hexes = Array.from({ length: 50 }, (_, i) => (0x738000 + i).toString(16))
+  for (const hex of hexes.slice(0, 49)) await store.get(hex, NOW - HOUR) // 49 live files: kept 30 s. 50 entries.
+  clock.t += 31_000 // the live ones have expired, the day file has not
+  await store.get(hexes[49], NOW) // the 51st: the expired go, not the day file
+  assert.equal(calls.length, 51)
+  await store.get(HEX, LEG1_MS)
+  assert.equal(calls.length, 51, 'the day file is still there')
+})
+
+test('TraceStore: close aborts the downloads under way (null), and nothing is asked after it', async () => {
+  const signals: AbortSignal[] = []
+  const fetchFn = ((_url: string, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      const signal = init!.signal!
+      signals.push(signal)
+      signal.addEventListener('abort', () => reject(signal.reason))
+    })) as unknown as typeof fetch
+  const store = storeOn(fetchFn, { t: NOW })
+  const pending = store.get(HEX, LEG1_MS)
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].aborted, false)
+  store.close()
+  assert.equal(signals[0].aborted, true)
+  assert.equal(await pending, null)
+  assert.equal(await store.get('738abc', LEG1_MS), null)
+  assert.equal(signals.length, 1, 'closed: nothing new is asked')
 })
 
 test('TraceStore: a hex that is not 6 hex digits (optionally after ~) is null with no request', async () => {

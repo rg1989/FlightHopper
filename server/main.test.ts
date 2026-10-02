@@ -28,6 +28,16 @@ const T0 = 2_000_000_000_000 // injected server clock, far from the recording's 
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'fh-main-'))
 
+/** A fetch for the past (adsb.lol's files) that records the URLs it is asked and answers 404: a test must not reach adsb.lol. */
+function pastFetch(): { urls: string[]; fetchFn: typeof fetch } {
+  const urls: string[] = []
+  const fetchFn = (async (input: string | URL | Request) => {
+    urls.push(String(input))
+    return new Response('not found', { status: 404 })
+  }) as typeof fetch
+  return { urls, fetchFn }
+}
+
 async function get<T>(url: string): Promise<{ status: number; type: string | null; body: T }> {
   const res = await fetch(url)
   return { status: res.status, type: res.headers.get('content-type'), body: (await res.json()) as T }
@@ -187,11 +197,13 @@ test('flip: the same API from ADSB_SOURCE=readsb against a fake receiver serving
   const recordDir = join(dir, 'rec')
   const env = { ADSB_SOURCE: 'readsb', READSB_URL: fake.url, READSB_COVERAGE: '37.6188,-122.3758,200', RECORD_DIR: recordDir }
   const cfg = { ...readServerConfig(env), staticDir: join(dir, 'dist') }
-  const app = createServer(cfg) // source from makeSource(cfg), real clock: what `npm run server` builds
+  const past = pastFetch()
+  const app = createServer(cfg, { historyFetch: past.fetchFn }) // source from makeSource(cfg), real clock: what `npm run server` builds
   const base = await app.listen(0)
   t.after(() => app.close())
 
   await assertApi(base, 'readsb', () => {}) // real time: the fake receiver reaches the second poll 2.5 s after start
+  assert.deepEqual(past.urls, [], 'a live source does not fetch the past by itself: nothing was asked of adsb.lol')
 
   const lines = readdirSync(recordDir).flatMap((f) => readRecording(join(recordDir, f)))
   assert.ok(lines.length >= 2, `${lines.length} recorded polls`)

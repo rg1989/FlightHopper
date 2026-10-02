@@ -5,15 +5,18 @@ import assert from 'node:assert/strict'
 import { HEAT_MAGIC, encodeHeatmap, hasSliceHeader, readSlot, type HeatIdentIn, type HeatRecordIn, type HeatSliceIn } from './heatmap.ts'
 import { destination, distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
+import { SLOT_MS } from '../shared/history.ts'
 
 const SLOT = Date.UTC(2026, 8, 30, 4, 0) // 04:00Z, the start of half hour 08
 const TLV = { lat: 32.0114, lon: 34.8867 } // Ben Gurion airport
-const Q = { ...TLV, nm: 30, stepS: 10 }
+const Q = { slotMs: SLOT, ...TLV, nm: 30, stepS: 10 }
 
 const pos = (hex: string, lat: number, lon: number, alt: HeatRecordIn['alt'], gs: number | null): HeatRecordIn => ({ hex, lat, lon, alt, gs })
 const ident = (hex: string, callsign: string | null, squawk: string | null): HeatIdentIn => ({ hex, callsign, squawk })
 /** The slice `sec` seconds into the half hour. */
 const at = (sec: number, ...records: (HeatRecordIn | HeatIdentIn)[]): HeatSliceIn => ({ tMs: SLOT + sec * 1000, records })
+/** The slice `sec` seconds into the half hour, stamped `ms` milliseconds off (a file's clock is not always exact). */
+const off = (sec: number, ms: number, ...records: (HeatRecordIn | HeatIdentIn)[]): HeatSliceIn => ({ tMs: SLOT + sec * 1000 + ms, records })
 /** The geoid undulation the way the reply carries it: metres, 0.1. */
 const geoid = (lat: number, lon: number): number => Math.round(geoidN(lat, lon) * 10) / 10
 
@@ -45,12 +48,51 @@ test('readSlot: stepS 20 keeps the slices at +0 s and +20 s and drops +10 s', ()
   assert.deepEqual(readSlot(file, { ...Q, nm: 100, stepS: 10 })?.aircraft[0].t, [0, 10, 20])
 })
 
+test('readSlot: the slot is the one asked for, not the file\'s first slice; slices outside [slot, slot + 30 min) are dropped', () => {
+  const file = encodeHeatmap([
+    at(-10, pos('738a10', 32.0, 34.8, 1000, 100)), // the half hour before
+    at(0, pos('738a10', 32.1, 34.8, 1000, 100)),
+    at(10, pos('738a10', 32.2, 34.8, 1000, 100)),
+    at(1790, pos('738a10', 32.3, 34.8, 1000, 100)),
+    at(1800, pos('738a10', 32.4, 34.8, 1000, 100)), // the half hour after
+  ])
+  const circle = { ...Q, nm: 100 }
+  const got = readSlot(file, circle)
+  assert.equal(got?.slotMs, SLOT)
+  assert.deepEqual(got?.aircraft[0].t, [0, 10, 1790])
+  assert.deepEqual(got?.aircraft[0].lat, [32.1, 32.2, 32.3])
+  // The same file asked as the next half hour: only its slice at +1800 s is inside, and the reply says which slot it is.
+  const next = readSlot(file, { ...circle, slotMs: SLOT + SLOT_MS })
+  assert.equal(next?.slotMs, SLOT + SLOT_MS)
+  assert.deepEqual(next?.aircraft.map((a) => [a.hex, a.t, a.lat]), [['738a10', [0], [32.4]]])
+  assert.deepEqual(readSlot(file, { ...circle, slotMs: SLOT + 2 * SLOT_MS }), { slotMs: SLOT + 2 * SLOT_MS, stepS: 10, aircraft: [] })
+  assert.deepEqual(readSlot(file, { ...circle, slotMs: SLOT - 2 * SLOT_MS })?.aircraft, [])
+})
+
+test('readSlot: one slice per group of stepS seconds, the first of it: a file stamped a few ms off, early or late, still gives one per step', () => {
+  for (const ms of [0, 3, -3, 400, -400]) {
+    const file = encodeHeatmap(Array.from({ length: 7 }, (_, i) => off(i * 10, ms, pos('738a10', 32 + i / 100, 34.8, 1000, 100))))
+    const t = (stepS: number): number[] | undefined => readSlot(file, { ...Q, nm: 100, stepS })?.aircraft[0].t
+    assert.deepEqual(t(10), [0, 10, 20, 30, 40, 50, 60], `${ms} ms off, step 10`)
+    assert.deepEqual(t(20), [0, 20, 40, 60], `${ms} ms off, step 20`)
+    assert.deepEqual(t(30), [0, 30, 60], `${ms} ms off, step 30`)
+  }
+})
+
+test('readSlot: a file whose slices are not on the step grid still gives the first slice of each group (every 60 s from +5 s)', () => {
+  const file = encodeHeatmap([5, 65, 125, 185, 245, 305].map((sec, i) => at(sec, pos('738a10', 32 + i / 100, 34.8, 1000, 100))))
+  const t = (stepS: number): number[] | undefined => readSlot(file, { ...Q, nm: 100, stepS })?.aircraft[0].t
+  assert.deepEqual(t(10), [5, 65, 125, 185, 245, 305])
+  assert.deepEqual(t(30), [5, 65, 125, 185, 245, 305], 'a slice in each 30 s group, none of them at a multiple of 30')
+  assert.deepEqual(t(300), [5, 305], 'five slices in the first 300 s group: the first; the sixth is in the next')
+})
+
 test('readSlot: the index records before the first slice header are not positions', () => {
   // As readsb writes them, [offset, 0, 0, 0] per slice come first. Read as a position the first would be aircraft
   // 000003 at 0°, 0°, which the whole-world circle below would show.
   const file = encodeHeatmap([at(0, pos('738a10', 32, 34.8, 1000, 100)), at(10, pos('738a10', 32.1, 34.8, 1000, 100)), at(20, pos('738a10', 32.2, 34.8, 1000, 100))])
   assert.equal(new DataView(file.buffer, file.byteOffset).getUint32(0, true), 3, 'the first record is index 0: the first header is at record 3')
-  assert.deepEqual(readSlot(file, { lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex), ['738a10'])
+  assert.deepEqual(readSlot(file, { slotMs: SLOT, lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex), ['738a10'])
 })
 
 test('readSlot: nm 5400 keeps everything, less is a circle', () => {
@@ -58,7 +100,7 @@ test('readSlot: nm 5400 keeps everything, less is a circle', () => {
   const at6000 = destination(TLV.lat, TLV.lon, 90, 6000)
   const at10000 = destination(TLV.lat, TLV.lon, 90, 10_000)
   const file = encodeHeatmap([at(0, pos('738a10', at5000.lat, at5000.lon, 1000, 100), pos('4b1801', at6000.lat, at6000.lon, 1000, 100), pos('e80123', at10000.lat, at10000.lon, 1000, 100))])
-  const hexes = (nm: number): string[] | undefined => readSlot(file, { ...TLV, nm, stepS: 300 })?.aircraft.map((a) => a.hex)
+  const hexes = (nm: number): string[] | undefined => readSlot(file, { slotMs: SLOT, ...TLV, nm, stepS: 300 })?.aircraft.map((a) => a.hex)
   assert.deepEqual(hexes(5400), ['4b1801', '738a10', 'e80123'])
   assert.deepEqual(hexes(5399), ['738a10'])
   assert.deepEqual(hexes(4900), [])
@@ -171,7 +213,7 @@ test('readSlot: squawk 0 is none, so null, however it was written; every other s
 
 test('readSlot: positions to 5 decimals, speeds to 0.1, altitudes in 25 ft steps, south and west are negative, a speed of 0 is not unknown', () => {
   const file = encodeHeatmap([at(0, pos('e80123', -33.8688197, -70.9876543, -1400, 123.4), pos('738a10', 32.1234567, 34.8765432, 36000, 0), pos('4b1801', 0, 0, 0, 0.1))])
-  const got = readSlot(file, { lat: 0, lon: 0, nm: 5400, stepS: 10 })
+  const got = readSlot(file, { slotMs: SLOT, lat: 0, lon: 0, nm: 5400, stepS: 10 })
   assert.deepEqual(
     got?.aircraft.map((a) => [a.hex, a.lat, a.lon, a.alt, a.gs]),
     [
@@ -185,9 +227,9 @@ test('readSlot: positions to 5 decimals, speeds to 0.1, altitudes in 25 ft steps
 
 test('readSlot: a record that is not a place on earth is skipped, not an error', () => {
   const file = encodeHeatmap([at(0, pos('000001', 94, 10, 1000, 100), pos('000002', 10, 190, 1000, 100), pos('000003', 89.9, 10, 1000, 100), pos('000004', -90, -180, 1000, 100))])
-  assert.deepEqual(readSlot(file, { lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex), ['000003', '000004'])
+  assert.deepEqual(readSlot(file, { slotMs: SLOT, lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex), ['000003', '000004'])
   // 94° of latitude is inside this circle's latitude band, and closer than 400 nm by the formula
-  assert.deepEqual(readSlot(file, { lat: 89, lon: 10, nm: 400, stepS: 10 })?.aircraft.map((a) => a.hex), ['000003'])
+  assert.deepEqual(readSlot(file, { slotMs: SLOT, lat: 89, lon: 10, nm: 400, stepS: 10 })?.aircraft.map((a) => a.hex), ['000003'])
 })
 
 // A deterministic spread of points: the same answer on every run.
@@ -226,7 +268,7 @@ test('readSlot: the circle is distanceNm exactly, also near the poles and across
       .map((p) => p.hex)
       .sort()
     assert.ok(want.length > 100 && want.length < points.length, `a real test: ${want.length} of ${points.length}`)
-    assert.deepEqual(readSlot(file, { ...c, stepS: 10 })?.aircraft.map((a) => a.hex), want)
+    assert.deepEqual(readSlot(file, { slotMs: SLOT, ...c, stepS: 10 })?.aircraft.map((a) => a.hex), want)
   }
 })
 
@@ -302,12 +344,12 @@ test('real records: readSlot decodes what readsb wrote', () => {
     ],
   })
   assert.deepEqual(
-    readSlot(realFile(), { ...TLV, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex),
+    readSlot(realFile(), { slotMs: SLOT, ...TLV, nm: 5400, stepS: 10 })?.aircraft.map((a) => a.hex),
     ['471d6e', '507caa', 'a3973f', '~2b960c'],
   )
-  const seattle = readSlot(realFile(), { lat: 47.6, lon: -122.3, nm: 100, stepS: 10 })?.aircraft
+  const seattle = readSlot(realFile(), { slotMs: SLOT, lat: 47.6, lon: -122.3, nm: 100, stepS: 10 })?.aircraft
   assert.deepEqual(seattle, [{ hex: '~2b960c', callsign: null, squawk: null, nM: -21.3, t: [0], lat: [48.39533], lon: [-122.39657], alt: [2900], gs: [193.7] }])
-  const brazil = readSlot(realFile(), { lat: -25, lon: -49, nm: 100, stepS: 10 })?.aircraft
+  const brazil = readSlot(realFile(), { slotMs: SLOT, lat: -25, lon: -49, nm: 100, stepS: 10 })?.aircraft
   assert.deepEqual(brazil, [{ hex: 'a3973f', callsign: null, squawk: null, nM: 2.7, t: [0], lat: [-25.15315], lon: [-49.15527], alt: [41000], gs: [478.5] }])
 })
 
@@ -348,7 +390,7 @@ const REAL_EMPTY = {
 
 test("real records: readsb's empty ident @@@@@@@@ is no callsign, and the squawk 251 is 0251", () => {
   const file = new Uint8Array(Buffer.from(Object.values(REAL_EMPTY).join(''), 'hex'))
-  assert.deepEqual(readSlot(file, { lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft, [
+  assert.deepEqual(readSlot(file, { slotMs: SLOT, lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft, [
     { hex: '7c6deb', callsign: null, squawk: '0251', nM: 22.2, t: [0], lat: [-33.94622], lon: [151.17823], alt: [-250], gs: [19.4] },
     { hex: 'c00638', callsign: null, squawk: '6574', nM: -34.1, t: [0], lat: [45.27155], lon: [-76.16507], alt: [40000], gs: [440.2] },
   ])

@@ -14,7 +14,7 @@
 import type { HistorySlot, HistoryTrack } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
-import { EVERYTHING_NM, slotOf } from '../shared/history.ts'
+import { EVERYTHING_NM, SLOT_MS } from '../shared/history.ts'
 
 export const HEAT_MAGIC = 0x0e7f7c9d
 
@@ -113,11 +113,12 @@ function callsignAt(buf: Uint8Array, o: number): string | null {
 
 /**
  * One pass over a decompressed file (the 13 MB, 825,000 records of a real half hour): the positions inside the circle
- * (q.lat, q.lon, q.nm), in the slices at every q.stepS seconds of the slot. An aircraft is a column set per hex; its callsign
- * and squawk come from its newest ident record in the whole file, also one in a slice that is not kept. null: no slice header.
- * A position outside the circle costs a few reads and compares, no allocation.
+ * (q.lat, q.lon, q.nm), in the slices of the half hour q.slotMs, the first slice of each group of q.stepS seconds. The slot is
+ * the one asked for, not the file's word for it: a slice stamped outside [slotMs, slotMs + 30 min) is dropped. An aircraft is a
+ * column set per hex; its callsign and squawk come from its newest ident record in the whole file, also one in a slice that is
+ * not kept. null: no slice header. A position outside the circle costs a few reads and compares, no allocation.
  */
-export function readSlot(buf: Uint8Array, q: { lat: number; lon: number; nm: number; stepS: number }): HistorySlot | null {
+export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon: number; nm: number; stepS: number }): HistorySlot | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
   const end = buf.byteLength - (buf.byteLength % REC) // a half record at the end is not read
   const everything = q.nm >= EVERYTHING_NM // the whole-world circle keeps every position, with no distance test
@@ -128,19 +129,26 @@ export function readSlot(buf: Uint8Array, q: { lat: number; lon: number; nm: num
   const maxLat = q.lat * 1e6 + band
   let o = firstHeader(dv, end)
   if (o < 0) return null
-  const slotMs = slotOf(dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true))
   const tracks = new Map<number, HistoryTrack>() // by address; hex is set at the end, for the aircraft that are kept
   // ponytail: the newest ident record wins as a whole: with no callsign, or squawk 0 (readsb's "none"), the aircraft gets
   // none, even if an older ident had one. That never happened in the real file above (0 of 9,373 aircraft). The offset
   // of the record is kept: nothing is decoded until an aircraft is kept.
   const identAt = new Map<number, number>()
   let keep = false
-  let sec = 0
+  let sec = 0 // seconds into the slot of the slice being read, once it is kept
+  let group = Number.NaN // the group of stepS seconds of the last slice kept
   for (; o < end; o += REC) {
     const w0 = dv.getUint32(o, true)
     if (w0 === HEAT_MAGIC) {
-      sec = Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - slotMs) / 1000)
-      keep = sec % q.stepS === 0
+      // Rounded to whole seconds first, so a file stamped a few ms off, early or late, groups as one on the grid does.
+      // The + 0 turns a -0 (a slice 3 ms early) into 0.
+      const at = Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - q.slotMs) / 1000) + 0
+      const g = Math.floor(at / q.stepS)
+      keep = at >= 0 && at < SLOT_MS / 1000 && g !== group
+      if (keep) {
+        sec = at
+        group = g
+      }
       continue
     }
     const w1 = dv.getInt32(o + 4, true)
@@ -184,5 +192,5 @@ export function readSlot(buf: Uint8Array, q: { lat: number; lon: number; nm: num
       }
       return trk
     })
-  return { slotMs, stepS: q.stepS, aircraft }
+  return { slotMs: q.slotMs, stepS: q.stepS, aircraft }
 }

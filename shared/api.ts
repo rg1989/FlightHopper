@@ -70,7 +70,7 @@ export interface TraceReply {
   t: number[]                    // s after t0Ms (0.1)
   lat: number[]                  // °, 5 decimals
   lon: number[]
-  alt: (number | 'g' | null)[]   // baro ft (geometric when that is all it sent), 'g' on the ground, null unknown
+  alt: (number | 'g' | null)[]   // baro ft (a geometric one, the only kind some send, converted to MSL), 'g' on the ground, null unknown
   gs: (number | null)[]          // kt
   trk: (number | null)[]         // true track, °
   vs: (number | null)[]          // vertical rate, fpm (baro, else geometric)

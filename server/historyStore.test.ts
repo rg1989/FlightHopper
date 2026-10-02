@@ -4,8 +4,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gzipSync } from 'node:zlib'
 import { encodeHeatmap, readSlot } from './heatmap.ts'
-import { HistoryStore, heatmapUrl, type HistoryStoreOpts } from './historyStore.ts'
-import { PUBLISH_DELAY_MS, SLOT_MS, newestSlotMs, stepFor } from '../shared/history.ts'
+import type { HistorySlot } from '../shared/api.ts'
+import { HistoryStore, heatmapUrl, type HistoryMiss, type HistoryStoreOpts } from './historyStore.ts'
+import { PUBLISH_DELAY_MS, SLOT_MS, newestSlotMs, slotOf, stepFor } from '../shared/history.ts'
 
 const BASE = 'https://adsb.lol'
 const MIN = 60_000
@@ -29,6 +30,12 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   return { promise, resolve }
 }
 const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+/** The slot a query gave, which the test expects to be one. */
+async function asSlot(answer: Promise<HistorySlot | HistoryMiss>): Promise<HistorySlot> {
+  const r = await answer
+  assert.ok(typeof r !== 'string', `a slot, not '${r}'`)
+  return r
+}
 
 function setup(opts: Partial<HistoryStoreOpts> = {}) {
   const clock = { t: NOW }
@@ -91,22 +98,22 @@ test('file: a 404 or a 410 is remembered for 10 minutes, then asked again', asyn
   const { store, clock, calls, serve } = setup()
   serve(NEWEST, { status: 404 })
   serve(AGO(1), { status: 410 })
-  assert.equal(await store.file(NEWEST), null)
-  assert.equal(await store.file(AGO(1)), null)
+  assert.equal(await store.file(NEWEST), 'missing')
+  assert.equal(await store.file(AGO(1)), 'missing')
   assert.equal(calls.length, 2)
   clock.t += 10 * MIN - 1
-  assert.equal(await store.file(NEWEST), null)
-  assert.equal(await store.file(AGO(1)), null)
+  assert.equal(await store.file(NEWEST), 'missing')
+  assert.equal(await store.file(AGO(1)), 'missing')
   assert.equal(calls.length, 2, 'remembered')
   clock.t += 1
   serve(NEWEST, ok(NEWEST)) // it is there by now
   assert.deepEqual(await store.file(NEWEST), heat(NEWEST))
   assert.equal(calls.length, 3)
-  assert.equal(await store.file(AGO(1)), null)
+  assert.equal(await store.file(AGO(1)), 'missing')
   assert.equal(calls.length, 4, 'asked again')
 })
 
-test('file: any other failure is null, not held and not remembered: 5xx, 429, a network error, a 200 that is not a heatmap, a body that is gzip but broken', async () => {
+test('file: any other failure is unavailable, not missing, and not held or remembered: 5xx, 429, 403, a network error, a timeout, a 200 that is not a heatmap, a body that is gzip but broken', async () => {
   const { store, calls, serve } = setup()
   const html = '<html><body>502 Bad Gateway</body></html>'
   const failures: Reply[] = [
@@ -114,6 +121,7 @@ test('file: any other failure is null, not held and not remembered: 5xx, 429, a 
     { status: 429 },
     { status: 403 },
     new Error('ECONNRESET'),
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
     { status: 200, body: new Uint8Array(0) },
     { status: 200, body: new TextEncoder().encode(html) }, // no slice header
     { status: 200, body: new Uint8Array(gzipSync(html)) }, // gzip of one, also checked after gunzip
@@ -122,7 +130,7 @@ test('file: any other failure is null, not held and not remembered: 5xx, 429, a 
   ]
   for (const [i, failure] of failures.entries()) {
     serve(NEWEST, failure)
-    assert.equal(await store.file(NEWEST), null, `failure ${i}`)
+    assert.equal(await store.file(NEWEST), 'unavailable', `failure ${i}`)
     assert.equal(calls.length, i + 1)
     assert.deepEqual(store.status().slots, [], 'not remembered as missing')
   }
@@ -141,17 +149,36 @@ test('file: a heatmap with a slice header and no aircraft in it is a file', asyn
   assert.equal(calls.length, 1)
 })
 
-test('file: a slot newer than the newest published, one not on a half hour: null, no request', async () => {
+test('file: a slot not published yet is unavailable (try again later), one that is no half hour is missing; no request for either', async () => {
   const { store, clock, calls, serve } = setup()
   serve(NEWEST + SLOT_MS, ok(NEWEST + SLOT_MS)) // even if the upstream had it
-  for (const slotMs of [NEWEST + SLOT_MS, NEWEST + 5 * SLOT_MS, NEWEST + 1, NEWEST - 1000, NaN, Infinity]) assert.equal(await store.file(slotMs), null, String(slotMs))
+  for (const slotMs of [NEWEST + SLOT_MS, NEWEST + 5 * SLOT_MS]) assert.equal(await store.file(slotMs), 'unavailable', String(slotMs))
+  for (const slotMs of [NEWEST + 1, NEWEST - 1000, NaN, Infinity]) assert.equal(await store.file(slotMs), 'missing', String(slotMs))
   assert.equal(calls.length, 0)
   // a half hour is published PUBLISH_DELAY_MS after it ends
   clock.t = NEWEST + 2 * SLOT_MS + PUBLISH_DELAY_MS - 1
-  assert.equal(await store.file(NEWEST + SLOT_MS), null)
+  assert.equal(await store.file(NEWEST + SLOT_MS), 'unavailable')
   assert.equal(calls.length, 0)
   clock.t += 1
   assert.deepEqual(await store.file(NEWEST + SLOT_MS), heat(NEWEST + SLOT_MS))
+  assert.equal(calls.length, 1)
+})
+
+test('file: a half hour older than 31 days is missing with no request: adsb.lol keeps about 30', async () => {
+  const { store, clock, calls, serve } = setup()
+  const limit = clock.t - 31 * 24 * 60 * MIN // 12:20Z, 31 days ago
+  const before = slotOf(limit) // 12:00Z that day: older than the limit
+  assert.ok(before < limit)
+  serve(before, ok(before)) // even if the upstream had it
+  assert.equal(await store.file(before), 'missing')
+  assert.equal(await store.file(before - 100 * SLOT_MS), 'missing')
+  assert.equal(calls.length, 0)
+  assert.deepEqual(store.status().slots, [], 'not remembered: nothing was asked')
+  serve(before + SLOT_MS, { status: 404 }) // 12:30Z: inside the limit, so it is asked
+  assert.equal(await store.file(before + SLOT_MS), 'missing')
+  assert.equal(calls.length, 1)
+  clock.t += 60 * MIN // an hour on, 12:00Z is further behind and still not asked
+  assert.equal(await store.file(before + SLOT_MS), 'missing', 'now older than 31 days')
   assert.equal(calls.length, 1)
 })
 
@@ -182,6 +209,83 @@ test('file: a hit is a use; maxSlots is 4 unless told', async () => {
   await store.file(d)
   await store.file(e)
   assert.deepEqual(store.status().slots.map((s) => s.slotMs), [e, d, AGO(1), NEWEST])
+})
+
+test('file: at most 2 downloads at once: a third slot is unavailable with no request; the same slot is shared; held and missing ones still answer', async () => {
+  const { store, calls, serve } = setup()
+  const [held, gone, x, y, z] = [AGO(1), AGO(2), AGO(3), AGO(4), AGO(5)]
+  serve(held, ok(held))
+  serve(gone, { status: 404 })
+  assert.deepEqual(await store.file(held), heat(held))
+  assert.equal(await store.file(gone), 'missing')
+  const gateX = deferred<Reply>()
+  const gateY = deferred<Reply>()
+  serve(x, gateX.promise)
+  serve(y, gateY.promise)
+  serve(z, ok(z))
+  const px = store.file(x)
+  const py = store.file(y)
+  assert.equal(calls.length, 4, 'two held or missing before, two downloads now')
+  assert.equal(await store.file(z), 'unavailable', 'a third download: not now')
+  assert.equal(calls.length, 4, 'and it asked nothing')
+  const again = store.file(x) // already under way: shared, not a third
+  assert.equal(calls.length, 4)
+  assert.deepEqual(await store.file(held), heat(held), 'a held file answers')
+  assert.equal(await store.file(gone), 'missing', 'a remembered miss answers')
+  assert.deepEqual(store.status().slots.filter((s) => s.state === 'loading').map((s) => s.slotMs), [y, x])
+  gateX.resolve(ok(x))
+  assert.deepEqual(await px, heat(x))
+  assert.equal(await again, await px)
+  assert.deepEqual(await store.file(z), heat(z), 'one download ended: room for another')
+  gateY.resolve(ok(y))
+  assert.deepEqual(await py, heat(y))
+  assert.equal(calls.length, 5)
+})
+
+test('file: downloads under way count toward maxSlots when files are dropped', async () => {
+  const { store, serve } = setup({ maxSlots: 4 })
+  const [a, b, c] = [AGO(2), AGO(3), AGO(4)]
+  for (const s of [NEWEST, AGO(1), a]) serve(s, ok(s))
+  await store.tick()
+  await store.file(a) // held: the newest two and a
+  const gateB = deferred<Reply>()
+  const gateC = deferred<Reply>()
+  serve(b, gateB.promise)
+  serve(c, gateC.promise)
+  const pb = store.file(b)
+  const pc = store.file(c)
+  gateB.resolve(ok(b))
+  await pb
+  // b is held and c is still coming: room for c is made now, so a, the least recently used, is gone.
+  assert.deepEqual(store.status().slots, [
+    { slotMs: c, state: 'loading' },
+    { slotMs: b, state: 'ready' },
+    { slotMs: AGO(1), state: 'ready' },
+    { slotMs: NEWEST, state: 'ready' },
+  ])
+  gateC.resolve(ok(c))
+  await pc
+  assert.deepEqual(store.status().slots.map((s) => s.slotMs), [c, b, AGO(1), NEWEST])
+})
+
+test('close: the downloads under way are aborted and end as unavailable, and no new one starts', async () => {
+  const signals: AbortSignal[] = []
+  const fetchFn = ((_url: string, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      const signal = init!.signal!
+      signals.push(signal)
+      signal.addEventListener('abort', () => reject(signal.reason))
+    })) as unknown as typeof fetch
+  const store = new HistoryStore({ userAgent: 'FlightHopper-test', fetchFn, nowMs: () => NOW })
+  const pending = store.file(NEWEST)
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].aborted, false)
+  store.close()
+  assert.equal(signals[0].aborted, true)
+  assert.equal(await pending, 'unavailable')
+  assert.equal(await store.file(AGO(1)), 'unavailable')
+  assert.equal(signals.length, 1, 'closed: nothing new is asked')
+  assert.deepEqual(store.status().slots, [])
 })
 
 test('tick: the newest two published slots, the second after the first, and only what is not held', async () => {
@@ -228,17 +332,18 @@ test('status: the newest published slot and every slot held, loading or missing,
   assert.deepEqual(store.status().slots, [{ slotMs: AGO(2), state: 'ready' }, { slotMs: AGO(1), state: 'ready' }], 'a miss is forgotten after 10 minutes')
 })
 
-test('query: readSlot of the file for the circle, the step from its radius; null when there is no file', async () => {
+test('query: readSlot of the file for the circle, the step from its radius; missing or unavailable when there is no file', async () => {
   const { store, calls, serve } = setup()
   serve(NEWEST, ok(NEWEST))
   const circle = { lat: 32.0114, lon: 34.8867, nm: 30 }
-  const got = await store.query(NEWEST, circle)
-  assert.equal(got?.aircraft.length, 1)
-  assert.deepEqual(got, readSlot(heat(NEWEST), { ...circle, stepS: stepFor(30) }))
-  assert.equal(got?.stepS, 10)
-  assert.equal((await store.query(NEWEST, { ...circle, nm: 500 }))?.stepS, 30)
-  assert.deepEqual((await store.query(NEWEST, { lat: 40.6, lon: -73.8, nm: 30 }))?.aircraft, [])
-  assert.equal(await store.query(AGO(1), circle), null, '404')
-  assert.equal(await store.query(NEWEST + SLOT_MS, circle), null, 'too new')
+  const got = await asSlot(store.query(NEWEST, circle))
+  assert.equal(got.aircraft.length, 1)
+  assert.deepEqual(got, readSlot(heat(NEWEST), { ...circle, slotMs: NEWEST, stepS: stepFor(30) }))
+  assert.equal(got.slotMs, NEWEST)
+  assert.equal(got.stepS, 10)
+  assert.equal((await asSlot(store.query(NEWEST, { ...circle, nm: 500 }))).stepS, 30)
+  assert.deepEqual((await asSlot(store.query(NEWEST, { lat: 40.6, lon: -73.8, nm: 30 }))).aircraft, [])
+  assert.equal(await store.query(AGO(1), circle), 'missing', '404')
+  assert.equal(await store.query(NEWEST + SLOT_MS, circle), 'unavailable', 'too new')
   assert.equal(calls.length, 2, 'one fetch of the newest, one of the missing')
 })

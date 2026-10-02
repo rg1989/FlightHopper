@@ -55,8 +55,21 @@ async function start(env: Record<string, string>, kind: 'readsb' | 'adsblol', de
   const clock = { t: T0 }
   const fake = fakeSource(clock, kind)
   const cfg = { ...readServerConfig({ REPLAY_FILES: FILE, ...env }), staticDir: join(mkdtempSync(join(tmpdir(), 'fh-browse-')), 'dist') }
-  const app = createServer(cfg, { source: fake.source, nowMs: () => clock.t, ...deps })
-  const base = await app.listen(0)
+  // adsb.lol's past is a fake that records what it is asked: a live source does not fetch it by itself, and a test must not reach it.
+  const past: string[] = []
+  const historyFetch = (async (input: string | URL | Request) => {
+    past.push(String(input))
+    return new Response('not found', { status: 404 })
+  }) as typeof fetch
+  const server = createServer(cfg, { source: fake.source, nowMs: () => clock.t, historyFetch, ...deps })
+  const app = {
+    ...server,
+    async close(): Promise<void> {
+      await server.close()
+      assert.deepEqual(past, [], 'nothing was asked of adsb.lol for the past')
+    },
+  }
+  const base = await server.listen(0)
   return { clock, fake, app, base }
 }
 

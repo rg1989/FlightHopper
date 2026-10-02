@@ -9,13 +9,15 @@
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
-//   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), 404: none
+//   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts). 404: adsb.lol
+//                                       has none (or it is older than 31 days); 503 + Retry-After: 15: it cannot be had now
 //   GET /api/history/status             the half hours held, being fetched or missing, and the newest published
 //   GET /api/trace?hex&at               an aircraft's flight leg flying at `at` (default now; adsb.lol's trace: trace.ts), 404: none
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
 // any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded (adsbdb.com).
-// A live source also keeps the newest hour of the past in memory (two heatmap files, refreshed each half hour).
+// The command line also keeps the newest hour of the past in memory for a live source (two heatmap files, refreshed each
+// half hour: rollHistory). A server made in code, a test's included, fetches the past only when it is asked.
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -59,8 +61,10 @@ const SELECTED_ROUTE_GAP_MS = 5000
 const SELECTED_ROUTE_RPS = 1 / 60
 const FLIGHT_LOG_TICK_MS = 5000
 const HISTORY_TICK_MS = 60_000 // the rolling fetch of the newest half hours: a new file appears every 30 min
-// Half-hour files held in memory (13-25 MB each): the newest two (rolling), and a replay's previous, current and next.
+// Half-hour files held in memory (13-28 MB each): the newest two (rolling), and a replay's previous, current and next.
 const HISTORY_SLOTS = 5
+const RETRY_AFTER_S = 15 // what a 503 tells the client: the past could not be had now, try again then
+const ORIGIN_MAX_AGE_MS = 10 * 60_000 // a leg that ended longer ago than this is not the flight in the air now
 const gzipAsync = promisify(gzip)
 const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete']) // the only writes
 
@@ -117,10 +121,10 @@ function acceptsGzip(header: string | undefined): boolean {
 }
 
 /** JSON, gzipped off the event loop (zlib's thread pool) when it is over 1 KB and the client accepts gzip. */
-async function sendJson(req: IncomingMessage, res: ServerResponse, status: number, body: unknown): Promise<void> {
+async function sendJson(req: IncomingMessage, res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): Promise<void> {
   const text = JSON.stringify(body)
   const bytes = Buffer.byteLength(text)
-  const headers = { 'content-type': 'application/json', 'cache-control': 'no-store', vary: 'accept-encoding' }
+  const headers = { 'content-type': 'application/json', 'cache-control': 'no-store', vary: 'accept-encoding', ...extra }
   if (bytes > GZIP_MIN_BYTES && acceptsGzip(req.headers['accept-encoding'])) {
     const gz = await gzipAsync(text, { level: GZIP_LEVEL })
     res.writeHead(status, { ...headers, 'content-encoding': 'gzip', 'content-length': gz.length }).end(gz)
@@ -209,11 +213,13 @@ async function serveStatic(root: string, pathname: string, range: string | undef
  * deps.nowMs is the server clock for the poller and the budget; it must be the clock the source stamps tRecvMs with
  * (Date.now for live sources, the same injected clock for a replay built with it).
  * deps.routesFetch replaces fetch for the route lookups (tests); routes run only with ADSB_SOURCE=adsblol and ROUTES=1.
- * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files; tests).
+ * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files; tests). deps.rollHistory (default false)
+ * keeps the newest two half hours of the past fetched while the server listens: the command line sets it for a live source.
+ * Off, the past is fetched only when a client asks, so a test server on a live source asks adsb.lol for nothing by itself.
  */
 export function createServer(
   cfg: ServerConfig,
-  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch; historyFetch?: typeof fetch } = {},
+  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch; historyFetch?: typeof fetch; rollHistory?: boolean } = {},
 ): { listen(port: number): Promise<string>; close(): Promise<void>; poller: Poller; info: InfoStore } {
   const nowMs = deps.nowMs ?? Date.now
   const source = deps.source ?? makeSource(cfg)
@@ -335,7 +341,10 @@ export function createServer(
     return out
   }
 
-  /** One past half hour in a circle: [200, HistorySlot] or [404, …] when adsb.lol has no file for it. */
+  /**
+   * One past half hour in a circle: [200, HistorySlot]; [404, …] when adsb.lol has no file for it (or it is older than 31
+   * days); [503, …] when it cannot be had now (adsb.lol failed or is not done with it yet, too many downloads): ask again.
+   */
   async function pastSlot(q: URLSearchParams): Promise<[number, unknown]> {
     const slot = num(q, 'slot')
     const lat = num(q, 'lat')
@@ -346,17 +355,26 @@ export function createServer(
     check(Math.abs(lon) <= 180, 'lon must be in [-180, 180]')
     check(nm > 0 && nm <= EVERYTHING_NM, `nm must be in (0, ${EVERYTHING_NM}]`)
     const r = await history.query(slot, { lat, lon, nm })
-    return r === null ? [404, { error: 'no data for this half hour' }] : [200, r]
+    if (r === 'missing') return [404, { error: 'no data for this half hour' }]
+    if (r === 'unavailable') return [503, { error: 'this half hour cannot be had now, try again' }]
+    return [200, r]
   }
 
-  /** One aircraft's flight leg flying at `at` (default now), with its route's first airport when known. */
+  /**
+   * One aircraft's flight leg flying at `at` (default now). Its route's first airport comes with it only for the flight in the
+   * air now: a leg whose last point is within 10 min of now and whose callsign is the aircraft's. The route is the aircraft's
+   * current one, so an older leg (yesterday's of the same aircraft, another flight) must not be given its origin.
+   */
   async function trace(q: URLSearchParams): Promise<[number, unknown]> {
     const hex = (q.get('hex') ?? '').trim().toLowerCase()
     check(HEX.test(hex), 'hex must be 6 hex digits (optionally prefixed with ~)')
     const at = num(q, 'at', nowMs())
     check(at > 0, 'at must be a time in ms')
     const r = await traces.get(hex, at)
-    return r === null ? [404, { error: 'no trace' }] : [200, { ...r, origin: info.origin(hex) }]
+    if (r === null) return [404, { error: 'no trace' }]
+    const lastMs = r.t0Ms + (r.t.at(-1) ?? 0) * 1000
+    const flyingNow = nowMs() - lastMs <= ORIGIN_MAX_AGE_MS && r.callsign !== null && r.callsign === info.get(hex)?.callsign
+    return [200, { ...r, origin: flyingNow ? info.origin(hex) : null }]
   }
 
   function recordings(): { recordings: RecordingInfo[] } {
@@ -420,7 +438,7 @@ export function createServer(
       else if (!(e instanceof BadRequest)) throw e
       else [status, body] = [400, { error: e.message }]
     }
-    return sendJson(req, res, status, body)
+    return sendJson(req, res, status, body, status === 503 ? { 'retry-after': String(RETRY_AFTER_S) } : {})
   }
 
   const server = createHttpServer((req, res) => {
@@ -448,9 +466,9 @@ export function createServer(
             }, ROUTE_TICK_MS)
             routeTimer.unref()
           }
-          // A live source keeps the newest hour of the past ready (History opens on it without a wait). A replay
-          // fetches the past only when asked.
-          if (source.caps.kind !== 'replay' && historyTimer === null) {
+          // Asked to roll (the command line does, for a live source): the newest hour of the past stays ready, so History
+          // opens on it without a wait. Otherwise the past is fetched only when a client asks.
+          if (deps.rollHistory === true && historyTimer === null) {
             const roll = (): void => void history.tick().catch((e: unknown) => console.error('history: tick failed:', e))
             roll()
             historyTimer = setInterval(roll, HISTORY_TICK_MS)
@@ -466,6 +484,8 @@ export function createServer(
       })
     },
     close(): Promise<void> {
+      history.close() // the downloads under way end now
+      traces.close()
       if (routeTimer !== null) clearInterval(routeTimer)
       routeTimer = null
       if (flightTimer !== null) clearInterval(flightTimer)
@@ -482,10 +502,13 @@ export function createServer(
   }
 }
 
+/** Whether the command line keeps the newest hour of the past fetched: for a live source, not for a replay. */
+export const rollsHistory = (cfg: ServerConfig): boolean => cfg.source !== 'replay'
+
 if (import.meta.main) {
   try {
     const cfg = readServerConfig(process.env)
-    const url = await createServer(cfg).listen(cfg.port)
+    const url = await createServer(cfg, { rollHistory: rollsHistory(cfg) }).listen(cfg.port)
     const routes = cfg.contact === null || cfg.source === 'replay' ? '' : cfg.routes && cfg.source === 'adsblol' ? ', routes on' : ', routes of selected flights'
     const rec = cfg.flightsDir === null ? '' : `, recording flights to ${cfg.flightsDir}`
     console.log(`FlightHopper server on ${url} (source ${cfg.source}${routes}${rec})`)

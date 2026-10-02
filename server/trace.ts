@@ -10,6 +10,9 @@
 // 2 first point of a new leg, 4 vrate is geometric, 8 altitude is geometric. Checked on a real live file and a real day
 // file (2026-10-02): 14 columns a row, `flight` in an acObj padded to 8 characters, a day file's timestamp is its UTC
 // midnight and a live file's is its first point.
+// The client shows alt × 0.3048 + N as the height above the ellipsoid, which is right for a baro altitude (feet above mean sea
+// level). A point flagged 8 has a geometric altitude, which is above the ellipsoid already: it goes out as ft - N / 0.3048, so
+// the client's sum gives it back.
 
 import { promisify } from 'node:util'
 import { gunzip } from 'node:zlib'
@@ -91,15 +94,18 @@ export function traceReply(json: unknown, hex: string, atMs: number): TraceReply
   for (const r of leg) {
     const lat = r[1] as number
     const lon = r[2] as number
+    const nM = roundTo(geoidN(lat, lon), 1)
+    let alt: number | 'g' | null = r[3] === 'ground' ? 'g' : num(r[3])
+    if (typeof alt === 'number' && typeof r[6] === 'number' && (r[6] & 8) !== 0) alt = Math.round(alt - nM / 0.3048) // geometric
     out.t.push(roundTo((r[0] as number) - dt0, 1))
     out.lat.push(roundTo(lat, 5))
     out.lon.push(roundTo(lon, 5))
-    out.alt.push(r[3] === 'ground' ? 'g' : num(r[3]))
+    out.alt.push(alt)
     out.gs.push(rounded(r[4], 1))
     out.trk.push(rounded(r[5], 1))
     out.vs.push(num(r[7])) // already the baro rate, else the geometric one (flags & 4 says which)
     out.roll.push(rounded(r[13], 1))
-    out.nM.push(roundTo(geoidN(lat, lon), 1))
+    out.nM.push(nM)
   }
   for (let i = leg.length - 1; i >= 0 && out.callsign === null; i--) out.callsign = callsignOf(leg[i][8])
   return out
@@ -132,6 +138,7 @@ export class TraceStore {
   #now: () => number
   #cache = new Map<string, { ms: number; ttlMs: number; json: unknown }>() // Map order is age order; json null: a 404
   #pending = new Map<string, Promise<unknown>>()
+  #stop = new AbortController() // close() aborts the downloads under way
 
   constructor(o: TraceStoreOpts) {
     this.#base = (o.base ?? TRACE_BASE).replace(/\/+$/, '')
@@ -150,11 +157,17 @@ export class TraceStore {
     return json === null ? null : traceReply(json, h, atMs)
   }
 
+  /** Aborts the downloads under way (their gets are null); nothing is asked after it. A server calls it when it closes. */
+  close(): void {
+    this.#stop.abort()
+  }
+
   async #file(url: string, ttlMs: number): Promise<unknown> {
     const hit = this.#cache.get(url)
     if (hit !== undefined && this.#now() - hit.ms < hit.ttlMs) return hit.json
     let pending = this.#pending.get(url)
     if (pending === undefined) {
+      if (this.#stop.signal.aborted) return null
       pending = this.#load(url, ttlMs).finally(() => this.#pending.delete(url))
       this.#pending.set(url, pending)
     }
@@ -167,7 +180,7 @@ export class TraceStore {
     try {
       const res = await this.#fetch(url, {
         headers: { 'user-agent': this.#userAgent, 'accept-encoding': 'gzip' },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.any([this.#stop.signal, AbortSignal.timeout(TIMEOUT_MS)]),
       })
       if (res.status !== 200) {
         void res.body?.cancel().catch(() => {}) // not read: let the connection go
@@ -183,8 +196,11 @@ export class TraceStore {
   }
 
   #keep(url: string, ttlMs: number, json: unknown): void {
+    const now = this.#now()
+    // The expired go first: a live file lasts 30 s and a day file an hour, so the oldest entry is not always the first to expire.
+    for (const [u, e] of this.#cache) if (now - e.ms >= e.ttlMs) this.#cache.delete(u)
     this.#cache.delete(url) // re-inserted last
-    this.#cache.set(url, { ms: this.#now(), ttlMs, json })
+    this.#cache.set(url, { ms: now, ttlMs, json })
     if (this.#cache.size > MAX_ENTRIES) this.#cache.delete(this.#cache.keys().next().value!)
   }
 }
