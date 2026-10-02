@@ -936,6 +936,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (outside && nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // another leg of it, or none yet
       if (tr === null) rebuildPath() // the feed's samples meanwhile
     }
+    h.bar.setNote(h.missing.has(slot) ? 'No data for this time' : null) // adsb.lol keeps about 30 days, some days not
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
     h.statusAtMs = nowP
     const st = await api.historyStatus()
@@ -955,7 +956,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     try {
       const r = await api.history(slot, c.lat, c.lon, c.nm)
       if (hist !== h) return
-      if (r === null) h.missing.add(slot)
+      if (r === null) {
+        h.missing.add(slot)
+        if (slot === slotOf(h.clock.now(performance.now()))) h.bar.setNote('No data for this time')
+      }
       else {
         h.feed.add(r, c)
         h.reload = true // the aircraft it holds before the replay time are placed at once
@@ -1543,7 +1547,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    * or the chase (to the map), then the focus. (The Settings dialog keeps every key while open: Esc closes it alone.)
    */
   const back = (): void => {
-    if (rail.close() || traffic?.close()) return
+    if (hist?.bar.closeGoTo() || rail.close() || traffic?.close()) return
     if (flightFrame.editing) flightFrame.edit(false)
     else if (run !== null || loadingScenario !== null) exitScenario()
     else if (chasing) setChase(false)
