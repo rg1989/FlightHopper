@@ -43,11 +43,13 @@ import { makeMapLayer, makeRoadsLayer } from './scene/mapLayer.ts'
 import { Weather } from './scene/weather.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
-import { localClock, mountHistoryBar, type HistoryBarHandle } from './history/bar.ts'
+import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
+import { localDay, mountHistoryBar, type HistoryBarHandle, type LocalDay } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
-import { SlotBlock, askNm, backMs, legFeeds, legStarted, lookaheadMs, wantedSlots } from './history/policy.ts'
-import { traceInfo, tracePath, traceSamples } from './history/trace.ts'
+import { SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
+import { MapMoves, daySpan, flyOver, insetContains, placeSelected, replayStatus, selectedInfo } from './history/selected.ts'
+import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
@@ -129,12 +131,17 @@ const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
 // History (history/): the past from adsb.lol's half-hour files, replayed through the live pipeline.
-const HISTORY_DAYS = 30 // adsb.lol keeps about 30 days of half-hour files (research, 2026-10-01)
+// ponytail: what exists until the server's first status says (it reports the oldest day adsb.lol keeps, ~42): 30 days
+// back, as the time bar guesses too. Upgrade: none, while the first status comes within a second.
+const HISTORY_GUESS_MS = 30 * 86_400_000
 const HISTORY_RATE = 10 // a replay starts at 10×: a half hour in three minutes
 const HISTORY_JUMP_MS = 120_000 // the replay clock moving further than this between frames is a seek
-const HISTORY_PREFETCH_MS = 5 * 60_000 // the next half hour is asked this long (replay time) before it starts
-const HISTORY_STATUS_MS = 5000 // how often the time bar learns what the server holds
-const TRACE_RETRY_MS = 30_000 // History: a selected aircraft's leg is asked again at most this often
+const HISTORY_STATUS_MS = 5000 // how often the time bar learns what exists and what adsb.lol lacks
+const SEEK_REST_MS = 300 // a scrubber seek asks for its half hours (and brings the aircraft into view) once it rests this long
+const DAY_AGAIN_MS = 15_000 // the selected aircraft's day: a failed ask, or an answer short of the replay time, again after this
+const BRING_FLY_S = 0.8 // the map's flight over the selected aircraft after a jump in time
+const FOLLOW_FLY_S = 0.6 // …and to follow it out of the view while playing
+const NO_LEGS: readonly TraceReply[] = []
 
 /** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–5,400 nm. */
 function viewNm(nm: number): number {
@@ -424,10 +431,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // live samples since it was selected) and its route's ends (from its chase replies, or the trace's).
   let chaseDest: RoutePlace | null = null
   let chaseOrigin: RoutePlace | null = null
-  let selTrace: TraceReply | null = null // its leg: live, up to now; History, the leg flying at the replay time
+  let selTrace: TraceReply | null = null // its leg: live, up to now; History, the leg of its day it is heard on
   let selSamples: Sample[] = [] // History: selTrace as samples, for its track (denser than the half-hour files)
   let selPath: PathPoint[] = [] // what the line draws: the trace's points, then trail's newer ones
-  let traceAskMs = -Infinity // performance.now() of the last trace asked for
   const trail: PathPoint[] = []
   let trailTMs = -Infinity // tMs of trail's newest point
   let tableHover: string | null = null
@@ -440,6 +446,16 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
   const aimAt = new Cartesian3() // the chased aircraft's middle, where the chase camera looks
   const onScreen: FleetEntry[] = [] // reused every frame
+  // History, every frame (history/selected.ts placeSelected): the fleet's entries with the selected aircraft's own as its
+  // day says (its track's state, or a ghost where it was last heard, written into histOwn), that entry, its card's numbers.
+  const histAll: FleetEntry[] = []
+  const histOwn: FleetEntry = {
+    hex: '', lat: 0, lon: 0, hM: 0, altFt: null, onGround: false, trackDeg: null, gsKt: null, vsFpm: null, ageS: 0, staleS: 0,
+    gapS: 0, quality: 'other', info: null,
+  }
+  let histAt: FleetEntry | undefined
+  let histCardS: RenderState | null = null
+  const moves = new MapMoves() // the person moving the map: History's map does not follow its aircraft meanwhile
   // A scenario playing (run) or being fetched (loadingScenario): either way the polls wait.
   let run: ScenarioRun | null = null
   let dress: Dresser | null = null // the scenario's aircraft on the chase model
@@ -451,15 +467,37 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     bar: HistoryBarHandle
     fedMs: number // the fleet holds the feed's samples up to here
     regMs: number // the selected aircraft's track holds its samples up to here
-    regFromTrace: boolean | null // they came from its trace (else the feed); null: none yet
+    regFrom: TraceReply | 'feed' | 'none' | null // they came from this leg of its day, the feed, or none (not heard); null: none yet
     known: Set<string> // the hexes whose info the fleet has
     loading: Set<number> // half hours being fetched
     block: SlotBlock // half hours not to ask for now: missing at adsb.lol, or failed a moment ago
-    lastWant: number // the half hour under the clock at the last tick (one rested in a tick is fetched)
+    missing: Set<number> // half hours adsb.lol answered it does not have (with the status's: the bar's red hatch)
+    missingShown: string // the missing half hours on the bar, as a key
+    lastWant: number // the half hour under the clock when the half hours were last asked for
     failing: boolean // the half hour under the clock failed to load: the bar says so until one loads
     status: HistoryStatus | null
     statusAtMs: number // performance.now() of the last status asked for
     reload: boolean // a half hour arrived: the next frame refills the fleet from the minute before
+    seekRestMs: number | null // a scrubber seek: its half hours are asked once performance.now() reaches this
+    // The selected aircraft's day of flights (history/aircraftDay.ts) for the bar's local day of the replay time.
+    dayOfT: LocalDay // that day
+    day: SelectedDay | null // the last answer (another aircraft's says nothing of the selected one)
+    dayAsk: { hex: string; startMs: number } | null // the ask in flight: a reply for any other is dropped
+    dayAgain: { hex: string; startMs: number; atMs: number } | null // that day is not asked again before atMs (performance.now())
+    legsShown: readonly TraceReply[] // the legs on the bar (amber)
+    pathLeg: TraceReply | null | undefined // the leg the flown path shows (null none; undefined: the feed's samples meanwhile)
+    bring: boolean // bring the selected aircraft into view (a jump), until its day for that time is known
+    inside: boolean // it was inside the view (inset) last frame: playing, the map follows it out of it
+    flyUntilMs: number // the map is flying over it until then (performance.now()): no other flight meanwhile
+  }
+  /** The selected aircraft's flights over a local day and the 12 h before it (GET /api/trace?hex&from&to). */
+  interface SelectedDay {
+    hex: string
+    startMs: number // the local day asked for (LocalDay.startMs)
+    toMs: number // answered up to here (the server's now at most)
+    legs: TraceReply[]
+    reg: string | null
+    typeCode: string | null
   }
   let hist: HistoryMode | null = null
   let room = NO_ROOM // the flight-data frame's safe area and what covers the canvas, as last measured
@@ -517,7 +555,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         onDelete: (file) => api.deleteRecording(file),
       })),
     } },
-    // The map in the past (history/): a time bar over the last 30 days. Pressed again (or the bar's Live): back to now.
+    // The map in the past (history/): a time bar over the days adsb.lol keeps. Pressed again (or the bar's Live): back to now.
     { id: 'history', icon: 'history', label: 'History: the map in the past', short: 'History', action: () => (hist === null ? enterHistory(null) : exitHistory()) },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
     { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
@@ -645,14 +683,18 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const map = makeMapLayer(viewer, mapUrl)
   const roads = makeRoadsLayer(viewer) // over the map, the satellite and the night lights
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text))
-  /** The layers the prefs and the view ask for: the street map or the satellite, roads over the satellite, weather top-down. */
+  /**
+   * The layers the prefs and the view ask for: the street map or the satellite, roads over the satellite, weather top-down
+   * and live only (it is today's: it says nothing of the past).
+   */
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
     map.show = onMap
     map.dark = prefs.dark
     roads.show = prefs.roads && !onMap
-    weather.show = prefs.wx && !chasing
-    if (chasing && prefs.wx) toggles.setWeather('On the top-down map, for now')
+    weather.show = prefs.wx && !chasing && hist === null
+    if (hist !== null && prefs.wx) toggles.setWeather('Live only')
+    else if (chasing && prefs.wx) toggles.setWeather('On the top-down map, for now')
     else if (!prefs.wx) toggles.setWeather(null)
   }
   applyLayers()
@@ -765,53 +807,32 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const seed = fleet.newest(hex)
       seedSample = seed ?? null
       if (seed) registry.ingest([seed])
-      fetchTrace(hex)
+      if (hist === null) fetchTrace(hex) // History asks for its day instead
     }
+    if (hist !== null) selectedInHistory(hist)
   }
 
   /**
-   * The selected aircraft's flight leg (its trace): its flown path; in History its track too (1–4 s points with track,
-   * rate and roll, where the half-hour files have 10 s points without them). A reply for another selection or mode is
-   * dropped. None (404): live, the path is the live samples'; in History a leg that does not cover the replay time goes
-   * and the feed's samples take over.
+   * Live: the selected aircraft's flight leg (its trace), for its flown path. A reply for another selection, or once
+   * History began, is dropped; none (404): the path is the live samples'.
    */
   function fetchTrace(hex: string): void {
-    const mode = hist
-    traceAskMs = performance.now()
-    api.trace(hex, mode === null ? null : Math.round(mode.clock.now(traceAskMs))).then((tr) => {
-      if (hex !== selected || mode !== hist) return
-      const h = hist
-      const t = h === null ? 0 : h.clock.now(performance.now())
-      if (tr === null) {
-        if (h !== null && selTrace !== null && !legFeeds(selTrace, t)) {
-          selTrace = null
-          selSamples = []
-          restartSelectedTrack(h, t)
-          rebuildPath()
-        }
-        return
-      }
-      if (h !== null && selTrace !== null && selTrace.t0Ms === tr.t0Ms && selTrace.t.length === tr.t.length) return // the same leg again
+    api.trace(hex).then((tr) => {
+      if (hex !== selected || hist !== null || tr === null) return
       selTrace = tr
       chaseOrigin = tr.origin ?? null
-      if (h !== null) {
-        selSamples = traceSamples(tr)
-        chaseInfo = { ...traceInfo(tr), squawk: h.feed.info(hex)?.squawk ?? null } // the files carry its squawk (7500…)
-        restartSelectedTrack(h, t)
-      }
       rebuildPath()
     }, (e: unknown) => console.warn('FlightHopper: no trace:', e))
   }
 
   /**
-   * selPath: live, the trace's points then the trail's newer ones; in History the trace's once its leg has started (after
-   * it ended too: that is where it flew), else the feed's samples of the aircraft.
+   * selPath: live, the trace's points then the trail's newer ones; in History, until the selected aircraft's day is
+   * known, the feed's samples of it (then its day's leg: showSelectedDay).
    */
   function rebuildPath(): void {
     const h = hist
     if (h !== null) {
-      const tr = selTrace !== null && legStarted(selTrace, h.clock.now(performance.now())) ? selTrace : null
-      selPath = tr !== null ? tracePath(tr) : selected === null ? [] : h.feed.samplesOf(selected, -Infinity, Infinity).map(pathPointOf)
+      selPath = selected === null ? [] : h.feed.samplesOf(selected, -Infinity, Infinity).map(pathPointOf)
       return
     }
     const base = selTrace === null ? [] : tracePath(selTrace)
@@ -822,39 +843,40 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /** History: the seconds between the slices of the half hour at t (10 before it is loaded). */
   const stepAt = (h: HistoryMode, t: number): number => h.feed.stepOf(slotOf(Math.min(t, h.clock.maxMs - 1))) ?? 10
 
-  /** History: the selected aircraft's track afresh from back(step) before t (a seek, or its trace came or went). */
+  /** History: the selected aircraft's track afresh from back(step) before t (a seek, or its source changed). */
   function restartSelectedTrack(h: HistoryMode, t: number): void {
     registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     h.regMs = t - backMs(stepAt(h, t))
-    h.regFromTrace = null
+    h.regFrom = null
   }
 
   /**
    * History: a fresh fleet from back(step) before t: a seek, the start, or the half hour under the clock arrived. The
-   * selected aircraft's track goes too, unless that half hour only arrived and the aircraft runs on a trace covering t.
+   * selected aircraft's track goes too, unless that half hour only arrived and the aircraft is heard on its leg at t
+   * (heard: its track runs on the leg, not on the files).
    */
-  function restartHistory(h: HistoryMode, t: number, seek: boolean): void {
+  function restartHistory(h: HistoryMode, t: number, seek: boolean, heard: boolean): void {
     const step = stepAt(h, t)
     fleet = new Fleet()
     fleet.setHintS(2.5 * step) // before the first prune: lifetimes for the files' slices, not the 60 s floor
     h.known.clear()
     h.fedMs = t - backMs(step)
     h.reload = false
-    const onTrace = selTrace !== null && legFeeds(selTrace, t)
-    if (seek || !onTrace) restartSelectedTrack(h, t)
+    if (seek || !heard) restartSelectedTrack(h, t)
     if (seek && chasing) chaseCam.snapHeading() // a jump is a cut: behind the aircraft at once, not a swing round
-    if (seek && selected !== null && !onTrace) traceAskMs = -Infinity // its leg there: asked at the next tick
   }
 
   /**
    * History, every frame: the feed's samples up to t into the fleet (after a seek, from back(step) before t), and the
-   * selected aircraft's up to t + lookahead(step) into its track: its trace's while the leg covers t, else the feed's.
+   * selected aircraft's up to t + lookahead(step) into its track, as its day says (ds): heard, its leg's (its trace: 1–4 s
+   * points with track, rate and roll, where the files have 10 s points without them); not heard, none (no track: it is
+   * drawn where it was last heard); its day not known yet, the feed's.
    * The chase traffic is drawn from the fleet (its samples already point at their next position): no tracks of its own,
    * which on 10 s samples would stop between them.
    */
-  function feedHistory(h: HistoryMode, t: number): void {
+  function feedHistory(h: HistoryMode, t: number, ds: DayState | null): void {
     const seek = t < h.fedMs || t - h.fedMs > HISTORY_JUMP_MS
-    if (seek || h.reload) restartHistory(h, t, seek)
+    if (seek || h.reload) restartHistory(h, t, seek, ds?.kind === 'heard')
     const fresh = h.feed.take(h.fedMs, t)
     h.fedMs = t
     if (fresh.length > 0) {
@@ -868,14 +890,114 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       fleet.ingest(fresh, infos)
     }
     if (selected === null) return
-    const fromTrace = selTrace !== null && legFeeds(selTrace, t)
-    if (h.regFromTrace !== null && h.regFromTrace !== fromTrace) restartSelectedTrack(h, t) // another source: a fresh track
-    h.regFromTrace = fromTrace
+    const from = ds === null ? 'feed' : ds.kind === 'heard' ? ds.leg : 'none'
+    if (from !== h.regFrom) {
+      // Another source: a fresh track (the feed's, as the first, keeps the selection's seed sample).
+      if (h.regFrom !== null || from !== 'feed') restartSelectedTrack(h, t)
+      h.regFrom = from
+    }
+    if (from === 'none') return
+    if (from !== 'feed' && from !== selTrace) {
+      selTrace = from
+      selSamples = traceSamples(from)
+    }
     const to = t + lookaheadMs(stepAt(h, t))
     if (to <= h.regMs) return
-    const mine = fromTrace ? between(selSamples, h.regMs, to) : h.feed.samplesOf(selected, h.regMs, to)
+    const mine = from === 'feed' ? h.feed.samplesOf(selected, h.regMs, to) : between(selSamples, h.regMs, to)
     h.regMs = to
     if (mine.length > 0) registry.ingest(mine)
+  }
+
+  /** History: the selected aircraft's day as last answered (for the bar's day of the replay time, or the one before it until that comes); null: none yet. */
+  const selectedDay = (h: HistoryMode): SelectedDay | null => (selected !== null && h.day !== null && h.day.hex === selected ? h.day : null)
+
+  /**
+   * History: the selected aircraft's day of flights (GET /api/trace?hex&from&to over selected.ts daySpan) for the bar's
+   * local day of t, asked when it is not answered: on selecting, on entering History with a selection, when the replay
+   * reaches another day, and at a time past what an answer for today covered. One ask a day at a time; a reply for
+   * another selection, day or mode is dropped; a failure is asked again after DAY_AGAIN_MS.
+   */
+  function askDayWhenDue(h: HistoryMode, t: number): void {
+    if (t < h.dayOfT.startMs || t >= h.dayOfT.endMs) h.dayOfT = localDay(t)
+    const hex = selected
+    if (hex === null) return
+    const { startMs, endMs } = h.dayOfT
+    const d = h.day
+    if (d !== null && d.hex === hex && d.startMs === startMs && t <= d.toMs) return // answered
+    const a = h.dayAsk
+    if (a !== null && a.hex === hex && a.startMs === startMs) return // in flight
+    const again = h.dayAgain
+    if (again !== null && again.hex === hex && again.startMs === startMs && performance.now() < again.atMs) return
+    const ask = { hex, startMs }
+    h.dayAsk = ask
+    const span = daySpan(startMs, endMs, h.status?.oldestSlotMs ?? null, Date.now())
+    const settle = (): boolean => {
+      if (hist !== h || h.dayAsk !== ask) return false // another selection, day or mode by now
+      h.dayAsk = null
+      h.dayAgain = { hex, startMs, atMs: performance.now() + DAY_AGAIN_MS }
+      return true
+    }
+    api.traceDay(hex, span.fromMs, span.toMs).then((r) => {
+      // None at adsb.lol at all (404): no flight that day.
+      if (settle()) h.day = { hex, startMs, toMs: r?.toMs ?? span.toMs, legs: r?.legs ?? [], reg: r?.reg ?? null, typeCode: r?.typeCode ?? null }
+    }, (e: unknown) => {
+      if (settle()) console.warn('FlightHopper: no day of flights:', e)
+    })
+  }
+
+  /** History: a new selection (or none): the ask for the last one's day is dropped, this one's goes, and it comes into view. */
+  function selectedInHistory(h: HistoryMode): void {
+    h.dayAsk = null
+    h.pathLeg = undefined
+    h.inside = false
+    h.bring = selected !== null
+    askDayWhenDue(h, h.clock.now(performance.now()))
+  }
+
+  /**
+   * History, every frame: the selected aircraft's flights on the bar (amber; none selected: none), and its flown path:
+   * the leg it is heard on or was last (cut at the replay time by the line), none before its first or on a day it did
+   * not fly; until its day is known, the feed's samples (historyTick).
+   */
+  function showSelectedDay(h: HistoryMode, ds: DayState | null): void {
+    const legs = selectedDay(h)?.legs ?? NO_LEGS
+    if (legs !== h.legsShown) {
+      h.legsShown = legs
+      h.bar.setLegs(legSpans(legs))
+    }
+    const leg = ds === null ? undefined : ds.kind === 'heard' || ds.kind === 'quiet' ? ds.leg : null
+    if (leg === h.pathLeg) return
+    h.pathLeg = leg
+    if (leg !== undefined) selPath = leg === null ? [] : tracePath(leg)
+  }
+
+  /**
+   * History, top-down: the selected aircraft into view after a jump (h.bring: once its position at the replay time is
+   * known, and again when its day for that time comes, which may put it elsewhere), and followed while playing when it
+   * leaves the view (selected.ts flyOver). The map flies over it at the height it has. Not in the chase, which needs no
+   * help, nor while a scrubber seek rests or a flight is under way.
+   */
+  function keepInView(h: HistoryMode, now: number, ds: DayState | null): void {
+    const at = histAt
+    if (chasing || selected === null) {
+      h.bring = false
+      h.inside = false
+      return
+    }
+    const inside = at !== undefined && insetContains(viewRectangleDeg(viewer), at.lat, at.lon)
+    if (now >= h.flyUntilMs && h.seekRestMs === null) {
+      if (at !== undefined && flyOver({ bring: h.bring, playing: h.clock.playing, wasInside: h.inside, inside, moved: moves.recent(now) })) {
+        const flyS = h.bring ? BRING_FLY_S : FOLLOW_FLY_S
+        enterBrowse(viewer, at, { heightM: viewer.camera.positionCartographic.height, flyS })
+        h.flyUntilMs = now + flyS * 1000
+      }
+      // Brought in once its day for this time said where it was (or that it was nowhere: before its first leg, none).
+      const day = selectedDay(h)
+      if (h.bring && ds !== null && day !== null && day.startMs === h.dayOfT.startMs && (at !== undefined || ds.kind === 'before' || ds.kind === 'none')) {
+        h.bring = false
+      }
+    }
+    h.inside = inside
   }
 
   /** Opens History at tMs (null: the start of the newest published half hour), paused unless play. */
@@ -883,32 +1005,38 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (run !== null || loadingScenario !== null) exitScenario()
     const nowP = performance.now()
     const wall = Date.now()
-    const minMs = wall - HISTORY_DAYS * 86_400_000
+    // Until the server's first status: HISTORY_GUESS_MS back, and the end of the newest half hour published (the bar's
+    // own guess, too).
+    const minMs = wall - HISTORY_GUESS_MS
     const maxMs = newestSlotMs(wall) + SLOT_MS
     const t0 = Math.min(maxMs, Math.max(minMs, tMs ?? maxMs - SLOT_MS))
-    if (hist !== null) return void hist.clock.seek(t0, nowP)
+    if (hist !== null) {
+      hist.clock.seek(t0, nowP)
+      return jumped(hist)
+    }
     const bar = mountHistoryBar(ui, {
-      zone: zoneName(), minMs, nowMs: () => Date.now(),
+      zone: zoneName(), nowMs: () => Date.now(),
       onToggle: () => hist?.clock.toggle(performance.now()),
-      onSeek: (t) => hist?.clock.seek(t, performance.now()),
+      onSeek: (t) => seekHistory(t, false),
       onRate: () => void hist?.clock.nextRate(performance.now()),
       onLive: () => exitHistory(),
-      onGoTo: (t) => hist?.clock.seek(t, performance.now()),
+      onGoTo: (t) => seekHistory(t, true),
     })
-    bar.setLimit(maxMs)
     const h: HistoryMode = {
       clock: new HistoryClock(t0, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP), feed: new HistoryFeed(), bar,
-      fedMs: t0, regMs: t0, regFromTrace: null, known: new Set(), loading: new Set(), block: new SlotBlock(),
-      lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity, reload: false,
+      fedMs: t0, regMs: t0, regFrom: null, known: new Set(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
+      missingShown: '', lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity,
+      reload: false, seekRestMs: null, dayOfT: localDay(t0), day: null, dayAsk: null, dayAgain: null, legsShown: NO_LEGS,
+      pathLeg: undefined, bring: false, inside: false, flyUntilMs: -Infinity,
     }
     hist = h
     selTrace = null // before restartHistory: a live leg must not keep the live track
     selSamples = []
     selPath = []
-    restartHistory(h, t0, false)
+    restartHistory(h, t0, false, false)
     chaseRaw = null
     trafficRaw = null
-    // Today's route and identity say nothing of the past: its trace brings the leg's own (origin only for a current leg).
+    // Today's route and identity say nothing of the past: its day of flights brings its own.
     chaseDest = null
     chaseOrigin = null
     chaseInfo = null
@@ -916,10 +1044,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     trailTMs = -Infinity
     ui.dataset.history = '1'
     rail.button('history').setAttribute('aria-pressed', 'true')
-    if (selected !== null) {
-      card.setRecording(selected, undefined, 0)
-      fetchTrace(selected)
-    }
+    applyLayers() // the weather is today's: live only
+    if (selected !== null) card.setRecording(selected, undefined, 0)
+    selectedInHistory(h) // its day asked for
+    jumped(h) // the half hours at once, and the selected aircraft into view
     lastUrlMs = -Infinity
     if (!firstData) {
       firstData = true
@@ -935,10 +1063,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     fleet = liveFleet
     trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
     trafficRaw = null
+    histAt = undefined
+    histCardS = null
     delete ui.dataset.history
     rail.button('history').setAttribute('aria-pressed', 'false')
     card.setReplay(null)
     trafficCard.setReplay(null)
+    statusPanel.setHistory(null)
+    applyLayers() // the weather again, as the prefs say
     const hex = selected
     if (hex !== null) {
       selected = null // select() ignores the same hex: this one starts afresh, live (a chase stays a chase)
@@ -948,32 +1080,82 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
-   * History, every second: the half hours the replay needs for this view (policy.ts: the one under the clock once it has
-   * rested there a tick, so a scrub across the day downloads nothing on its way; the next one ahead of time; asked for a
-   * wider circle at the view's slice step; the rest dropped), pruning, the selected aircraft's leg, the bar's note and
-   * segments.
+   * The time bar moved the replay: a jump (Go to, a day arrow: its half hours asked at once) or a scrubber seek (asked once
+   * it rests SEEK_REST_MS: a drag across the day downloads nothing on its way). The map follows the clock meanwhile.
+   */
+  function seekHistory(t: number, jump: boolean): void {
+    const h = hist
+    if (h === null) return
+    const p = performance.now()
+    h.clock.seek(t, p)
+    if (jump) jumped(h)
+    else h.seekRestMs = p + SEEK_REST_MS
+  }
+
+  /** History: a jump in time (Go to, a day arrow, a scrubber seek at rest, entering): its half hours asked at once, and the selected aircraft brought into view. */
+  function jumped(h: HistoryMode): void {
+    h.seekRestMs = null
+    askSlots(h, h.clock.now(performance.now()))
+    h.bring = selected !== null
+  }
+
+  /**
+   * History: asks for the half hours the replay needs at t for this view (policy.ts): the one under the clock and the
+   * next one early enough for the speed (prefetchMs), each for a circle wider than the view at the view's slice step,
+   * unless the feed holds it for this view, it is being fetched, or it is blocked (missing at adsb.lol, failed a moment ago).
+   */
+  function askSlots(h: HistoryMode, t: number): void {
+    const wall = Date.now()
+    const v = viewCircle()
+    const want = wantedSlots(t, h.clock.maxMs, prefetchMs(h.clock.rate))
+    h.lastWant = want[0]
+    for (const s of want) {
+      if (!h.feed.covers(s, v) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: v.lat, lon: v.lon, nm: askNm(v.nm, chasing) })
+    }
+  }
+
+  /**
+   * History: whether the replay waits for data at t (the bar's loader, a playing clock stalled): the half hour under the
+   * clock is not held for this view (as askSlots asks it) and is neither missing at adsb.lol nor failing, or the selected
+   * aircraft's first day is being asked for (its first ask: a retry after a failure waits for nothing, as a failed half
+   * hour does not).
+   */
+  function historyLoading(h: HistoryMode, t: number): boolean {
+    const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
+    if (!h.feed.covers(slot, viewCircle()) && !h.block.isMissing(slot, Date.now()) && !h.failing) return true
+    return selected !== null && h.dayAsk !== null && h.dayAsk.hex === selected && selectedDay(h) === null && h.dayAgain?.hex !== selected
+  }
+
+  /** History: the half hours adsb.lol does not have, as far as known (the status's, and those it answered so here), on the bar. */
+  function showMissing(h: HistoryMode): void {
+    const wall = Date.now()
+    for (const s of h.missing) if (!h.block.isMissing(s, wall)) h.missing.delete(s) // its block ran out: asked again by now
+    const all = new Set(h.missing)
+    for (const s of h.status?.slots ?? []) if (s.state === 'missing') all.add(s.slotMs)
+    const slots = [...all].sort((a, b) => a - b)
+    const key = slots.join()
+    if (key === h.missingShown) return
+    h.missingShown = key
+    h.bar.setMissing(slots)
+  }
+
+  /**
+   * History, every second: the half hours the replay needs (askSlots; not while a scrubber seek has not rested), pruning,
+   * the selected aircraft's path from the feed until its day is known, the bar's note, and every HISTORY_STATUS_MS what
+   * exists (the clock's and the bar's bounds: the oldest moment adsb.lol keeps, the newest published) and what adsb.lol
+   * lacks (the bar's missing half hours).
    */
   async function historyTick(h: HistoryMode): Promise<void> {
     const nowP = performance.now()
     const wall = Date.now()
     const t = h.clock.now(nowP)
-    const v = viewCircle()
-    const want = wantedSlots(t, h.clock.maxMs, HISTORY_PREFETCH_MS)
-    const steady = want[0] === h.lastWant
-    h.lastWant = want[0]
-    if (steady) {
-      for (const s of want) {
-        if (!h.feed.covers(s, v) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: v.lat, lon: v.lon, nm: askNm(v.nm, chasing) })
-      }
-    }
-    h.feed.retain(new Set([want[0] - SLOT_MS, want[0], want[0] + SLOT_MS]))
+    const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
+    if (h.seekRestMs === null) askSlots(h, t)
+    h.feed.retain(new Set([slot - SLOT_MS, slot, slot + SLOT_MS]))
     fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
-    if (selected !== null) {
-      if (!(selTrace !== null && legFeeds(selTrace, t)) && nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // its leg at this time, or none yet
-      if (selTrace === null || !legStarted(selTrace, t)) rebuildPath() // the feed's samples meanwhile
-    }
-    h.bar.setNote(h.block.isMissing(want[0], wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
+    if (selected !== null && selectedDay(h) === null) rebuildPath() // the feed's samples until its day is known
+    h.bar.setNote(h.block.isMissing(slot, wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
     h.statusAtMs = nowP
     // Not awaited: the next tick does not wait for it.
@@ -981,22 +1163,27 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (hist !== h) return
       h.status = st
       h.block.fromStatus(st.slots, Date.now())
+      const minMs = st.oldestSlotMs
       const maxMs = st.newestSlotMs + SLOT_MS
-      h.clock.setBounds(Date.now() - HISTORY_DAYS * 86_400_000, maxMs, performance.now())
-      h.bar.setLimit(maxMs)
-      h.bar.setSlots(st.slots, [...h.loading])
+      if (Number.isFinite(minMs) && Number.isFinite(maxMs) && minMs <= maxMs) { // a server older than the field: the guess stays
+        h.clock.setBounds(minMs, maxMs, performance.now())
+        h.bar.setBounds(minMs, maxMs)
+      }
+      showMissing(h)
     }, (e: unknown) => console.warn('FlightHopper: no history status:', e))
   }
 
   /** Fetches one half hour for circle c into the feed. None at adsb.lol: not asked for a while; a failure: retried soon. */
   async function loadSlot(h: HistoryMode, slot: number, c: Circle): Promise<void> {
     h.loading.add(slot)
-    h.bar.setSlots(h.status?.slots ?? [], [...h.loading])
     try {
       const r = await api.history(slot, c.lat, c.lon, c.nm)
       if (hist !== h) return
-      if (r === null) h.block.missing(slot, Date.now())
-      else if (r.slotMs === slot) {
+      if (r === null) {
+        h.block.missing(slot, Date.now())
+        h.missing.add(slot)
+        showMissing(h)
+      } else if (r.slotMs === slot) {
         h.feed.add(r, c)
         h.failing = false
         // The half hour under the clock: its aircraft before the replay time are placed at once. (The next one, asked
@@ -1011,7 +1198,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       console.warn('FlightHopper: the past not loaded:', e)
     } finally {
       h.loading.delete(slot)
-      if (hist === h) h.bar.setSlots(h.status?.slots ?? [], [...h.loading])
     }
   }
 
@@ -1043,6 +1229,28 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (g.to === 'place') enterBrowse(viewer, g, { heightM: g.heightM })
     else enterBrowse(viewer, { lat: (g.south + g.north) / 2, lon: (g.west + g.east) / 2 }, { heightM: Math.max(COUNTRY_MIN_HEIGHT_M, heightToFit(g, c.clientWidth, c.clientHeight, 1.15)) })
     if (matchMedia('(max-width: 860px)').matches) rail.close() // the map, not a panel over it
+  }
+
+  /**
+   * The person moving the map (history/selected.ts MapMoves): History's map does not follow its aircraft meanwhile, and a
+   * jump's bring-into-view gives way to it. Caught on the window, before Cesium's handlers and the trackpad's (which stops
+   * the wheel on the canvas's parent).
+   */
+  function mapPressed(e: PointerEvent): void {
+    if (e.target !== viewer.canvas) return
+    moves.down(e.pointerId, performance.now())
+    if (hist !== null) hist.bring = false
+  }
+  function mapReleased(e: PointerEvent): void {
+    moves.up(e.pointerId, performance.now())
+  }
+  function mapWheeled(e: WheelEvent): void {
+    if (e.target !== viewer.canvas) return
+    moves.wheel(performance.now())
+    if (hist !== null) hist.bring = false
+  }
+  function mapLetGo(): void {
+    moves.clear(performance.now())
   }
 
   /** The selected aircraft in the 3-D chase view (on), or back to the top-down map over it (off). */
@@ -1197,29 +1405,52 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     let all = NO_ENTRIES
     let s: RenderState | null = null
     let tSunMs = Date.now() // until the first reply; then the render time (server clock)
+    let histLoading = false // History: the replay waits for the data of its time
     // A scenario: its aircraft at its clock's time, lit at that instant; no traffic around it.
     const sf = run?.frame(dtS) ?? null
     if (sf !== null) s = sf.state
     else if (hist !== null) {
       // History: everything at the replay clock's time with no render delay (the selected aircraft's track has its
-      // samples ahead of it), lit at that instant.
+      // samples ahead of it), lit at that instant. A playing clock holds (stalls) while the data of its time loads.
       const h = hist
       if (h.clock.atEnd(now)) h.clock.pause(now) // the newest published moment: there is no further
+      if (h.seekRestMs !== null && now >= h.seekRestMs) jumped(h) // a scrubber seek at rest
+      histLoading = historyLoading(h, h.clock.now(now))
+      h.clock.stall(histLoading, now)
       const t = h.clock.now(now)
-      feedHistory(h, t)
+      askDayWhenDue(h, t)
+      // The selected aircraft at t as its day says (history/aircraftDay.ts); null until its day is known: as the feed has it.
+      const day = selectedDay(h)
+      const ds = day === null ? null : dayState(day.legs, t)
+      feedHistory(h, t, ds)
       tSunMs = t
       all = fleet.entries(t)
       if (selected !== null) {
         const track = registry.get(selected)
-        s = track?.stateAt(t) ?? null
+        let ts = track?.stateAt(t) ?? null
         const first = track?.oldestTMs ?? null
-        if (s === null && track !== undefined && first !== null && t < first) s = track.stateAt(first)
+        if (ts === null && track !== undefined && first !== null && t < first) ts = track.stateAt(first)
+        chaseInfo = day === null ? null : selectedInfo(day, ds, t, h.feed.info(selected), chaseInfo)
+        histAt = placeSelected(all, selected, ds, t, ts, chaseInfo, histAll, histOwn)
+        all = histAll
+        if (ds === null || ds.kind === 'heard') {
+          s = ts
+          histCardS = ts
+        } else {
+          s = chasing ? chased : null // no track: a chase that is on stays where it was (as live's "Signal lost"); Esc leaves it
+          histCardS = ds.kind === 'quiet' && histAt !== undefined ? entryState(histAt) : null // its last known numbers
+        }
+      } else {
+        histAt = undefined
+        histCardS = null
       }
-      h.bar.update({ tMs: t, playing: h.clock.playing, rate: h.clock.rate })
-      const replay = `Replay · ${localClock(t).slice(0, 5)}`
+      showSelectedDay(h, ds)
+      h.bar.update({ tMs: t, playing: h.clock.playing, rate: h.clock.rate, loading: histLoading })
       const quietS = Math.max(60, 2.5 * stepAt(h, t)) // a coarse file's aircraft is heard once a slice
-      card.setReplay(replay, quietS)
-      trafficCard.setReplay(replay, quietS)
+      card.setReplay(replayStatus(ds, t, quietS))
+      trafficCard.setReplay(replayStatus(null, t, quietS))
+      statusPanel.setHistory({ loading: histLoading })
+      keepInView(h, now, ds)
     } else if (api.ready) {
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
@@ -1340,8 +1571,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (model) model.show = chasing && s !== null
     toggles.setBusy(topo.animating)
     toggles.setChasing(chasing)
-    // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state.
-    card.update(selected, s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null)), shown, chasing) // ≤ 4 Hz
+    // The panel shows as soon as something is known: identity from the fleet before the chase reply and first state. In
+    // History its numbers are its state at the replay time as its day says (none before its first leg, or that day).
+    card.update(selected, hist !== null ? histCardS : s, chaseRaw, chaseInfo ?? (selected === null ? null : (fleet.get(selected)?.info ?? null)), shown, chasing) // ≤ 4 Hz
     const th = traffic?.openHex ?? null // open only while chasing (Traffic.select closes it otherwise)
     const te = th === null ? undefined : fleet.get(th)
     const dist = traffic?.openDistM ?? null
@@ -1363,14 +1595,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     rail.setDot('aircraft', statusDot(known))
     // In trouble no answers come; in a scenario none are asked for.
     rail.setBusy('aircraft', sf === null && hist === null && (known === null || (known.degraded === null && (known.pendingAreas ?? 0) > 0)))
-    rail.setBusy('history', hist !== null && hist.loading.size > 0)
+    rail.setBusy('history', hist !== null && histLoading)
     // In trouble too (they are still not loaded), but none shown as loading: no answer is coming.
     pendingLayer.update(hist === null ? status.pendingBoxes : undefined, !chasing, known !== null && known.degraded === null)
-    // Top-down only: the chase has its own view of where it goes. In History the path is cut at the replay time.
-    const at = chasing || sf !== null || selected === null ? undefined : fleet.get(selected)
+    // Top-down only: the chase has its own view of where it goes. In History the path is cut at the replay time, and it
+    // joins the aircraft as drawn (none before its first leg, or that day: no line).
+    const at = chasing || sf !== null || selected === null ? undefined : hist !== null ? histAt : fleet.get(selected)
     // The lead-in from the origin and its "First heard" only with the whole leg (the trace): live samples alone start at
-    // the selection, not at the first reception.
-    const wholeLeg = selTrace !== null && (hist === null || legStarted(selTrace, tSunMs))
+    // the selection, not at the first reception. Live only: the past's day of flights knows no route.
+    const wholeLeg = hist === null && selTrace !== null
     routeLine.update(at === undefined ? null : at, selPath, hist === null ? chaseDest : null, wholeLeg ? chaseOrigin : null, hist === null ? Infinity : tSunMs)
     if (!chasing && now - scaleAtMs > 200) {
       scaleAtMs = now
@@ -1592,6 +1825,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     viewer.canvas.style.cursor = ''
   }
   viewer.canvas.addEventListener('pointerleave', onLeave) // onto the table or panel, or out of the window
+  window.addEventListener('pointerdown', mapPressed, true)
+  window.addEventListener('pointerup', mapReleased, true)
+  window.addEventListener('pointercancel', mapReleased, true)
+  window.addEventListener('wheel', mapWheeled, { capture: true, passive: true })
+  window.addEventListener('blur', mapLetGo)
   /**
    * Esc (and the TV remote's Back) steps back one level: an open panel, then a traffic card, edit mode, then a scenario
    * or the chase (to the map), then the focus. (The Settings dialog keeps every key while open: Esc closes it alone.)
@@ -1633,8 +1871,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (chasing) {
         presets?.cancel() // a camera key ends a preset's glide and the Auto tour
         o.set(o.headingOffsetDeg + s.headingDeg, o.pitchDeg + s.pitchDeg, o.rangeM / s.zoom)
-      } else if (s.zoom !== 1) browsePinch(viewer, s.zoom, c.clientWidth / 2, c.clientHeight / 2)
+        return
+      }
+      if (s.zoom !== 1) browsePinch(viewer, s.zoom, c.clientWidth / 2, c.clientHeight / 2)
       else browseDrag(viewer, -s.dx, -s.dy) // the map follows a drag: the view goes the other way
+      moves.wheel(performance.now()) // the person moves the map (History does not follow its aircraft meanwhile)
+      if (hist !== null) hist.bring = false
     },
     pick: () => {
       const at = new Cartesian2(viewer.canvas.clientWidth / 2, viewer.canvas.clientHeight / 2)
@@ -1660,6 +1902,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       remote?.destroy()
       presets?.destroy()
       viewer.canvas.removeEventListener('pointerleave', onLeave)
+      window.removeEventListener('pointerdown', mapPressed, true)
+      window.removeEventListener('pointerup', mapReleased, true)
+      window.removeEventListener('pointercancel', mapReleased, true)
+      window.removeEventListener('wheel', mapWheeled, true)
+      window.removeEventListener('blur', mapLetGo)
       if (hoverTimer !== null) clearTimeout(hoverTimer)
       mouse.destroy()
       bench?.destroy()
