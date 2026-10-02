@@ -13,7 +13,8 @@ const KEYS: Section[] = [
     ['/', 'Search airports, cities, countries, the flights in view, recordings and scenarios (also Cmd+K)'],
     ['Esc', 'One step back: a panel, a card, the layout, the chase or a scenario, then the selection'],
     ['M', 'Map or satellite, for the view on screen (in a scenario it mutes)'],
-    ['R', 'Roads and places over the satellite'],
+    ['R', 'Roads over the satellite'],
+    ['P', 'Borders and places over the satellite'],
     ['W', 'Weather on the top-down map'],
   ] },
   { title: '3-D chase', rows: [

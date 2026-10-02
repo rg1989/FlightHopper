@@ -121,6 +121,8 @@ test('scene keys: T topography and L sun, either case; not with a modifier, on a
   assert.equal(sceneKey(press('X')), 'glass')
   assert.equal(sceneKey(press('m')), 'base') // map or satellite, for the view on screen
   assert.equal(sceneKey(press('R')), 'roads')
+  assert.equal(sceneKey(press('p')), 'places') // borders and places: a switch apart from the roads
+  assert.equal(sceneKey(press('P')), 'places')
   assert.equal(sceneKey(press('w')), 'wx')
   assert.equal(sceneKey(press('b')), null)
   assert.equal(sceneKey(press('Escape')), null)

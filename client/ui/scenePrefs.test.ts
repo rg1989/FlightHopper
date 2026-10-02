@@ -92,8 +92,32 @@ test('glass (see-through buildings): off by default, ?glass=1 or the stored fiel
   assert.deepEqual(JSON.parse(saved), { ...DEFAULT_PREFS, topo: true, light: false, glass: true })
 })
 
-test('map layers: street map top-down, satellite in the chase, no roads, no weather; the URL and storage set each', () => {
-  assert.deepEqual(readScenePrefs('', null), { topo: true, light: true, glass: false, mapTop: true, mapChase: false, dark: false, roads: false, wx: false })
+test('map layers: street map top-down, satellite in the chase, borders and places but no roads over it, no weather; the URL and storage set each', () => {
+  assert.deepEqual(readScenePrefs('', null), { topo: true, light: true, glass: false, mapTop: true, mapChase: false, dark: false, roads: false, places: true, wx: false })
   const p = readScenePrefs('?mapTop=0&mapChase=1&wx=1', '{"roads":true}')
   assert.deepEqual([p.mapTop, p.mapChase, p.roads, p.wx], [false, true, true, true])
+})
+
+test('borders and places: a switch apart from roads; ?places=0|1 and the stored field set it, and it is stored', () => {
+  assert.deepEqual(readScenePrefs('?places=0', null), { ...DEFAULT_PREFS, places: false })
+  assert.deepEqual(readScenePrefs('?roads=1', null), { ...DEFAULT_PREFS, roads: true, places: true })
+  assert.equal(readScenePrefs('', '{"roads":false,"places":false}').places, false)
+  assert.equal(readScenePrefs('', '{"roads":true,"places":false}').places, false)
+  assert.equal(readScenePrefs('?places=1', '{"places":false}').places, true)
+  let saved = ''
+  writeScenePrefs({ ...DEFAULT_PREFS, roads: true, places: false }, { setItem: (_k: string, v: string) => void (saved = v) })
+  assert.deepEqual(JSON.parse(saved), { ...DEFAULT_PREFS, roads: true, places: false })
+})
+
+test('stored before places had a switch of its own (roads was both overlays): places keeps what roads had', () => {
+  const overlays = (stored: string, search = ''): [boolean, boolean] => {
+    const p = readScenePrefs(search, stored)
+    return [p.roads, p.places]
+  }
+  assert.deepEqual(overlays('{"topo":true,"roads":true,"wx":false}'), [true, true]) // both were on: both stay on
+  assert.deepEqual(overlays('{"topo":true,"roads":false,"wx":false}'), [false, false]) // off: the satellite stays bare
+  assert.deepEqual(overlays('{"roads":true,"places":"no"}'), [true, true]) // only a real boolean counts
+  assert.deepEqual(overlays('{"topo":false}'), [false, true]) // nothing stored for either: the defaults
+  assert.deepEqual(overlays('{"roads":1}'), [false, true])
+  assert.deepEqual(overlays('{"roads":true}', '?places=0'), [true, false]) // the URL still wins
 })

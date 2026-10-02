@@ -1,15 +1,15 @@
 // client/ui/scenePrefs.ts
 /**
  * The user's scene toggles (design D11) and map layers: the URL (?topo=0|1, ?light, ?glass, ?mapTop, ?mapChase, ?dark,
- * ?roads, ?wx) wins over localStorage['fh.scene.v1'], which wins over the defaults (terrain and sun on, buildings solid, the street
- * map top-down (light) and the satellite in the chase, no roads overlay, no weather). Pure: the app passes location.search, the stored string and the storage, so Node
+ * ?roads, ?places, ?wx) wins over localStorage['fh.scene.v1'], which wins over the defaults (terrain and sun on, buildings solid, the street
+ * map top-down (light) and the satellite in the chase, borders and places over the satellite but no roads, no weather). Pure: the app passes location.search, the stored string and the storage, so Node
  * tests need no DOM. Reading localStorage itself can throw (storage blocked), so the app guards that read.
  */
 import type { ScenePrefs } from '../types.ts'
 
 export const PREFS_KEY = 'fh.scene.v1'
 export const DEFAULT_PREFS: ScenePrefs = Object.freeze({
-  topo: true, light: true, glass: false, mapTop: true, mapChase: false, dark: false, roads: false, wx: false,
+  topo: true, light: true, glass: false, mapTop: true, mapChase: false, dark: false, roads: false, places: true, wx: false,
 })
 export const PREF_KEYS = Object.keys(DEFAULT_PREFS) as (keyof ScenePrefs)[]
 
@@ -28,7 +28,10 @@ export function readScenePrefs(search: string, stored: string | null): ScenePref
   }
   const q = new URLSearchParams(search)
   const out = { ...DEFAULT_PREFS }
-  for (const k of PREF_KEYS) out[k] = flag(q.get(k), bool(saved?.[k], DEFAULT_PREFS[k]))
+  // A value stored before places had a switch of its own has none for it: roads stood for both overlays then, so places
+  // takes what roads had (nobody loses what they had; with neither stored, the default).
+  const fallback = { ...DEFAULT_PREFS, places: bool(saved?.roads, DEFAULT_PREFS.places) }
+  for (const k of PREF_KEYS) out[k] = flag(q.get(k), bool(saved?.[k], fallback[k]))
   return out
 }
 

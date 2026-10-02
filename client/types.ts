@@ -179,7 +179,8 @@ export interface ScenePrefs {
   mapTop: boolean                               // the top-down view shows the street map (else the satellite imagery)
   mapChase: boolean                             // the chase view shows the street map (else the satellite imagery)
   dark: boolean                                 // the street map in its dark theme (its own tiles recoloured), both views
-  roads: boolean                                // roads and place names over the satellite imagery
+  roads: boolean                                // streets and highways over the satellite imagery
+  places: boolean                               // country borders and place names over the satellite imagery
   wx: boolean                                   // aviation weather on the top-down map: radar, METARs, SIGMETs
 }
 

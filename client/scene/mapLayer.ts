@@ -24,7 +24,6 @@ const SATURATION = 0.6
 // draw per tile when it loads, nothing per frame. Where the canvas has no filter (Safari), nightPixels does the same
 // sums. (An earlier dark theme, Esri's Dark Gray Canvas under its places labels, drew labels twice and borders thin.)
 export const NIGHT_FILTER = 'invert(1) hue-rotate(180deg) saturate(0.45) brightness(0.8) contrast(1.1)'
-const PLACES_URL = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
 // NIGHT_FILTER's sums (Filter Effects 1, the shorthand functions on sRGB values, clamped after each): hue-rotate(180deg)
 // and saturate(0.45) as their colour matrices.
@@ -162,32 +161,40 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
   }
 }
 
-// Roads and place names over the satellite: Esri's two reference overlays (transparent PNG), keyless on
-// services.arcgisonline.com with CORS * (checked 2026-09-30; the keyed ibasemaps endpoint has no reference layers).
-// Their detail follows the zoom: motorways and countries far out, every street and neighbourhood up close.
+// Over the satellite: Esri's two reference overlays (transparent PNG), each with a switch of its own: roads
+// (World_Transportation) and borders and place names (World_Boundaries_and_Places). Keyless on services.arcgisonline.com
+// with CORS * (checked 2026-09-30; the keyed ibasemaps endpoint has no reference layers). Their detail follows the zoom:
+// motorways and countries far out, every street and neighbourhood up close.
 // Copyright (their MapServer?f=json): Esri, HERE, Garmin, (c) OpenStreetMap contributors. No credit on screen (the user's call).
-export const ROADS_URLS = [
-  'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
-  PLACES_URL,
-]
-const ROADS_MAX_ZOOM = 19 // street detail ends here; Cesium upsamples past it
+export const ROADS_URL = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'
+export const PLACES_URL = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+const REFERENCE_MAX_ZOOM = 19 // street detail ends here; Cesium upsamples past it
 
-/** The roads-and-places overlay, on top of every imagery layer added before it. Starts hidden (a hidden layer loads nothing). */
-export function makeRoadsLayer(viewer: Viewer): MapLayer {
-  const layers = ROADS_URLS.map((url) => {
-    const l = viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url, maximumLevel: ROADS_MAX_ZOOM }))
+/** The two overlays, apart. */
+export interface ReferenceLayers {
+  roads: MapLayer
+  places: MapLayer
+}
+
+/**
+ * The reference overlays on top of every imagery layer added before them, the places above the roads (names over the
+ * streets). Each starts hidden (a hidden layer loads nothing).
+ */
+export function makeReferenceLayers(viewer: Viewer): ReferenceLayers {
+  const overlay = (url: string): MapLayer => {
+    const l = viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url, maximumLevel: REFERENCE_MAX_ZOOM }))
     l.show = false
-    return l
-  })
-  return {
-    get show(): boolean {
-      return layers[0].show
-    },
-    set show(v: boolean) {
-      for (const l of layers) l.show = v
-    },
-    destroy(): void {
-      for (const l of layers) viewer.imageryLayers.remove(l, true)
-    },
+    return {
+      get show(): boolean {
+        return l.show
+      },
+      set show(v: boolean) {
+        l.show = v
+      },
+      destroy(): void {
+        viewer.imageryLayers.remove(l, true) // a second call finds nothing to remove
+      },
+    }
   }
+  return { roads: overlay(ROADS_URL), places: overlay(PLACES_URL) }
 }

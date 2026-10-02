@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Event, ImageryLayer, ImageryLayerCollection, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
 import type { Viewer } from 'cesium'
-import { NIGHT_FILTER, NightOsmProvider, OSM_CREDIT_HTML, OSM_URL, makeMapLayer, nightPixels } from './mapLayer.ts'
+import { NIGHT_FILTER, NightOsmProvider, OSM_CREDIT_HTML, OSM_URL, PLACES_URL, ROADS_URL, makeMapLayer, makeReferenceLayers, nightPixels } from './mapLayer.ts'
 
 /** Just the imagery collection, with a satellite-like base layer already in it, and a scene to render. No network. */
 function fakeViewer() {
@@ -136,4 +136,47 @@ test('nightPixels: the light map’s colours go dark and its dark text light, hu
   const [pr, pg, pb] = px([200, 250, 204, 255]) // a park
   assert.ok(pg > pr && pg > pb, `a park stays green: ${[pr, pg, pb]}`)
   assert.deepEqual(px([0, 0, 0, 0]).slice(3), [0], 'a transparent pixel stays transparent')
+})
+
+test('the reference overlays: roads, and borders and places above them, over every layer before them; each starts hidden', () => {
+  const { imageryLayers, base, viewer } = fakeViewer()
+  makeMapLayer(viewer)
+  makeReferenceLayers(viewer)
+  assert.equal(imageryLayers.length, 5)
+  assert.equal(imageryLayers.get(0), base)
+  const [roads, places] = [imageryLayers.get(3), imageryLayers.get(4)]
+  const url = (l: ImageryLayer): string => (l.imageryProvider as UrlTemplateImageryProvider).url
+  assert.match(ROADS_URL, /^https:\/\/services\.arcgisonline\.com\/.*\/Reference\/World_Transportation\/MapServer\/tile\/\{z\}\/\{y\}\/\{x\}$/)
+  assert.match(PLACES_URL, /^https:\/\/services\.arcgisonline\.com\/.*\/Reference\/World_Boundaries_and_Places\/MapServer\/tile\/\{z\}\/\{y\}\/\{x\}$/)
+  assert.deepEqual([url(roads), url(places)], [ROADS_URL, PLACES_URL])
+  assert.deepEqual([roads.imageryProvider.maximumLevel, places.imageryProvider.maximumLevel], [19, 19])
+  assert.deepEqual([roads.show, places.show], [false, false], 'a hidden layer loads nothing')
+})
+
+test('the reference overlays each have their own show: roads alone, places alone, both', () => {
+  const { imageryLayers, viewer } = fakeViewer()
+  const over = makeReferenceLayers(viewer)
+  const [roads, places] = [imageryLayers.get(1), imageryLayers.get(2)]
+  const shown = (): boolean[] => [over.roads.show, over.places.show, roads.show, places.show]
+  assert.deepEqual(shown(), [false, false, false, false])
+  over.roads.show = true
+  assert.deepEqual(shown(), [true, false, true, false])
+  over.places.show = true
+  assert.deepEqual(shown(), [true, true, true, true])
+  over.roads.show = false
+  assert.deepEqual(shown(), [false, true, false, true])
+})
+
+test('the reference overlays: destroy removes each alone, and twice is harmless', () => {
+  const { imageryLayers, base, viewer } = fakeViewer()
+  const over = makeReferenceLayers(viewer)
+  const [roads, places] = [imageryLayers.get(1), imageryLayers.get(2)]
+  over.roads.destroy()
+  over.roads.destroy()
+  assert.equal(roads.isDestroyed(), true)
+  assert.deepEqual([imageryLayers.length, imageryLayers.get(1)], [2, places])
+  over.places.destroy()
+  over.places.destroy()
+  assert.equal(places.isDestroyed(), true)
+  assert.deepEqual([imageryLayers.length, imageryLayers.get(0)], [1, base])
 })

@@ -1,7 +1,7 @@
 // client/ui/urlState.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_PREFS } from './scenePrefs.ts'
+import { DEFAULT_PREFS, readScenePrefs } from './scenePrefs.ts'
 import { readHist, readScenario, readView, writeUrl } from './urlState.ts'
 
 test('writeUrl: camera, chase, orbit and non-default toggles; other parameters kept; round trip through readView', () => {
@@ -14,6 +14,15 @@ test('writeUrl: camera, chase, orbit and non-default toggles; other parameters k
   })
   assert.equal(url, '?bench=1&at=32.0114,34.8867,312&hex=a1b2c3&chase=1&cam=12,-12,150&topo=0')
   assert.deepEqual(readView(url), { at: { lat: 32.0114, lon: 34.8867, heightKm: 312 }, cam: { headingDeg: 12, pitchDeg: -12, rangeM: 150 }, chase: true })
+})
+
+test('writeUrl: roads and places each have their parameter, written when off their default; a reload reads them back', () => {
+  const none = { at: null, hex: null, chase: false, cam: null }
+  const prefs = { ...DEFAULT_PREFS, roads: true, places: false }
+  const url = writeUrl('?places=1&tv=1', { ...none, prefs })
+  assert.equal(url, '?tv=1&roads=1&places=0')
+  assert.deepEqual(readScenePrefs(url, '{"roads":false,"places":true}'), prefs)
+  assert.equal(writeUrl(url, { ...none, prefs: DEFAULT_PREFS }), '?tv=1', 'the defaults: neither')
 })
 
 test('writeUrl: a focused aircraft on the map keeps hex but writes no chase or cam; chase needs a hex', () => {
