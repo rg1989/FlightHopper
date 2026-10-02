@@ -545,3 +545,10 @@ test('a held position costs under 70 bytes (~59 in Node, worst mix): the columns
   assert.equal(f.take(T0 + 100_000, T0 + 110_000).length, AIRCRAFT, 'it still serves them (and the feed lives to here)')
   assert.ok(perPosition < 70, `${perPosition.toFixed(1)} bytes per held position (an object per position was ~370)`)
 })
+
+test('stepOf: the slice step of a held half hour, null when it is not held', () => {
+  const f = new HistoryFeed()
+  f.add({ slotMs: 1_790_740_800_000, stepS: 30, aircraft: [] }, { lat: 32, lon: 34.8, nm: 500 })
+  assert.equal(f.stepOf(1_790_740_800_000), 30)
+  assert.equal(f.stepOf(1_790_742_600_000), null)
+})

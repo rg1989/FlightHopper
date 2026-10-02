@@ -18,7 +18,7 @@ Approved 2026-10-01/02 from the mocks in `.planning/reports/history-mock/` ("yes
    in the past too. The address bar keeps the replay time (`?hist=<unix s>`), so a reload returns to it, paused.
 3. **The rolling file.** While a live server runs it keeps the newest two half-hour files in memory (fetched at start,
    then each new one ~90 s after its half hour ends, the oldest dropped), so rewinding the last hour needs no wait.
-   Older half hours are fetched when the replay needs them and dropped again (at most 4 in memory). Nothing is written
+   Older half hours are fetched when the replay needs them and dropped again (at most 5 in memory). Nothing is written
    to disk.
 
 ## Data (all keyless, adsb.lol, ODbL 1.0)
@@ -36,7 +36,7 @@ Approved 2026-10-01/02 from the mocks in `.planning/reports/history-mock/` ("yes
   - `shared/history.ts`: slot arithmetic both sides share (`SLOT_MS`, `slotOf`, `newestSlotMs`, `stepFor`).
   - `server/heatmap.ts`: reads a decompressed half-hour file into a `HistorySlot` for one circle (one pass, filters by
     circle and step).
-  - `server/historyStore.ts`: fetch (deduped, 404 remembered 10 min), ≤ 4 files in memory (the newest 2 pinned),
+  - `server/historyStore.ts`: fetch (deduped, 404 remembered 10 min, 2 downloads at a time), ≤ 5 files in memory (the newest 2 pinned),
     `tick()` for the rolling fetch, `status()`.
   - `server/trace.ts`: trace URL choice (live file when `at` is within 24 h, else the day file), leg cut, columnar
     `TraceReply` with geoid N per point; small cache.

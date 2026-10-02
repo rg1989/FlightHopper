@@ -19,10 +19,10 @@ export function newestSlotMs(nowMs: number): number {
 /** The whole-world radius, nm (a quarter of the way round the earth): a circle this wide holds every position. */
 export const EVERYTHING_NM = 5400
 
+/** [largest radius nm, seconds between the slices kept] for each band of view sizes, nearest first. */
+export const STEP_BANDS: readonly (readonly [number, number])[] = [[300, 10], [1000, 30], [2500, 60], [EVERYTHING_NM, 300]]
+
 /** Seconds between the slices kept for a circle of radius nm: every 10 s slice near, fewer for a wide view (payload). */
 export function stepFor(nm: number): number {
-  if (nm <= 300) return 10
-  if (nm <= 1000) return 30
-  if (nm <= 2500) return 60
-  return 300
+  return (STEP_BANDS.find(([max]) => nm <= max) ?? STEP_BANDS[STEP_BANDS.length - 1])[1]
 }

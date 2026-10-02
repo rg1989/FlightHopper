@@ -157,6 +157,11 @@ export class HistoryFeed {
     return this.#slots.has(slotMs)
   }
 
+  /** Seconds between the slices held for that half hour; null when it is not held. */
+  stepOf(slotMs: number): number | null {
+    return this.#slots.get(slotMs)?.stepS ?? null
+  }
+
   /**
    * Every held sample with fromMs < tMs ≤ toMs, all aircraft, in time order (equal times: older slot, then the slot's
    * own aircraft order). New Sample objects on every call.

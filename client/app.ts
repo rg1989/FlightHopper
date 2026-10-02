@@ -27,7 +27,7 @@ import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
 import type { ChaseResponse, HistoryStatus, StatusBrief, TraceReply } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
-import { SLOT_MS, newestSlotMs, slotOf, stepFor } from '../shared/history.ts'
+import { SLOT_MS, newestSlotMs, slotOf } from '../shared/history.ts'
 import { countryOf, flagEmoji } from '../shared/icaoCountry.ts'
 import type { AircraftInfo, RoutePlace } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
@@ -46,6 +46,7 @@ import { RouteLine, type PathPoint } from './scene/routeLine.ts'
 import { localClock, mountHistoryBar, type HistoryBarHandle } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
+import { SlotBlock, askNm, backMs, legCovers, lookaheadMs, wantedSlots } from './history/policy.ts'
 import { traceInfo, tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
@@ -129,11 +130,8 @@ const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
 // History (history/): the past from adsb.lol's half-hour files, replayed through the live pipeline.
 const HISTORY_DAYS = 30 // adsb.lol keeps about 30 days of half-hour files (research, 2026-10-01)
 const HISTORY_RATE = 10 // a replay starts at 10×: a half hour in three minutes
-const HISTORY_LOOKAHEAD_MS = 20_000 // the selected aircraft's track gets its samples this far ahead: no render delay
-const HISTORY_BACK_MS = 60_000 // after a seek the fleet starts from the minute before: each aircraft's last position
 const HISTORY_JUMP_MS = 120_000 // the replay clock moving further than this between frames is a seek
 const HISTORY_PREFETCH_MS = 5 * 60_000 // the next half hour is asked this long (replay time) before it starts
-const HISTORY_MARGIN = 1.3 // a half hour is asked for a circle this much wider than the view: small pans ask nothing
 const HISTORY_STATUS_MS = 5000 // how often the time bar learns what the server holds
 const TRACE_RETRY_MS = 30_000 // History: a selected aircraft's leg is asked again at most this often
 
@@ -330,15 +328,6 @@ function between(xs: readonly Sample[], from: number, to: number): Sample[] {
   return out
 }
 
-/**
- * History: the radius a half hour is asked for, around a view of radius nm: HISTORY_MARGIN wider (small pans ask
- * nothing more), but within the view's slice step (shared/history.ts stepFor), or the feed would never find it covered.
- */
-function askNm(nm: number): number {
-  const cap = nm <= 300 ? 300 : nm <= 1000 ? 1000 : nm <= 2500 ? 2500 : MAX_VIEW_NM
-  return Math.min(cap, Math.max(MIN_VIEW_NM, Math.round(nm * HISTORY_MARGIN)))
-}
-
 /** The local time zone's short name for the clocks ('GMT+3' where the browser knows no abbreviation). */
 function zoneName(): string {
   return new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value ?? ''
@@ -461,9 +450,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     bar: HistoryBarHandle
     fedMs: number // the fleet holds the feed's samples up to here
     regMs: number // the selected aircraft's track holds its samples up to here
+    regFromTrace: boolean | null // they came from its trace (else the feed); null: none yet
     known: Set<string> // the hexes whose info the fleet has
     loading: Set<number> // half hours being fetched
-    missing: Set<number> // half hours adsb.lol has no file for
+    block: SlotBlock // half hours not to ask for now: missing at adsb.lol, or failed a moment ago
+    lastWant: number // the half hour under the clock at the last tick (one rested in a tick is fetched)
+    failing: boolean // the half hour under the clock failed to load: the bar says so until one loads
     status: HistoryStatus | null
     statusAtMs: number // performance.now() of the last status asked for
     reload: boolean // a half hour arrived: the next frame refills the fleet from the minute before
@@ -769,7 +761,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       seedSample = seed ?? null
       if (seed) registry.ingest([seed])
       if (hist !== null) {
-        hist.regMs = hist.clock.now(performance.now()) - HISTORY_BACK_MS
+        restartSelectedTrack(hist, hist.clock.now(performance.now()))
         card.setRecording(hex, undefined, 0) // no Record button in the past
       }
       fetchTrace(hex)
@@ -779,57 +771,88 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * The selected aircraft's flight leg (its trace): its flown path; in History its track too (1–4 s points with track,
    * rate and roll, where the half-hour files have 10 s points without them). A reply for another selection or mode is
-   * dropped; none (404) leaves the path to the live samples (History: the feed's).
+   * dropped. None (404): live, the path is the live samples'; in History a leg that does not cover the replay time goes
+   * and the feed's samples take over.
    */
   function fetchTrace(hex: string): void {
     const mode = hist
     traceAskMs = performance.now()
     api.trace(hex, mode === null ? null : Math.round(mode.clock.now(traceAskMs))).then((tr) => {
-      if (tr === null || hex !== selected || mode !== hist) return
+      if (hex !== selected || mode !== hist) return
+      const h = hist
+      const t = h === null ? 0 : h.clock.now(performance.now())
+      if (tr === null) {
+        if (h !== null && selTrace !== null && !legCovers(selTrace, t)) {
+          selTrace = null
+          selSamples = []
+          restartSelectedTrack(h, t)
+          rebuildPath()
+        }
+        return
+      }
       selTrace = tr
-      if (tr.origin) chaseOrigin = tr.origin
-      if (hist !== null) {
+      chaseOrigin = tr.origin ?? null
+      if (h !== null) {
         selSamples = traceSamples(tr)
-        chaseInfo = traceInfo(tr)
-        restartSelectedTrack(hist.clock.now(performance.now()))
+        chaseInfo = { ...traceInfo(tr), squawk: h.feed.info(hex)?.squawk ?? null } // the files carry its squawk (7500…)
+        restartSelectedTrack(h, t)
       }
       rebuildPath()
     }, (e: unknown) => console.warn('FlightHopper: no trace:', e))
   }
 
-  /** selPath: the trace's points, then (live) the trail's newer ones; in History without a trace, the feed's samples. */
+  /**
+   * selPath: live, the trace's points then the trail's newer ones; in History the trace's while its leg covers the
+   * replay time, else the feed's samples of the aircraft.
+   */
   function rebuildPath(): void {
-    const base = selTrace === null ? [] : tracePath(selTrace)
-    if (hist !== null) {
-      selPath = base.length > 0 || selected === null ? base : hist.feed.samplesOf(selected, -Infinity, Infinity).map(pathPointOf)
+    const h = hist
+    if (h !== null) {
+      const tr = selTrace !== null && legCovers(selTrace, h.clock.now(performance.now())) ? selTrace : null
+      selPath = tr !== null ? tracePath(tr) : selected === null ? [] : h.feed.samplesOf(selected, -Infinity, Infinity).map(pathPointOf)
       return
     }
+    const base = selTrace === null ? [] : tracePath(selTrace)
     const first = trail.length > 0 ? trail[0].tMs : Infinity
     selPath = trail.length === 0 ? base : base.filter((p) => p.tMs < first).concat(trail)
   }
 
-  /** History: the selected aircraft's track afresh from the minute before t (a seek, or its trace arrived). */
-  function restartSelectedTrack(t: number): void {
-    registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
-    if (hist !== null) hist.regMs = t - HISTORY_BACK_MS
-  }
+  /** History: the seconds between the slices of the half hour at t (10 before it is loaded). */
+  const stepAt = (h: HistoryMode, t: number): number => h.feed.stepOf(slotOf(Math.min(t, h.clock.maxMs - 1))) ?? 10
 
-  /** History: a seek (or the start): a fresh fleet from the minute before t, the selected aircraft's track afresh. */
-  function restartHistory(h: HistoryMode, t: number): void {
-    fleet = new Fleet()
-    h.known.clear()
-    h.fedMs = t - HISTORY_BACK_MS
-    h.reload = false
-    trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
-    restartSelectedTrack(t)
+  /** History: the selected aircraft's track afresh from back(step) before t (a seek, or its trace came or went). */
+  function restartSelectedTrack(h: HistoryMode, t: number): void {
+    registry = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
+    h.regMs = t - backMs(stepAt(h, t))
+    h.regFromTrace = null
   }
 
   /**
-   * History, every frame: the feed's samples up to t into the fleet (after a seek, from the minute before), and the
-   * selected aircraft's (its trace's, else the feed's) up to t + HISTORY_LOOKAHEAD_MS into its track.
+   * History: a fresh fleet from back(step) before t: a seek, the start, or the half hour under the clock arrived. The
+   * selected aircraft's track goes too, unless that half hour only arrived and the aircraft runs on a trace covering t.
+   */
+  function restartHistory(h: HistoryMode, t: number, seek: boolean): void {
+    const step = stepAt(h, t)
+    fleet = new Fleet()
+    fleet.setHintS(2.5 * step) // before the first prune: lifetimes for the files' slices, not the 60 s floor
+    h.known.clear()
+    h.fedMs = t - backMs(step)
+    h.reload = false
+    const onTrace = selTrace !== null && legCovers(selTrace, t)
+    if (seek || !onTrace) restartSelectedTrack(h, t)
+    if (seek && chasing) chaseCam.snapHeading() // a jump is a cut: behind the aircraft at once, not a swing round
+    if (seek && selected !== null && !onTrace) traceAskMs = -Infinity // its leg there: asked at the next tick
+  }
+
+  /**
+   * History, every frame: the feed's samples up to t into the fleet (after a seek, from back(step) before t), and the
+   * selected aircraft's up to t + lookahead(step) into its track: its trace's while the leg covers t, else the feed's.
+   * The chase traffic is drawn from the fleet (its samples already point at their next position): no tracks of its own,
+   * which on 10 s samples would stop between them.
    */
   function feedHistory(h: HistoryMode, t: number): void {
-    if (h.reload || t < h.fedMs || t - h.fedMs > HISTORY_JUMP_MS) restartHistory(h, t)
+    const seek = t < h.fedMs || t - h.fedMs > HISTORY_JUMP_MS
+    if (seek || h.reload) restartHistory(h, t, seek)
     const fresh = h.feed.take(h.fedMs, t)
     h.fedMs = t
     if (fresh.length > 0) {
@@ -841,12 +864,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         if (i !== null) (infos ??= []).push(i)
       }
       fleet.ingest(fresh, infos)
-      if (chasing && chased !== null) trafficTracks.ingestNear(fresh, chased.lat, chased.lon, TRAFFIC_TRACK_NM, selected)
     }
     if (selected === null) return
-    const to = t + HISTORY_LOOKAHEAD_MS
+    const fromTrace = selTrace !== null && legCovers(selTrace, t)
+    if (h.regFromTrace !== null && h.regFromTrace !== fromTrace) restartSelectedTrack(h, t) // another source: a fresh track
+    h.regFromTrace = fromTrace
+    const to = t + lookaheadMs(stepAt(h, t))
     if (to <= h.regMs) return
-    const mine = selSamples.length > 0 ? between(selSamples, h.regMs, to) : h.feed.samplesOf(selected, h.regMs, to)
+    const mine = fromTrace ? between(selSamples, h.regMs, to) : h.feed.samplesOf(selected, h.regMs, to)
     h.regMs = to
     if (mine.length > 0) registry.ingest(mine)
   }
@@ -871,11 +896,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     bar.setLimit(maxMs)
     const h: HistoryMode = {
       clock: new HistoryClock(t0, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP), feed: new HistoryFeed(), bar,
-      fedMs: t0, regMs: t0, known: new Set(), loading: new Set(), missing: new Set(), status: null, statusAtMs: -Infinity, reload: false,
+      fedMs: t0, regMs: t0, regFromTrace: null, known: new Set(), loading: new Set(), block: new SlotBlock(),
+      lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity, reload: false,
     }
     hist = h
-    restartHistory(h, t0)
+    restartHistory(h, t0, false)
     chaseRaw = null
+    trafficRaw = null
+    // Today's route and identity say nothing of the past: its trace brings the leg's own (origin only for a current leg).
+    chaseDest = null
+    chaseOrigin = null
+    chaseInfo = null
     trail.length = 0
     trailTMs = -Infinity
     selTrace = null
@@ -901,9 +932,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     hist = null
     fleet = liveFleet
     trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
+    trafficRaw = null
     delete ui.dataset.history
     rail.button('history').setAttribute('aria-pressed', 'false')
     card.setReplay(null)
+    trafficCard.setReplay(null)
     const hex = selected
     if (hex !== null) {
       selected = null // select() ignores the same hex: this one starts afresh, live (a chase stays a chase)
@@ -913,58 +946,66 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
-   * History, every second: the half hours the replay needs for this view (asked for a wider circle at the view's slice
-   * step; the next one ahead of time; the rest dropped), pruning, the selected aircraft's leg, the bar's segments.
+   * History, every second: the half hours the replay needs for this view (policy.ts: the one under the clock once it has
+   * rested there a tick, so a scrub across the day downloads nothing on its way; the next one ahead of time; asked for a
+   * wider circle at the view's slice step; the rest dropped), pruning, the selected aircraft's leg, the bar's note and
+   * segments.
    */
   async function historyTick(h: HistoryMode): Promise<void> {
     const nowP = performance.now()
+    const wall = Date.now()
     const t = h.clock.now(nowP)
     const v = viewCircle()
-    const slot = slotOf(t)
-    const want = [slot]
-    if (t - slot > SLOT_MS - HISTORY_PREFETCH_MS && slot + SLOT_MS < h.clock.maxMs) want.push(slot + SLOT_MS)
-    for (const s of want) {
-      if (!h.feed.covers(s, v) && !h.loading.has(s) && !h.missing.has(s)) void loadSlot(h, s, { lat: v.lat, lon: v.lon, nm: askNm(v.nm) })
+    const want = wantedSlots(t, h.clock.maxMs, HISTORY_PREFETCH_MS)
+    const steady = want[0] === h.lastWant
+    h.lastWant = want[0]
+    if (steady) {
+      for (const s of want) {
+        if (!h.feed.covers(s, v) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: v.lat, lon: v.lon, nm: askNm(v.nm, chasing) })
+      }
     }
-    h.feed.retain(new Set([slot - SLOT_MS, slot, slot + SLOT_MS]))
-    fleet.setHintS(2.5 * stepFor(v.nm))
+    h.feed.retain(new Set([want[0] - SLOT_MS, want[0], want[0] + SLOT_MS]))
+    fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
-    trafficTracks.prune(t, TRAFFIC_TRACK_KEEP_S)
-    if (selected !== null) {
-      const tr = selTrace
-      const outside = tr === null || t < tr.t0Ms - HISTORY_BACK_MS || t > tr.t0Ms + (tr.t.at(-1) ?? 0) * 1000 + 10 * 60_000
-      if (outside && nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // another leg of it, or none yet
-      if (tr === null) rebuildPath() // the feed's samples meanwhile
+    if (selected !== null && !(selTrace !== null && legCovers(selTrace, t))) {
+      if (nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // its leg at this time, or none yet
+      rebuildPath() // the feed's samples meanwhile
     }
-    h.bar.setNote(h.missing.has(slot) ? 'No data for this time' : null) // adsb.lol keeps about 30 days, some days not
+    h.bar.setNote(h.block.isMissing(want[0], wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
     h.statusAtMs = nowP
-    const st = await api.historyStatus()
-    if (hist !== h) return
-    h.status = st
-    for (const x of st.slots) if (x.state === 'missing') h.missing.add(x.slotMs)
-    const maxMs = st.newestSlotMs + SLOT_MS
-    h.clock.setBounds(Date.now() - HISTORY_DAYS * 86_400_000, maxMs, performance.now())
-    h.bar.setLimit(maxMs)
-    h.bar.setSlots(st.slots, [...h.loading])
+    // Not awaited: the next tick does not wait for it.
+    api.historyStatus().then((st) => {
+      if (hist !== h) return
+      h.status = st
+      h.block.fromStatus(st.slots, Date.now())
+      const maxMs = st.newestSlotMs + SLOT_MS
+      h.clock.setBounds(Date.now() - HISTORY_DAYS * 86_400_000, maxMs, performance.now())
+      h.bar.setLimit(maxMs)
+      h.bar.setSlots(st.slots, [...h.loading])
+    }, (e: unknown) => console.warn('FlightHopper: no history status:', e))
   }
 
-  /** Fetches one half hour for circle c into the feed; adsb.lol having none marks it missing (asked no more). */
+  /** Fetches one half hour for circle c into the feed. None at adsb.lol: not asked for a while; a failure: retried soon. */
   async function loadSlot(h: HistoryMode, slot: number, c: Circle): Promise<void> {
     h.loading.add(slot)
     h.bar.setSlots(h.status?.slots ?? [], [...h.loading])
     try {
       const r = await api.history(slot, c.lat, c.lon, c.nm)
       if (hist !== h) return
-      if (r === null) {
-        h.missing.add(slot)
-        if (slot === slotOf(h.clock.now(performance.now()))) h.bar.setNote('No data for this time')
-      }
-      else {
+      if (r === null) h.block.missing(slot, Date.now())
+      else if (r.slotMs === slot) {
         h.feed.add(r, c)
-        h.reload = true // the aircraft it holds before the replay time are placed at once
+        h.failing = false
+        // The half hour under the clock: its aircraft before the replay time are placed at once. (The next one, asked
+        // ahead of time, is taken up as the clock reaches it.)
+        if (slot === slotOf(Math.min(h.clock.now(performance.now()), h.clock.maxMs - 1))) h.reload = true
       }
     } catch (e) {
+      if (hist === h) {
+        h.block.failed(slot, Date.now()) // the server busy or unreachable: again in a few seconds
+        h.failing = slot === h.lastWant
+      }
       console.warn('FlightHopper: the past not loaded:', e)
     } finally {
       h.loading.delete(slot)
@@ -1166,7 +1207,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       feedHistory(h, t)
       tSunMs = t
       all = fleet.entries(t)
-      if (chasing) trafficTracks.applyTo(all, t)
       if (selected !== null) {
         const track = registry.get(selected)
         s = track?.stateAt(t) ?? null
@@ -1174,7 +1214,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         if (s === null && track !== undefined && first !== null && t < first) s = track.stateAt(first)
       }
       h.bar.update({ tMs: t, playing: h.clock.playing, rate: h.clock.rate })
-      card.setReplay(`Replay · ${localClock(t).slice(0, 5)}`)
+      const replay = `Replay · ${localClock(t).slice(0, 5)}`
+      const quietS = Math.max(60, 2.5 * stepAt(h, t)) // a coarse file's aircraft is heard once a slice
+      card.setReplay(replay, quietS)
+      trafficCard.setReplay(replay, quietS)
     } else if (api.ready) {
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
@@ -1325,7 +1368,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const at = chasing || sf !== null || selected === null ? undefined : fleet.get(selected)
     // The lead-in from the origin and its "First heard" only with the whole leg (the trace): live samples alone start at
     // the selection, not at the first reception.
-    routeLine.update(at === undefined ? null : at, selPath, chaseDest, selTrace === null ? null : chaseOrigin, hist === null ? Infinity : tSunMs)
+    const wholeLeg = selTrace !== null && (hist === null || legCovers(selTrace, tSunMs))
+    routeLine.update(at === undefined ? null : at, selPath, hist === null ? chaseDest : null, wholeLeg ? chaseOrigin : null, hist === null ? Infinity : tSunMs)
     if (!chasing && now - scaleAtMs > 200) {
       scaleAtMs = now
       mapKey.setScale(groundScale())
@@ -1556,7 +1600,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') back()
-    else if (e.key === ' ' && hist !== null && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement || e.target instanceof HTMLTextAreaElement)) {
+    else if (e.key === ' ' && hist !== null && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target instanceof HTMLInputElement
+      || e.target instanceof HTMLButtonElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement)) {
       e.preventDefault() // Space plays and pauses the replay (as a scenario's)
       hist.clock.toggle(performance.now())
     }

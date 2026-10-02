@@ -79,7 +79,7 @@ function split(v: string): [string, string] {
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
-  sinceSelectS: number, chasing = true, range: CardRange | null = null, replay: string | null = null,
+  sinceSelectS: number, chasing = true, range: CardRange | null = null, replay: string | null = null, replayQuietS = REPLAY_QUIET_S,
 ): CardView {
   const sections = detailRows(s, raw, info, lookup)
   const get = (key: string): string | null => {
@@ -107,7 +107,7 @@ export function cardView(
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
   } else if (replay !== null) {
     // History: the status is the replay clock; a position over a minute old was not heard then (the files hold gaps).
-    const quiet = Number.isFinite(s.ageS) && s.ageS > REPLAY_QUIET_S
+    const quiet = Number.isFinite(s.ageS) && s.ageS > replayQuietS
     state = quiet ? 'lost' : 'replay'
     text = quiet ? `${replay} · not heard` : replay
   } else if (lost) {
@@ -190,8 +190,11 @@ export interface FlightCardHandle {
    * undefined when the server records nothing (no Record button). serverNowMs dates it.
    */
   setRecording(hex: string, rec: RecordingState | null | undefined, serverNowMs: number): void
-  /** History: the status line reads text ("Replay · 17:43", amber) instead of Live; null: live again. */
-  setReplay(text: string | null): void
+  /**
+   * History: the status line reads text ("Replay · 17:43", amber) instead of Live; null: live again. quietS: a position
+   * older than this at the replay time reads "not heard" (default a minute; wider for coarse files).
+   */
+  setReplay(text: string | null, quietS?: number): void
   destroy(): void
 }
 
@@ -376,6 +379,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   let curChasing = false
   let curRange: CardRange | null = null
   let curReplay: string | null = null // History: "Replay · 17:43", else null (live)
+  let curQuietS = REPLAY_QUIET_S // History: past this age a position was "not heard" (scaled to the files' slices)
   let shown: string | null = null
   let selectedAtMs = 0
   let lastMs = -Infinity
@@ -488,7 +492,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       lk = opts.lookup(hex, cs)
       lkKey = key
     }
-    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange, curReplay)
+    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange, curReplay, curQuietS)
     paintChase(curChasing)
     set(flag, v.flag)
     set(callsign, v.callsign)
@@ -620,9 +624,10 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
     },
-    setReplay(text) {
-      if (destroyed || text === curReplay) return
+    setReplay(text, quietS = REPLAY_QUIET_S) {
+      if (destroyed || (text === curReplay && quietS === curQuietS)) return
       curReplay = text
+      curQuietS = quietS
       if (hexOf() !== null) render()
     },
     setRecording(hex, state, serverNowMs) {
