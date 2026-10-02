@@ -61,8 +61,8 @@ export interface PanelView {
 }
 
 const DASH = '—'
-// The History source's tooltip: where the past comes from, and the licence its credit is owed under.
-const HISTORY_TITLE = 'History from adsb.lol, ODbL 1.0'
+// The History source's tooltip: where the past and its aircraft types come from, and the licences their credits are owed under.
+const HISTORY_TITLE = 'History: adsb.lol (ODbL 1.0). Aircraft types: Mictronics aircraft database (ODC-By 1.0)'
 
 /**
  * The panel for a status (null before the first one). history: History is open, and the panel describes the replay,
