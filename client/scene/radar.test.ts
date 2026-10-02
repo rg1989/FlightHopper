@@ -1,7 +1,7 @@
 // client/scene/radar.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BANDS, RAIN_PALETTE, RadarSource, decodeTile, queueDraw, renderTile, sourceTiles, type Palette, type Rgba, type SourceTile } from './radar.ts'
+import { BANDS, RAIN_PALETTE, RadarSource, decodeTile, renderTile, sourceTiles, type Palette, type Rgba, type SourceTile } from './radar.ts'
 
 const NONE = -128
 const N = 256
@@ -267,30 +267,5 @@ test('RadarSource: one fetch per tile of the frame; a failed tile is no echo and
   } finally {
     globalThis.fetch = fetch0
     console.warn = warn0
-  }
-})
-
-test('queueDraw: jobs run in turn, a frame at a time; a dropped one rejects undrawn, a failing one rejects, the rest still run', async () => {
-  const g = globalThis as unknown as Record<string, unknown>
-  const saved = g.requestAnimationFrame
-  let frames = 0
-  g.requestAnimationFrame = (f: () => void) => setTimeout(() => (frames++, f()), 0)
-  try {
-    const ran: string[] = []
-    const a = queueDraw(() => (ran.push('a'), 1))
-    const b = assert.rejects(queueDraw(() => {
-      ran.push('b')
-      throw new Error('boom')
-    }), /boom/)
-    const c = assert.rejects(queueDraw(() => (ran.push('c'), 3), () => false), /dropped/)
-    const d = queueDraw(() => (ran.push('d'), 4))
-    assert.equal(await a, 1)
-    await b
-    await c
-    assert.equal(await d, 4)
-    assert.deepEqual(ran, ['a', 'b', 'd'])
-    assert.equal(frames, 1, 'quick jobs share a frame')
-  } finally {
-    g.requestAnimationFrame = saved
   }
 })

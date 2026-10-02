@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { Event, ImageryLayerCollection, Request, RequestState, UrlTemplateImageryProvider, type ImageryLayer, type Viewer } from 'cesium'
 import type { Metar } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
+import { makeMapLayer } from './mapLayer.ts'
 import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarSource, type SourceTile } from './radar.ts'
 import { MARKER_PX, RadarLayer, RadarProvider, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow, type WeatherOptions } from './weather.ts'
 
@@ -134,6 +135,21 @@ test('radar layer: given an index it adds each layer there, asked each time, so 
   render()
   assert.deepEqual(radar(), [c])
   assert.deepEqual(at(c, over), [1, 2])
+})
+
+test('radar layer: an index below zero (the map is destroyed: its liftIndex is -1) puts a layer on top, as no index does, and does not throw', () => {
+  const { imageryLayers, viewer, radar } = fakeViewer()
+  const map = makeMapLayer(viewer)
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark, () => map.liftIndex) // as the app asks
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  const [a] = radar()
+  assert.equal(imageryLayers.indexOf(a), 3, 'under the map\'s ink while the map is there')
+  map.destroy() // the app destroys the map, then the weather: a frame can arrive between
+  assert.equal(map.liftIndex, -1)
+  r.frame(HOST, '/v2/radar/b')
+  const [, b] = radar()
+  assert.equal(imageryLayers.indexOf(b), imageryLayers.length - 1, 'on top')
 })
 
 test('radar layer: the same frame is not loaded again; a new one loads unseen and takes over in one frame once its tiles are in', () => {

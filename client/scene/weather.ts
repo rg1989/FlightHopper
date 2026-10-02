@@ -34,8 +34,9 @@ import {
 } from 'cesium'
 import type { FlightCategory, Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, speedIn, type Units } from '../ui/units.ts'
+import { queueDraw } from './drawQueue.ts'
 import { whenTilesLoaded } from './mapLayer.ts'
-import { RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, queueDraw, renderTile, sourceTiles, type Palette } from './radar.ts'
+import { RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, renderTile, sourceTiles, type Palette } from './radar.ts'
 import { metarCard, sigmetCards } from './wxCard.ts'
 import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
@@ -164,7 +165,7 @@ function marker(look: Look): HTMLCanvasElement {
 
 export interface WeatherOptions {
   units?: () => Units // what speeds and heights are worded in (the flight-data frame's); default knots and feet
-  radarIndex?: () => number // where in the imagery stack each radar layer goes, asked as it is added; default: on top
+  radarIndex?: () => number // where in the imagery stack each radar layer goes, asked as it is added; default, or below 0: on top
 }
 
 let blankTile: ImageData | null = null
@@ -218,10 +219,10 @@ export class RadarProvider extends UrlTemplateImageryProvider {
 
 /**
  * The rain radar's imagery layer: a RainViewer frame (one RadarSource, so a palette change fetches nothing again) drawn
- * in a palette, on top of all imagery, or from index() up when one is given. A new frame or palette loads unseen on top
- * (a shown layer loads its tiles; at alpha 0 Cesium draws none of it) and takes over once they are in: drawn, and the old
- * layer gone, in the same frame. So the rain never blinks out and two frames are never drawn at once. While hidden it
- * takes over at once.
+ * in a palette, on top of all imagery, or from index() up when one is given (not negative). A new frame or palette loads
+ * unseen on top (a shown layer loads its tiles; at alpha 0 Cesium draws none of it) and takes over once they are in: drawn,
+ * and the old layer gone, in the same frame. So the rain never blinks out and two frames are never drawn at once. While
+ * hidden it takes over at once.
  */
 export class RadarLayer {
   private readonly viewer: Viewer
@@ -235,7 +236,7 @@ export class RadarLayer {
   private stopWait: (() => void) | null = null
   private gone = false
 
-  /** index: where in the imagery stack a layer goes, asked as it is added (default: on top). */
+  /** index: where in the imagery stack a layer goes, asked as it is added (default, or below 0: on top). */
   constructor(viewer: Viewer, palette: Palette, index?: () => number) {
     this.viewer = viewer
     this.pal = palette
@@ -280,7 +281,8 @@ export class RadarLayer {
     if (drawn !== null && drawn.source === this.source && drawn.palette === this.pal) return // back to what is drawn
     const swap = this.shown && this.layer !== null
     const layer = new ImageryLayer(new RadarProvider(this.source, this.pal), { show: this.shown, alpha: swap ? 0 : 1 })
-    this.viewer.imageryLayers.add(layer, this.index?.())
+    const at = this.index?.() ?? -1 // the map's liftIndex is -1 once it is destroyed: on top then, as add(layer, -1) throws
+    this.viewer.imageryLayers.add(layer, at < 0 ? undefined : at)
     if (!swap) {
       if (this.layer !== null) this.retire(this.layer)
       this.layer = layer

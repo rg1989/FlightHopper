@@ -1,7 +1,7 @@
 // client/scene/radar.ts
 // The rain radar drawn smooth at every zoom, in a palette made for the map under it. RadarSource fetches and decodes a
-// frame's tiles, renderTile draws one output tile and queueDraw spreads the drawing over frames; weather.ts puts it on the
-// map (RadarProvider, RadarLayer). No Cesium here: the Layers panel takes its palettes from this file.
+// frame's tiles and renderTile draws one output tile; weather.ts puts it on the map (RadarProvider, RadarLayer), spreading
+// the drawing over frames (drawQueue.ts). No Cesium here: the Layers panel takes its palettes from this file.
 //
 // RainViewer's free API serves its newest frame as 256-px tiles up to zoom 7 (deeper ones are a "zoom not supported"
 // picture), in its "Universal Blue" colours: each colour is one whole dBZ, rain and snow apart. A real cell is ~2 × 2 tile
@@ -489,32 +489,4 @@ export class RadarSource {
       return null // not asked again for this frame
     }
   }
-}
-
-// Tiles are drawn on the main thread, at most DRAW_MS of them a frame: a burst (a palette change redraws every tile in
-// view) fills in over a few frames instead of stalling one.
-const DRAW_MS = 6
-const queue: (() => void)[] = []
-
-/** draw() run in its turn, unless live() is false by then: it rejects undrawn. */
-export function queueDraw<T>(draw: () => T, live: () => boolean = () => true): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const job = (): void => {
-      try {
-        if (!live()) throw new Error('dropped')
-        resolve(draw())
-      } catch (e) {
-        reject(e)
-      }
-    }
-    if (queue.push(job) === 1) requestAnimationFrame(pump)
-  })
-}
-
-function pump(): void {
-  const end = performance.now() + DRAW_MS
-  do {
-    queue.shift()!()
-  } while (queue.length > 0 && performance.now() < end)
-  if (queue.length > 0) requestAnimationFrame(pump)
 }

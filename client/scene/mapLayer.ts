@@ -8,8 +8,9 @@
 // (2) never bulk-download or prefetch. Cesium requests only the tiles in view, and a hidden layer loads none, so chase
 // mode costs OSM nothing. Do not set a no-referrer Referrer-Policy on the page. Access is best-effort and can be
 // withdrawn: pass another tile server's URL (the policy asks that the URL can be changed without a code change).
-import { Credit, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
+import { Credit, OpenStreetMapImageryProvider, RequestState, UrlTemplateImageryProvider } from 'cesium'
 import type { ImageryLayer, Request, Scene, Viewer } from 'cesium'
+import { queueDraw } from './drawQueue.ts'
 
 export const OSM_URL = 'https://tile.openstreetmap.org/'
 export const OSM_CREDIT_HTML = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
@@ -23,12 +24,6 @@ const SATURATION = 0.6
 // map's, crisp at every zoom; nothing is drawn twice and no second tile server is asked. Recolouring costs a canvas
 // draw per tile when it loads, nothing per frame. Where the canvas has no filter (Safari), nightPixels does the same
 // sums. (An earlier dark theme, Esri's Dark Gray Canvas under its places labels, drew labels twice and borders thin.)
-//
-// Labels over the weather: the map's names, lines and icons are baked into its tiles, so rain drawn over the map covers
-// them. A second copy of each theme's tiles keeps only their ink (inkAlpha) and is transparent elsewhere. Lifted
-// (StreetMap.lift) it lies over the radar: where no rain falls it draws what the map under it already shows, so it cannot be
-// seen, and under rain the names stay crisp. It asks for the map's own tile URLs (the browser's cache has them), only while
-// lifted: no prefetch.
 export const NIGHT_FILTER = 'invert(1) hue-rotate(180deg) saturate(0.45) brightness(0.8) contrast(1.1)'
 
 // NIGHT_FILTER's sums (Filter Effects 1, the shorthand functions on sRGB values, clamped after each): hue-rotate(180deg)
@@ -62,54 +57,79 @@ export function nightPixels(px: Uint8ClampedArray): void {
   }
 }
 
+// Labels over the weather: the map's names, lines and icons are baked into its tiles, so rain drawn over the map covers
+// them. A second copy of each theme's tiles keeps only their ink (inkAlpha) and is transparent elsewhere. Lifted
+// (StreetMap.lift) it lies over the radar: where no rain falls it draws what the map under it already shows, so it cannot be
+// seen, and under rain the names stay crisp. It asks for the map's own tile URLs (the browser's cache has them), only while
+// lifted: no prefetch. A tile's drawing is one job in drawQueue's frame budget, so a view's tiles arriving together fill in
+// over a few frames instead of stalling one; and the ink follows the map's theme at once: it lies over a complete map, so at
+// worst its names are missing for a moment, where holding the old theme's ink would show it over the new map.
+//
 // Ink: dark pixels of the light (original) tile, and a halo one pixel round them.
 const INK_DARK = 0.42 // luminance at or below: ink
 const INK_LIGHT = 0.62 // at or above: not ink (fills: land 0.94, water 0.80, parks 0.93, forest 0.78, buildings 0.82)
 const HALO = 0.85
 
+// Scratch for inkAlpha, grown as tiles need it and reused: a call fills what it reads.
+let share = new Float32Array(0) // each pixel's own ink, 0–1
+let across = new Float32Array(0) // the most of it in each pixel and its left and right neighbours
+
 /**
- * The ink share (0–255) of each pixel of a w × h RGBA tile in the light map's own colours.
+ * The ink share (0–255) of each pixel of a w × h RGBA tile in the light map's own colours. The halo is the most ink in the
+ * 3 × 3 round a pixel, taken as the most of each three along the rows (across), then of three of those down the columns: the
+ * whole window's answer for about half the reads.
  * ponytail: a halo stops at its tile's edge, so a name crossing a seam has a pixel's gap in its halo there. Upgrade: read the
  * neighbouring tiles' edge rows.
  */
 export function inkAlpha(px: Uint8ClampedArray, w: number, h: number): Uint8Array {
   const n = w * h
-  const t = new Float32Array(n)
+  if (share.length < n) {
+    share = new Float32Array(n)
+    across = new Float32Array(n)
+  }
+  const t = share
   for (let i = 0; i < n; i++) {
     const lum = (0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2]) / 255
     t[i] = lum <= INK_DARK ? 1 : lum >= INK_LIGHT ? 0 : (INK_LIGHT - lum) / (INK_LIGHT - INK_DARK)
   }
+  for (let y = 0; y < h; y++) {
+    const r = y * w
+    for (let x = 0; x < w; x++) {
+      let m = t[r + x]
+      if (x > 0 && t[r + x - 1] > m) m = t[r + x - 1]
+      if (x < w - 1 && t[r + x + 1] > m) m = t[r + x + 1]
+      across[r + x] = m
+    }
+  }
   const out = new Uint8Array(n)
   for (let y = 0; y < h; y++) {
+    const r = y * w
     for (let x = 0; x < w; x++) {
-      let halo = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        const yy = y + dy
-        if (yy < 0 || yy >= h) continue
-        for (let dx = -1; dx <= 1; dx++) {
-          const xx = x + dx
-          if (xx >= 0 && xx < w && t[yy * w + xx] > halo) halo = t[yy * w + xx]
-        }
-      }
-      out[y * w + x] = Math.round(Math.max(t[y * w + x], HALO * halo) * 255)
+      let halo = across[r + x]
+      if (y > 0 && across[r + x - w] > halo) halo = across[r + x - w]
+      if (y < h - 1 && across[r + x + w] > halo) halo = across[r + x + w]
+      out[r + x] = Math.round(Math.max(t[r + x], HALO * halo) * 255)
     }
   }
   return out
 }
 
 type Tile = Awaited<NonNullable<ReturnType<OpenStreetMapImageryProvider['requestImage']>>>
-// Checked on the prototype: a context without the property (Safari) would keep a string assigned to it all the same.
-const canvasFilter = typeof CanvasRenderingContext2D !== 'undefined' && 'filter' in CanvasRenderingContext2D.prototype
+const isBitmap = (img: Tile): img is ImageBitmap => typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap
+// Checked on the prototype: a context without the property (Safari) would keep a string assigned to it all the same. Asked as
+// each tile comes in, so that a test can give the page a canvas with a filter.
+const canvasFilter = (): boolean => typeof CanvasRenderingContext2D !== 'undefined' && 'filter' in CanvasRenderingContext2D.prototype
 
 /** A tile drawn in NIGHT_FILTER's colours. Cesium asks for ImageBitmaps already flipped for WebGL and flips a canvas as it
  *  uploads it: a bitmap goes back as a bitmap (else the tile would be upside down), an image as a canvas. */
 async function night(img: Tile): Promise<Tile> {
+  const filtered = canvasFilter()
   const c = document.createElement('canvas')
   c.width = img.width
   c.height = img.height
-  const ctx = c.getContext('2d', { willReadFrequently: !canvasFilter })
+  const ctx = c.getContext('2d', { willReadFrequently: !filtered })
   if (ctx === null) return img
-  if (canvasFilter) {
+  if (filtered) {
     ctx.filter = NIGHT_FILTER
     ctx.drawImage(img, 0, 0)
   } else {
@@ -118,7 +138,7 @@ async function night(img: Tile): Promise<Tile> {
     nightPixels(data.data)
     ctx.putImageData(data, 0, 0)
   }
-  if (!(typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap)) return c
+  if (!isBitmap(img)) return c
   img.close() // drawn: Cesium never closes the bitmaps it decoded, and this one is not handed on
   const out = await createImageBitmap(c)
   c.width = c.height = 0 // its pixels are in the bitmap: free the canvas now, not at the next collection
@@ -148,11 +168,11 @@ function flipRows(px: Uint8ClampedArray, w: number, h: number): void {
 /**
  * A tile reduced to its ink, as straight-alpha ImageData: every pixel in the map's own colour (the clear ones too: a canvas
  * would premultiply theirs away, and Cesium's filtering would then draw a dark rim where the ink fades out), its alpha from
- * inkAlpha of the original colours, and in the dark theme recoloured by nightPixels (never the canvas filter: one set of
- * sums in every browser). Cesium flips ImageData as it uploads it, so it goes back north-up: its bitmaps come already
- * flipped for WebGL (see night), so a bitmap is turned back, and closed once drawn.
- * ponytail: a view's tiles arriving together from the cache cost a few milliseconds of the main thread each (inkAlpha, and
- * nightPixels in the dark theme). Upgrade: draw them through radar.ts' queueDraw, a few milliseconds a frame.
+ * inkAlpha of the original colours. The dark theme's colours are the dark map's: where the canvas has a filter, the tile is
+ * drawn a second time through NIGHT_FILTER and its colours taken from that, exactly what the dark map shows in that browser;
+ * where it has none (Safari), nightPixels does the same sums on the original's. The alpha is the original's either way.
+ * Cesium flips ImageData as it uploads it, so it goes back north-up: its bitmaps come already flipped for WebGL (see night),
+ * so a bitmap's rows are turned back. It takes the bitmap open and leaves it open: the provider closes it.
  */
 function ink(img: Tile, dark: boolean): ImageData {
   const { width: w, height: h } = img
@@ -160,32 +180,57 @@ function ink(img: Tile, dark: boolean): ImageData {
   c.width = w
   c.height = h
   const ctx = c.getContext('2d', { willReadFrequently: true })
-  ctx?.drawImage(img, 0, 0)
-  const bitmap = typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap
-  if (bitmap) img.close() // drawn, or not wanted: Cesium never closes the bitmaps it decoded, and this one is not handed on
   if (ctx === null) return new ImageData(1, 1) // nothing drawn: the map's own tile here would cover the rain
-  const tile = ctx.getImageData(0, 0, w, h)
+  ctx.drawImage(img, 0, 0)
+  let tile = ctx.getImageData(0, 0, w, h)
+  const alpha = inkAlpha(tile.data, w, h)
+  if (dark && canvasFilter()) {
+    ctx.clearRect(0, 0, w, h)
+    ctx.filter = NIGHT_FILTER
+    ctx.drawImage(img, 0, 0)
+    tile = ctx.getImageData(0, 0, w, h)
+  } else if (dark) {
+    nightPixels(tile.data)
+  }
   c.width = c.height = 0 // its pixels are in tile: free the canvas now, not at the next collection
   const px = tile.data
-  const alpha = inkAlpha(px, w, h)
-  if (dark) nightPixels(px)
   for (let i = 0; i < alpha.length; i++) px[i * 4 + 3] = alpha[i]
-  if (bitmap) flipRows(px, w, h)
+  if (isBitmap(img)) flipRows(px, w, h)
   return tile
 }
 
-/** The OpenStreetMap tiles reduced to their ink (see ink), in the light map's colours or the dark theme's. */
+/**
+ * The OpenStreetMap tiles reduced to their ink (see ink), in the light map's colours or the dark theme's. A tile is drawn in
+ * its turn in drawQueue's frames, unless live() (its layer is still shown) is false by then: it is dropped undrawn.
+ */
 export class InkOsmProvider extends OpenStreetMapImageryProvider {
   readonly dark: boolean
+  private readonly live: () => boolean
 
-  constructor(options: OpenStreetMapImageryProvider.ConstructorOptions, dark: boolean) {
+  constructor(options: OpenStreetMapImageryProvider.ConstructorOptions, dark: boolean, live: () => boolean) {
     super(options)
     this.dark = dark
+    this.live = live
   }
 
-  // ImageData is not among Cesium's ImageryTypes, but its Texture takes it (RadarProvider hands it over the same way).
   override requestImage(x: number, y: number, level: number, request?: Request): Promise<Tile> | undefined {
-    return super.requestImage(x, y, level, request)?.then((img) => ink(img, this.dark) as unknown as Tile)
+    const got = super.requestImage(x, y, level, request)
+    return got === undefined ? undefined : this.inked(got, request)
+  }
+
+  // The tile's drawing is a drawQueue job. A dropped one is a cancelled request to Cesium, which asks again later and logs
+  // nothing, as for RadarProvider's; any other failure it logs.
+  private async inked(got: Promise<Tile>, request?: Request): Promise<Tile> {
+    const img = await got
+    try {
+      // ImageData is not among Cesium's ImageryTypes, but its Texture takes it (RadarProvider hands it over the same way).
+      return (await queueDraw(() => ink(img, this.dark), this.live)) as unknown as Tile
+    } catch (e) {
+      if (!this.live() && request !== undefined) (request as { state: RequestState }).state = RequestState.CANCELLED
+      throw e
+    } finally {
+      if (isBitmap(img)) img.close() // drawn, or not wanted: Cesium never closes the bitmaps it decoded, and this one is not handed on
+    }
   }
 }
 
@@ -217,7 +262,10 @@ export function whenTilesLoaded(scene: Scene, done: () => void): () => void {
 export interface StreetMap extends MapLayer {
   dark: boolean
   lift: boolean
-  /** Where a layer goes to lie over the map and under its ink: the light ink layer's place. */
+  /**
+   * Where a layer goes to lie over the map and under its ink: the light ink layer's place. -1 once the map is destroyed
+   * (that layer is gone): a caller then adds on top, as Cesium's add throws on a negative index in a debug build.
+   */
   readonly liftIndex: number
 }
 
@@ -235,17 +283,21 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
   const darkLayers = [layers.addImageryProvider(new NightOsmProvider(osm))]
   shown(darkLayers, false) // shown by default: that would read as a swap from dark
   // The ink of each theme right after the dark map, light first: a layer added at liftIndex lies over the map and under them.
-  const lightInk = layers.addImageryProvider(new InkOsmProvider(osm, false))
+  // A tile of one still waiting to be drawn when it is hidden or destroyed is dropped.
+  const inkLayer = (isDark: boolean): ImageryLayer => {
+    const l: ImageryLayer = layers.addImageryProvider(new InkOsmProvider(osm, isDark, () => l.show && !l.isDestroyed()))
+    l.show = false // lift shows one
+    return l
+  }
+  const lightInk = inkLayer(false)
   lightInk.brightness = BRIGHTNESS // the map's own, so that the two are one picture where no rain falls
   lightInk.saturation = SATURATION
-  const darkInk = layers.addImageryProvider(new InkOsmProvider(osm, true))
-  shown([lightInk, darkInk], false) // lift shows one
+  const darkInk = inkLayer(true)
   const light = [layer]
   let show = true
   let dark = false
   let lift = false
   let stopWait: (() => void) | null = null
-  let stopInkWait: (() => void) | null = null
   const apply = (): void => {
     stopWait?.()
     stopWait = null
@@ -265,23 +317,11 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
       shown(off, false)
     })
   }
-  // The ink swaps themes as the map does: the old ink stays until the new one's tiles are in, or the names would fall under
-  // the rain for as long as they load. A wait of its own, so that lift never restarts the map's.
+  // The current theme's ink while the weather lifts it over a map on screen, else none; a swap is at once (see the header).
   const applyInk = (): void => {
-    stopInkWait?.()
-    stopInkWait = null
-    const [on, off] = dark ? [darkInk, lightInk] : [lightInk, darkInk]
     const wanted = show && lift
-    if (!wanted || !off.show) { // the other theme's ink is not on screen: nothing to keep
-      off.show = false
-      on.show = wanted
-      return
-    }
-    on.show = true
-    stopInkWait = whenTilesLoaded(viewer.scene, () => {
-      stopInkWait = null
-      off.show = false
-    })
+    lightInk.show = wanted && !dark
+    darkInk.show = wanted && dark
   }
   apply()
   return {
@@ -314,8 +354,6 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
     destroy(): void {
       stopWait?.()
       stopWait = null
-      stopInkWait?.()
-      stopInkWait = null
       layers.remove(layer, true) // a second call finds nothing to remove
       for (const l of [...darkLayers, lightInk, darkInk]) layers.remove(l, true)
     },
