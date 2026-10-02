@@ -1,19 +1,7 @@
 // client/scene/radar.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  BANDS,
-  RADAR_MAX_LEVEL,
-  RAIN_PALETTE,
-  RadarProvider,
-  RadarSource,
-  decodeTile,
-  renderTile,
-  sourceTiles,
-  type Palette,
-  type Rgba,
-  type SourceTile,
-} from './radar.ts'
+import { BANDS, RAIN_PALETTE, RadarSource, decodeTile, queueDraw, renderTile, sourceTiles, type Palette, type Rgba, type SourceTile } from './radar.ts'
 
 const NONE = -128
 const N = 256
@@ -45,18 +33,28 @@ const from = (tiles: Record<string, SourceTile>) => (sx: number, sy: number): So
 const px = (out: Uint8ClampedArray, i: number, j: number): number[] => [...out.subarray((j * N + i) * 4, (j * N + i) * 4 + 4)]
 /** A palette colour as the output bytes write it. */
 const bytes = (c: Rgba): number[] => [...new Uint8ClampedArray([c[0], c[1], c[2], c[3] * 255])]
+/** The first pixel two tiles differ at, or null: a failing check names it rather than printing 262,144 bytes. */
+const firstDiff = (a: Uint8ClampedArray, b: Uint8ClampedArray): string | null => {
+  for (let q = 0; q < Math.max(a.length, b.length); q++) {
+    const p = q >> 2
+    if (a[q] !== b[q]) return `pixel ${p % N}, ${Math.floor(p / N)}: ${px(a, p % N, Math.floor(p / N))} vs ${px(b, p % N, Math.floor(p / N))}`
+  }
+  return null
+}
 
-// A palette that writes the band count: rain band b is red 20·(b + 1), snow green, both opaque. A count c ≥ 1 reads back
-// as red (or green) / 20, below 1 as alpha.
-const ramp = (ch: number): Rgba[] => Array.from({ length: BANDS }, (_, b): Rgba => {
-  const c: [number, number, number, number] = [0, 0, 0, 1]
-  c[ch] = 20 * (b + 1)
-  return c
-})
-const COUNT: Palette = { rain: ramp(0), snow: ramp(1) }
-const countAt = (out: Uint8ClampedArray, i: number, j: number): number => {
-  const [r, g, , a] = px(out, i, j)
-  return a < 255 ? a / 255 : (r || g) / 20
+// Test palettes, opaque. RED_GREEN: rain red, snow green. SPLIT: 15–25 dBZ blue, 30–35 green, 40 red, above white, so a
+// pixel's colour says which bands it shows.
+const one = (c: [number, number, number]): Rgba[] => Array.from({ length: BANDS }, (): Rgba => [...c, 1])
+const RED_GREEN: Palette = { rain: one([200, 0, 0]), snow: one([0, 200, 0]) }
+const split = Array.from({ length: BANDS }, (_, b): Rgba => (b <= 2 ? [0, 0, 255, 1] : b <= 4 ? [0, 255, 0, 1] : b === 5 ? [255, 0, 0, 1] : [255, 255, 255, 1]))
+const SPLIT: Palette = { rain: split, snow: split }
+
+/** Where source pixel (sx, sy) of tile 7/76/50 lands at a level ≥ 7: the tile there, and an output pixel at its centre. */
+function site(level: number, sx: number, sy: number): { x: number; y: number; i: number; j: number } {
+  const k = 2 ** (level - 7)
+  const size = N / k
+  const [tx, ty] = [Math.floor(sx / size), Math.floor(sy / size)]
+  return { x: 76 * k + tx, y: 50 * k + ty, i: (sx - tx * size) * k + (k >> 1), j: (sy - ty * size) * k + (k >> 1) }
 }
 
 test('decodeTile: each Universal Blue colour is one dBZ, rain or snow; no alpha or an unknown colour is no echo', () => {
@@ -73,16 +71,20 @@ test('decodeTile: each Universal Blue colour is one dBZ, rain or snow; no alpha 
   assert.deepEqual([...t.snow.subarray(0, 11)], [0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0])
 })
 
-test('renderTile: no echo draws nothing', () => {
-  for (const out of [renderTile(7, 76, 50, () => null, COUNT), renderTile(9, 305, 201, from({ '76/50': tile() }), RAIN_PALETTE.dark)]) {
-    assert.equal(out.length, N * N * 4)
-    assert.ok(out.every((v, i) => i % 4 !== 3 || v === 0))
-  }
+test('renderTile: nothing to draw says so (null): no echo, or one that does not reach the tile', () => {
+  const none = (out: Uint8ClampedArray | null, why: string): void => assert.ok(out === null, why)
+  none(renderTile(7, 76, 50, () => null, RED_GREEN), 'no source')
+  none(renderTile(9, 305, 201, from({ '76/50': tile() }), RAIN_PALETTE.dark), 'no echo')
+  none(renderTile(9, 305, 201, from({ '76/50': tile([[0, 0, 50]]) }), RAIN_PALETTE.dark), 'echo outside its patch')
+  none(renderTile(7, 77, 50, from({ '76/50': tile([[253, 100, 50]]) }), RAIN_PALETTE.dark), 'in its patch, out of reach')
+  none(renderTile(7, 77, 50, from({ '76/50': tile([[254, 100, 50]]) }), RAIN_PALETTE.dark), 'reached, but too faint to draw')
+  const out = renderTile(7, 76, 50, from({ '76/50': tile([[100, 120, 40]]) }), RAIN_PALETTE.dark)
+  assert.equal(out?.length, N * N * 4)
 })
 
 test('renderTile: a one-pixel 40 dBZ cell at level 7 keeps its band\'s colour and draws no halo', () => {
   for (const pal of [RAIN_PALETTE.light, RAIN_PALETTE.dark]) {
-    const out = renderTile(7, 76, 50, from({ '76/50': tile([[100, 120, 40]]) }), pal)
+    const out = renderTile(7, 76, 50, from({ '76/50': tile([[100, 120, 40]]) }), pal)!
     assert.deepEqual(px(out, 100, 120), bytes(pal.rain[5]))
     for (const [i, j] of [[103, 120], [97, 120], [100, 123], [100, 117], [103, 123], [97, 117]]) assert.equal(px(out, i, j)[3], 0, `${i}, ${j}`)
     let shown = 0
@@ -91,24 +93,50 @@ test('renderTile: a one-pixel 40 dBZ cell at level 7 keeps its band\'s colour an
   }
 })
 
-test('renderTile: the same cell at level 9 is a dot of its band\'s colour, nothing above it (no overshoot)', () => {
-  // Source pixel (100, 120) of tile 7/76/50 lies in its level-9 child (305, 201), whose square starts at (64, 64): its
-  // 4 × 4 output block is 144…147 × 224…227.
-  const src = from({ '76/50': tile([[100, 120, 40]]) })
+test('renderTile: a one-pixel 40 dBZ cell keeps its band\'s colour at every level, 7 to 12, and nothing round it shows a lower band', () => {
   for (const pal of [RAIN_PALETTE.light, RAIN_PALETTE.dark]) {
-    const out = renderTile(9, 305, 201, src, pal)
-    for (const [i, j] of [[145, 225], [146, 225], [145, 226], [146, 226]]) assert.deepEqual(px(out, i, j), bytes(pal.rain[5]), `${i}, ${j}`)
+    const want = bytes(pal.rain[5])
+    for (let level = 7; level <= 12; level++) {
+      const at = site(level, 100, 124)
+      const out = renderTile(level, at.x, at.y, from({ '76/50': tile([[100, 124, 40]]) }), pal)!
+      let brightest = 0
+      for (let p = 0; p < N * N; p++) {
+        if (out[p * 4 + 3] === 0) continue
+        assert.deepEqual([...out.subarray(p * 4, p * 4 + 3)], want.slice(0, 3), `level ${level}, pixel ${p % N}, ${Math.floor(p / N)}`)
+        brightest = Math.max(brightest, out[p * 4 + 3])
+      }
+      assert.deepEqual(px(out, at.i, at.j).slice(0, 3), want.slice(0, 3), `level ${level}: its centre`)
+      assert.ok(brightest > 0 && brightest <= want[3], `level ${level}: ${brightest}`)
+      if (level !== 8) assert.equal(brightest, want[3], `level ${level}: its centre wholly in its band`) // at 8 it straddles four pixels
+    }
   }
-  const out = renderTile(9, 305, 201, src, COUNT)
-  let most = 0
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) most = Math.max(most, countAt(out, i, j))
-  assert.equal(most, 6) // 15, 20, … 40: six bands
+})
+
+test('renderTile: a 40 dBZ peak in 25 dBZ rain shows its own colour at every level, 7 to 12, with no rim of the bands between', () => {
+  const t = block(tile(), 70, 94, 131, 155, 25)
+  t.dbz[124 * N + 100] = 40
+  for (let level = 7; level <= 12; level++) {
+    const at = site(level, 100, 124)
+    const out = renderTile(level, at.x, at.y, from({ '76/50': t }), SPLIT)!
+    const [r, g, b, a] = px(out, at.i, at.j)
+    assert.equal(a, 255)
+    assert.ok(g === 0 && r >= 0.6 * 255, `level ${level}: the peak's own colour mostly, the rain's round it: ${[r, g, b]}`)
+    if (level !== 8) assert.deepEqual([r, g, b], [255, 0, 0], `level ${level}`)
+    for (let j = Math.max(0, at.j - 8); j <= Math.min(N - 1, at.j + 8); j++) {
+      for (let i = Math.max(0, at.i - 8); i <= Math.min(N - 1, at.i + 8); i++) assert.equal(px(out, i, j)[1], 0, `level ${level}: no 30–35 dBZ at ${i}, ${j}`)
+    }
+    for (const pal of [RAIN_PALETTE.light, RAIN_PALETTE.dark]) {
+      const real = renderTile(level, at.x, at.y, from({ '76/50': t }), pal)!
+      if (level !== 8) assert.deepEqual(px(real, at.i, at.j), bytes(pal.rain[5]), `level ${level}`)
+      assert.deepEqual(px(real, at.i + 12 * 2 ** (level - 7), at.j), bytes(pal.rain[2]), `level ${level}: the rain round it`)
+    }
+  }
 })
 
 test('renderTile: a 12 × 12 block of 20 dBZ at level 10 fills with its colour and its outline is anti-aliased over a pixel, not blurred', () => {
   // Source pixels 40…51 of tile 7/76/50 lie in its level-10 child (609, 401), square from 32: output 64…159 each way.
   const pal = RAIN_PALETTE.dark
-  const out = renderTile(10, 609, 401, from({ '76/50': block(tile(), 40, 40, 52, 52, 20) }), pal)
+  const out = renderTile(10, 609, 401, from({ '76/50': block(tile(), 40, 40, 52, 52, 20) }), pal)!
   const full = bytes(pal.rain[1])
   for (let j = 66; j < 158; j++) for (let i = 66; i < 158; i++) assert.deepEqual(px(out, i, j), full, `${i}, ${j}`)
   const lines: [string, (t: number) => number[]][] = [['row 112', (t) => px(out, t, 112)], ['column 112', (t) => px(out, 112, t)]]
@@ -140,8 +168,8 @@ function cone(t: SourceTile, cx: number, cy: number): SourceTile {
 
 test('renderTile: seams — two level-9 tiles from one source tile meet as smoothly as columns inside a tile', () => {
   const src = from({ '76/50': cone(tile(), 64, 30) }) // across the border between the children 304 and 305
-  const left = renderTile(9, 304, 200, src, RAIN_PALETTE.dark)
-  const right = renderTile(9, 305, 200, src, RAIN_PALETTE.dark)
+  const left = renderTile(9, 304, 200, src, RAIN_PALETTE.dark)!
+  const right = renderTile(9, 305, 200, src, RAIN_PALETTE.dark)!
   const step = (a: Uint8ClampedArray, i: number, b: Uint8ClampedArray, k: number): number => {
     let most = 0
     for (let j = 0; j < N; j++) for (let c = 0; c < 4; c++) most = Math.max(most, Math.abs(a[(j * N + i) * 4 + c] - b[(j * N + k) * 4 + c]))
@@ -156,15 +184,15 @@ test('renderTile: seams — two level-9 tiles from one source tile meet as smoot
 
 test('renderTile: seams are exact — side by side, two tiles are the one drawn from the echo moved by half a tile', () => {
   // Level 9: the children 304 | 305 of tile 7/76/50, and child 304 of the echo moved 32 source pixels left.
-  const left = renderTile(9, 304, 200, from({ '76/50': cone(tile(), 64, 30) }), RAIN_PALETTE.light)
-  const right = renderTile(9, 305, 200, from({ '76/50': cone(tile(), 64, 30) }), RAIN_PALETTE.light)
-  const moved = renderTile(9, 304, 200, from({ '76/50': cone(tile(), 32, 30) }), RAIN_PALETTE.light)
+  const left = renderTile(9, 304, 200, from({ '76/50': cone(tile(), 64, 30) }), RAIN_PALETTE.light)!
+  const right = renderTile(9, 305, 200, from({ '76/50': cone(tile(), 64, 30) }), RAIN_PALETTE.light)!
+  const moved = renderTile(9, 304, 200, from({ '76/50': cone(tile(), 32, 30) }), RAIN_PALETTE.light)!
   // Level 7 across two source tiles (the neighbour's pixels are read): 76 | 77, and 76 with the echo moved 128 left.
   const a = block(tile(), 250, 100, 256, 112, 30)
   const b = block(tile(), 0, 100, 6, 112, 30)
-  const l7 = renderTile(7, 76, 50, from({ '76/50': a, '77/50': b }), RAIN_PALETTE.light)
-  const r7 = renderTile(7, 77, 50, from({ '76/50': a, '77/50': b }), RAIN_PALETTE.light)
-  const m7 = renderTile(7, 76, 50, from({ '76/50': block(tile(), 122, 100, 134, 112, 30) }), RAIN_PALETTE.light)
+  const l7 = renderTile(7, 76, 50, from({ '76/50': a, '77/50': b }), RAIN_PALETTE.light)!
+  const r7 = renderTile(7, 77, 50, from({ '76/50': a, '77/50': b }), RAIN_PALETTE.light)!
+  const m7 = renderTile(7, 76, 50, from({ '76/50': block(tile(), 122, 100, 134, 112, 30) }), RAIN_PALETTE.light)!
   for (const [l, r, m] of [[left, right, moved], [l7, r7, m7]]) {
     for (let j = 0; j < N; j++) {
       for (let i = 0; i < N; i++) {
@@ -182,23 +210,23 @@ test('renderTile: x wraps round the world; rows off the map are never asked for'
   const out = renderTile(7, 0, 0, (sx, sy) => {
     asked.push(`${sx}/${sy}`)
     return sx === 127 && sy === 0 ? edge : null
-  }, RAIN_PALETTE.dark)
+  }, RAIN_PALETTE.dark)!
   assert.ok(asked.every((k) => /^\d+\/\d+$/.test(k) && Number(k.split('/')[0]) < 128 && Number(k.split('/')[1]) < 128), asked.join(' '))
   assert.ok(asked.includes('127/0'))
-  assert.deepEqual([...out], [...renderTile(7, 1, 0, from({ '0/0': edge }), RAIN_PALETTE.dark)]) // as tile 1 east of tile 0
+  assert.equal(firstDiff(out, renderTile(7, 1, 0, from({ '0/0': edge }), RAIN_PALETTE.dark)!), null) // as tile 1 east of tile 0
 })
 
 test('renderTile: snow paints from the snow palette, to its outline; rain beside it from the rain palette', () => {
   const pal = RAIN_PALETTE.dark
-  const lone = renderTile(7, 76, 50, from({ '76/50': tile([[100, 120, 30, true]]) }), pal)
+  const lone = renderTile(7, 76, 50, from({ '76/50': tile([[100, 120, 30, true]]) }), pal)!
   assert.deepEqual(px(lone, 100, 120), bytes(pal.snow[3]))
   // Rain west of source column 60, snow east of it: the level-9 children 304 (columns 0…63) and 305 (64…127), rows 0…63.
   const t = block(block(tile(), 40, 40, 60, 60, 30), 60, 40, 80, 60, 30, true)
   const centre = (sx: number, sy: number): [number, number] => [(sx % 64) * 4 + 2, sy * 4 + 2] // a source pixel's output centre
-  assert.deepEqual(px(renderTile(9, 305, 200, from({ '76/50': t }), pal), ...centre(70, 50)), bytes(pal.snow[3]))
-  assert.deepEqual(px(renderTile(9, 304, 200, from({ '76/50': t }), pal), ...centre(50, 50)), bytes(pal.rain[3]))
+  assert.deepEqual(px(renderTile(9, 305, 200, from({ '76/50': t }), pal)!, ...centre(70, 50)), bytes(pal.snow[3]))
+  assert.deepEqual(px(renderTile(9, 304, 200, from({ '76/50': t }), pal)!, ...centre(50, 50)), bytes(pal.rain[3]))
   // No rain-coloured rim round the snow: every pixel drawn there comes from the snow palette.
-  const counts = renderTile(9, 305, 200, from({ '76/50': block(tile(), 70, 40, 90, 60, 30, true) }), COUNT)
+  const counts = renderTile(9, 305, 200, from({ '76/50': block(tile(), 70, 40, 90, 60, 30, true) }), RED_GREEN)!
   let drawn = 0
   for (let p = 0; p < counts.length; p += 4) {
     if (counts[p + 3] === 0) continue
@@ -242,53 +270,27 @@ test('RadarSource: one fetch per tile of the frame; a failed tile is no echo and
   }
 })
 
-test('RadarProvider: tiles to level 12 from the frame\'s source; each asks only the source tiles it reads; none with echo → one blank', async () => {
-  const asked: string[] = []
-  const echo = tile([[100, 120, 40]])
-  class Stub extends RadarSource {
-    override get(z: number, x: number, y: number): Promise<SourceTile | null> {
-      asked.push(`${z}/${x}/${y}`)
-      return Promise.resolve(z === 7 && x === 76 && y === 50 ? echo : null)
-    }
-  }
-  // Just enough of a DOM: a canvas that keeps what is put in it, ImageData, and frames.
-  class FakeImageData {
-    data: Uint8ClampedArray
-    width: number
-    height: number
-    constructor(data: Uint8ClampedArray, width: number, height: number) {
-      this.data = data
-      this.width = width
-      this.height = height
-    }
-  }
-  const fakeCanvas = () => {
-    const c = { width: 0, height: 0, put: null as FakeImageData | null, getContext: () => ({ putImageData: (d: FakeImageData) => void (c.put = d) }) }
-    return c
-  }
+test('queueDraw: jobs run in turn, a frame at a time; a dropped one rejects undrawn, a failing one rejects, the rest still run', async () => {
   const g = globalThis as unknown as Record<string, unknown>
-  const saved = ['document', 'ImageData', 'requestAnimationFrame'].map((k) => [k, g[k]] as const)
-  Object.assign(g, {
-    document: { createElement: fakeCanvas },
-    ImageData: FakeImageData,
-    requestAnimationFrame: (f: () => void) => setTimeout(f, 0),
-  })
+  const saved = g.requestAnimationFrame
+  let frames = 0
+  g.requestAnimationFrame = (f: () => void) => setTimeout(() => (frames++, f()), 0)
   try {
-    const p = new RadarProvider(new Stub('https://h', '/p'), RAIN_PALETTE.dark)
-    assert.equal(p.url, 'https://h/p/256/{z}/{x}/{y}/2/0_1.png')
-    assert.equal(p.maximumLevel, RADAR_MAX_LEVEL)
-    assert.equal(RADAR_MAX_LEVEL, 12)
-    const c = (await p.requestImage(76 * 32 + 16, 50 * 32 + 16, 12)) as unknown as ReturnType<typeof fakeCanvas>
-    assert.deepEqual(asked, ['7/76/50'])
-    assert.deepEqual([c.width, c.height], [256, 256])
-    assert.equal(c.put?.data.length, 256 * 256 * 4)
-    asked.length = 0
-    const nothing = await p.requestImage(10, 10, 9)
-    assert.deepEqual(asked, ['7/2/2'])
-    assert.equal(await p.requestImage(11, 10, 9), nothing, 'one shared blank')
-    const drawn = (await p.requestImage(305, 201, 9)) as unknown as ReturnType<typeof fakeCanvas>
-    assert.deepEqual([...drawn.put!.data.subarray((225 * 256 + 145) * 4, (225 * 256 + 145) * 4 + 4)], bytes(RAIN_PALETTE.dark.rain[5]))
+    const ran: string[] = []
+    const a = queueDraw(() => (ran.push('a'), 1))
+    const b = assert.rejects(queueDraw(() => {
+      ran.push('b')
+      throw new Error('boom')
+    }), /boom/)
+    const c = assert.rejects(queueDraw(() => (ran.push('c'), 3), () => false), /dropped/)
+    const d = queueDraw(() => (ran.push('d'), 4))
+    assert.equal(await a, 1)
+    await b
+    await c
+    assert.equal(await d, 4)
+    assert.deepEqual(ran, ['a', 'b', 'd'])
+    assert.equal(frames, 1, 'quick jobs share a frame')
   } finally {
-    for (const [k, v] of saved) g[k] = v
+    g.requestAnimationFrame = saved
   }
 })

@@ -724,7 +724,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
    * satellite, weather top-down and live only (it is today's: it says nothing of the past), its rain in the colours for
-   * the map under it (the satellite is dark under the rain).
+   * the top-down map's base (the satellite is dark under the rain).
    */
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
@@ -732,7 +732,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     map.dark = prefs.dark
     roads.show = prefs.roads && !onMap
     places.show = prefs.places && !onMap
-    weather.theme = rainTheme(prefs, chasing)
+    weather.theme = rainTheme(prefs)
     weather.show = prefs.wx && !chasing && hist === null
     if (hist !== null && prefs.wx) toggles.setWeather('Live only') // the chase has no weather row to say anything on
     else if (!prefs.wx) toggles.setWeather(null)

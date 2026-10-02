@@ -22,14 +22,19 @@ import {
   LabelStyle,
   Math as CesiumMath,
   NearFarScalar,
+  RequestState,
   SceneTransforms,
+  UrlTemplateImageryProvider,
   VerticalOrigin,
   type Billboard,
+  type ImageryTypes,
+  type Request,
   type Viewer,
 } from 'cesium'
 import type { FlightCategory, Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, speedIn, type Units } from '../ui/units.ts'
-import { RAIN_PALETTE, RadarProvider, RadarSource, type Palette } from './radar.ts'
+import { whenTilesLoaded } from './mapLayer.ts'
+import { RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, queueDraw, renderTile, sourceTiles, type Palette } from './radar.ts'
 import { metarCard, sigmetCards } from './wxCard.ts'
 import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
@@ -160,10 +165,60 @@ export interface WeatherOptions {
   units?: () => Units // what speeds and heights are worded in (the flight-data frame's); default knots and feet
 }
 
+let blankTile: ImageData | null = null
+/** One clear pixel for every tile that draws nothing: Cesium stretches it over the tile (a 4-byte texture, not 256 KB). */
+const blank = (): ImageData => (blankTile ??= new ImageData(1, 1))
+
+/**
+ * RainViewer's frame drawn smooth (radar.ts' renderTile) in a palette: Cesium asks for tiles up to RADAR_MAX_LEVEL. Each
+ * is ImageData, north-up, in straight alpha. Cesium's Texture uploads it as it does an image (texImage2D, flipped, alpha
+ * not premultiplied; its types leave ImageData out), where a canvas would premultiply it and lose the colour of clear
+ * pixels, so filtering would darken the rain's edges.
+ */
+export class RadarProvider extends UrlTemplateImageryProvider {
+  readonly source: RadarSource
+  readonly palette: Palette
+  private gone = false
+
+  constructor(source: RadarSource, palette: Palette) {
+    super({ url: source.url, maximumLevel: RADAR_MAX_LEVEL })
+    this.source = source
+    this.palette = palette
+  }
+
+  /** Its layer is gone: tiles still waiting to be drawn are not. */
+  drop(): void {
+    this.gone = true
+  }
+
+  get dropped(): boolean {
+    return this.gone
+  }
+
+  override requestImage(x: number, y: number, level: number, request?: Request): Promise<ImageryTypes> {
+    const z = Math.min(level, RADAR_SRC_MAX)
+    const need = sourceTiles(level, x, y)
+    const image = Promise.all(need.map(([sx, sy]) => this.source.get(z, sx, sy))).then((got) => {
+      if (got.every((t) => t === null)) return blank()
+      const at = new Map(need.map(([sx, sy], i) => [`${sx}/${sy}`, got[i]]))
+      return queueDraw(() => {
+        const px = renderTile(level, x, y, (sx, sy) => at.get(`${sx}/${sy}`) ?? null, this.palette)
+        return px === null ? blank() : new ImageData(px, 256, 256)
+      }, () => !this.gone)
+    })
+    return image.catch((e: unknown) => {
+      // Cesium takes a cancelled request as "ask again later" and logs nothing; any other failure it logs, tile by tile.
+      if (this.gone && request !== undefined) (request as { state: RequestState }).state = RequestState.CANCELLED
+      throw e
+    }) as unknown as Promise<ImageryTypes>
+  }
+}
+
 /**
  * The rain radar's imagery layer: a RainViewer frame (one RadarSource, so a palette change fetches nothing again) drawn
- * in a palette, on top of all imagery. A new frame or palette goes on top at once and the layers it replaces stay under
- * it until its tiles are in (as the street map's theme swap), or go at once while hidden: the rain never blinks out.
+ * in a palette, on top of all imagery. A new frame or palette loads unseen on top (a shown layer loads its tiles; at
+ * alpha 0 Cesium draws none of it) and takes over once they are in: drawn, and the old layer gone, in the same frame. So
+ * the rain never blinks out and two frames are never drawn at once. While hidden it takes over at once.
  */
 export class RadarLayer {
   private readonly viewer: Viewer
@@ -171,8 +226,8 @@ export class RadarLayer {
   private shown = false
   private source: RadarSource | null = null
   private path = ''
-  private layer: ImageryLayer | null = null
-  private old: ImageryLayer[] = [] // replaced, under the newest while its tiles load
+  private layer: ImageryLayer | null = null // the one drawn
+  private next: ImageryLayer | null = null // its replacement while that loads
   private stopWait: (() => void) | null = null
   private gone = false
 
@@ -187,8 +242,8 @@ export class RadarLayer {
 
   set show(on: boolean) {
     this.shown = on
+    if (!on) this.settle()
     if (this.layer) this.layer.show = on
-    if (!on) this.drop()
   }
 
   get palette(): Palette {
@@ -211,35 +266,49 @@ export class RadarLayer {
 
   private put(): void {
     if (this.gone || this.source === null) return
-    const next = new ImageryLayer(new RadarProvider(this.source, this.pal), { show: this.shown })
-    this.viewer.imageryLayers.add(next)
-    if (this.layer) this.old.push(this.layer)
-    this.layer = next
     this.stopWait?.()
     this.stopWait = null
-    if (!this.shown) return this.drop()
-    // A new layer has no tiles yet: the first frame queues them, then the old go once they are in.
-    const scene = this.viewer.scene
-    let frames = 0
-    this.stopWait = scene.postRender.addEventListener(() => {
-      if (frames++ < 1 || !scene.globe.tilesLoaded) return
-      this.drop()
+    if (this.next !== null) this.retire(this.next) // nobody saw it
+    this.next = null
+    const drawn = this.layer === null ? null : (this.layer.imageryProvider as RadarProvider)
+    if (drawn !== null && drawn.source === this.source && drawn.palette === this.pal) return // back to what is drawn
+    const swap = this.shown && this.layer !== null
+    const layer = new ImageryLayer(new RadarProvider(this.source, this.pal), { show: this.shown, alpha: swap ? 0 : 1 })
+    this.viewer.imageryLayers.add(layer)
+    if (!swap) {
+      if (this.layer !== null) this.retire(this.layer)
+      this.layer = layer
+      return
+    }
+    this.next = layer
+    this.stopWait = whenTilesLoaded(this.viewer.scene, () => {
+      this.stopWait = null
+      this.settle()
     })
   }
 
-  /** Removes the replaced layers. */
-  private drop(): void {
+  /** The replacement, if any, is drawn and the layer it replaces goes. */
+  private settle(): void {
     this.stopWait?.()
     this.stopWait = null
-    for (const l of this.old) this.viewer.imageryLayers.remove(l, true)
-    this.old = []
+    if (this.next === null) return
+    this.next.alpha = 1
+    if (this.layer !== null) this.retire(this.layer)
+    this.layer = this.next
+    this.next = null
+  }
+
+  private retire(l: ImageryLayer): void {
+    ;(l.imageryProvider as RadarProvider).drop()
+    this.viewer.imageryLayers.remove(l, true)
   }
 
   destroy(): void {
     this.gone = true
-    this.drop()
-    if (this.layer) this.viewer.imageryLayers.remove(this.layer, true)
-    this.layer = null
+    this.stopWait?.()
+    this.stopWait = null
+    for (const l of [this.next, this.layer]) if (l !== null) this.retire(l)
+    this.next = this.layer = null
   }
 }
 

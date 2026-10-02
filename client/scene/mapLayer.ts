@@ -9,7 +9,7 @@
 // mode costs OSM nothing. Do not set a no-referrer Referrer-Policy on the page. Access is best-effort and can be
 // withdrawn: pass another tile server's URL (the policy asks that the URL can be changed without a code change).
 import { Credit, OpenStreetMapImageryProvider, UrlTemplateImageryProvider } from 'cesium'
-import type { ImageryLayer, Request, Viewer } from 'cesium'
+import type { ImageryLayer, Request, Scene, Viewer } from 'cesium'
 
 export const OSM_URL = 'https://tile.openstreetmap.org/'
 export const OSM_CREDIT_HTML = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
@@ -96,6 +96,21 @@ export interface MapLayer {
   destroy(): void
 }
 
+/**
+ * Calls done once the globe's tiles are all in, at least one rendered frame from now: a layer just shown has no tiles
+ * yet, and only that frame queues them. For a swap that keeps the old layer until the new one can stand alone. Returns
+ * the call that stops waiting.
+ */
+export function whenTilesLoaded(scene: Scene, done: () => void): () => void {
+  let frames = 0
+  const stop = scene.postRender.addEventListener(() => {
+    if (frames++ < 1 || !scene.globe.tilesLoaded) return
+    stop()
+    done()
+  })
+  return stop
+}
+
 /** The street map: show, and dark picks its theme. Only the shown theme's layers load tiles. */
 export interface StreetMap extends MapLayer {
   dark: boolean
@@ -132,12 +147,9 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
     if (dark) while (layers.indexOf(layer) > layers.indexOf(darkLayers[0])) layers.lower(layer)
     else while (layers.indexOf(layer) < layers.indexOf(darkLayers[0])) layers.raise(layer)
     shown(on, true)
-    let frames = 0
-    stopWait = viewer.scene.postRender.addEventListener(() => {
-      if (frames++ < 1 || !viewer.scene.globe.tilesLoaded) return
-      shown(off, false)
-      stopWait?.()
+    stopWait = whenTilesLoaded(viewer.scene, () => {
       stopWait = null
+      shown(off, false)
     })
   }
   apply()

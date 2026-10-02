@@ -343,12 +343,14 @@ test('weather: a rain scale above the airports legend, Light to Heavy, in the ra
   t.update({ ...DEFAULT_PREFS, wx: true })
   assert.equal(scale.vars['--scale'], gradient('light'))
   assert.equal(RAIN_PALETTE.light.rain.length, 11)
+  t.setChasing(true) // the chase's base (the satellite) is not the weather's
+  assert.equal(scale.vars['--scale'], gradient('light'))
 })
 
-test('rainTheme: the radar\'s light palette only over the light street map; the dark map and the satellite take the dark', () => {
-  assert.equal(rainTheme(DEFAULT_PREFS, false), 'light')
-  assert.equal(rainTheme({ ...DEFAULT_PREFS, dark: true }, false), 'dark')
-  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapTop: false }, false), 'dark')
-  assert.equal(rainTheme(DEFAULT_PREFS, true), 'dark') // the chase's base: the satellite by default
-  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapChase: true }, true), 'light')
+test('rainTheme: the top-down map\'s base decides (the weather shows there only): light over the light street map, else dark', () => {
+  assert.equal(rainTheme(DEFAULT_PREFS), 'light')
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, dark: true }), 'dark')
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapTop: false }), 'dark')
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapChase: true }), 'light') // the chase's base changes nothing
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapTop: false, mapChase: true }), 'dark')
 })

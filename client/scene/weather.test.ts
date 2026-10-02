@@ -1,11 +1,11 @@
 // client/scene/weather.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Event, ImageryLayerCollection, UrlTemplateImageryProvider, type ImageryLayer, type Viewer } from 'cesium'
+import { Event, ImageryLayerCollection, Request, RequestState, UrlTemplateImageryProvider, type ImageryLayer, type Viewer } from 'cesium'
 import type { Metar } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarProvider } from './radar.ts'
-import { MARKER_PX, RadarLayer, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow } from './weather.ts'
+import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarSource, type SourceTile } from './radar.ts'
+import { MARKER_PX, RadarLayer, RadarProvider, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow } from './weather.ts'
 
 const metric: Units = { alt: 'm', speed: 'kmh', vs: 'ms' }
 const wind = (wdir: number | null, wspd: number, cat: Metar['cat'] = 'VFR'): Pick<Metar, 'cat' | 'wdir' | 'wspd'> => ({ cat, wdir, wspd })
@@ -92,6 +92,8 @@ function fakeViewer() {
 }
 const HOST = 'https://tilecache.rainviewer.com'
 const drawer = (l: ImageryLayer): RadarProvider => l.imageryProvider as RadarProvider
+/** Drawn on screen: shown and not at alpha 0 (a layer shown at alpha 0 loads its tiles but Cesium draws nothing of it). */
+const onScreen = (l: ImageryLayer): boolean => l.show && l.alpha > 0
 
 test('radar layer: a frame goes on top of the imagery, drawn smooth to level 12 from its RainViewer tiles; the palette carries the alpha', () => {
   const { imageryLayers, viewer, radar } = fakeViewer()
@@ -111,7 +113,7 @@ test('radar layer: a frame goes on top of the imagery, drawn smooth to level 12 
   assert.equal(l.show, true)
 })
 
-test('radar layer: the same frame is not loaded again; a new one gets its own source and replaces the old once its tiles are in', () => {
+test('radar layer: the same frame is not loaded again; a new one loads unseen and takes over in one frame once its tiles are in', () => {
   const { viewer, scene, render, radar } = fakeViewer()
   const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
   r.show = true
@@ -121,23 +123,43 @@ test('radar layer: the same frame is not loaded again; a new one gets its own so
   assert.deepEqual(radar(), [a])
   r.frame(HOST, '/v2/radar/b')
   const [, b] = radar()
-  assert.deepEqual(radar(), [a, b], 'the new frame on top, the old under it while it loads')
+  assert.deepEqual(radar(), [a, b], 'the new frame on top')
   assert.notEqual(drawer(b).source, drawer(a).source)
   assert.match(drawer(b).source.url, /\/v2\/radar\/b\//)
-  assert.deepEqual([a.show, b.show], [true, true])
+  assert.deepEqual([b.show, b.alpha], [true, 0], 'shown, so Cesium loads it, at alpha 0, so it draws nothing yet')
+  assert.deepEqual(radar().filter(onScreen), [a], 'one frame on screen')
   render() // the frame that queues the new tiles
-  assert.deepEqual(radar(), [a, b])
   scene.globe.tilesLoaded = false
   render()
-  assert.deepEqual(radar(), [a, b], 'still loading')
+  assert.deepEqual(radar().filter(onScreen), [a], 'still loading')
   scene.globe.tilesLoaded = true
   render()
-  assert.deepEqual(radar(), [b])
+  assert.deepEqual(radar(), [b], 'in the same frame: the new one drawn, the old gone')
+  assert.equal(b.alpha, 1)
   assert.ok(a.isDestroyed())
+  assert.ok(drawer(a).dropped)
   assert.equal(scene.postRender.numberOfListeners, 0)
 })
 
-test('radar layer: a palette change draws the same source in the other palette, without a gap', () => {
+test('radar layer: a frame arriving while one loads replaces the one nobody saw: never more than two layers', () => {
+  const { viewer, render, radar } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  r.frame(HOST, '/v2/radar/b')
+  const [a, b] = radar()
+  r.frame(HOST, '/v2/radar/c')
+  const [, c] = radar()
+  assert.deepEqual(radar(), [a, c])
+  assert.ok(b.isDestroyed() && drawer(b).dropped)
+  assert.deepEqual(radar().filter(onScreen), [a])
+  render()
+  render()
+  assert.deepEqual(radar(), [c])
+  assert.equal(c.alpha, 1)
+})
+
+test('radar layer: a palette change draws the same source in the other palette and takes over once in; changed back first, nothing new', () => {
   const { viewer, render, radar, scene } = fakeViewer()
   const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
   r.show = true
@@ -147,45 +169,125 @@ test('radar layer: a palette change draws the same source in the other palette, 
   const [, light] = radar()
   assert.equal(drawer(light).palette, RAIN_PALETTE.light)
   assert.equal(drawer(light).source, drawer(dark).source, 'no tile fetched again')
+  assert.equal(light.alpha, 0)
   r.palette = RAIN_PALETTE.light // unchanged: nothing new
   assert.deepEqual(radar(), [dark, light])
-  r.palette = RAIN_PALETTE.dark // and back before the light one is in: both stay under the newest
-  const [, , back] = radar()
-  assert.deepEqual(radar(), [dark, light, back])
+  r.palette = RAIN_PALETTE.dark // back before the light one is in: what is on screen already is it
+  assert.deepEqual(radar(), [dark])
+  assert.ok(light.isDestroyed() && drawer(light).dropped)
+  assert.equal(scene.postRender.numberOfListeners, 0)
+  r.palette = RAIN_PALETTE.light
+  const [, again] = radar()
   render()
   render()
-  assert.deepEqual(radar(), [back])
+  assert.deepEqual(radar(), [again])
+  assert.equal(again.alpha, 1)
   assert.equal(scene.postRender.numberOfListeners, 0)
 })
 
-test('radar layer: hidden, a replaced layer goes at once; hiding mid-swap drops the old ones at once', () => {
+test('radar layer: hidden, a new one takes over at once; hiding mid-swap puts the newest in at once', () => {
   const { viewer, radar, scene } = fakeViewer()
   const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
   r.frame(HOST, '/v2/radar/a')
   r.frame(HOST, '/v2/radar/b')
+  const [b] = radar()
   assert.equal(radar().length, 1)
-  assert.match(drawer(radar()[0]).source.url, /\/b\//)
+  assert.match(drawer(b).source.url, /\/b\//)
+  assert.deepEqual([b.show, b.alpha], [false, 1])
   assert.equal(scene.postRender.numberOfListeners, 0)
   r.show = true
   r.palette = RAIN_PALETTE.light
-  assert.equal(radar().length, 2)
+  const [, light] = radar()
   r.show = false
-  assert.equal(radar().length, 1)
-  assert.equal(drawer(radar()[0]).palette, RAIN_PALETTE.light)
-  assert.equal(radar()[0].show, false)
+  assert.deepEqual(radar(), [light])
+  assert.deepEqual([light.show, light.alpha], [false, 1])
+  assert.ok(b.isDestroyed() && drawer(b).dropped)
   assert.equal(scene.postRender.numberOfListeners, 0)
+  r.show = true
+  assert.deepEqual(radar().filter(onScreen), [light])
 })
 
-test('radar layer: destroy removes its layers and stops waiting; twice is harmless', () => {
-  const { imageryLayers, viewer, scene } = fakeViewer()
+test('radar layer: destroy removes its layers, drops their drawing and stops waiting; twice is harmless; a frame after it adds nothing', () => {
+  const { imageryLayers, viewer, scene, radar } = fakeViewer()
   const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
   r.show = true
   r.frame(HOST, '/v2/radar/a')
   r.frame(HOST, '/v2/radar/b')
+  const both = radar()
   r.destroy()
   r.destroy()
   assert.equal(imageryLayers.length, 1)
+  assert.ok(both.every((l) => drawer(l).dropped))
   assert.equal(scene.postRender.numberOfListeners, 0)
+  r.frame(HOST, '/v2/radar/c')
+  assert.equal(imageryLayers.length, 1)
+})
+
+/** Just enough of the browser for RadarProvider: ImageData and frames. */
+class FakeImageData {
+  data: Uint8ClampedArray
+  width: number
+  height: number
+  constructor(a: Uint8ClampedArray | number, w: number, h?: number) {
+    this.data = typeof a === 'number' ? new Uint8ClampedArray(a * w * 4) : a
+    this.width = typeof a === 'number' ? a : w
+    this.height = typeof a === 'number' ? w : (h ?? a.length / 4 / w)
+  }
+}
+async function withBrowser(run: () => Promise<void>): Promise<void> {
+  const g = globalThis as unknown as Record<string, unknown>
+  const saved = (['ImageData', 'requestAnimationFrame'] as const).map((k) => [k, g[k]] as const)
+  Object.assign(g, { ImageData: FakeImageData, requestAnimationFrame: (f: () => void) => setTimeout(f, 0) })
+  try {
+    await run()
+  } finally {
+    for (const [k, v] of saved) g[k] = v
+  }
+}
+/** A source holding one 40 dBZ pixel at (100, 120) of tile 7/76/50, and what it was asked for. */
+function stubSource(asked: string[]): RadarSource {
+  const dbz = new Int8Array(256 * 256).fill(-128)
+  dbz[120 * 256 + 100] = 40
+  const echo: SourceTile = { dbz, snow: new Uint8Array(256 * 256) }
+  return new (class extends RadarSource {
+    override get(z: number, x: number, y: number): Promise<SourceTile | null> {
+      asked.push(`${z}/${x}/${y}`)
+      return Promise.resolve(z === 7 && x === 76 && y === 50 ? echo : null)
+    }
+  })('https://h', '/p')
+}
+
+test('RadarProvider: tiles to level 12 as straight-alpha ImageData; each asks only the source tiles it reads; nothing drawn → one shared 1-pixel image', async () => {
+  await withBrowser(async () => {
+    const asked: string[] = []
+    const p = new RadarProvider(stubSource(asked), RAIN_PALETTE.dark)
+    assert.equal(p.url, 'https://h/p/256/{z}/{x}/{y}/2/0_1.png')
+    assert.equal(p.maximumLevel, RADAR_MAX_LEVEL)
+    const image = async (x: number, y: number, level: number): Promise<FakeImageData> => (await p.requestImage(x, y, level)) as unknown as FakeImageData
+    const middle = await image(76 * 32 + 16, 50 * 32 + 16, 12) // its source has echo, but not near this square
+    assert.deepEqual(asked, ['7/76/50'])
+    assert.deepEqual([middle.width, middle.height], [1, 1])
+    assert.deepEqual([...middle.data], [0, 0, 0, 0])
+    asked.length = 0
+    assert.equal(await image(10, 10, 9), middle, 'no source has echo: the same blank')
+    assert.deepEqual(asked, ['7/2/2'])
+    const drawn = await image(305, 201, 9)
+    assert.deepEqual([drawn.width, drawn.height], [256, 256])
+    const at = (225 * 256 + 145) * 4
+    const [r, g, b, a] = RAIN_PALETTE.dark.rain[5]
+    assert.deepEqual([...drawn.data.subarray(at, at + 4)], [...new Uint8ClampedArray([r, g, b, a * 255])])
+  })
+})
+
+test('RadarProvider: dropped, its tiles still waiting are not drawn, and Cesium hears them as cancelled (it logs nothing)', async () => {
+  await withBrowser(async () => {
+    const p = new RadarProvider(stubSource([]), RAIN_PALETTE.dark)
+    const request = new Request()
+    const pending = p.requestImage(305, 201, 9, request)
+    p.drop()
+    await assert.rejects(pending)
+    assert.equal(request.state, RequestState.CANCELLED)
+  })
 })
 
 test('Weather: the radar in the dark palette until told the theme; a theme change redraws the frame it has in the other', async () => {
@@ -220,6 +322,7 @@ test('Weather: the radar in the dark palette until told the theme; a theme chang
     w.theme = 'light'
     assert.equal(w.theme, 'light')
     const [, light] = radar()
+    assert.equal(light.alpha, 0)
     assert.equal(drawer(light).palette, RAIN_PALETTE.light)
     assert.equal(drawer(light).source, drawer(frame).source)
     assert.equal(asked.filter((u) => u.includes('weather-maps.json')).length, 1)

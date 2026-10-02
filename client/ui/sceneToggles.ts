@@ -6,7 +6,7 @@
 // buildings (X). Each row has its icon and key. A click asks the app for the toggled prefs through onChange and changes
 // nothing itself; update() only re-renders. A view or base change hides and shows rows (none is rebuilt, so the focus
 // stays put). setBusy(true) shows a spinner on the terrain row while the relief grows or sinks. Under Weather: the rain
-// scale in the radar's colours for the map on screen, the airports legend, and setWeather()'s line on what the weather
+// scale in the radar's colours for the top-down map, the airports legend, and setWeather()'s line on what the weather
 // layer holds. The app owns the keys, the stored prefs and the panel.
 import { icon, type IconName } from './icons.ts'
 import { RAIN_PALETTE } from '../scene/radar.ts'
@@ -53,8 +53,9 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, tex
 /** The base-map pref the view on screen uses. */
 export const baseKey = (chasing: boolean): 'mapTop' | 'mapChase' => (chasing ? 'mapChase' : 'mapTop')
 
-/** The radar's palette for the map on screen: light over the light street map; the dark map and the satellite, dark. */
-export const rainTheme = (prefs: ScenePrefs, chasing: boolean): 'light' | 'dark' => (prefs.dark || !prefs[baseKey(chasing)] ? 'dark' : 'light')
+/** The radar's palette. The weather shows on the top-down map only, so its base decides: light over the light street map;
+ *  the dark map and the satellite, dark. */
+export const rainTheme = (prefs: ScenePrefs): 'light' | 'dark' => (prefs.dark || !prefs.mapTop ? 'dark' : 'light')
 
 export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): SceneTogglesHandle {
   let prefs = { ...opts.prefs }
@@ -111,7 +112,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   theme.setAttribute('aria-label', 'Map theme')
   const lightBtn = segBtn(theme, 'Light', () => 'dark', false)
   const darkBtn = segBtn(theme, 'Dark', () => 'dark', true)
-  // The rain radar's colours, light rain to heavy, as drawn over the map on screen.
+  // The rain radar's colours, light rain to heavy, as drawn over the top-down map.
   const rain = h('div', 'fh-wx-rain')
   const scale = h('span', 'fh-wx-scale')
   rain.append(h('span', 'fh-wx-rain-end', 'Light'), scale, h('span', 'fh-wx-rain-end', 'Heavy'))
@@ -123,7 +124,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     lightBtn.setAttribute('aria-pressed', String(!prefs.dark))
     darkBtn.setAttribute('aria-pressed', String(prefs.dark))
     baseView.textContent = chasing ? 'Chase view' : 'Top-down view'
-    const theme = rainTheme(prefs, chasing)
+    const theme = rainTheme(prefs)
     if (theme === scaleTheme) return
     scaleTheme = theme
     scale.style.setProperty('--scale', `linear-gradient(90deg, ${RAIN_PALETTE[theme].rain.map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`).join(', ')})`)

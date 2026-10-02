@@ -1,16 +1,18 @@
 // client/scene/radar.ts
-// The rain radar drawn smooth at every zoom, in a palette made for the map under it (weather.ts shows it).
+// The rain radar drawn smooth at every zoom, in a palette made for the map under it. RadarSource fetches and decodes a
+// frame's tiles, renderTile draws one output tile and queueDraw spreads the drawing over frames; weather.ts puts it on the
+// map (RadarProvider, RadarLayer). No Cesium here: the Layers panel takes its palettes from this file.
 //
 // RainViewer's free API serves its newest frame as 256-px tiles up to zoom 7 (deeper ones are a "zoom not supported"
 // picture), in its "Universal Blue" colours: each colour is one whole dBZ, rain and snow apart. A real cell is ~2 × 2 tile
 // pixels, so magnified as they are the tiles are the 1-km squares the user saw. Blurring the dBZ before colouring rounds
 // them but lowered small storm cores by up to 19 dBZ (a storm drawn as light rain), so each 5-dBZ band's REGION is
 // smoothed instead: for every threshold T the 0/1 field "dBZ ≥ T" is resampled with a cubic B-spline (smooth, never
-// overshoots) and the band's edge drawn where it crosses LEVEL, anti-aliased over one pixel. Bands nest, every core keeps
-// its band (a one-pixel cell stays a small dot) and the outlines are curves. A tile reads M source pixels round its
-// square from the neighbouring tiles, so tiles meet without seams. The data is RainViewer's as sent; only the drawing is ours.
+// overshoots) and the band's edge drawn where it crosses LEVEL, anti-aliased over one pixel. A pixel shows its bands laid
+// one over the next, each by its share of the pixel: bands nest, every core keeps its colour (a one-pixel cell stays a
+// small dot of it) and the outlines are curves. A tile reads M source pixels round its square from the neighbouring tiles,
+// so tiles meet without seams. The data is RainViewer's as sent; only the drawing is ours.
 // Colours: https://www.rainviewer.com/files/rainviewer_api_colors_table.csv, column "Universal Blue" (read 2026-10-02).
-import { UrlTemplateImageryProvider } from 'cesium'
 
 export const RADAR_SRC_MAX = 7 // RainViewer's free API: deeper zooms are a "zoom not supported" picture
 export const RADAR_MAX_LEVEL = 12 // our deepest tile (a source pixel 32 px wide); Cesium magnifies past it
@@ -94,24 +96,28 @@ const hex = (...cs: [string, number][]): Rgba[] =>
   cs.map(([h, a]): Rgba => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16), a])
 
 export const RAIN_PALETTE: Record<'light' | 'dark', Palette> = {
-  // the light street map: deeper blues so light rain shows on its pale land and blue sea; amber, not yellow
-  light: { rain: hex(['#0a84ff', .38], ['#0a6cff', .50], ['#1450e0', .62], ['#2a35b8', .72], ['#ffc400', .85],
-    ['#ff8a00', .88], ['#f0442c', .90], ['#c8193c', .92], ['#a020c8', .92], ['#6a1b9a', .92], ['#4a148c', .92]),
-    snow: hex(['#8f86ff', .35], ['#7d72f5', .45], ['#6a5ce6', .55], ['#5847d4', .65], ['#4b3bc4', .72], ['#4b3bc4', .72],
-    ['#4b3bc4', .72], ['#4b3bc4', .72], ['#4b3bc4', .72], ['#4b3bc4', .72], ['#4b3bc4', .72]) },
-  // the dark map and the satellite: luminous cyan to indigo, then warm
-  dark: { rain: hex(['#38c6ff', .40], ['#2fa8ff', .52], ['#2f86ff', .62], ['#3d66ff', .70], ['#ffd447', .88],
-    ['#ff9c33', .90], ['#ff5a3c', .92], ['#e8325f', .94], ['#d659ff', .95], ['#f3d9ff', .95], ['#ffffff', .95]),
-    snow: hex(['#cfe0ff', .35], ['#dbe7ff', .45], ['#e6eeff', .55], ['#f0f5ff', .65], ['#ffffff', .75], ['#ffffff', .75],
-    ['#ffffff', .75], ['#ffffff', .75], ['#ffffff', .75], ['#ffffff', .75], ['#ffffff', .75]) },
+  // the light street map: deeper blues for its pale land and blue sea, amber not yellow; light rain faint, so the map shows through
+  light: { rain: hex(['#1f86ff', .30], ['#1170f0', .40], ['#1556d6', .48], ['#2a3cb5', .56], ['#ffb300', .62],
+    ['#ff8800', .66], ['#f04a2a', .70], ['#c81d42', .74], ['#9b2bc4', .78], ['#6c1fa0', .82], ['#4a148c', .85]),
+    snow: hex(['#8f86ff', .28], ['#7d72f5', .36], ['#6a5ce6', .44], ['#5847d4', .52], ['#4b3bc4', .6], ['#4b3bc4', .6],
+    ['#4b3bc4', .6], ['#4b3bc4', .6], ['#4b3bc4', .6], ['#4b3bc4', .6], ['#4b3bc4', .6]) },
+  // the dark map and the satellite: luminous cyan to indigo, then warm; light rain faint, so the map shows through
+  dark: { rain: hex(['#36b4ff', .30], ['#2f9bff', .40], ['#2f7dff', .48], ['#4a63ff', .56], ['#f5c842', .62],
+    ['#ff9a35', .66], ['#ff5c3d', .70], ['#e83563', .74], ['#cf5cff', .78], ['#ecd4ff', .82], ['#ffffff', .85]),
+    snow: hex(['#cfe0ff', .28], ['#dbe7ff', .36], ['#e6eeff', .44], ['#f0f5ff', .52], ['#ffffff', .6], ['#ffffff', .6],
+    ['#ffffff', .6], ['#ffffff', .6], ['#ffffff', .6], ['#ffffff', .6], ['#ffffff', .6]) },
 }
 
-/** A palette's colours as r, g, b, alpha × 255 per band, for the drawing loop. */
-const flat = new WeakMap<readonly Rgba[], Float64Array>()
-function flatOf(cs: readonly Rgba[]): Float64Array {
-  let f = flat.get(cs)
-  if (f === undefined) flat.set(cs, (f = Float64Array.from(cs.flatMap(([r, g, b, a]) => [r, g, b, a * 255]))))
-  return f
+/** A palette for the drawing loop: each band's colour premultiplied by its alpha (r·a, g·a, b·a, a), then the first
+ *  band's colour as it is, with alpha 0, for clear pixels. */
+const premultiplied = new WeakMap<readonly Rgba[], Float64Array>()
+function premultipliedOf(cs: readonly Rgba[]): Float64Array {
+  let t = premultiplied.get(cs)
+  if (t === undefined) {
+    t = Float64Array.from([...cs.flatMap(([r, g, b, a]) => [r * a, g * a, b * a, a]), cs[0][0], cs[0][1], cs[0][2], 0])
+    premultiplied.set(cs, t)
+  }
+  return t
 }
 
 /** Where a tile at level/x/y reads from: the source tile at level z (≤ 7) and the size × size square at ox, oy in it. */
@@ -183,19 +189,23 @@ interface Scratch {
   h: Float64Array // the field resampled along its rows: P rows × W
   hLo: Int32Array // per row of h: the samples [lo, hi) that can be above 0
   hHi: Int32Array
-  f0: Float64Array // W × W resampled: the first band's,
-  f: Float64Array // the other bands' in turn,
+  f: Float64Array // W × W resampled: each band's in turn,
   fs: Float64Array // and the snow's
   fLo: Int32Array // per row of the last field resampled: [lo, hi) as hLo
   fHi: Int32Array
-  count: Float32Array // per output pixel, how many bands cover it (fractions on their edges)
+  // Per output pixel: what its bands below the last one reached left it (premultiplied colour, 4 each), that last band
+  // and its share, and 1 where it takes the snow palette.
+  acc: Float64Array
+  top: Int8Array
+  share: Float64Array
+  pick: Uint8Array
 }
 let scratch: Scratch | null = null
 const scratchOf = (): Scratch => (scratch ??= {
   dbz: new Int8Array(PMAX * PMAX), snow: new Uint8Array(PMAX * PMAX), ind: new Uint8Array(PMAX * PMAX),
   h: new Float64Array(PMAX * W), hLo: new Int32Array(PMAX), hHi: new Int32Array(PMAX),
-  f0: new Float64Array(W * W), f: new Float64Array(W * W), fs: new Float64Array(W * W), fLo: new Int32Array(W), fHi: new Int32Array(W),
-  count: new Float32Array(SIZE * SIZE),
+  f: new Float64Array(W * W), fs: new Float64Array(W * W), fLo: new Int32Array(W), fHi: new Int32Array(W),
+  acc: new Float64Array(SIZE * SIZE * 4), top: new Int8Array(SIZE * SIZE), share: new Float64Array(SIZE * SIZE), pick: new Uint8Array(SIZE * SIZE),
 })
 
 /** s.ind (P × P) resampled into f (W × W): along the rows, then the columns, each row only where its ones reach. */
@@ -258,47 +268,75 @@ function resample(s: Scratch, P: number, taps: Taps, f: Float64Array): void {
   }
 }
 
-/** Adds to s.count each output pixel's share of the band whose field is f: 1 inside its edge, 0 outside, and on the
- *  edge how far in it lies, in pixels (the field over its gradient) + ½. Outside the rows' spans f is 0: nothing to add. */
-function addBand(s: Scratch, f: Float64Array): void {
-  const { count, fLo, fHi } = s
+/**
+ * Band b (its field in s.f) on each output pixel, by its share: 1 inside its edge, 0 outside, and on the edge how far in
+ * the pixel lies (the field over its gradient, in pixels) + ½, never more than the band below's (bands nest). What that
+ * leaves the band below, its share less this one's, goes into acc in its colour: a pixel shows each band by how much of
+ * it is in that band and no higher. Outside the rows' spans the field is 0: no share, the band below keeps its own.
+ */
+function addBand(s: Scratch, b: number, rain: Float64Array, snow: Float64Array, pick: Uint8Array | null): void {
+  const { f, fLo, fHi, acc, top, share } = s
+  const o = (b - 1) * 4
   for (let j = 0; j < SIZE; j++) {
     const fr = (j + 1) * W
-    const cr = j * SIZE - 1 // count[cr + x]: the output pixel under field column x
+    const pr = j * SIZE - 1 // the output pixel under field column x: pr + x
     const hi = Math.min(fHi[j + 1], W - 1)
     for (let x = Math.max(fLo[j + 1], 1); x < hi; x++) {
       const q = fr + x
       const v = f[q]
-      if (v >= FULL) {
-        count[cr + x] += 1
-        continue
+      let sh = 1
+      if (v < FULL) {
+        const gx = f[q + 1] - f[q - 1]
+        const gy = f[q + W] - f[q - W]
+        const e = v - LEVEL
+        const g2 = Math.max(0.25 * (gx * gx + gy * gy), 1e-8) // the gradient's square, at least 1e-4²
+        sh = 4 * e * e >= g2 ? (e > 0 ? 1 : 0) : e / Math.sqrt(g2) + 0.5 // half a pixel or more from the edge: all or none
       }
-      const gx = f[q + 1] - f[q - 1]
-      const gy = f[q + W] - f[q - W]
-      const e = v - LEVEL
-      const g2 = Math.max(0.25 * (gx * gx + gy * gy), 1e-8) // the gradient's square, at least 1e-4²
-      if (4 * e * e >= g2) { // half a pixel or more from the edge: wholly in or out
-        if (e > 0) count[cr + x] += 1
-        continue
+      const p = pr + x
+      const below = share[p]
+      if (sh > below) sh = below
+      if (sh < below && b > 0) {
+        const cs = pick !== null && pick[p] === 1 ? snow : rain
+        const w = below - sh
+        const k = p * 4
+        acc[k] += w * cs[o]
+        acc[k + 1] += w * cs[o + 1]
+        acc[k + 2] += w * cs[o + 2]
+        acc[k + 3] += w * cs[o + 3]
       }
-      count[cr + x] += e / Math.sqrt(g2) + 0.5
+      share[p] = sh
+      top[p] = b
     }
   }
 }
 
+/** Per output pixel, 1 where snow is at least half the echo round it: the snow's field against the first band's (f0, or
+ *  null when that band covers the whole patch). To the echo's outline, where both thin out together. */
+function choose(s: Scratch, f0: Float64Array | null): Uint8Array {
+  const { fs, pick } = s
+  for (let j = 0, p = 0; j < SIZE; j++) {
+    const fr = (j + 1) * W + 1
+    for (let i = 0; i < SIZE; i++, p++) {
+      const v = fs[fr + i]
+      pick[p] = v > 0 && 2 * v >= (f0 === null ? 1 : f0[fr + i]) ? 1 : 0
+    }
+  }
+  return pick
+}
+
 /**
- * One 256 × 256 output tile (RGBA bytes, straight alpha) at level/x/y. Its source is the tile at level min(level, 7):
- * itself up to 7, else its level-7 ancestor, of which it covers a 256 / 2^d square magnified k = 2^d times (d = level −
- * 7). src(sx, sy) answers a decoded source tile of that level (x wraps; a y outside the map, or a missing tile → null,
- * read as no echo); M source pixels round the square come from the neighbours, so adjacent tiles meet seamlessly.
+ * One 256 × 256 output tile (RGBA bytes, straight alpha) at level/x/y, or null when it draws nothing. Its source is the
+ * tile at level min(level, 7): itself up to 7, else its level-7 ancestor, of which it covers a 256 / 2^d square magnified
+ * k = 2^d times (d = level − 7). src(sx, sy) answers a decoded source tile of that level (x wraps; a y outside the map,
+ * or a missing tile → null, read as no echo); M source pixels round the square come from the neighbours, so adjacent
+ * tiles meet seamlessly.
  */
-export function renderTile(level: number, x: number, y: number, src: (sx: number, sy: number) => SourceTile | null, pal: Palette): Uint8ClampedArray<ArrayBuffer> {
-  const out = new Uint8ClampedArray(SIZE * SIZE * 4)
+export function renderTile(level: number, x: number, y: number, src: (sx: number, sy: number) => SourceTile | null, pal: Palette): Uint8ClampedArray<ArrayBuffer> | null {
   const { z, d, size, sx, sy, ox, oy } = square(level, x, y)
   const n = 2 ** z
   const P = size + 2 * M
   const s = scratchOf()
-  const { dbz, snow, ind, count } = s
+  const { dbz, snow, ind } = s
   // The patch: P × P source pixels from (ox − M, oy − M) of tile (sx, sy), across into its neighbours.
   const near: (SourceTile | null | undefined)[] = []
   for (let py = 0; py < P; py++) {
@@ -338,59 +376,64 @@ export function renderTile(level: number, x: number, y: number, src: (sx: number
     if (v < min) min = v
     if (snow[p] !== 0 && v >= FIRST_DBZ) snowy = true
   }
-  if (max < FIRST_DBZ) return out
-  // Each band present: its share of every output pixel added to count. A band over the whole patch is 1 everywhere.
+  if (max < FIRST_DBZ) return null
+  // The bands every patch pixel is in (1 everywhere: not resampled), and those any is in.
+  const inBands = (v: number): number => (v < FIRST_DBZ ? 0 : Math.min(BANDS, Math.floor((v - FIRST_DBZ) / STEP_DBZ) + 1))
+  const whole = inBands(min)
+  const present = inBands(max)
   const taps = tapsFor(d)
-  count.fill(0)
-  let whole = 0
-  for (let b = 0; b < BANDS; b++) {
-    const T = FIRST_DBZ + STEP_DBZ * b
-    if (max < T) break
-    if (min >= T) {
-      whole++
-      continue
-    }
-    for (let p = 0; p < P * P; p++) ind[p] = dbz[p] >= T ? 1 : 0
-    const f = b === 0 ? s.f0 : s.f
-    resample(s, P, taps, f)
-    addBand(s, f)
-  }
-  // Snow where it is at least half the echo round a pixel: to its outline, where the echo itself thins out.
+  const rain = premultipliedOf(pal.rain)
+  const snowCs = premultipliedOf(pal.snow)
+  const { acc, top, share } = s
+  acc.fill(0)
+  share.fill(1)
+  top.fill(whole - 1)
+  let pick: Uint8Array | null = null
   if (snowy) {
     for (let p = 0; p < P * P; p++) ind[p] = snow[p] !== 0 && dbz[p] >= FIRST_DBZ ? 1 : 0
     resample(s, P, taps, s.fs)
+    if (whole > 0) pick = choose(s, null)
   }
-  const echoWhole = min >= FIRST_DBZ
-  const [rain, snowCols] = [flatOf(pal.rain), flatOf(pal.snow)]
-  for (let j = 0, p = 0; j < SIZE; j++) {
-    const fr = (j + 1) * W + 1
-    for (let i = 0; i < SIZE; i++, p++) {
-      let cs = rain
-      if (snowy) {
-        const v = s.fs[fr + i]
-        if (v > 0 && 2 * v >= (echoWhole ? 1 : s.f0[fr + i])) cs = snowCols
-      }
-      const c = count[p] + whole
-      const q = p * 4
-      if (c < 1) {
-        // Short of the first band: its colour, fading out. A clear pixel keeps the colour too: filtering draws no dark rim.
-        out[q] = cs[0]
-        out[q + 1] = cs[1]
-        out[q + 2] = cs[2]
-        out[q + 3] = c > 0 ? cs[3] * c : 0
-        continue
-      }
-      const m = Math.floor(c)
-      const lo = (m - 1) * 4
-      const hi = Math.min(m, BANDS - 1) * 4
-      const t = c - m
-      out[q] = cs[lo] + (cs[hi] - cs[lo]) * t
-      out[q + 1] = cs[lo + 1] + (cs[hi + 1] - cs[lo + 1]) * t
-      out[q + 2] = cs[lo + 2] + (cs[hi + 2] - cs[lo + 2]) * t
-      out[q + 3] = cs[lo + 3] + (cs[hi + 3] - cs[lo + 3]) * t
+  for (let b = whole; b < present; b++) {
+    const T = FIRST_DBZ + STEP_DBZ * b
+    for (let p = 0; p < P * P; p++) ind[p] = dbz[p] >= T ? 1 : 0
+    resample(s, P, taps, s.f)
+    addBand(s, b, rain, snowCs, pick)
+    if (b === 0 && snowy) pick = choose(s, s.f) // the first band leaves acc nothing: the palettes can wait for its field
+  }
+  // Each pixel: what its lower bands left in acc, and its last band by its share; then straight colour and alpha.
+  const out = new Uint8ClampedArray(SIZE * SIZE * 4)
+  let drawn = false
+  for (let p = 0; p < SIZE * SIZE; p++) {
+    const cs = pick !== null && pick[p] === 1 ? snowCs : rain
+    const k = p * 4
+    let r = acc[k]
+    let g = acc[k + 1]
+    let bl = acc[k + 2]
+    let a = acc[k + 3]
+    const t = top[p]
+    if (t >= 0) {
+      const w = share[p]
+      const o = t * 4
+      r += w * cs[o]
+      g += w * cs[o + 1]
+      bl += w * cs[o + 2]
+      a += w * cs[o + 3]
+    }
+    if (a > 0) {
+      out[k] = r / a
+      out[k + 1] = g / a
+      out[k + 2] = bl / a
+      out[k + 3] = a * 255
+      if (out[k + 3] > 0) drawn = true
+    } else { // clear: still the first band's colour, so filtering draws no dark rim
+      const o = BANDS * 4
+      out[k] = cs[o]
+      out[k + 1] = cs[o + 1]
+      out[k + 2] = cs[o + 2]
     }
   }
-  return out
+  return drawn ? out : null
 }
 
 let reader: CanvasRenderingContext2D | null = null
@@ -448,25 +491,17 @@ export class RadarSource {
   }
 }
 
-function canvasOf(px: Uint8ClampedArray<ArrayBuffer> | null): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = c.height = SIZE
-  if (px !== null) c.getContext('2d')!.putImageData(new ImageData(px, SIZE, SIZE), 0, 0)
-  return c
-}
-
-let blankTile: HTMLCanvasElement | null = null
-const blank = (): HTMLCanvasElement => (blankTile ??= canvasOf(null)) // Cesium only reads it: one for every empty tile
-
 // Tiles are drawn on the main thread, at most DRAW_MS of them a frame: a burst (a palette change redraws every tile in
 // view) fills in over a few frames instead of stalling one.
 const DRAW_MS = 6
 const queue: (() => void)[] = []
 
-function drawn<T>(draw: () => T): Promise<T> {
+/** draw() run in its turn, unless live() is false by then: it rejects undrawn. */
+export function queueDraw<T>(draw: () => T, live: () => boolean = () => true): Promise<T> {
   return new Promise((resolve, reject) => {
     const job = (): void => {
       try {
+        if (!live()) throw new Error('dropped')
         resolve(draw())
       } catch (e) {
         reject(e)
@@ -482,27 +517,4 @@ function pump(): void {
     queue.shift()!()
   } while (queue.length > 0 && performance.now() < end)
   if (queue.length > 0) requestAnimationFrame(pump)
-}
-
-/** RainViewer's frame drawn smooth (renderTile) in a palette: Cesium asks for tiles up to RADAR_MAX_LEVEL. */
-export class RadarProvider extends UrlTemplateImageryProvider {
-  readonly source: RadarSource
-  readonly palette: Palette
-
-  constructor(source: RadarSource, palette: Palette) {
-    super({ url: source.url, maximumLevel: RADAR_MAX_LEVEL })
-    this.source = source
-    this.palette = palette
-  }
-
-  /** A canvas, drawn north-up (Cesium flips a canvas as it uploads it, as it does an image). */
-  override requestImage(x: number, y: number, level: number): Promise<HTMLCanvasElement> {
-    const z = Math.min(level, RADAR_SRC_MAX)
-    const need = sourceTiles(level, x, y)
-    return Promise.all(need.map(([sx, sy]) => this.source.get(z, sx, sy))).then((got) => {
-      if (got.every((t) => t === null)) return blank()
-      const at = new Map(need.map(([sx, sy], i) => [`${sx}/${sy}`, got[i]]))
-      return drawn(() => canvasOf(renderTile(level, x, y, (sx, sy) => at.get(`${sx}/${sy}`) ?? null, this.palette)))
-    })
-  }
 }
