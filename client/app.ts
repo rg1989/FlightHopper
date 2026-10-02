@@ -47,7 +47,7 @@ import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
 import { localDay, mountHistoryBar, type HistoryBarHandle, type LocalDay } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
-import { KnownHexes, SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
+import { KnownHexes, SlotBlock, SlotFailure, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
   MapMoves, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight, keepLegs,
   placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
@@ -497,8 +497,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     block: SlotBlock // half hours not to ask for now: missing at adsb.lol, or failed a moment ago
     missing: Set<number> // half hours adsb.lol answered it does not have (with the status's: the bar's red hatch)
     missingShown: string // the missing half hours on the bar, as a key
-    lastWant: number // the half hour under the clock when the half hours were last asked for
-    failing: boolean // the half hour under the clock failed to load: the bar says so until one loads
+    failure: SlotFailure // the half hour under the clock failed to load: the bar says so until it loads, or another is under it
     status: HistoryStatus | null
     statusAtMs: number // performance.now() of the last status asked for
     reload: boolean // a half hour arrived: the next frame refills the fleet from the minute before
@@ -1117,7 +1116,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const h: HistoryMode = {
       clock, feed: new HistoryFeed(), bar,
       fedMs: t0, regMs: t0, regFrom: null, known: new KnownHexes(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
-      missingShown: '', lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity,
+      missingShown: '', failure: new SlotFailure(), status: null, statusAtMs: -Infinity,
       reload: false, seekRestMs: null, dayOfT: localDay(t0), day: null, dayAsk: null, dayAgain: null, legsShown: NO_LEGS,
       pathLeg: undefined, bring: false, inside: false, flyUntilMs: -Infinity, hadAt: false, askedMs: -Infinity,
     }
@@ -1191,7 +1190,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    */
   function jumped(h: HistoryMode): void {
     h.seekRestMs = null
-    h.failing = false
+    h.failure.clear()
     h.askedMs = -Infinity
     h.bring = selected !== null
   }
@@ -1199,12 +1198,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * History: asks for the half hours the replay needs at t (policy.ts): the one under the clock and the next one early
    * enough for the speed (prefetchMs), each for a circle wider than c (the view, or where it is going) at its slice step,
-   * unless the feed holds it for c, it is being fetched, or it is blocked (missing at adsb.lol, failed a moment ago).
+   * unless the feed holds it for c, it is being fetched, or it is blocked (missing at adsb.lol, failed a moment ago). A
+   * half hour under the clock other than the last asked for starts with no failure (policy.ts SlotFailure).
    */
   function askSlots(h: HistoryMode, t: number, c: Circle): void {
     const wall = Date.now()
     const want = wantedSlots(t, h.clock.maxMs, prefetchMs(h.clock.rate))
-    h.lastWant = want[0]
+    h.failure.asked(want[0])
     for (const s of want) {
       if (!h.feed.covers(s, c) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: c.lat, lon: c.lon, nm: askNm(c.nm, chasing) })
     }
@@ -1232,7 +1232,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
     return historyWait({
       held: h.feed.has(slot), centre: h.feed.reaches(slot, v.lat, v.lon), chasing, missing: h.block.isMissing(slot, Date.now()),
-      failing: h.failing, loading: h.loading.has(slot), firstDay: firstDayAsked(selected, h.dayAsk, h.day, h.dayAgain),
+      failing: h.failure.failing, loading: h.loading.has(slot), firstDay: firstDayAsked(selected, h.dayAsk, h.day, h.dayAgain),
     })
   }
 
@@ -1263,7 +1263,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
     if (selected !== null && selectedDay(h, t) === null) rebuildPath() // the feed's samples until its day for t is known
-    h.bar.setNote(h.block.isMissing(slot, wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
+    h.bar.setNote(h.block.isMissing(slot, wall) ? 'No data for this time' : h.failure.failing ? 'Could not load this time · retrying' : null)
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
     h.statusAtMs = nowP
     // Not awaited: the next tick does not wait for it.
@@ -1291,10 +1291,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (r === null) {
         h.block.missing(slot, Date.now())
         h.missing.add(slot)
+        h.failure.answered(slot)
         showMissing(h)
       } else if (r.slotMs === slot) {
         h.feed.add(r, c)
-        h.failing = false
+        h.failure.answered(slot)
         // The half hour under the clock: its aircraft before the replay time are placed at once. (The next one, asked
         // ahead of time, is taken up as the clock reaches it.)
         if (slot === slotOf(Math.min(h.clock.now(performance.now()), h.clock.maxMs - 1))) h.reload = true
@@ -1302,7 +1303,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     } catch (e) {
       if (hist === h) {
         h.block.failed(slot, Date.now()) // the server busy or unreachable: again in a few seconds
-        h.failing = slot === h.lastWant
+        h.failure.failed(slot) // the bar's note, if it is the half hour under the clock
       }
       console.warn('FlightHopper: the past not loaded:', e)
     } finally {

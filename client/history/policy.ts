@@ -1,8 +1,9 @@
 // client/history/policy.ts
 // History's decisions that need no map (app.ts acts on them): which half hours to ask for and how early the next one,
-// how long one stays unasked after it was missing or failed, how far back a fresh fleet starts and how far ahead the
-// selected aircraft's track is fed (both scaled to the slices the files were cut at), how wide a circle to ask for,
-// which aircraft the fleet is given the info of again, and whether the selected aircraft's leg covers the replay time.
+// how long one stays unasked after it was missing or failed, whether the one under the clock is failing (the bar's
+// note), how far back a fresh fleet starts and how far ahead the selected aircraft's track is fed (both scaled to the
+// slices the files were cut at), how wide a circle to ask for, which aircraft the fleet is given the info of again, and
+// whether the selected aircraft's leg covers the replay time.
 import type { HistoryStatus } from '../../shared/api.ts'
 import { SLOT_MS, STEP_BANDS, slotOf } from '../../shared/history.ts'
 
@@ -82,6 +83,42 @@ export class SlotBlock {
         if (!this.#missing.has(s.slotMs)) this.missing(s.slotMs, nowMs)
       } else if (this.#missing.delete(s.slotMs)) this.#until.delete(s.slotMs)
     }
+  }
+}
+
+/**
+ * Whether the half hour under the clock failed to load (the bar says "Could not load this time · retrying", and the
+ * replay plays on rather than wait for it). Only that half hour's own answers set and clear it: a prefetched one failing
+ * or arriving says nothing of it. The next half hour under the clock, or a jump, starts with none.
+ */
+export class SlotFailure {
+  #slot = Number.NaN // the half hour under the clock when the half hours were last asked for
+  #failing = false
+
+  get failing(): boolean {
+    return this.#failing
+  }
+
+  /** The half hours are asked for at a replay time whose half hour is slot: another one than before starts with no failure. */
+  asked(slot: number): void {
+    if (slot === this.#slot) return
+    this.#slot = slot
+    this.#failing = false
+  }
+
+  /** slot could not be had (the server busy or unreachable). */
+  failed(slot: number): void {
+    if (slot === this.#slot) this.#failing = true
+  }
+
+  /** slot was answered: its aircraft, or none at adsb.lol (its own note says so). */
+  answered(slot: number): void {
+    if (slot === this.#slot) this.#failing = false
+  }
+
+  /** A jump: the new time's note and loader are its own. */
+  clear(): void {
+    this.#failing = false
   }
 }
 

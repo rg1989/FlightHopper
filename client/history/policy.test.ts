@@ -4,7 +4,7 @@ import { SLOT_MS, slotOf } from '../../shared/history.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Sample } from '../../shared/types.ts'
 import { Fleet } from '../browse/fleet.ts'
-import { KnownHexes, SlotBlock, askNm, backMs, legCovers, legFeeds, lookaheadMs, prefetchMs, wantedSlots } from './policy.ts'
+import { KnownHexes, SlotBlock, SlotFailure, askNm, backMs, legCovers, legFeeds, lookaheadMs, prefetchMs, wantedSlots } from './policy.ts'
 
 const H = Date.parse('2026-10-01T10:00:00Z') // a slot start
 const MIN = 60_000
@@ -45,6 +45,36 @@ test("a missing half hour is not asked again for 10 minutes, a failed one for 15
   b.missing(H, 0)
   b.fromStatus([{ slotMs: H, state: 'ready' }, { slotMs: H - SLOT_MS, state: 'missing' }], 1000)
   assert.deepEqual([b.isMissing(H, 1000), b.isMissing(H - SLOT_MS, 1000)], [false, true], 'the server has it now; the other is missing')
+})
+
+test('the half hour under the clock failing: only its own answers set and clear it; a prefetch failing or arriving says nothing of it', () => {
+  const f = new SlotFailure()
+  f.asked(H) // the one under the clock, and the next one ahead of time
+  f.failed(H + SLOT_MS)
+  assert.equal(f.failing, false, 'the next one failing: the one under the clock may well load')
+  f.failed(H)
+  assert.equal(f.failing, true)
+  f.answered(H + SLOT_MS)
+  assert.equal(f.failing, true, 'the next one arriving: the one under the clock is still not loaded')
+  f.failed(H + SLOT_MS)
+  f.asked(H)
+  assert.equal(f.failing, true, 'asked again for the same half hour: failing until it answers')
+  f.answered(H)
+  assert.equal(f.failing, false, 'it loaded (or adsb.lol answered it has none: its own note)')
+})
+
+test('the half hour under the clock failing: the next one under the clock, or a jump, starts with none', () => {
+  const f = new SlotFailure()
+  f.asked(H)
+  f.failed(H)
+  f.asked(H + SLOT_MS)
+  assert.equal(f.failing, false, 'played on into the next half hour (loaded ahead of time): not failing')
+  f.failed(H)
+  assert.equal(f.failing, false, 'the half hour left behind failing late says nothing')
+  f.failed(H + SLOT_MS)
+  assert.equal(f.failing, true)
+  f.clear()
+  assert.equal(f.failing, false, 'a jump: the new time says')
 })
 
 test('a leg covers the replay time from a minute before its first point to a minute after its last', () => {
