@@ -9,15 +9,19 @@
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
-//   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts). 404: adsb.lol
-//                                       has none (or it is older than 31 days); 503 + Retry-After: 15: it cannot be had now
-//   GET /api/history/status             the half hours held, being fetched or missing, and the newest published
+//   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
+//                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
+//                                       oldest day it keeps); 503 + Retry-After: 15: it cannot be had now
+//   GET /api/history/status             the half hours held, being fetched or missing, the newest published and the oldest kept
 //   GET /api/trace?hex&at               an aircraft's flight leg flying at `at` (default now; adsb.lol's trace: trace.ts), 404: none
+//   GET /api/trace?hex&from&to          its legs over a span of up to 48 h (TraceDay; none: no legs); 503 + Retry-After: 15: a file
+//                                       of the span cannot be had now
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
 // any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded (adsbdb.com).
 // The command line also keeps the newest hour of the past in memory for a live source (two heatmap files, refreshed each
-// half hour: rollHistory). A server made in code, a test's included, fetches the past only when it is asked.
+// half hour: rollHistory), and for any source loads the past's aircraft types and finds the oldest day adsb.lol keeps
+// (historyMeta). A server made in code, a test's included, fetches the past only when it is asked.
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -42,6 +46,7 @@ import { makeSource, userAgent } from './sources/index.ts'
 import type { Source } from './sources/types.ts'
 import { SampleStore } from './store.ts'
 import { TraceStore } from './trace.ts'
+import { TypeDb } from './typeDb.ts'
 import { WxError, makeWx } from './wx.ts'
 
 // ponytail: loopback only. Cloudflare Tunnel and the Vite dev proxy both connect locally, but other machines on the
@@ -65,6 +70,9 @@ const HISTORY_TICK_MS = 60_000 // the rolling fetch of the newest half hours: a 
 const HISTORY_SLOTS = 5
 const RETRY_AFTER_S = 15 // what a 503 tells the client: the past could not be had now, try again then
 const ORIGIN_MAX_AGE_MS = 10 * 60_000 // a leg that ended longer ago than this is not the flight in the air now
+const TYPES_WAIT_MS = 5000 // the first ask for the past waits this long for the type table, which loads as the server starts
+const META_TICK_MS = 60_000 // the type table and the oldest day are checked this often; each loads when it is due
+const SPAN_MAX_MS = 48 * 3_600_000 // the longest span of one aircraft's legs: the client asks for a day and the 12 h before it
 const gzipAsync = promisify(gzip)
 const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete']) // the only writes
 
@@ -213,13 +221,27 @@ async function serveStatic(root: string, pathname: string, range: string | undef
  * deps.nowMs is the server clock for the poller and the budget; it must be the clock the source stamps tRecvMs with
  * (Date.now for live sources, the same injected clock for a replay built with it).
  * deps.routesFetch replaces fetch for the route lookups (tests); routes run only with ADSB_SOURCE=adsblol and ROUTES=1.
- * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files; tests). deps.rollHistory (default false)
- * keeps the newest two half hours of the past fetched while the server listens: the command line sets it for a live source.
- * Off, the past is fetched only when a client asks, so a test server on a live source asks adsb.lol for nothing by itself.
+ * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files, the type table; tests). deps.rollHistory
+ * (default false) keeps the newest two half hours of the past fetched while the server listens: the command line sets it for
+ * a live source. deps.historyMeta (default false) loads the type table for the past's aircraft (typeDb.ts) and finds the
+ * oldest day adsb.lol keeps (HistoryStore.tickOldest), each refreshed while the server listens: the command line sets it for
+ * any source. Off, the past is fetched only when a client asks, so a test server asks adsb.lol for nothing by itself; its
+ * aircraft have no type and the oldest day is taken to be 30 days back. deps.types and deps.oldestSlotMs put a table and an
+ * oldest day in instead (tests).
  */
 export function createServer(
   cfg: ServerConfig,
-  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch; historyFetch?: typeof fetch; rollHistory?: boolean } = {},
+  deps: {
+    source?: Source
+    nowMs?: () => number
+    routesFetch?: typeof fetch
+    wxFetch?: typeof fetch
+    historyFetch?: typeof fetch
+    rollHistory?: boolean
+    historyMeta?: boolean
+    types?: TypeDb
+    oldestSlotMs?: number
+  } = {},
 ): { listen(port: number): Promise<string>; close(): Promise<void>; poller: Poller; info: InfoStore } {
   const nowMs = deps.nowMs ?? Date.now
   const source = deps.source ?? makeSource(cfg)
@@ -262,9 +284,14 @@ export function createServer(
   const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch })
   // The past (History mode, the flown path): adsb.lol's files, fetched when asked and held in memory only.
   const pastUa = userAgent(cfg.contact ?? 'personal use')
-  const history = new HistoryStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs, maxSlots: HISTORY_SLOTS })
+  const history = new HistoryStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs, maxSlots: HISTORY_SLOTS, oldestMs: deps.oldestSlotMs })
   const traces = new TraceStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs })
   let historyTimer: ReturnType<typeof setInterval> | null = null
+  // The past's aircraft types: Mictronics' table, loaded by this server only when asked to (historyMeta), else one put in.
+  const ownTypes = deps.types === undefined && deps.historyMeta === true ? new TypeDb({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs }) : null
+  const types = deps.types ?? ownTypes
+  let typesWait: Promise<boolean> | null = null // the first ask's wait for the table, shared by the asks meanwhile
+  let metaTimer: ReturnType<typeof setInterval> | null = null
 
   /**
    * The AircraftInfo this client lacks for the aircraft in a view answer. since = 0: all of them. Otherwise an
@@ -342,8 +369,10 @@ export function createServer(
   }
 
   /**
-   * One past half hour in a circle: [200, HistorySlot]; [404, …] when adsb.lol has no file for it (or it is older than 31
-   * days); [503, …] when it cannot be had now (adsb.lol failed or is not done with it yet, too many downloads): ask again.
+   * One past half hour in a circle: [200, HistorySlot], each aircraft with its type and category from the type table (null
+   * when it has none); [404, …] when adsb.lol has no file for it (or it is older than the oldest day it keeps); [503, …] when
+   * it cannot be had now (adsb.lol failed or is not done with it yet, too many downloads): ask again. The first ask after the
+   * server starts waits up to 5 s for the type table, as the file downloads; no ask after it waits.
    */
   async function pastSlot(q: URLSearchParams): Promise<[number, unknown]> {
     const slot = num(q, 'slot')
@@ -354,9 +383,14 @@ export function createServer(
     check(Math.abs(lat) <= 90, 'lat must be in [-90, 90]')
     check(Math.abs(lon) <= 180, 'lon must be in [-180, 180]')
     check(nm > 0 && nm <= EVERYTHING_NM, `nm must be in (0, ${EVERYTHING_NM}]`)
-    const r = await history.query(slot, { lat, lon, nm })
+    typesWait ??= types === null ? Promise.resolve(false) : types.ready(TYPES_WAIT_MS)
+    const [r] = await Promise.all([history.query(slot, { lat, lon, nm }), typesWait])
     if (r === 'missing') return [404, { error: 'no data for this half hour' }]
     if (r === 'unavailable') return [503, { error: 'this half hour cannot be had now, try again' }]
+    for (const a of r.aircraft) {
+      a.type = types?.type(a.hex) ?? null
+      a.category = types?.category(a.hex) ?? null
+    }
     return [200, r]
   }
 
@@ -368,6 +402,7 @@ export function createServer(
   async function trace(q: URLSearchParams): Promise<[number, unknown]> {
     const hex = (q.get('hex') ?? '').trim().toLowerCase()
     check(HEX.test(hex), 'hex must be 6 hex digits (optionally prefixed with ~)')
+    if (q.has('from') || q.has('to')) return traceSpan(q, hex)
     const at = num(q, 'at', nowMs())
     check(at > 0, 'at must be a time in ms')
     const r = await traces.get(hex, at)
@@ -375,6 +410,28 @@ export function createServer(
     const lastMs = r.t0Ms + (r.t.at(-1) ?? 0) * 1000
     const flyingNow = nowMs() - lastMs <= ORIGIN_MAX_AGE_MS && r.callsign !== null && r.callsign === info.get(hex)?.callsign
     return [200, { ...r, origin: flyingNow ? info.origin(hex) : null }]
+  }
+
+  /**
+   * One aircraft's legs over a span (TraceDay): from and to in UTC ms, at most 48 h apart; to is capped at now and from raised
+   * to the oldest day adsb.lol keeps, and the reply says the span it answered. 400 when it is no span of the past (from after
+   * to, over 48 h, from in the future, to before the oldest day); 200 with no legs when it did not fly then; 503 when a file
+   * of the span could not be had (a partial day must not read as "not heard"). No origin: the route is today's flight's.
+   */
+  async function traceSpan(q: URLSearchParams, hex: string): Promise<[number, unknown]> {
+    check(!q.has('at'), 'give at, or from and to, not both')
+    const from = num(q, 'from')
+    const to = num(q, 'to')
+    const now = nowMs()
+    const oldest = history.oldestSlotMs()
+    check(from <= to, 'from must not be after to')
+    check(to - from <= SPAN_MAX_MS, 'from and to must be at most 48 h apart')
+    check(from <= now, 'from must not be in the future')
+    check(to >= oldest, `to must not be before the oldest day adsb.lol keeps, ${new Date(oldest).toISOString()}`)
+    const r = await traces.day(hex, Math.max(from, oldest), Math.min(to, now))
+    if (r === null) throw new BadRequest('from and to must be times in ms') // cannot be, once checked: both are past days now
+    if (r === 'unavailable') return [503, { error: 'its trace cannot be had now, try again' }]
+    return [200, r]
   }
 
   function recordings(): { recordings: RecordingInfo[] } {
@@ -474,6 +531,17 @@ export function createServer(
             historyTimer = setInterval(roll, HISTORY_TICK_MS)
             historyTimer.unref()
           }
+          // Asked to (the command line does, for any source): the type table and the oldest day adsb.lol keeps, each loaded
+          // when it is due (the table daily, the oldest day every 6 h, 10 min after a failure).
+          if (deps.historyMeta === true && metaTimer === null) {
+            const meta = (): void => {
+              void ownTypes?.tick().catch((e: unknown) => console.error('types: tick failed:', e))
+              void history.tickOldest().catch((e: unknown) => console.error('history: the oldest day search failed:', e))
+            }
+            meta()
+            metaTimer = setInterval(meta, META_TICK_MS)
+            metaTimer.unref()
+          }
           if (flights !== null && flightTimer === null) {
             flightTimer = setInterval(() => flights.tick(), FLIGHT_LOG_TICK_MS)
             flightTimer.unref()
@@ -486,6 +554,9 @@ export function createServer(
     close(): Promise<void> {
       history.close() // the downloads under way end now
       traces.close()
+      ownTypes?.close()
+      if (metaTimer !== null) clearInterval(metaTimer)
+      metaTimer = null
       if (routeTimer !== null) clearInterval(routeTimer)
       routeTimer = null
       if (flightTimer !== null) clearInterval(flightTimer)
@@ -505,10 +576,16 @@ export function createServer(
 /** Whether the command line keeps the newest hour of the past fetched: for a live source, not for a replay. */
 export const rollsHistory = (cfg: ServerConfig): boolean => cfg.source !== 'replay'
 
+/**
+ * What the command line asks of its server beyond a test's: the newest hour of the past for a live source (rollsHistory);
+ * the past's aircraft types and the oldest day adsb.lol keeps for any, a replay's included (History works on either).
+ */
+export const commandLineDeps = (cfg: ServerConfig): { rollHistory: boolean; historyMeta: boolean } => ({ rollHistory: rollsHistory(cfg), historyMeta: true })
+
 if (import.meta.main) {
   try {
     const cfg = readServerConfig(process.env)
-    const url = await createServer(cfg, { rollHistory: rollsHistory(cfg) }).listen(cfg.port)
+    const url = await createServer(cfg, commandLineDeps(cfg)).listen(cfg.port)
     const routes = cfg.contact === null || cfg.source === 'replay' ? '' : cfg.routes && cfg.source === 'adsblol' ? ', routes on' : ', routes of selected flights'
     const rec = cfg.flightsDir === null ? '' : `, recording flights to ${cfg.flightsDir}`
     console.log(`FlightHopper server on ${url} (source ${cfg.source}${routes}${rec})`)

@@ -3,8 +3,11 @@
 // that half hour ends. Shared so the server's cache and the client's time bar agree on the slots.
 
 export const SLOT_MS = 30 * 60_000
-/** How long after its half hour ends its file is surely there: written ~1 s after, the rest is margin. */
-export const PUBLISH_DELAY_MS = 90_000
+/**
+ * How long after its half hour ends its file is taken to be there: it appears 2-8 s after (median 2 s, p90 8 s, measured
+ * 2026-10-02). The rare one later than this answers 404 at first, which the server takes for "late" and asks again 15 s on.
+ */
+export const PUBLISH_DELAY_MS = 20_000
 
 /** The start of the half hour holding tMs (UTC ms). */
 export function slotOf(tMs: number): number {

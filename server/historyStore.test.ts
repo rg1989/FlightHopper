@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib'
 import { encodeHeatmap, readSlot } from './heatmap.ts'
 import type { HistorySlot } from '../shared/api.ts'
 import { HistoryStore, heatmapUrl, type HistoryMiss, type HistoryStoreOpts } from './historyStore.ts'
-import { PUBLISH_DELAY_MS, SLOT_MS, newestSlotMs, slotOf, stepFor } from '../shared/history.ts'
+import { PUBLISH_DELAY_MS, SLOT_MS, newestSlotMs, stepFor } from '../shared/history.ts'
 
 const BASE = 'https://adsb.lol'
 const MIN = 60_000
@@ -94,23 +94,51 @@ test('file: a held file is not fetched again; concurrent calls for one slot shar
   assert.equal(calls.length, 1, 'held')
 })
 
-test('file: a 404 or a 410 is remembered for 10 minutes, then asked again', async () => {
+test('file: a 404 or a 410 of a half hour before the newest is remembered for 10 minutes, then asked again', async () => {
   const { store, clock, calls, serve } = setup()
-  serve(NEWEST, { status: 404 })
-  serve(AGO(1), { status: 410 })
-  assert.equal(await store.file(NEWEST), 'missing')
+  serve(AGO(1), { status: 404 })
+  serve(AGO(2), { status: 410 })
   assert.equal(await store.file(AGO(1)), 'missing')
+  assert.equal(await store.file(AGO(2)), 'missing')
   assert.equal(calls.length, 2)
   clock.t += 10 * MIN - 1
-  assert.equal(await store.file(NEWEST), 'missing')
   assert.equal(await store.file(AGO(1)), 'missing')
+  assert.equal(await store.file(AGO(2)), 'missing')
   assert.equal(calls.length, 2, 'remembered')
   clock.t += 1
-  serve(NEWEST, ok(NEWEST)) // it is there by now
+  serve(AGO(1), ok(AGO(1))) // it is there by now
+  assert.deepEqual(await store.file(AGO(1)), heat(AGO(1)))
+  assert.equal(calls.length, 3)
+  assert.equal(await store.file(AGO(2)), 'missing')
+  assert.equal(calls.length, 4, 'asked again')
+})
+
+test('file: a 404 or 410 of the newest half hour is "not yet": unavailable, not listed as missing, asked again after 15 s', async () => {
+  const { store, clock, calls, serve } = setup()
+  serve(NEWEST, { status: 404 })
+  assert.equal(await store.file(NEWEST), 'unavailable', 'late, not missing: worth asking again')
+  assert.deepEqual(store.status().slots, [], 'not missing')
+  clock.t += 15_000 - 1
+  assert.equal(await store.file(NEWEST), 'unavailable')
+  assert.equal(calls.length, 1, 'remembered 15 s: not asked again yet')
+  clock.t += 1
+  serve(NEWEST, { status: 410 })
+  assert.equal(await store.file(NEWEST), 'unavailable')
+  assert.equal(calls.length, 2, 'forgotten after 15 s: asked again')
+  clock.t += 15_000
+  serve(NEWEST, ok(NEWEST)) // there now
   assert.deepEqual(await store.file(NEWEST), heat(NEWEST))
   assert.equal(calls.length, 3)
-  assert.equal(await store.file(AGO(1)), 'missing')
-  assert.equal(calls.length, 4, 'asked again')
+
+  // Once a newer half hour is published, a 404 of this one is an old one's: missing, for 10 minutes.
+  const later = setup()
+  later.serve(NEWEST, { status: 404 })
+  assert.equal(await later.store.file(NEWEST), 'unavailable')
+  later.clock.t += SLOT_MS
+  assert.equal(await later.store.file(NEWEST), 'missing', 'now the second newest: a 404 is final')
+  later.clock.t += 9 * MIN
+  assert.equal(await later.store.file(NEWEST), 'missing')
+  assert.equal(later.calls.length, 2)
 })
 
 test('file: any other failure is unavailable, not missing, and not held or remembered: 5xx, 429, 403, a network error, a timeout, a 200 that is not a heatmap, a body that is gzip but broken', async () => {
@@ -164,22 +192,120 @@ test('file: a slot not published yet is unavailable (try again later), one that 
   assert.equal(calls.length, 1)
 })
 
-test('file: a half hour older than 31 days is missing with no request: adsb.lol keeps about 30', async () => {
+const DAY = 24 * 60 * MIN
+const TODAY = Date.UTC(2026, 9, 1) // NOW's UTC day
+
+test('file: a half hour before the oldest day kept is missing with no request; until a search finds that day it is today − 30 days, 00:00 UTC', async () => {
   const { store, clock, calls, serve } = setup()
-  const limit = clock.t - 31 * 24 * 60 * MIN // 12:20Z, 31 days ago
-  const before = slotOf(limit) // 12:00Z that day: older than the limit
-  assert.ok(before < limit)
-  serve(before, ok(before)) // even if the upstream had it
-  assert.equal(await store.file(before), 'missing')
-  assert.equal(await store.file(before - 100 * SLOT_MS), 'missing')
+  const guess = TODAY - 30 * DAY // 2026-09-01 00:00Z
+  assert.equal(store.oldestSlotMs(), guess)
+  serve(guess - SLOT_MS, ok(guess - SLOT_MS)) // even if the upstream had it
+  assert.equal(await store.file(guess - SLOT_MS), 'missing', '23:30Z the day before')
+  assert.equal(await store.file(guess - 100 * SLOT_MS), 'missing')
   assert.equal(calls.length, 0)
   assert.deepEqual(store.status().slots, [], 'not remembered: nothing was asked')
-  serve(before + SLOT_MS, { status: 404 }) // 12:30Z: inside the limit, so it is asked
-  assert.equal(await store.file(before + SLOT_MS), 'missing')
+  serve(guess, { status: 404 }) // 00:00Z: inside, so it is asked
+  assert.equal(await store.file(guess), 'missing')
   assert.equal(calls.length, 1)
-  clock.t += 60 * MIN // an hour on, 12:00Z is further behind and still not asked
-  assert.equal(await store.file(before + SLOT_MS), 'missing', 'now older than 31 days')
+  clock.t = TODAY + DAY + 30 * MIN // the next day: the guess moves with it
+  assert.equal(store.oldestSlotMs(), guess + DAY)
+  clock.t += 11 * MIN
+  assert.equal(await store.file(guess), 'missing', 'now before the oldest day')
   assert.equal(calls.length, 1)
+
+  const told = setup({ oldestMs: TODAY - 42 * DAY })
+  assert.equal(told.store.oldestSlotMs(), TODAY - 42 * DAY, 'as a search would have found it')
+  assert.equal(await told.store.file(TODAY - 42 * DAY - SLOT_MS), 'missing')
+  assert.equal(told.calls.length, 0)
+  assert.equal(await told.store.file(TODAY - 42 * DAY), 'missing', '404 from the fake host')
+  assert.equal(told.calls.length, 1, 'the oldest day itself is asked')
+})
+
+/** A store whose host has the days from `oldest` up to today (HEAD of a day's 00.bin.ttf: 200) and none before (404). */
+function daysHost(oldest: number | null, fail?: (url: string) => Response | Error | null) {
+  const clock = { t: NOW }
+  const heads: { url: string; method: string | undefined; headers: Headers; signal: AbortSignal | null | undefined }[] = []
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    heads.push({ url, method: init?.method, headers: new Headers(init?.headers), signal: init?.signal })
+    const trouble = fail?.(url) ?? null
+    if (trouble instanceof Error) throw trouble
+    if (trouble !== null) return trouble
+    const m = /\/globe_history\/(\d{4})\/(\d{2})\/(\d{2})\/heatmap\/00\.bin\.ttf$/.exec(url)
+    assert.ok(m !== null, url)
+    const day = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    return new Response(null, { status: oldest !== null && day >= oldest ? 200 : 404 })
+  }) as typeof fetch
+  const store = new HistoryStore({ userAgent: 'FlightHopper-test', fetchFn, nowMs: () => clock.t })
+  return { store, clock, heads }
+}
+
+test('findOldest: a binary search with HEAD over the days from 60 back to yesterday finds the oldest one there, in 6 requests at most', async () => {
+  const { store, heads } = daysHost(TODAY - 42 * DAY) // 2026-08-20, as adsb.lol had it on 2026-10-02 (42 days)
+  assert.equal(await store.findOldest(), TODAY - 42 * DAY)
+  assert.equal(store.oldestSlotMs(), TODAY - 42 * DAY)
+  assert.equal(store.status().oldestSlotMs, TODAY - 42 * DAY)
+  assert.ok(heads.length <= 6, `${heads.length} requests`)
+  for (const h of heads) {
+    assert.equal(h.method, 'HEAD')
+    assert.match(h.url, /^https:\/\/adsb\.lol\/globe_history\/2026\/(07|08|09)\/\d\d\/heatmap\/00\.bin\.ttf$/)
+    assert.equal(h.headers.get('user-agent'), 'FlightHopper-test')
+    assert.ok(h.signal instanceof AbortSignal && !h.signal.aborted, 'a stuck request ends by itself')
+  }
+  for (let back = 1; back <= 60; back++) {
+    const host = daysHost(TODAY - back * DAY)
+    assert.equal(await host.store.findOldest(), TODAY - back * DAY, `${back} days back`)
+    assert.ok(host.heads.length <= 6, `${back} days back: ${host.heads.length} requests`)
+  }
+  const deeper = daysHost(TODAY - 90 * DAY)
+  assert.equal(await deeper.store.findOldest(), TODAY - 60 * DAY, 'older than the search looks: the farthest day it looks at')
+})
+
+test('findOldest: none of the days there, or a request that fails, is null and changes nothing', async () => {
+  const none = daysHost(null)
+  assert.equal(await none.store.findOldest(), null)
+  assert.equal(none.store.oldestSlotMs(), TODAY - 30 * DAY, 'still the guess')
+  assert.ok(none.heads.length <= 6)
+  for (const trouble of [new Response(null, { status: 503 }), new Response(null, { status: 429 }), new Error('ECONNRESET')]) {
+    const host = daysHost(TODAY - 42 * DAY, () => trouble)
+    assert.equal(await host.store.findOldest(), null, String(trouble))
+    assert.equal(host.heads.length, 1, 'it stops at the first failure')
+    assert.equal(host.store.oldestSlotMs(), TODAY - 30 * DAY)
+  }
+  let failing = false
+  const found = daysHost(TODAY - 42 * DAY, () => (failing ? new Error('ECONNRESET') : null))
+  await found.store.findOldest()
+  failing = true
+  assert.equal(await found.store.findOldest(), null)
+  assert.equal(found.store.oldestSlotMs(), TODAY - 42 * DAY, 'a failed search keeps what the last one found')
+})
+
+test('tickOldest: searches at once, again 6 h after a search that found the day, 10 minutes after one that did not', async () => {
+  let failing = true
+  const { store, clock, heads } = daysHost(TODAY - 42 * DAY, () => (failing ? new Response(null, { status: 500 }) : null))
+  await store.tickOldest()
+  assert.equal(heads.length, 1, 'the first tick searches (and fails at once)')
+  clock.t += 10 * MIN - 1
+  await store.tickOldest()
+  assert.equal(heads.length, 1, 'not again before 10 minutes')
+  clock.t += 1
+  failing = false
+  await store.tickOldest()
+  assert.equal(store.oldestSlotMs(), TODAY - 42 * DAY)
+  const searched = heads.length
+  clock.t += 6 * 60 * MIN - 1
+  await store.tickOldest()
+  assert.equal(heads.length, searched, 'not again before 6 h')
+  clock.t += 1
+  await store.tickOldest()
+  assert.ok(heads.length > searched, '6 h on: searched again')
+})
+
+test('findOldest: after close, nothing is asked', async () => {
+  const { store, heads } = daysHost(TODAY - 42 * DAY)
+  store.close()
+  assert.equal(await store.findOldest(), null)
+  assert.equal(heads.length, 0)
 })
 
 test('file: at most maxSlots held, the least recently used goes first, the newest two published stay', async () => {
@@ -313,13 +439,13 @@ test('status: the newest published slot and every slot held, loading or missing,
   serve(AGO(1), ok(AGO(1)))
   serve(AGO(2), gate.promise)
   serve(AGO(3), { status: 404 })
-  assert.deepEqual(store.status(), { newestSlotMs: NEWEST, oldestSlotMs: 0, slots: [] })
+  assert.deepEqual(store.status(), { newestSlotMs: NEWEST, oldestSlotMs: TODAY - 30 * DAY, slots: [] })
   await store.file(AGO(1))
   await store.file(AGO(3))
   const loading = store.file(AGO(2))
   assert.deepEqual(store.status(), {
     newestSlotMs: NEWEST,
-    oldestSlotMs: 0,
+    oldestSlotMs: TODAY - 30 * DAY,
     slots: [
       { slotMs: AGO(3), state: 'missing' },
       { slotMs: AGO(2), state: 'loading' },

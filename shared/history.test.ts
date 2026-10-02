@@ -11,10 +11,10 @@ test('a time falls in the half hour that holds it', () => {
   assert.equal(SLOT_MS, 1_800_000)
 })
 
-test('the newest published half hour ended at least 90 s ago', () => {
+test('the newest published half hour ended at least 20 s ago', () => {
   assert.equal(newestSlotMs(at('2026-10-01T13:50:00Z')), at('2026-10-01T13:00:00Z'))
-  assert.equal(newestSlotMs(at('2026-10-01T13:31:29Z')), at('2026-10-01T12:30:00Z')) // 13:00's file: not sure yet
-  assert.equal(newestSlotMs(at('2026-10-01T13:31:30Z')), at('2026-10-01T13:00:00Z'))
+  assert.equal(newestSlotMs(at('2026-10-01T13:30:19.999Z')), at('2026-10-01T12:30:00Z')) // 13:00's file: not sure yet
+  assert.equal(newestSlotMs(at('2026-10-01T13:30:20Z')), at('2026-10-01T13:00:00Z'))
 })
 
 test('wide views keep fewer slices', () => {
