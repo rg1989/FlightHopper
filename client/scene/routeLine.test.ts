@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Cartesian3, Cartographic } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { altitudeRgba, GROUND_INDEX, UNKNOWN_INDEX } from './altitudeColor.ts'
-import { arc, countUpTo, decimate, firstHeardText, GAP_NM, GAP_S, greatCircle, indexRgba, pathRuns } from './routeLine.ts'
+import { arc, countUpTo, decimate, firstHeardText, GAP_NM, GAP_S, greatCircle, groundHeights, indexRgba, PATH_LIFT_M, pathRuns } from './routeLine.ts'
 import type { PathPoint, PathRun } from './routeLine.ts'
 
 test('greatCircle: both ends, ~20 nm steps, every point on the shortest way (TLV → LHR passes over the Alps, not Turkey)', () => {
@@ -98,6 +98,69 @@ test('pathRuns: a last point alone after a gap is a run of its own (its colour j
     { gap: true, color: null, t: [10, 200] },
     { gap: false, color: 250, t: [200] },
   ])
+})
+
+test('pathRuns: one point → a run of it, in its own band', () => {
+  assert.deepEqual(short(pathRuns([pt(0, 0, 12_345)], Infinity)), [{ gap: false, color: 120, t: [0] }])
+})
+
+test('pathRuns: two gaps in a row → a lone point before, between and after them, every run joined', () => {
+  const runs = pathRuns([pt(0, 0, 20_000), pt(100, 10, 20_000), pt(200, 20, 20_000)], Infinity)
+  assert.deepEqual(short(runs), [
+    { gap: false, color: 200, t: [0] },
+    { gap: true, color: null, t: [0, 100] },
+    { gap: false, color: 200, t: [100] },
+    { gap: true, color: null, t: [100, 200] },
+    { gap: false, color: 200, t: [200] },
+  ])
+  assertJoined(runs)
+})
+
+test('pathRuns: a cut inside a gap\'s step leaves the gap out (its far end is not heard yet)', () => {
+  const pts = [pt(0, 0, 30_000), pt(10, 1, 30_000), pt(200, 20, 30_000), pt(210, 21, 30_000)]
+  assert.deepEqual(short(pathRuns(pts, 100_000)), [{ gap: false, color: 300, t: [0, 10] }])
+  assert.deepEqual(short(pathRuns(pts, 200_000)), [
+    { gap: false, color: 300, t: [0, 10] },
+    { gap: true, color: null, t: [10, 200] },
+    { gap: false, color: 300, t: [200] },
+  ])
+})
+
+test('pathRuns: a gap is more than GAP_S and more than GAP_NM; exactly either is not one', () => {
+  // Exactly 60 s, 5 nm on.
+  assert.deepEqual(short(pathRuns([pt(0, 0, 30_000), pt(60, 5, 30_000)], Infinity)), [{ gap: false, color: 300, t: [0, 60] }])
+  // 90 s, exactly 2 nm on: a pair distanceNm puts 2 nm apart to the last bit (along a meridian no pair lands on it).
+  const a = { ...pt(0, 0, 30_000), lat: 32, lon: 34 }
+  const b = { ...pt(90, 0, 30_000), lat: 32.02355509527381, lon: 34.02777745276302 }
+  assert.equal(distanceNm(a.lat, a.lon, b.lat, b.lon), GAP_NM)
+  assert.deepEqual(short(pathRuns([a, b], Infinity)), [{ gap: false, color: 300, t: [0, 90] }])
+  // Just over both.
+  assert.equal(pathRuns([pt(0, 0, 30_000), pt(60.001, 2.1, 30_000)], Infinity)[1]?.gap, true)
+})
+
+test('groundHeights: a ground run stands on the ground read once at its first point on it, + PATH_LIFT_M', () => {
+  // Landing: the ground run starts at the last point in the air (shared), which keeps its own height.
+  const runs = pathRuns([pt(0, 0, 900), pt(4, 0.3, 300), pt(8, 0.6, 'g'), pt(12, 0.8, 'g'), pt(16, 0.9, 'g')], Infinity)
+  const reads: number[] = []
+  const lifted = groundHeights(runs, (p) => (reads.push(p.tMs / 1000), 60))
+  assert.deepEqual(reads, [8], 'one read, at the first point on the ground')
+  assert.deepEqual([...lifted].map(([p, h]) => [p.tMs / 1000, h]), [[8, 60 + PATH_LIFT_M], [12, 60 + PATH_LIFT_M], [16, 60 + PATH_LIFT_M]])
+  assert.equal(PATH_LIFT_M, 3)
+})
+
+test('groundHeights: take-off keeps the ground run\'s height (no second read); past a gap a ground run reads its own; unloaded ground stays unlifted', () => {
+  // Taxi, take-off, climb, a hole, then heard on the ground again where the tiles are not loaded yet.
+  const pts = [pt(0, 0, 'g'), pt(10, 0.05, 'g'), pt(20, 0.5, 400), pt(30, 1.2, 1_200), pt(400, 80, 'g'), pt(410, 80.05, 'g')]
+  const reads: number[] = []
+  const lifted = groundHeights(pathRuns(pts, Infinity), (p) => (reads.push(p.tMs / 1000), p.tMs < 100_000 ? 40 : undefined))
+  assert.deepEqual(reads, [0, 400])
+  assert.deepEqual([...lifted].map(([p, h]) => [p.tMs / 1000, h]), [[0, 40 + PATH_LIFT_M], [10, 40 + PATH_LIFT_M]])
+})
+
+test('groundHeights: a lone point on the ground after a gap, carried on by a climb, is lifted too', () => {
+  const pts = [pt(0, 0, 3_000), pt(200, 30, 'g'), pt(210, 30.5, 400)]
+  const lifted = groundHeights(pathRuns(pts, Infinity), () => 25)
+  assert.deepEqual([...lifted].map(([p, h]) => [p.tMs / 1000, h]), [[200, 25 + PATH_LIFT_M]])
 })
 
 test('pathRuns: the points after cutMs are left out (one at cutMs stays)', () => {

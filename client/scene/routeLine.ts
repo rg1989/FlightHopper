@@ -5,7 +5,7 @@
 // great circle to its destination airport (the route's last airport, when the server knows where it is), with a dot and
 // the airport's code there. Flightradar24-style: the line ahead is the shortest way, not the filed route (airways and
 // procedures bend it, most near the airports); so is the lead-in from the origin.
-import { Cartesian2, Cartesian3, Color, HorizontalOrigin, LabelCollection, LabelStyle, Material, NearFarScalar, PointPrimitiveCollection, PolylineCollection, VerticalOrigin } from 'cesium'
+import { Cartesian2, Cartesian3, Cartographic, Color, HorizontalOrigin, LabelCollection, LabelStyle, Material, NearFarScalar, PointPrimitiveCollection, PolylineCollection, VerticalOrigin } from 'cesium'
 import type { Label, PointPrimitive, Polyline, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import type { RoutePlace } from '../../shared/info.ts'
@@ -61,7 +61,8 @@ export function countUpTo(points: readonly { tMs: number }[], cutMs: number): nu
  * The path up to cutMs (points in time order) as runs: a new run where the colour band (1,000 ft; ground and unknown
  * their own) changes; a step longer than GAP_S and GAP_NM is a gap run of its two ends. Consecutive runs share their
  * joining point (the same object). A step takes the colour of the point it leads to, so a run's points after its first
- * are all in its band; a run of one point is the last after a gap (its colour goes on to the aircraft).
+ * are all in its band. A run of one point has no step of its own: the only point of the path, a first point a gap
+ * follows, a point between two gaps, or the last point after a gap (its colour goes on to the aircraft).
  */
 export function pathRuns(points: readonly PathPoint[], cutMs: number): PathRun[] {
   const runs: PathRun[] = []
@@ -85,6 +86,32 @@ export function pathRuns(points: readonly PathPoint[], cutMs: number): PathRun[]
     } else runs.push((run = { gap: false, color, points: [q, p] }))
   }
   return runs
+}
+
+/** On the ground the path stands this far above the drawn ground: at hM (the geoid's) it is under it, and hidden. */
+export const PATH_LIFT_M = 3
+
+/**
+ * The drawn height of the runs' points on the ground: read(p), the drawn ground (undefined while its tile is not loaded),
+ * at each run's first point on the ground, + PATH_LIFT_M, for all of that run's points on the ground (an airport is flat
+ * enough). A point two runs share keeps the first run's. Points in the air, and on ground not read yet, are not in it.
+ */
+export function groundHeights(runs: readonly PathRun[], read: (p: PathPoint) => number | undefined): Map<PathPoint, number> {
+  const out = new Map<PathPoint, number>()
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i]
+    if (r.gap) continue
+    const shared = i > 0 && !runs[i - 1].gap // its first point is the last of the run before, which placed it
+    let h: number | undefined | null = null // null: not read yet
+    for (let k = shared ? 1 : 0; k < r.points.length; k++) {
+      const p = r.points[k]
+      if (!p.onGround) continue
+      if (h === null) h = read(p)
+      if (h === undefined) break
+      out.set(p, h + PATH_LIFT_M)
+    }
+  }
+  return out
 }
 
 /** points thinned for drawing: both ends, and between them each point at least minNm from the one kept before it. */
@@ -124,6 +151,9 @@ const STILL_M = 1
 const KEEP_NM = 0.3 // a flown point is drawn this far from the last one drawn (a standard-rate turn's chords stay within ~30 m of it)
 const KEEP_GROUND_NM = 0.01 // ~20 m on the ground, so a taxi route keeps its corners
 const LEAD_IN_NM = 10 // first heard this far from the origin airport or more: dotted from it
+const GROUND_READ_MS = 1000 // the ground under a ground run is read again at most once a second, so it settles as tiles load
+const GROUND_MOVED_M = 0.5 // …and the run redrawn when it moved more than this
+const CARTO = new Cartographic()
 // The flown path: its altitude colour inside a dark edge that keeps it apart from the pale street map. Cesium's
 // outlineWidth is both edges together: 4 px of colour, a 1 px edge each side.
 const PATH_PX = 6
@@ -171,17 +201,32 @@ export function arc(a: LinePoint, b: LinePoint): Cartesian3[] {
   return pts.map((g, i) => Cartesian3.fromDegrees(g.lon, g.lat, a.hM + ((b.hM - a.hM) * i) / (pts.length - 1)))
 }
 
+/** What PolylineCollection.add takes, as far as these lines use it (Cesium types it any: it has no Polyline.ConstructorOptions). */
+interface LineOptions {
+  width: number
+  show: boolean
+  material: Material
+}
+
 /** A flown run's line: its colour (written in place per run) inside the dark edge. */
-const flownLine = () => ({
+const flownLine = (): LineOptions => ({
   width: PATH_PX, show: false,
   material: Material.fromType(Material.PolylineOutlineType, { color: new Color(), outlineColor: EDGE, outlineWidth: EDGE_PX }),
 })
 
 /** A line nobody heard: dotted grey. */
-const dottedLine = () => ({
+const dottedLine = (): LineOptions => ({
   width: 3, show: false,
   material: Material.fromType(Material.PolylineDashType, { color: DOTS, gapColor: DOTS_GAP, dashLength: 6 }),
 })
+
+/** The drawn ground under a ground run, read at one point of it; h undefined until its tile is loaded. */
+interface GroundRead {
+  lat: number
+  lon: number
+  h: number | undefined
+  readMs: number
+}
 
 /** Lines from..to of a pool, no longer used: hidden, and emptied so Cesium leaves them out of its batches. */
 function retire(pool: readonly Polyline[], from: number, to: number): void {
@@ -225,6 +270,11 @@ export class RouteLine {
   #atH = NaN
   #dest: RoutePlace | null = null
   #origin: RoutePlace | null = null
+  // The drawn ground under this path's ground runs, by the tMs of the point it was read at; the reads the drawn runs use;
+  // the last point's height when it stands on read ground (the join's then).
+  #grounds = new Map<number, GroundRead>()
+  #groundsUsed: GroundRead[] = []
+  #lastLift: number | undefined = undefined
 
   constructor(viewer: Viewer) {
     this.#viewer = viewer
@@ -266,11 +316,13 @@ export class RouteLine {
     if (!newPath && !newDest && !newOrigin && nowMs - this.#lastMs < REDRAW_MS) return
     const newPoints = newPath || n !== this.#n || !samePoint(last, this.#last)
     const moved = !(Math.abs(at.lat - this.#atLat) <= STILL_DEG && Math.abs(at.lon - this.#atLon) <= STILL_DEG && Math.abs(at.hM - this.#atH) <= STILL_M)
-    if (!newPoints && !moved && !newDest && !newOrigin) return
+    const newGround = !newPoints && this.#groundMoved(nowMs) // its tiles loaded, or the relief grew or sank
+    if (!newPoints && !moved && !newDest && !newOrigin && !newGround) return
     this.#lastMs = nowMs
-    if (newPoints) this.#drawPath(path, cutMs)
+    if (newPath) this.#grounds.clear()
+    if (newPoints || newGround) this.#drawPath(path, cutMs, nowMs)
     if (newPath || newOrigin) this.#drawLeadIn(first, origin)
-    if (newPoints || moved) this.#drawJoin(last, at)
+    if (newPoints || newGround || moved) this.#drawJoin(last, at)
     if (moved || newDest) this.#drawAhead(at, dest)
     this.#first = first
     this.#last = last
@@ -284,25 +336,34 @@ export class RouteLine {
   }
 
   /** The runs into the pools (flown ones in their colour, gaps dotted), the rest of the pools hidden; the join's colour. */
-  #drawPath(path: readonly PathPoint[], cutMs: number): void {
+  #drawPath(path: readonly PathPoint[], cutMs: number, nowMs: number): void {
     // ponytail: the whole path is rewritten when a point is added or cut, ≤ 4 times a second (a few ms for a long leg's
     // trace), and every run is a line of its own: tens on an airliner's leg, a few hundred for circuits all afternoon.
     // Altitude jittering across a band's edge for hours would make thousands (Cesium then spends ms a frame on them).
+    // The pools never shrink: after a one-off leg of thousands of runs, thousands of emptied lines and their materials
+    // stay hidden for the session (out of Cesium's batches: memory, and a little in each rebuild).
     const runs = pathRuns(path, cutMs)
+    // ponytail: one ground height per run, read at its first point on the ground (an airport is flat to a few metres; a
+    // long taxi across a sloping one dips under it), and read again at most once a second: the drawn ground it reads
+    // grows and sinks with the topography toggle, and the run sits off it for that second.
+    this.#groundsUsed.length = 0
+    const lifted = groundHeights(runs, (p) => this.#groundAt(p, nowMs))
+    const hOf = (p: PathPoint): number => lifted.get(p) ?? p.hM
     const flown: { color: number; pts: readonly PathPoint[] }[] = []
     let gaps = 0
     for (const r of runs) {
       if (r.gap) {
-        this.#put(this.#gaps, gaps++, dottedLine, arc(r.points[0], r.points[1]))
+        const [a, b] = r.points
+        this.#put(this.#gaps, gaps++, dottedLine, arc({ lat: a.lat, lon: a.lon, hM: hOf(a) }, { lat: b.lat, lon: b.lon, hM: hOf(b) }))
         continue
       }
       const pts = decimate(r.points, r.color === GROUND_INDEX ? KEEP_GROUND_NM : KEEP_NM)
-      if (pts.length >= 2) flown.push({ color: r.color, pts }) // a lone point after a gap: the join starts there
+      if (pts.length >= 2) flown.push({ color: r.color, pts }) // a lone point has no step to draw (the join may start there)
     }
     // Same colours side by side in the pool: Cesium draws neighbours of one look in one call (≤ 43 calls, not one a run).
     flown.sort((a, b) => a.color - b.color)
     for (let i = 0; i < flown.length; i++) {
-      const line = this.#put(this.#flown, i, flownLine, flown[i].pts.map((p) => Cartesian3.fromDegrees(p.lon, p.lat, p.hM)))
+      const line = this.#put(this.#flown, i, flownLine, flown[i].pts.map((p) => Cartesian3.fromDegrees(p.lon, p.lat, hOf(p))))
       indexRgba(flown[i].color, line.material.uniforms.color)
     }
     retire(this.#flown, flown.length, this.#nFlown)
@@ -311,10 +372,40 @@ export class RouteLine {
     this.#nGaps = gaps
     const end = runs.at(-1) // flown: a gap is always followed by the run it leads to
     if (end !== undefined) indexRgba(end.color, this.#join.material.uniforms.color)
+    const last = end?.points.at(-1)
+    this.#lastLift = last === undefined ? undefined : lifted.get(last)
+  }
+
+  /** The drawn ground at p, a ground run's first point on it: from the cache, read again when GROUND_READ_MS old. */
+  #groundAt(p: PathPoint, nowMs: number): number | undefined {
+    let g = this.#grounds.get(p.tMs)
+    if (g === undefined) this.#grounds.set(p.tMs, (g = { lat: p.lat, lon: p.lon, h: undefined, readMs: -Infinity }))
+    this.#read(g, nowMs)
+    this.#groundsUsed.push(g)
+    return g.h
+  }
+
+  /** globe.getHeight: the ground as drawn (exaggerated or flattened with the relief), undefined where no tile is loaded. */
+  #read(g: GroundRead, nowMs: number): void {
+    if (nowMs - g.readMs < GROUND_READ_MS) return
+    g.readMs = nowMs
+    const h = this.#viewer.scene.globe?.getHeight(Cartographic.fromDegrees(g.lon, g.lat, 0, CARTO))
+    if (h !== undefined) g.h = h // a tile dropped since keeps the height read before
+  }
+
+  /** The ground under the drawn ground runs read again (each at most every GROUND_READ_MS): true when it moved. */
+  #groundMoved(nowMs: number): boolean {
+    let moved = false
+    for (const g of this.#groundsUsed) {
+      const was = g.h
+      this.#read(g, nowMs)
+      if (g.h !== undefined && (was === undefined || Math.abs(g.h - was) > GROUND_MOVED_M)) moved = true
+    }
+    return moved
   }
 
   /** Pool line i (made when the pool is that short) shown through positions. */
-  #put(pool: Polyline[], i: number, make: () => object, positions: Cartesian3[]): Polyline {
+  #put(pool: Polyline[], i: number, make: () => LineOptions, positions: Cartesian3[]): Polyline {
     const line = pool[i] ?? (pool[i] = this.#runs.add(make()))
     line.positions = positions
     line.show = true
@@ -334,10 +425,12 @@ export class RouteLine {
     if (this.#firstLabel.text !== text) this.#firstLabel.text = text
   }
 
-  /** The last flown point to the aircraft. */
+  /** The last flown point to the aircraft. From a point on read ground both ends stand on it (the aircraft's hM there is the geoid's). */
   #drawJoin(p: PathPoint | null, at: LinePoint): void {
     this.#join.show = p !== null
-    if (p !== null) this.#join.positions = [Cartesian3.fromDegrees(p.lon, p.lat, p.hM), Cartesian3.fromDegrees(at.lon, at.lat, at.hM)]
+    if (p === null) return
+    const h = this.#lastLift
+    this.#join.positions = [Cartesian3.fromDegrees(p.lon, p.lat, h ?? p.hM), Cartesian3.fromDegrees(at.lon, at.lat, h ?? at.hM)]
   }
 
   /** The dashed great circle to the destination, with its dot and code. */
