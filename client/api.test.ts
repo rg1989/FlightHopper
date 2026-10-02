@@ -173,3 +173,26 @@ test('history, historyStatus and trace ask their endpoints; a 404 is null, not a
   await assert.rejects(api.historyStatus(), { message: 'HTTP 502' })
   assert.equal(api.ready, false, 'the history endpoints do not set the server clock')
 })
+
+test('traceDay asks the legs of a span in whole ms; a 404 is null, another failure throws', async () => {
+  const urls: string[] = []
+  const inits: (RequestInit | undefined)[] = []
+  const answers: Response[] = []
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    urls.push(String(input))
+    inits.push(init)
+    return answers.shift()!
+  }) as typeof fetch
+  const api = new ApiClient('http://host/api', fetchFn, () => 0)
+  const day = { hex: '4691c4', reg: null, typeCode: null, fromMs: 1_790_640_000_000, toMs: 1_790_726_400_000, legs: [] }
+  answers.push(new Response(JSON.stringify(day)), new Response('{"error":"none"}', { status: 404 }), new Response('', { status: 500 }), new Response('{}', { status: 404 }))
+  assert.deepEqual(await api.traceDay('4691c4', 1_790_640_000_000, 1_790_726_400_000), day)
+  assert.equal(urls[0], 'http://host/api/trace?hex=4691c4&from=1790640000000&to=1790726400000')
+  assert.ok(inits[0]?.signal instanceof AbortSignal, 'a timeout signal')
+  assert.equal(await api.traceDay('~abc123', 1_790_640_000_000.4, 1_790_726_400_000.6), null)
+  assert.equal(urls[1], 'http://host/api/trace?hex=~abc123&from=1790640000000&to=1790726400001', 'whole numbers')
+  await assert.rejects(api.traceDay('4691c4', 1, 2), { message: 'HTTP 500' })
+  await api.traceDay('x&to=1', 1, 2)
+  assert.equal(urls[3], 'http://host/api/trace?hex=x%26to%3D1&from=1&to=2', 'the hex cannot add a parameter')
+  assert.equal(api.ready, false, 'it does not set the server clock')
+})
