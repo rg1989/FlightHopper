@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
+import { CATEGORY_COLOR } from '../scene/wxText.ts'
 import type { ScenePrefs } from '../types.ts'
 
 // sceneToggles.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -305,7 +306,7 @@ test('weather legend: the word Airports, then how the flight rules read, each in
     ['fh-wx-legend-title', 'Airports'], ['fh-wx-cat', 'Good'], ['fh-wx-cat', 'Marginal'], ['fh-wx-cat', 'Poor'], ['fh-wx-cat', 'Very poor'],
   ])
   const colors = all(root).filter((e) => e.className === 'fh-wx-cat').map((e) => e.vars['--c'])
-  assert.deepEqual(colors, ['#3ddc84', '#4f9dff', '#ff5a5a', '#e05cff']) // as the markers' rings (weather.ts)
+  assert.deepEqual(colors, [CATEGORY_COLOR.VFR, CATEGORY_COLOR.MVFR, CATEGORY_COLOR.IFR, CATEGORY_COLOR.LIFR]) // as the markers' rings
 })
 
 test('weather is the top-down map\'s: in the chase its row, legend and line go, and come back with the map', () => {

@@ -8,6 +8,7 @@
 // stays put). setBusy(true) shows a spinner on the terrain row while the relief grows or sinks; setWeather() shows what
 // the weather layer holds. The app owns the keys, the stored prefs and the panel.
 import { icon, type IconName } from './icons.ts'
+import { CATEGORY_COLOR } from '../scene/wxText.ts'
 import type { ScenePrefs } from '../types.ts'
 import './sceneToggles.css'
 
@@ -37,8 +38,8 @@ const SCENE_ROWS: Row[] = [
   { key: 'glass', icon: 'building', label: 'See-through buildings', hint: 'Buildings glassy, so they never hide the aircraft', shortcut: 'X' },
 ]
 const ROWS = [...LAYER_ROWS, ...SCENE_ROWS]
-// How the weather reads at an airport (VFR to LIFR in weather.ts), in the colours of its markers' rings.
-const CATEGORIES: [string, string][] = [['Good', '#3ddc84'], ['Marginal', '#4f9dff'], ['Poor', '#ff5a5a'], ['Very poor', '#e05cff']]
+// How the weather reads at an airport (VFR to LIFR), in the colours of its markers' rings (wxText.ts).
+const CATEGORIES: [string, string][] = [['Good', CATEGORY_COLOR.VFR], ['Marginal', CATEGORY_COLOR.MVFR], ['Poor', CATEGORY_COLOR.IFR], ['Very poor', CATEGORY_COLOR.LIFR]]
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = ''): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag)

@@ -8,7 +8,7 @@
 //   the wind blows to (none when calm or variable), for the view's whole-degree box when it spans ≤ 40° (server/wx.ts).
 // - hazard areas (SIGMETs: thunderstorms, turbulence, icing, volcanic ash…) outlined and faintly filled, labelled with
 //   their name and heights.
-// Hover (or tap) a marker for the airport's weather, an area for its hazard: a card in plain words (wxText.ts), never the
+// Hover (or tap) a marker for the airport's weather, an area for its hazard: a card in plain words (wxCard.ts), never the
 // raw report. Everything refreshes while shown: METARs every 5 min or when the view leaves its box, hazard areas and radar
 // every 10 min. Hidden, it asks for nothing.
 import {
@@ -30,10 +30,8 @@ import {
 } from 'cesium'
 import type { FlightCategory, Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, speedIn, type Units } from '../ui/units.ts'
-import {
-  CONDITION, cloudText, hhmm, pressureText, sigmetLabel, sigmetLevels, sigmetTitle, stationName, tempText, visibilityText, weatherText,
-  windText,
-} from './wxText.ts'
+import { metarCard, sigmetCards } from './wxCard.ts'
+import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
 const RADAR_INDEX = 'https://api.rainviewer.com/public/weather-maps.json'
 const RADAR_MAX_LEVEL = 7
@@ -43,21 +41,10 @@ const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and radar
 const VIEW_CHECK_MS = 2_000
 const MAX_SPAN_DEG = 40 // as server/wx.ts
 const HOVER_PX = 16
-const MARKER_PX = 48 // an airport's marker as shown; its canvas is drawn at twice that, for sharp edges
+export const MARKER_PX = 48 // an airport's marker as shown; its canvas is drawn at twice that, for sharp edges
 const FONT = '-apple-system, "Segoe UI", sans-serif'
 
-export const CATEGORY_COLOR: Record<FlightCategory, string> = { VFR: '#3ddc84', MVFR: '#4f9dff', IFR: '#ff5a5a', LIFR: '#e05cff' }
-const NO_CATEGORY = '#b8c2cf'
-
-export function sigmetColor(hazard: string): string {
-  if (/TS|CB/.test(hazard)) return '#ff5a5a'
-  if (/TURB|MTW/.test(hazard)) return '#ffb020'
-  if (/ICE/.test(hazard)) return '#4fd1ff'
-  if (/VA|RDOACT/.test(hazard)) return '#c080ff'
-  if (/TC/.test(hazard)) return '#ff3df0'
-  if (/DS|SS/.test(hazard)) return '#d8b070'
-  return '#dddddd'
-}
+const NO_CATEGORY = '#b8c2cf' // the ring of a report with no flight category
 
 /** Ray casting on [lon, lat] rings (degrees; areas this small need no great-circle edges). */
 export function inRing(ring: [number, number][], lon: number, lat: number): boolean {
@@ -108,13 +95,13 @@ export const lookKey = (l: Look): string => `wx:${l.cat}:${l.shown}:${l.dir ?? '
 
 /**
  * The wind arrow in marker pixels from the marker's centre (x right, y down), pointing `dir` degrees clockwise from north:
- * a shaft from r 12 to 19 and a head from r 17 (4.5 either side) to its tip at r 23.
+ * a shaft from r 12 to 16 and a head from r 15.5 (4.5 either side) to its tip at r 21.5, so its 5 px halo ends at the canvas edge.
  */
 export function windArrow(dir: number): { shaft: [Pt, Pt]; head: [Pt, Pt, Pt] } {
   const t = (dir * Math.PI) / 180
   const [dx, dy] = [Math.sin(t), -Math.cos(t)]
   const at = (r: number, side = 0): Pt => [dx * r - dy * side, dy * r + dx * side]
-  return { shaft: [at(12), at(19)], head: [at(17, -4.5), at(23), at(17, 4.5)] }
+  return { shaft: [at(12), at(16)], head: [at(15.5, -4.5), at(21.5), at(15.5, 4.5)] }
 }
 
 /** The airport marker, north up: the arrow out from under a dark disc, the disc ringed in the category's colour, the speed in it. */
@@ -169,66 +156,6 @@ function marker(look: Look): HTMLCanvasElement {
   g.textBaseline = 'alphabetic'
   g.fillText(String(look.shown), 0, px * 0.36) // the digits' middle on the disc's: they stand about 0.72 em tall
   return c
-}
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = ''): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag)
-  el.className = className
-  if (text !== '') el.textContent = text
-  return el
-}
-
-/** A card's head line: the name (a hazard's with its colour as a dot), then the small id and the time, pushed right. */
-function cardHead(name: string, hazardColor: string | null, id: string | null, time: string | null): HTMLElement {
-  const row = h('div', 'fh-wx-h')
-  const n = h('span', hazardColor === null ? 'fh-wx-name' : 'fh-wx-name fh-wx-hazard', name)
-  if (hazardColor !== null) n.style.setProperty('--c', hazardColor)
-  row.append(n)
-  if (id !== null) row.append(h('span', 'fh-wx-id', id))
-  if (time !== null) row.append(h('span', 'fh-wx-t fh-num', time))
-  return row
-}
-
-/** A two-column list of the rows that have a text; null when none has. */
-function cardRows(rows: [string, string | null][]): HTMLElement | null {
-  const dl = h('dl', 'fh-wx-rows')
-  for (const [term, text] of rows) if (text !== null) dl.append(h('dt', '', term), h('dd', '', text))
-  return dl.children.length > 0 ? dl : null
-}
-
-/** An airport's card: name, id and time of the report; the condition in its colour; wind, visibility, cloud, weather, temperature, pressure. */
-export function metarCard(m: Metar, u: Units): HTMLElement[] {
-  const name = stationName(m.name, m.id)
-  const out = [cardHead(name, null, name === m.id ? null : m.id, m.obsMs === null ? null : hhmm(m.obsMs))]
-  if (m.cat !== null) {
-    const cond = h('div', 'fh-wx-cond')
-    cond.style.setProperty('--c', CATEGORY_COLOR[m.cat])
-    cond.append(`${CONDITION[m.cat]} conditions `, h('span', 'fh-wx-code', m.cat))
-    out.push(cond)
-  }
-  const rows = cardRows([
-    ['Wind', windText(m, u)],
-    ['Visibility', visibilityText(m.visKm, m.visPlus)],
-    ['Cloud', cloudText(m, u)],
-    ['Weather', weatherText(m.wx)],
-    ['Temperature', tempText(m.tempC, m.dewC)],
-    ['Pressure', pressureText(m.qnhHpa)],
-  ])
-  if (rows !== null) out.push(rows)
-  return out
-}
-
-/** The hazard areas over a point: a card each (its name in its colour, until when, the heights), a hairline between. */
-export function sigmetCards(list: Sigmet[], u: Units): HTMLElement[] {
-  const out: HTMLElement[] = []
-  for (const s of list) {
-    if (out.length > 0) out.push(h('div', 'fh-wx-sep'))
-    const until = Date.parse(s.until)
-    out.push(cardHead(sigmetTitle(s), sigmetColor(s.hazard), null, Number.isNaN(until) ? null : `until ${hhmm(until)}`))
-    const rows = cardRows([['Height', sigmetLevels(s, u)]])
-    if (rows !== null) out.push(rows)
-  }
-  return out
 }
 
 export interface WeatherOptions {
@@ -296,6 +223,8 @@ export class Weather {
       this.timer = null
       return
     }
+    this.setMetars(this.metars) // the frame's units change in the chase, where this is hidden: re-word what was drawn (looks are cached)
+    this.drawAreas()
     this.tick()
     this.status()
     this.timer = setInterval(() => this.tick(), VIEW_CHECK_MS)
@@ -357,11 +286,17 @@ export class Weather {
     if (list === null) return this.status()
     this.sigmets = list
     this.tipKey = ''
+    this.drawAreas()
+    this.status()
+  }
+
+  /** The hazard areas as outlines on a faint fill, each with its label, worded in the frame's units. */
+  private drawAreas(): void {
     const u = this.units()
     const ents = this.areas.entities
     ents.suspendEvents()
     ents.removeAll()
-    for (const s of list) {
+    for (const s of this.sigmets) {
       const color = Color.fromCssColorString(sigmetColor(s.hazard))
       for (const ring of s.rings) {
         const pos = Cartesian3.fromDegreesArray(ring.flat())
@@ -373,7 +308,7 @@ export class Weather {
       ents.add({
         position: Cartesian3.fromDegrees(lon, lat),
         label: {
-          text: sigmetLabel(s, u), font: '600 12px -apple-system, "Segoe UI", sans-serif', fillColor: color,
+          text: sigmetLabel(s, u), font: `600 12px ${FONT}`, fillColor: color,
           outlineColor: Color.fromCssColorString('#0a0e16'), outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           translucencyByDistance: new NearFarScalar(2e6, 1, 8e6, 0),
@@ -381,7 +316,6 @@ export class Weather {
       })
     }
     ents.resumeEvents()
-    this.status()
   }
 
   private async loadMetars(box: string): Promise<void> {

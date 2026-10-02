@@ -191,7 +191,7 @@
   }
 }
 
-/* The weather layer's card (client/scene/weather.ts): an airport's weather or a hazard area under the pointer, in words. */
+/* The weather layer's card (built by client/scene/wxCard.ts): an airport's weather or a hazard area under the pointer, in words. */
 .fh-wx-tip {
   position: absolute;
   z-index: 15;

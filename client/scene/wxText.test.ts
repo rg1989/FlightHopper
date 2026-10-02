@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import type { Cloud, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import {
-  CONDITION, altText, cloudText, compass, hhmm, pressureText, sigmetLabel, sigmetLevels, sigmetTitle, speedText, stationName, tempText,
-  visibilityText, weatherText, windText,
+  CONDITION, altText, cloudText, compass, hhmm, pressureText, sigmetColor, sigmetLabel, sigmetLevels, sigmetTitle, speedText, stationName,
+  tempText, visibilityText, weatherText, windText,
 } from './wxText.ts'
 
 const ft: Units = DEFAULT_UNITS // ft, kt
@@ -25,7 +25,10 @@ test('stationName: before the first comma, slashes as spaces, whole words spelle
   assert.equal(stationName('Aqaba/Hussein Intl, MN, JO', 'OJAQ'), 'Aqaba Hussein International')
   assert.equal(stationName('Casper  Natrona Rgnl , WY, US', 'KCPR'), 'Casper Natrona Regional')
   assert.equal(stationName('Ames Muni, IA, US', 'KAMW'), 'Ames Municipal')
-  assert.equal(stationName('Intlville Arptown', 'X'), 'Intlville Arptown') // whole words only
+  assert.equal(stationName('Moffett Fld, CA, US', 'KNUQ'), 'Moffett Field')
+  assert.equal(stationName('Jefferson Cnty, CO, US', 'KBJC'), 'Jefferson County')
+  assert.equal(stationName('Truax Fld Mem, WI, US', 'KMSN'), 'Truax Field Memorial')
+  assert.equal(stationName('Intlville Arptown Memphis Fldstone', 'X'), 'Intlville Arptown Memphis Fldstone') // whole words only
   assert.equal(stationName(null, 'LLHA'), 'LLHA')
   assert.equal(stationName('', 'LLHA'), 'LLHA')
   assert.equal(stationName(' , IL', 'LLHA'), 'LLHA')
@@ -63,7 +66,7 @@ test('windText: calm, variable, from a direction, gusting', () => {
   assert.equal(windText({ wdir: 290, wspd: 12, wgst: 22 }, both), 'From WNW, 12 kt (22 km/h), gusting 22 kt (41 km/h)')
 })
 
-test('visibilityText: whole km from 5, one decimal to 1 km, metres below; "or more" when it is a floor', () => {
+test('visibilityText: whole km from 5, 0.1 km to 1 km without a trailing ".0", metres below; "or more" when it is a floor', () => {
   assert.equal(visibilityText(null, false), null)
   assert.equal(visibilityText(null, true), null)
   assert.equal(visibilityText(9.66, true), '10 km or more')
@@ -71,6 +74,15 @@ test('visibilityText: whole km from 5, one decimal to 1 km, metres below; "or mo
   assert.equal(visibilityText(5, false), '5 km')
   assert.equal(visibilityText(2.4, false), '2.4 km')
   assert.equal(visibilityText(1.59, false), '1.6 km')
+  assert.equal(visibilityText(2.44, false), '2.4 km')
+  assert.equal(visibilityText(4.007, false), '4 km') // a round value has no ".0"
+  assert.equal(visibilityText(4.97, false), '5 km') // rounds up to a whole one
+  assert.equal(visibilityText(4.007, true), '4 km or more')
+  assert.equal(visibilityText(1, false), '1 km')
+  assert.equal(visibilityText(0.998, false), '1 km') // 1000 m is a kilometre
+  assert.equal(visibilityText(0.975, true), '1 km or more')
+  assert.equal(visibilityText(0.96, false), '950 m')
+  assert.equal(visibilityText(0, false), '0 m')
   assert.equal(visibilityText(0.8, false), '800 m')
   assert.equal(visibilityText(0.6437, false), '650 m') // 0650 in the report is 0.4 miles in the API
   assert.equal(visibilityText(0.82, false), '800 m')
@@ -118,6 +130,21 @@ test('weatherText: each code in words, joined, the first letter capital', () => 
   assert.equal(weatherText(''), null)
 })
 
+test('weatherText: a group with a code it has no words for is left out whole, and null when none is left', () => {
+  assert.equal(weatherText('NSW'), null)
+  assert.equal(weatherText('RERA'), null) // recent rain: RE has no words
+  assert.equal(weatherText('-RA NSW'), 'Light rain')
+  assert.equal(weatherText('NSW -RA BR'), 'Light rain, mist')
+  assert.equal(weatherText('-RA RERA BR'), 'Light rain, mist')
+  assert.equal(weatherText('RAXX'), null)
+  assert.equal(weatherText('RAX'), null) // a letter left over
+  assert.equal(weatherText('RASH'), null) // a descriptor is no phenomenon
+  assert.equal(weatherText('//'), null)
+  assert.equal(weatherText('-'), null) // a strength with nothing it is the strength of
+  assert.equal(weatherText('VC'), null)
+  assert.equal(weatherText('+TSRAXX'), null)
+})
+
 test('tempText, pressureText, CONDITION', () => {
   assert.equal(tempText(26, 16), '26 °C, dew point 16 °C')
   assert.equal(tempText(26, null), '26 °C')
@@ -154,6 +181,43 @@ test('sigmetTitle: the hazard in words, its qualifier a word before it; unknown 
   assert.equal(sigmetTitle(sig({ hazard: 'TS', qualifier: 'ZZZ' })), 'Thunderstorms') // unknown qualifier: no word
 })
 
+test('sigmetTitle: the qualifier is split on spaces; known words are adjectives in order, other words are left out', () => {
+  assert.equal(sigmetTitle(sig({ hazard: 'TS', qualifier: 'SEV EMBD' })), 'Severe embedded thunderstorms')
+  assert.equal(sigmetTitle(sig({ hazard: 'TS', qualifier: 'EMBD SEV' })), 'Embedded severe thunderstorms')
+  assert.equal(sigmetTitle(sig({ hazard: 'TS', qualifier: 'SEV ZZZ  EMBD' })), 'Severe embedded thunderstorms')
+  assert.equal(sigmetTitle(sig({ hazard: 'ICE', qualifier: ' MOD ' })), 'Moderate icing')
+  assert.equal(sigmetTitle(sig({ hazard: 'XYZ', qualifier: 'SEV FRQ' })), 'Severe frequent XYZ')
+  assert.equal(sigmetTitle(sig({ hazard: 'TURB', qualifier: '' })), 'Turbulence')
+  assert.equal(sigmetTitle(sig({ hazard: '' })), '') // no hazard code: nothing to say, and no crash
+})
+
+test('sigmetTitle: MTW adds "(mountain waves)" after the hazard, once, and not to mountain waves themselves', () => {
+  assert.equal(sigmetTitle(sig({ hazard: 'TURB', qualifier: 'SEV MTW' })), 'Severe turbulence (mountain waves)')
+  assert.equal(sigmetTitle(sig({ hazard: 'TURB', qualifier: 'MTW' })), 'Turbulence (mountain waves)')
+  assert.equal(sigmetTitle(sig({ hazard: 'MTW', qualifier: 'SEV' })), 'Severe mountain waves')
+  assert.equal(sigmetTitle(sig({ hazard: 'MTW', qualifier: 'SEV MTW' })), 'Severe mountain waves')
+})
+
+test('sigmetTitle: the rest of the qualifier is a volcano\'s or a cyclone\'s name, in title case; for other hazards it is ignored', () => {
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'SANTA MARIA' })), 'Volcanic ash (Santa Maria)')
+  assert.equal(sigmetTitle(sig({ hazard: 'TC', qualifier: 'CHOI' })), 'Tropical cyclone (Choi)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'ERUPTION MT SANGAY' })), 'Volcanic ash (Eruption Mt Sangay)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'SEV SANTA MARIA' })), 'Severe volcanic ash (Santa Maria)') // known words still lead
+  assert.equal(sigmetTitle(sig({ hazard: 'TC', qualifier: 'OBSC CHOI' })), 'Obscured tropical cyclone (Choi)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'KRAKATAU-1' })), 'Volcanic ash (Krakatau-1)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'ST. HELENS' })), 'Volcanic ash (St. Helens)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: 'POPOCATÉPETL' })), 'Volcanic ash (Popocatépetl)')
+  assert.equal(sigmetTitle(sig({ hazard: 'VA', qualifier: null })), 'Volcanic ash')
+  assert.equal(sigmetTitle(sig({ hazard: 'TC', qualifier: '' })), 'Tropical cyclone')
+  assert.equal(sigmetTitle(sig({ hazard: 'TURB', qualifier: 'CHOI' })), 'Turbulence') // not a hazard that carries a name
+  assert.equal(sigmetTitle(sig({ hazard: 'TS', qualifier: 'ERUPTION MT SANGAY' })), 'Thunderstorms')
+})
+
+test('sigmetColor: a colour per kind of hazard', () => {
+  assert.equal(sigmetColor('TS'), '#ff5a5a')
+  assert.equal(sigmetColor('ICE'), '#4fd1ff')
+})
+
 test('sigmetLevels and sigmetLabel: heights in the frame\'s unit, "up to" without a base, "surface" at the ground', () => {
   assert.equal(sigmetLevels(sig({ top: null }), ft), null)
   assert.equal(sigmetLevels(sig({ base: 0, top: null }), ft), null)
@@ -171,4 +235,6 @@ test('sigmetLevels and sigmetLabel: heights in the frame\'s unit, "up to" withou
   assert.equal(sigmetLabel(sig({ hazard: 'ICE', base: 18000, top: 35000 }), ft), 'Icing · 18,000 to 35,000 ft')
   assert.equal(sigmetLabel(sig({ hazard: 'TURB' }), ft), 'Turbulence')
   assert.equal(sigmetLabel(sig({ hazard: 'TS', top: 35000 }), metric), 'Thunderstorms · up to 10,650 m')
+  assert.equal(sigmetLabel(sig({ hazard: 'TURB', qualifier: 'SEV MTW', base: 0, top: 5500 }), ft), 'Severe turbulence (mountain waves) · surface to 5,500 ft')
+  assert.equal(sigmetLabel(sig({ hazard: 'VA', qualifier: 'SANTA MARIA' }), ft), 'Volcanic ash (Santa Maria)')
 })
