@@ -310,6 +310,24 @@ test('a track from a server older than the type field has no type: null, not und
   assert.equal(f.info('a1b2c3')!.typeCode, null)
 })
 
+test('info gives the category its type implies (the server’s, for the icon): the newest held slot’s, else an older one’s; null when none has one', () => {
+  const row: Pt[] = [[0, 32, 34.8, 1000, 100], [10, 32, 34.81, 1000, 100]]
+  const f = new HistoryFeed()
+  // def456's newer slot knows its callsign, squawk and type but no category: the older slot's still counts.
+  const rest = { callsign: 'NEW2', squawk: '2000', type: 'B738' }
+  f.add(slot([track('a1b2c3', row, { type: 'R44', category: 'A7' }), track('def456', row, { ...rest, category: null }), track('bbbbbb', row)], T1), HOME)
+  f.add(slot([track('a1b2c3', row, { type: 'R44', category: 'A1' }), track('def456', row, { category: 'A3' })], T0), HOME)
+  assert.equal(f.info('a1b2c3')!.category, 'A7', 'the newest wins')
+  assert.equal(f.info('def456')!.category, 'A3', 'from the older slot')
+  assert.equal(f.info('bbbbbb')!.category, null, 'no slot knows it')
+})
+
+test('a track from a server older than the category field has none: null, not undefined', () => {
+  const f = new HistoryFeed()
+  f.add(slot([track('a1b2c3', [[0, 32, 34.8, 1000, 100]], { type: 'B738' })]), HOME) // no category key at all
+  assert.equal(f.info('a1b2c3')!.category, null)
+})
+
 test('covers: a slot held for a circle covers a circle that lies wholly inside it', () => {
   const f = new HistoryFeed()
   f.add(slot([]), HOME) // 32, 34.8, 100 nm
