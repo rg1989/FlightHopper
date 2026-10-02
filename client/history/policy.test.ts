@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SLOT_MS } from '../../shared/history.ts'
-import { SlotBlock, askNm, backMs, legCovers, lookaheadMs, wantedSlots } from './policy.ts'
+import { SlotBlock, askNm, backMs, legCovers, legFeeds, legStarted, lookaheadMs, wantedSlots } from './policy.ts'
 
 const H = Date.parse('2026-10-01T10:00:00Z') // a slot start
 const MIN = 60_000
@@ -44,4 +44,11 @@ test("a half hour is asked for a wider circle than the view, within the view's s
   assert.equal(askNm(20, false), 26)
   assert.equal(askNm(20, true), 100, 'the chase view moves with its aircraft: a small circle would be asked again every few seconds')
   assert.equal(askNm(5400, false), 5400)
+})
+
+test('a leg draws as the flown path once it has started (after it ended too), and feeds the track only from its first point', () => {
+  const leg = { t0Ms: H, t: [0, 600, 1200] } // 10:00 to 10:20
+  assert.deepEqual([H - MIN, H + 5 * MIN, H + 3 * 60 * MIN].map((t) => legStarted(leg, t)), [true, true, true])
+  assert.equal(legStarted(leg, H - MIN - 1), false)
+  assert.deepEqual([H - 1, H, H + 21 * MIN, H + 21 * MIN + 1].map((t) => legFeeds(leg, t)), [false, true, true, false])
 })

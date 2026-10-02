@@ -77,6 +77,16 @@ export function legCovers(leg: { t0Ms: number; t: readonly number[] }, t: number
   return t >= leg.t0Ms - LEG_MARGIN_MS && t <= leg.t0Ms + (leg.t.at(-1) ?? 0) * 1000 + LEG_MARGIN_MS
 }
 
+/** The leg has started at t (a minute's margin): from then on, after it ended too, it is the aircraft's flown path. */
+export function legStarted(leg: { t0Ms: number }, t: number): boolean {
+  return t >= leg.t0Ms - LEG_MARGIN_MS
+}
+
+/** The leg feeds the aircraft's track at t: from its first point (no earlier: the track would wait there) to a minute after its last. */
+export function legFeeds(leg: { t0Ms: number; t: readonly number[] }, t: number): boolean {
+  return t >= leg.t0Ms && legCovers(leg, t)
+}
+
 /**
  * The radius to ask a half hour for, around a view of radius nm: MARGIN wider, but within the view's step band (a
  * wider circle is cut coarser, and the feed would never find the view covered); a chase at least CHASE_ASK_NM.

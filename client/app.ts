@@ -46,7 +46,7 @@ import { RouteLine, type PathPoint } from './scene/routeLine.ts'
 import { localClock, mountHistoryBar, type HistoryBarHandle } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
-import { SlotBlock, askNm, backMs, legCovers, lookaheadMs, wantedSlots } from './history/policy.ts'
+import { SlotBlock, askNm, backMs, legFeeds, legStarted, lookaheadMs, wantedSlots } from './history/policy.ts'
 import { traceInfo, tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
@@ -757,13 +757,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     lastFocusAskMs = -Infinity
     seedSample = null
     if (hex !== null) {
+      if (hist !== null) {
+        restartSelectedTrack(hist, hist.clock.now(performance.now())) // before the seed, which it would drop
+        card.setRecording(hex, undefined, 0) // no Record button in the past
+      }
       const seed = fleet.newest(hex)
       seedSample = seed ?? null
       if (seed) registry.ingest([seed])
-      if (hist !== null) {
-        restartSelectedTrack(hist, hist.clock.now(performance.now()))
-        card.setRecording(hex, undefined, 0) // no Record button in the past
-      }
       fetchTrace(hex)
     }
   }
@@ -782,7 +782,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const h = hist
       const t = h === null ? 0 : h.clock.now(performance.now())
       if (tr === null) {
-        if (h !== null && selTrace !== null && !legCovers(selTrace, t)) {
+        if (h !== null && selTrace !== null && !legFeeds(selTrace, t)) {
           selTrace = null
           selSamples = []
           restartSelectedTrack(h, t)
@@ -790,6 +790,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         }
         return
       }
+      if (h !== null && selTrace !== null && selTrace.t0Ms === tr.t0Ms && selTrace.t.length === tr.t.length) return // the same leg again
       selTrace = tr
       chaseOrigin = tr.origin ?? null
       if (h !== null) {
@@ -802,13 +803,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
-   * selPath: live, the trace's points then the trail's newer ones; in History the trace's while its leg covers the
-   * replay time, else the feed's samples of the aircraft.
+   * selPath: live, the trace's points then the trail's newer ones; in History the trace's once its leg has started (after
+   * it ended too: that is where it flew), else the feed's samples of the aircraft.
    */
   function rebuildPath(): void {
     const h = hist
     if (h !== null) {
-      const tr = selTrace !== null && legCovers(selTrace, h.clock.now(performance.now())) ? selTrace : null
+      const tr = selTrace !== null && legStarted(selTrace, h.clock.now(performance.now())) ? selTrace : null
       selPath = tr !== null ? tracePath(tr) : selected === null ? [] : h.feed.samplesOf(selected, -Infinity, Infinity).map(pathPointOf)
       return
     }
@@ -838,7 +839,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     h.known.clear()
     h.fedMs = t - backMs(step)
     h.reload = false
-    const onTrace = selTrace !== null && legCovers(selTrace, t)
+    const onTrace = selTrace !== null && legFeeds(selTrace, t)
     if (seek || !onTrace) restartSelectedTrack(h, t)
     if (seek && chasing) chaseCam.snapHeading() // a jump is a cut: behind the aircraft at once, not a swing round
     if (seek && selected !== null && !onTrace) traceAskMs = -Infinity // its leg there: asked at the next tick
@@ -866,7 +867,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       fleet.ingest(fresh, infos)
     }
     if (selected === null) return
-    const fromTrace = selTrace !== null && legCovers(selTrace, t)
+    const fromTrace = selTrace !== null && legFeeds(selTrace, t)
     if (h.regFromTrace !== null && h.regFromTrace !== fromTrace) restartSelectedTrack(h, t) // another source: a fresh track
     h.regFromTrace = fromTrace
     const to = t + lookaheadMs(stepAt(h, t))
@@ -900,6 +901,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity, reload: false,
     }
     hist = h
+    selTrace = null // before restartHistory: a live leg must not keep the live track
+    selSamples = []
+    selPath = []
     restartHistory(h, t0, false)
     chaseRaw = null
     trafficRaw = null
@@ -909,9 +913,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     chaseInfo = null
     trail.length = 0
     trailTMs = -Infinity
-    selTrace = null
-    selSamples = []
-    selPath = []
     ui.dataset.history = '1'
     rail.button('history').setAttribute('aria-pressed', 'true')
     if (selected !== null) {
@@ -967,9 +968,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     h.feed.retain(new Set([want[0] - SLOT_MS, want[0], want[0] + SLOT_MS]))
     fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
-    if (selected !== null && !(selTrace !== null && legCovers(selTrace, t))) {
-      if (nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // its leg at this time, or none yet
-      rebuildPath() // the feed's samples meanwhile
+    if (selected !== null) {
+      if (!(selTrace !== null && legFeeds(selTrace, t)) && nowP - traceAskMs >= TRACE_RETRY_MS) fetchTrace(selected) // its leg at this time, or none yet
+      if (selTrace === null || !legStarted(selTrace, t)) rebuildPath() // the feed's samples meanwhile
     }
     h.bar.setNote(h.block.isMissing(want[0], wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
@@ -1368,7 +1369,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const at = chasing || sf !== null || selected === null ? undefined : fleet.get(selected)
     // The lead-in from the origin and its "First heard" only with the whole leg (the trace): live samples alone start at
     // the selection, not at the first reception.
-    const wholeLeg = selTrace !== null && (hist === null || legCovers(selTrace, tSunMs))
+    const wholeLeg = selTrace !== null && (hist === null || legStarted(selTrace, tSunMs))
     routeLine.update(at === undefined ? null : at, selPath, hist === null ? chaseDest : null, wholeLeg ? chaseOrigin : null, hist === null ? Infinity : tSunMs)
     if (!chasing && now - scaleAtMs > 200) {
       scaleAtMs = now
@@ -1456,7 +1457,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         chaseRaw = r.raw ?? chaseRaw
         chaseInfo = r.info ?? chaseInfo
         if (r.dest !== undefined) chaseDest = r.dest
-        if (r.origin) chaseOrigin = r.origin
+        // The route's origin is the trace's leg's only while that leg flies now under the route's callsign (a parked
+        // aircraft's trace is its last leg; its callsign may already name the next flight).
+        const tr = selTrace
+        if (r.origin && tr !== null && tr.callsign !== null && tr.callsign === (r.info?.callsign ?? chaseInfo?.callsign)
+          && tr.t0Ms + (tr.t.at(-1) ?? 0) * 1000 >= r.serverNowMs - 10 * 60_000) chaseOrigin = r.origin
         card.setRecording(hex!, r.rec, r.serverNowMs)
         chased0 = snapClock
         // How old its newest position is on arrival. Not from the first reply: that one is the stored history, whose
