@@ -100,7 +100,7 @@ export interface StatusPanelHandle {
   /** The live status (null before the first). In History it only keeps the recording row up to date: the rest is the replay's. */
   update(status: StatusBrief | null, serverNowMs: number | null): void
   setImagery(text: string, state: 'ok' | 'fallback' | 'plain'): void
-  /** History: the panel describes the replay instead of the live feed; null: live again (the next update() repaints). */
+  /** History: the panel describes the replay instead of the live feed; null: live again, repainted at once from the last status. */
   setHistory(v: { loading: boolean } | null): void
 }
 
