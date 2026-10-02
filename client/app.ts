@@ -541,9 +541,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // The flight-data frame around the chased aircraft: over the traffic brackets, under the overlays (flightFrame.css).
   // Its cards as the viewer arranged them (edit mode: the layout button in the corner), kept in this browser.
   const frameLayer = div('fh-frame', root)
+  const framePrefs = readFramePrefs(storedFrame)
+  let frameUnits = framePrefs.units // the weather card's speeds and heights are in these too
   const flightFrame = new FlightFrame(frameLayer, {
-    prefs: readFramePrefs(storedFrame),
-    onPrefs: (p) => writeFramePrefs(p, store),
+    prefs: framePrefs,
+    onPrefs: (p) => {
+      frameUnits = p.units
+      writeFramePrefs(p, store)
+    },
     onEdit: (on) => rail.button('layout').setAttribute('aria-pressed', String(on)),
   })
   const ui = div('fh-ui', root)
@@ -715,7 +720,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
   const { roads, places } = makeReferenceLayers(viewer) // over the map, the satellite and the night lights
-  const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text))
+  const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits })
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
    * satellite, weather top-down and live only (it is today's: it says nothing of the past).

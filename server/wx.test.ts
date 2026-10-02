@@ -31,9 +31,10 @@ test('metars: slimmed, one upstream request per box and TTL (concurrent asks sha
   assert.equal(asked.length, 1)
   assert.equal(asked[0], 'https://aviationweather.gov/api/data/metar?bbox=29,34,34,36&format=json')
   assert.deepEqual(a, b)
+  const lacking = { name: null, obsMs: null, visKm: null, visPlus: false, tempC: null, dewC: null, qnhHpa: null, wx: null, clouds: [], vertVisFt: null }
   assert.deepEqual(a, [
-    { id: 'LLBG', lat: 32.01, lon: 34.87, cat: 'MVFR', wdir: 290, wspd: 12, wgst: 22, raw: 'METAR LLBG …' },
-    { id: 'OJAM', lat: 31.97, lon: 35.99, cat: 'VFR', wdir: null, wspd: 3, wgst: null, raw: 'METAR OJAM …' },
+    { id: 'LLBG', lat: 32.01, lon: 34.87, cat: 'MVFR', wdir: 290, wspd: 12, wgst: 22, raw: 'METAR LLBG …', ...lacking },
+    { id: 'OJAM', lat: 31.97, lon: 35.99, cat: 'VFR', wdir: null, wspd: 3, wgst: null, raw: 'METAR OJAM …', ...lacking },
   ])
   now = 6 * 60_000 // past the TTL, upstream down: the last good answer
   fail = true

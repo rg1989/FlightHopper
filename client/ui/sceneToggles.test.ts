@@ -23,7 +23,8 @@ class El {
   type = ''
   #hidden = false
   classList = { add: (): void => {} } // icons.ts marks its svg
-  style = { setProperty: (): void => {} }
+  vars: Record<string, string> = {}
+  style = { setProperty: (k: string, v: string): void => void (this.vars[k] = v) }
   attrs: Record<string, string> = {}
   attrWrites = 0
   hiddenWrites = 0
@@ -106,7 +107,7 @@ test('switch rows: Roads (R), Borders & places (P), Weather (W), 3-D terrain (T)
   assert.deepEqual(rows.map((r) => text(r.children[1])), [
     'RoadsRStreets and highways over the satellite',
     'Borders & placesPCountry lines and city names over the satellite',
-    'WeatherWRain radar, airport flight rules and wind, SIGMETs',
+    'WeatherWRain radar, airport weather, hazard areas',
     '3-D terrainTMountains and valleys in relief',
     'SunLReal sun and moon light, day and night',
     'See-through buildingsXBuildings glassy, so they never hide the aircraft',
@@ -291,10 +292,20 @@ test('weather: its legend shows while on, and setWeather writes the status line'
   t.update({ ...DEFAULT_PREFS, wx: true })
   assert.equal(wxMore.hidden, false)
   assert.equal(wxLine.hidden, true)
-  t.setWeather('Radar 12:00Z · 3 airports')
-  assert.deepEqual([wxLine.hidden, wxLine.textContent], [false, 'Radar 12:00Z · 3 airports'])
+  t.setWeather('Radar 12:00 · 3 airports')
+  assert.deepEqual([wxLine.hidden, wxLine.textContent], [false, 'Radar 12:00 · 3 airports'])
   t.setWeather(null)
   assert.equal(wxLine.hidden, true)
+})
+
+test('weather legend: the word Airports, then how the flight rules read, each in its colour', () => {
+  const { root, wxMore } = mount({ ...DEFAULT_PREFS, wx: true })
+  const legend = all(wxMore).find((e) => e.className === 'fh-wx-legend')!
+  assert.deepEqual(legend.children.map((e) => [e.className, e.textContent]), [
+    ['fh-wx-legend-title', 'Airports'], ['fh-wx-cat', 'Good'], ['fh-wx-cat', 'Marginal'], ['fh-wx-cat', 'Poor'], ['fh-wx-cat', 'Very poor'],
+  ])
+  const colors = all(root).filter((e) => e.className === 'fh-wx-cat').map((e) => e.vars['--c'])
+  assert.deepEqual(colors, ['#3ddc84', '#4f9dff', '#ff5a5a', '#e05cff']) // as the markers' rings (weather.ts)
 })
 
 test('weather is the top-down map\'s: in the chase its row, legend and line go, and come back with the map', () => {

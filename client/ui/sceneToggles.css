@@ -159,6 +159,10 @@
   color: var(--fh-muted);
 }
 
+.fh-wx-legend-title {
+  font-weight: 400;
+}
+
 .fh-wx-cat::before {
   content: '';
   display: inline-block;
@@ -187,22 +191,91 @@
   }
 }
 
-/* The weather layer's readout (client/scene/weather.ts): a METAR or SIGMET under the pointer, as reported. */
+/* The weather layer's card (client/scene/weather.ts): an airport's weather or a hazard area under the pointer, in words. */
 .fh-wx-tip {
   position: absolute;
   z-index: 15;
   top: 0;
   left: 0;
-  max-width: min(360px, calc(100% - 16px));
-  padding: 8px 10px;
+  max-width: min(300px, calc(100% - 16px));
+  padding: 10px 12px;
   border-radius: var(--fh-radius-sm);
   color: var(--fh-text);
-  font: 12px/1.45 ui-monospace, 'SF Mono', Menlo, monospace;
-  white-space: pre-wrap;
+  font: 12.5px/1.45 var(--fh-font);
+  white-space: normal;
   pointer-events: none;
   box-shadow: var(--fh-shadow);
 }
 
 .fh-wx-tip[hidden] {
   display: none;
+}
+
+/* The head line: the name, the small id after it, the time pushed to the right. */
+.fh-wx-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fh-wx-name {
+  color: var(--fh-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fh-wx-id {
+  color: var(--fh-faint);
+  font-size: 11px;
+}
+
+.fh-wx-t {
+  margin-left: auto;
+  color: var(--fh-muted);
+}
+
+/* The condition line, and a hazard's name: a dot in the colour they stand for. */
+.fh-wx-cond {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.fh-wx-cond::before,
+.fh-wx-hazard::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--c);
+  vertical-align: -1px;
+}
+
+.fh-wx-code {
+  padding: 1px 5px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 4px;
+  color: var(--fh-muted);
+  font-size: 10px;
+}
+
+.fh-wx-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+}
+
+.fh-wx-rows dt {
+  color: var(--fh-muted);
+}
+
+.fh-wx-rows dd {
+  margin: 0;
+}
+
+.fh-wx-sep {
+  margin: 8px 0;
+  border-top: 1px solid var(--fh-hairline);
 }

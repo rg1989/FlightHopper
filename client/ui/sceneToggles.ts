@@ -29,7 +29,7 @@ interface Row { key: Key; icon: IconName; label: string; hint: string; shortcut:
 const LAYER_ROWS: Row[] = [
   { key: 'roads', icon: 'road', label: 'Roads', hint: 'Streets and highways over the satellite', shortcut: 'R' },
   { key: 'places', icon: 'flag', label: 'Borders & places', hint: 'Country lines and city names over the satellite', shortcut: 'P' },
-  { key: 'wx', icon: 'cloud', label: 'Weather', hint: 'Rain radar, airport flight rules and wind, SIGMETs', shortcut: 'W' },
+  { key: 'wx', icon: 'cloud', label: 'Weather', hint: 'Rain radar, airport weather, hazard areas', shortcut: 'W' },
 ]
 const SCENE_ROWS: Row[] = [
   { key: 'topo', icon: 'mountain', label: '3-D terrain', hint: 'Mountains and valleys in relief', shortcut: 'T' },
@@ -37,8 +37,8 @@ const SCENE_ROWS: Row[] = [
   { key: 'glass', icon: 'building', label: 'See-through buildings', hint: 'Buildings glassy, so they never hide the aircraft', shortcut: 'X' },
 ]
 const ROWS = [...LAYER_ROWS, ...SCENE_ROWS]
-// Flight rules at an airport (weather.ts draws the dots in these colours).
-const CATEGORIES: [string, string][] = [['VFR', '#3ddc84'], ['MVFR', '#4f9dff'], ['IFR', '#ff5a5a'], ['LIFR', '#e05cff']]
+// How the weather reads at an airport (VFR to LIFR in weather.ts), in the colours of its markers' rings.
+const CATEGORIES: [string, string][] = [['Good', '#3ddc84'], ['Marginal', '#4f9dff'], ['Poor', '#ff5a5a'], ['Very poor', '#e05cff']]
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = ''): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag)
@@ -118,6 +118,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   const [roadsRow, placesRow, wxRow] = LAYER_ROWS.map(row)
   const wxMore = h('div', 'fh-wx-more')
   const legend = h('div', 'fh-wx-legend')
+  legend.append(h('span', 'fh-wx-legend-title', 'Airports'))
   for (const [cat, color] of CATEGORIES) {
     const k = h('span', 'fh-wx-cat', cat)
     k.style.setProperty('--c', color)
