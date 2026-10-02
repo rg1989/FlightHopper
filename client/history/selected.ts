@@ -11,12 +11,15 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { RectDeg } from '../scene/browseCamera.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import type { ReplayStatus } from '../ui/flightCard.ts'
-import { callsignAt, legEndMs, pointsUpTo, type DayState } from './aircraftDay.ts'
+import { callsignAt, dayState, legEndMs, pointsUpTo, type DayState } from './aircraftDay.ts'
 import { heightM, traceInfo } from './trace.ts'
 
 const BEFORE_MS = 12 * 3_600_000 // a day is asked with this much before it: where the aircraft stood when it began
 const VIEW_INSET = 0.1 // an aircraft within this share of the view's height or width from an edge is out of view
 const MOVED_MS = 1500 // the map does not follow an aircraft while the person moves it, nor this long after
+const AHEAD_MS = 120_000 // the chase asks for where its aircraft will be this far on, before its view outruns what is loaded
+const KT_MS = 1852 / 3600
+const FPM_MS = 0.3048 / 60
 // ponytail: English weekdays, as the time bar's day labels (bar.ts). Upgrade: Intl when the UI is translated.
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -122,29 +125,41 @@ function ghostAt(e: FleetEntry, hex: string, leg: TraceReply, t: number, info: A
   return e
 }
 
+type Gap = Extract<DayState, { kind: 'gap' }>
+
+/**
+ * Inside a hole of a leg (ds) at t: the point before it (i; the next one ends it), the share of its time gone (f), that
+ * share of the way along the great circle from one to the other (lat, lon: where the flown path draws the hole dotted),
+ * the bearing from one to the other (trk) and the distance (nm).
+ */
+function inHole(ds: Gap, t: number): { i: number; f: number; lat: number; lon: number; trk: number; nm: number } {
+  const leg = ds.leg
+  const i = pointsUpTo(leg, ds.sinceMs) - 1
+  const f = (t - ds.sinceMs) / (ds.untilMs - ds.sinceMs) // more than a minute: a hole
+  const nm = distanceNm(leg.lat[i], leg.lon[i], leg.lat[i + 1], leg.lon[i + 1])
+  const trk = bearingDeg(leg.lat[i], leg.lon[i], leg.lat[i + 1], leg.lon[i + 1])
+  const at = destination(leg.lat[i], leg.lon[i], trk, f * nm)
+  return { i, f, lat: at.lat, lon: at.lon, trk, nm }
+}
+
 /**
  * e as a ghost where the aircraft is estimated to be at t inside a hole of its leg (ds: between the points either side):
- * that share of the time along the great circle from one to the other (where the flown path draws the hole dotted),
- * its track the bearing from one to the other, its altitude that share of the way (unknown when either end's is not a
- * number; on the ground when both are), its speed the distance over the time, its vertical rate the climb over it. Its
- * height as drawn goes from one point's to the other's as the dotted line does. Aged from the point before the hole.
+ * that share of the time along the great circle from one to the other (inHole), its track the bearing from one to the
+ * other, its altitude that share of the way (unknown when either end's is not a number; on the ground when both are),
+ * its speed the distance over the time, its vertical rate the climb over it. Its height as drawn goes from one point's
+ * to the other's as the dotted line does. Aged from the point before the hole.
  */
-function gapAt(e: FleetEntry, hex: string, ds: Extract<DayState, { kind: 'gap' }>, t: number, info: AircraftInfo | null): FleetEntry {
+function gapAt(e: FleetEntry, hex: string, ds: Gap, t: number, info: AircraftInfo | null): FleetEntry {
   const leg = ds.leg
-  const i = pointsUpTo(leg, ds.sinceMs) - 1 // the point before the hole; the next one ends it
-  const j = i + 1
-  const ms = ds.untilMs - ds.sinceMs // more than a minute: a hole
-  const f = (t - ds.sinceMs) / ms
-  const nm = distanceNm(leg.lat[i], leg.lon[i], leg.lat[j], leg.lon[j])
-  const trk = bearingDeg(leg.lat[i], leg.lon[i], leg.lat[j], leg.lon[j])
-  const at = destination(leg.lat[i], leg.lon[i], trk, f * nm)
+  const { i, f, lat, lon, trk, nm } = inHole(ds, t)
+  const ms = ds.untilMs - ds.sinceMs
   const a = leg.alt[i]
-  const b = leg.alt[j]
+  const b = leg.alt[i + 1]
   const hA = heightM(a, leg.nM[i])
   e.hex = hex
-  e.lat = at.lat
-  e.lon = at.lon
-  e.hM = hA + (heightM(b, leg.nM[j]) - hA) * f
+  e.lat = lat
+  e.lon = lon
+  e.hM = hA + (heightM(b, leg.nM[i + 1]) - hA) * f
   e.altFt = typeof a === 'number' && typeof b === 'number' ? a + (b - a) * f : null
   e.onGround = a === 'g' && b === 'g'
   e.trackDeg = trk
@@ -166,7 +181,7 @@ function gapAt(e: FleetEntry, hex: string, ds: Extract<DayState, { kind: 'gap' }
  * fleet's stays). Heard: its track's state s, written into own (no state yet: the fleet's). Quiet: a ghost at its leg's
  * last point, written into own (fleetLayer.ts places it at any age, faded; it must be the only entry of its hex). In a
  * hole of its leg: the same ghost where it is estimated to be (gapAt). Before its first leg, or no leg that day: not
- * drawn. Returns its entry as drawn, else undefined. Allocates nothing but, in a hole, geo.ts destination's place.
+ * drawn. Returns its entry as drawn, else undefined. Allocates nothing but, in a hole, the estimate's place (inHole).
  */
 export function placeSelected(entries: readonly FleetEntry[], hex: string, ds: DayState | null, t: number, s: RenderState | null,
   info: AircraftInfo | null, out: FleetEntry[], own: FleetEntry): FleetEntry | undefined {
@@ -242,4 +257,122 @@ export class MapMoves {
 export function flyOver(o: { bring: boolean; playing: boolean; wasInside: boolean; inside: boolean; moved: boolean }): boolean {
   if (o.inside) return false
   return o.bring || (o.playing && o.wasInside && !o.moved)
+}
+
+/**
+ * The ghost in a hole of its leg (placeSelected's entry) as the chased aircraft's state: the chase flies the estimate
+ * rather than freezing where it was last heard. Its nose along the bearing, pitched by its climb over its speed, wings
+ * level; aged from the point before the hole.
+ */
+export function estimateState(e: FleetEntry): RenderState {
+  const gs = (e.gsKt ?? 0) * KT_MS
+  const vs = (e.vsFpm ?? 0) * FPM_MS
+  return {
+    hex: e.hex, lat: e.lat, lon: e.lon, hM: e.hM, headingDeg: e.trackDeg ?? 0, pitchDeg: gs > 0 ? (Math.atan2(vs, gs) * 180) / Math.PI : 0,
+    rollDeg: 0, gsKt: e.gsKt, trackDeg: e.trackDeg, altBaroFt: e.altFt, vsFpm: e.vsFpm, mode: 'interp', altSource: 'baro-bias',
+    onGround: e.onGround, ageS: e.ageS, quality: e.quality, callsign: e.info?.callsign ?? null, typeCode: e.info?.typeCode ?? null,
+  }
+}
+
+/**
+ * Where History's asks are centred in the chase (app.ts): where the chased aircraft will be about AHEAD_MS of replay after
+ * t, on its leg (heard or in a hole of it: its last point by then, or along a hole as the estimate goes; past the leg's
+ * end, where it ends), so its view is asked for before it outruns what is loaded. Null off a leg (its day not known,
+ * quiet, before, none): where it is stands.
+ */
+export function chaseAskAt(ds: DayState | null, t: number): { lat: number; lon: number } | null {
+  if (ds === null || (ds.kind !== 'heard' && ds.kind !== 'gap')) return null
+  const at = t + AHEAD_MS
+  const then = dayState([ds.leg], at)
+  if (then.kind === 'gap') {
+    const p = inHole(then, at)
+    return { lat: p.lat, lon: p.lon }
+  }
+  const n = pointsUpTo(ds.leg, at)
+  return n === 0 ? null : { lat: ds.leg.lat[n - 1], lon: ds.leg.lon[n - 1] }
+}
+
+/**
+ * Whether History waits for data at the replay time (app.ts, every frame), for the half hour under the clock: stall (the
+ * clock holds, the bar's loader turns) only when nothing of it is loaded around the view's centre (centre false: a jump,
+ * the start, a pan or zoom to an area never loaded) or, in the chase, when none of it is loaded at all (held false: its
+ * view moves with its aircraft, which flies its own leg, so loaded ground it outruns never stops it), and that half hour
+ * is neither missing at adsb.lol nor failing; or while the selection's first day of flights is asked for (firstDay).
+ * Otherwise a view partly out of what is loaded is asked for at once and plays on: the loader turns while its half hour
+ * loads (loading), the clock does not hold.
+ */
+export function historyWait(o: { held: boolean; centre: boolean; chasing: boolean; missing: boolean; failing: boolean;
+  loading: boolean; firstDay: boolean }): { stall: boolean; ring: boolean } {
+  const empty = !(o.chasing ? o.held : o.centre) && !o.missing && !o.failing
+  const stall = empty || o.firstDay
+  return { stall, ring: stall || o.loading }
+}
+
+/** A selected aircraft's local day (its day of flights asked, answered or failed). */
+export interface DayKey {
+  hex: string
+  startMs: number
+}
+
+const sameDay = <T extends DayKey>(a: T | null, b: DayKey): a is T => a !== null && a.hex === b.hex && a.startMs === b.startMs
+
+/**
+ * The selected aircraft's day of flights at t (app.ts askDayWhenDue; want: its local day): whether to ask for it now, and
+ * the ask in flight to keep. An ask in flight for another day is dropped (its reply would replace this day's answer: a
+ * day answered, the day before asked, back again before that reply came). Answered (the day held is want's and reaches
+ * t), or want's ask in flight: nothing to ask. A failure or an answer short of t a moment ago: not before again.atMs.
+ */
+export function dayAsk(want: DayKey, t: number, day: (DayKey & { toMs: number }) | null, inFlight: DayKey | null,
+  again: (DayKey & { atMs: number }) | null, nowMs: number): { ask: boolean; inFlight: DayKey | null } {
+  const flying = sameDay(inFlight, want) ? inFlight : null
+  if ((sameDay(day, want) && t <= day.toMs) || flying !== null) return { ask: false, inFlight: flying }
+  return { ask: !(sameDay(again, want) && nowMs < again.atMs), inFlight: null }
+}
+
+/**
+ * Whether the selection's first day of flights is being asked for (History waits for it: where the aircraft is hangs on
+ * it): an ask for hex in flight, no answer for it held, and no failure for it (a retry waits for nothing, as a failed half
+ * hour does not).
+ */
+export function firstDayAsked(hex: string | null, ask: DayKey | null, day: DayKey | null, again: DayKey | null): boolean {
+  return hex !== null && ask !== null && ask.hex === hex && day?.hex !== hex && again?.hex !== hex
+}
+
+/**
+ * The legs of a fresh answer for the day already held (held), each the held one where it is the same leg (its first
+ * point's time and its number of points): the selected aircraft's track and path go by the leg itself, and an answer
+ * that only repeats them must not start them again. The held array itself when every leg is (the bar's stay too).
+ */
+export function keepLegs(held: TraceReply[], fresh: TraceReply[]): TraceReply[] {
+  const out = fresh.map((l) => held.find((o) => o.t0Ms === l.t0Ms && o.t.length === l.t.length) ?? l)
+  return out.length === held.length && out.every((l, i) => l === held[i]) ? held : out
+}
+
+/**
+ * Where the selected aircraft's track is fed from at t (app.ts feedHistory): its day not known yet, the feed's samples;
+ * heard, its leg's; otherwise none (not heard, in a hole too: no track).
+ */
+export function trackSource(ds: DayState | null): TraceReply | 'feed' | 'none' {
+  return ds === null ? 'feed' : ds.kind === 'heard' ? ds.leg : 'none'
+}
+
+/** Another source starts the track afresh, but the first one when it is the feed (it keeps the selection's seed sample). */
+export function restartsTrack(was: TraceReply | 'feed' | 'none' | null, next: TraceReply | 'feed' | 'none'): boolean {
+  return next !== was && (was !== null || next !== 'feed')
+}
+
+/**
+ * keepInView's rule for this frame (top-down, with a selection; app.ts flies): over the selected aircraft ('bring' or
+ * 'follow') or not (null), and whether a pending bring stays pending. Nothing while the map flies already or a scrubber
+ * seek rests (busy). Bring: a jump, entering History or selecting (bring), and its first position after none (had false,
+ * at true: before its first leg to heard, a day answer placing it), unless the person moved the map in the last 1.5 s;
+ * flyOver says when (out of view; while playing, followed out of it). A pending bring ends once its day for that time
+ * says where it was (dayKnown and at) or that it was nowhere (nowhere: before its first leg, none that day).
+ */
+export function viewMove(o: { busy: boolean; bring: boolean; had: boolean; at: boolean; playing: boolean; wasInside: boolean;
+  inside: boolean; moved: boolean; dayKnown: boolean; nowhere: boolean }): { fly: 'bring' | 'follow' | null; bring: boolean } {
+  if (o.busy) return { fly: null, bring: o.bring }
+  const bring = o.bring || (!o.had && o.at && !o.moved)
+  const fly = o.at && flyOver({ bring, playing: o.playing, wasInside: o.wasInside, inside: o.inside, moved: o.moved })
+  return { fly: fly ? (bring ? 'bring' : 'follow') : null, bring: o.bring && !(o.dayKnown && (o.at || o.nowhere)) }
 }

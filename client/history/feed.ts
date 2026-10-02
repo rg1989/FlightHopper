@@ -157,6 +157,16 @@ export class HistoryFeed {
     return this.#slots.has(slotMs)
   }
 
+  /**
+   * Something of the slot is loaded at (lat, lon): it is held for a circle holding that point, at any step (History
+   * stalls only where nothing is: covers says whether the whole view is, at its step).
+   */
+  reaches(slotMs: number, lat: number, lon: number): boolean {
+    const h = this.#slots.get(slotMs)
+    if (h === undefined) return false
+    return h.circle.nm >= EVERYTHING_NM || distanceNm(h.circle.lat, h.circle.lon, lat, lon) <= h.circle.nm
+  }
+
   /** Seconds between the slices held for that half hour; null when it is not held. */
   stepOf(slotMs: number): number | null {
     return this.#slots.get(slotMs)?.stepS ?? null

@@ -48,7 +48,10 @@ import { localDay, mountHistoryBar, type HistoryBarHandle, type LocalDay } from 
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
 import { SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
-import { MapMoves, daySpan, flyOver, insetContains, placeSelected, replayStatus, selectedInfo } from './history/selected.ts'
+import {
+  MapMoves, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, insetContains, keepLegs, placeSelected, replayStatus,
+  restartsTrack, selectedInfo, trackSource, viewMove,
+} from './history/selected.ts'
 import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
@@ -144,6 +147,7 @@ const DAY_AGAIN_MS = 15_000 // the selected aircraft's day: a failed ask, or an 
 const DAY_PAST_MS = 30 * 60_000
 const BRING_FLY_S = 0.8 // the map's flight over the selected aircraft after a jump in time
 const FOLLOW_FLY_S = 0.6 // …and to follow it out of the view while playing
+const ASK_EVERY_MS = 250 // History asks for the half hours its view lacks from the frame, at most this often
 const NO_LEGS: readonly TraceReply[] = []
 
 /** Radius in whole 10 nm steps (so the ApiClient's per-view `since` key survives small changes), clamped to 20–5,400 nm. */
@@ -493,6 +497,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     bring: boolean // bring the selected aircraft into view (a jump), until its day for that time is known
     inside: boolean // it was inside the view (inset) last frame: playing, the map follows it out of it
     flyUntilMs: number // the map is flying over it until then (performance.now(); -Infinity: not): no other flight meanwhile
+    hadAt: boolean // it was drawn last frame (a first position after none brings it into view)
+    askedMs: number // performance.now() of the frame's last ask for half hours (-Infinity: ask at the next frame)
   }
   /** The selected aircraft's flights over a local day and the 12 h before it (GET /api/trace?hex&from&to). */
   interface SelectedDay {
@@ -895,12 +901,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       fleet.ingest(fresh, infos)
     }
     if (selected === null) return
-    const from = ds === null ? 'feed' : ds.kind === 'heard' ? ds.leg : 'none'
-    if (from !== h.regFrom) {
-      // Another source: a fresh track (the feed's, as the first, keeps the selection's seed sample).
-      if (h.regFrom !== null || from !== 'feed') restartSelectedTrack(h, t)
-      h.regFrom = from
-    }
+    const from = trackSource(ds)
+    if (restartsTrack(h.regFrom, from)) restartSelectedTrack(h, t) // another source: a fresh track
+    h.regFrom = from
     if (from === 'none') return
     if (from !== 'feed' && from !== selTrace) {
       selTrace = from
@@ -933,13 +936,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const hex = selected
     if (hex === null) return
     const { startMs, endMs } = h.dayOfT
-    const d = h.day
-    if (d !== null && d.hex === hex && d.startMs === startMs && t <= d.toMs) return // answered
-    const a = h.dayAsk
-    if (a !== null && a.hex === hex && a.startMs === startMs) return // in flight
-    const again = h.dayAgain
-    if (again !== null && again.hex === hex && again.startMs === startMs && performance.now() < again.atMs) return
     const ask = { hex, startMs }
+    const due = dayAsk(ask, t, h.day, h.dayAsk, h.dayAgain, performance.now()) // answered, in flight, or failed a moment ago: no
+    h.dayAsk = due.inFlight // an ask for another day is dropped
+    if (!due.ask) return
     h.dayAsk = ask
     const span = daySpan(startMs, endMs, h.status?.oldestSlotMs ?? null, Date.now())
     const settle = (): boolean => {
@@ -951,9 +951,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     api.traceDay(hex, span.fromMs, span.toMs).then((r) => {
       // None at adsb.lol at all (404): no flight that day.
       if (!settle()) return
+      // A fresh answer for the day held keeps the legs it repeats (the track and path go by the leg itself).
+      const old = h.day
+      const legs = r?.legs ?? []
       h.day = {
-        hex, startMs, fromMs: r?.fromMs ?? span.fromMs, toMs: r?.toMs ?? span.toMs, legs: r?.legs ?? [], reg: r?.reg ?? null,
-        typeCode: r?.typeCode ?? null,
+        hex, startMs, fromMs: r?.fromMs ?? span.fromMs, toMs: r?.toMs ?? span.toMs, reg: r?.reg ?? null, typeCode: r?.typeCode ?? null,
+        legs: old !== null && old.hex === hex && old.startMs === startMs ? keepLegs(old.legs, legs) : legs,
       }
     }, (e: unknown) => {
       if (settle()) console.warn('FlightHopper: no day of flights:', e)
@@ -965,6 +968,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     h.dayAsk = null
     h.pathLeg = undefined
     h.inside = false
+    h.hadAt = false
     h.bring = selected !== null
     askDayWhenDue(h, h.clock.now(performance.now()))
   }
@@ -983,39 +987,39 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const leg = ds === null ? undefined : ds.kind === 'heard' || ds.kind === 'gap' || ds.kind === 'quiet' ? ds.leg : null
     if (leg === h.pathLeg) return
     h.pathLeg = leg
-    if (leg !== undefined) selPath = leg === null ? [] : tracePath(leg)
+    if (leg === undefined) rebuildPath() // the feed's samples at once (historyTick keeps them fresh), not the old leg's
+    else selPath = leg === null ? [] : tracePath(leg)
   }
 
   /**
    * History, top-down: the selected aircraft into view after a jump (h.bring: once its position at the replay time is
-   * known, and again when its day for that time comes, which may put it elsewhere), and followed while playing when it
-   * leaves the view (selected.ts flyOver). The map flies over it at the height it has, and asks for the half hours of
-   * where it lands at once. Not in the chase, which needs no help, nor while a scrubber seek rests or a flight is under way.
+   * known, and again when its day for that time comes, which may put it elsewhere) or at its first position after none,
+   * and followed while playing when it leaves the view (selected.ts viewMove). The map flies over it at the height it has
+   * and asks for the half hours of where it lands as it takes off (v: this frame's view, whose size it keeps). Not in the
+   * chase, which needs no help, nor while a scrubber seek rests or a flight is under way.
    */
-  function keepInView(h: HistoryMode, now: number, day: SelectedDay | null, ds: DayState | null): void {
-    if (h.flyUntilMs !== -Infinity && now >= h.flyUntilMs) {
-      h.flyUntilMs = -Infinity
-      askSlots(h, h.clock.now(now)) // the map has arrived: its half hours at once, as after a jump
-    }
+  function keepInView(h: HistoryMode, now: number, t: number, day: SelectedDay | null, ds: DayState | null, rect: RectDeg | null, v: Circle): void {
     const at = histAt
+    const had = h.hadAt
+    h.hadAt = at !== undefined
     if (chasing || selected === null) {
       h.bring = false
       h.inside = false
       return
     }
-    const inside = at !== undefined && insetContains(viewRectangleDeg(viewer), at.lat, at.lon)
-    if (now >= h.flyUntilMs && h.seekRestMs === null) {
-      if (at !== undefined && flyOver({ bring: h.bring, playing: h.clock.playing, wasInside: h.inside, inside, moved: moves.recent(now) })) {
-        const flyS = h.bring ? BRING_FLY_S : FOLLOW_FLY_S
-        enterBrowse(viewer, at, { heightM: viewer.camera.positionCartographic.height, flyS })
-        h.flyUntilMs = now + flyS * 1000
-      }
-      // Brought in once its day for this time said where it was (or that it was nowhere: before its first leg, none).
-      if (h.bring && ds !== null && day !== null && day.startMs === h.dayOfT.startMs && (at !== undefined || ds.kind === 'before' || ds.kind === 'none')) {
-        h.bring = false
-      }
-    }
+    const inside = at !== undefined && insetContains(rect, at.lat, at.lon)
+    const m = viewMove({
+      busy: now < h.flyUntilMs || h.seekRestMs !== null, bring: h.bring, had, at: at !== undefined, playing: h.clock.playing,
+      wasInside: h.inside, inside, moved: moves.recent(now), dayKnown: ds !== null && day !== null && day.startMs === h.dayOfT.startMs,
+      nowhere: ds?.kind === 'before' || ds?.kind === 'none',
+    })
+    h.bring = m.bring
     h.inside = inside
+    if (m.fly === null || at === undefined) return
+    const flyS = m.fly === 'bring' ? BRING_FLY_S : FOLLOW_FLY_S
+    enterBrowse(viewer, at, { heightM: viewer.camera.positionCartographic.height, flyS })
+    h.flyUntilMs = now + flyS * 1000
+    askSlots(h, t, { lat: at.lat, lon: at.lon, nm: v.nm })
   }
 
   /** Opens History at tMs (null: the start of the newest published half hour), paused unless play. */
@@ -1040,12 +1044,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       onLive: () => exitHistory(),
       onGoTo: (t) => seekHistory(t, true),
     })
+    bar.setBounds(minMs, maxMs) // the clock's guess, until the server's first status
     const h: HistoryMode = {
       clock: new HistoryClock(t0, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP), feed: new HistoryFeed(), bar,
       fedMs: t0, regMs: t0, regFrom: null, known: new Set(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
       missingShown: '', lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity,
       reload: false, seekRestMs: null, dayOfT: localDay(t0), day: null, dayAsk: null, dayAgain: null, legsShown: NO_LEGS,
-      pathLeg: undefined, bring: false, inside: false, flyUntilMs: -Infinity,
+      pathLeg: undefined, bring: false, inside: false, flyUntilMs: -Infinity, hadAt: false, askedMs: -Infinity,
     }
     hist = h
     selTrace = null // before restartHistory: a live leg must not keep the live track
@@ -1110,38 +1115,56 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     else h.seekRestMs = p + SEEK_REST_MS
   }
 
-  /** History: a jump in time (Go to, a day arrow, a scrubber seek at rest, entering): its half hours asked at once, and the selected aircraft brought into view. */
+  /**
+   * History: a jump in time (Go to, a day arrow, a scrubber seek at rest, entering): its half hours asked at once (the
+   * next frame asks), the last half hour's failure forgotten (its note and loader are the new time's to say), and the
+   * selected aircraft brought into view.
+   */
   function jumped(h: HistoryMode): void {
     h.seekRestMs = null
-    askSlots(h, h.clock.now(performance.now()))
+    h.failing = false
+    h.askedMs = -Infinity
     h.bring = selected !== null
   }
 
   /**
-   * History: asks for the half hours the replay needs at t for this view (policy.ts): the one under the clock and the
-   * next one early enough for the speed (prefetchMs), each for a circle wider than the view at the view's slice step,
-   * unless the feed holds it for this view, it is being fetched, or it is blocked (missing at adsb.lol, failed a moment ago).
+   * History: asks for the half hours the replay needs at t (policy.ts): the one under the clock and the next one early
+   * enough for the speed (prefetchMs), each for a circle wider than c (the view, or where it is going) at its slice step,
+   * unless the feed holds it for c, it is being fetched, or it is blocked (missing at adsb.lol, failed a moment ago).
    */
-  function askSlots(h: HistoryMode, t: number): void {
+  function askSlots(h: HistoryMode, t: number, c: Circle): void {
     const wall = Date.now()
-    const v = viewCircle()
     const want = wantedSlots(t, h.clock.maxMs, prefetchMs(h.clock.rate))
     h.lastWant = want[0]
     for (const s of want) {
-      if (!h.feed.covers(s, v) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: v.lat, lon: v.lon, nm: askNm(v.nm, chasing) })
+      if (!h.feed.covers(s, c) && !h.loading.has(s) && !h.block.blocked(s, wall)) void loadSlot(h, s, { lat: c.lat, lon: c.lon, nm: askNm(c.nm, chasing) })
     }
   }
 
   /**
-   * History: whether the replay waits for data at t (the bar's loader, a playing clock stalled): the half hour under the
-   * clock is not held for this view (as askSlots asks it) and is neither missing at adsb.lol nor failing, or the selected
-   * aircraft's first day is being asked for (its first ask: a retry after a failure waits for nothing, as a failed half
-   * hour does not).
+   * History, every frame: the half hours the view lacks, asked at once (askSlots), at most every ASK_EVERY_MS; not while
+   * a scrubber seek rests nor while the map flies over the aircraft (it asked where it lands as it took off). In the
+   * chase for where the chased aircraft will be about two minutes on (selected.ts chaseAskAt), its view's size: asked
+   * before its view outruns what is loaded.
    */
-  function historyLoading(h: HistoryMode, t: number): boolean {
+  function askWhenDue(h: HistoryMode, now: number, t: number, v: Circle, ds: DayState | null): void {
+    if (now - h.askedMs < ASK_EVERY_MS || h.seekRestMs !== null || now < h.flyUntilMs) return
+    h.askedMs = now
+    const ahead = chasing ? chaseAskAt(ds, t) : null
+    askSlots(h, t, ahead === null ? v : { lat: ahead.lat, lon: ahead.lon, nm: v.nm })
+  }
+
+  /**
+   * History: whether the replay waits for data at t in view v (selected.ts historyWait): the clock stalls only where
+   * nothing of the half hour under it is loaded (around the view's centre; in the chase, anywhere), or for the selection's
+   * first day of flights; the bar's loader turns then and while that half hour loads.
+   */
+  function waitFor(h: HistoryMode, t: number, v: Circle): { stall: boolean; ring: boolean } {
     const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
-    if (!h.feed.covers(slot, viewCircle()) && !h.block.isMissing(slot, Date.now()) && !h.failing) return true
-    return selected !== null && h.dayAsk !== null && h.dayAsk.hex === selected && h.day?.hex !== selected && h.dayAgain?.hex !== selected
+    return historyWait({
+      held: h.feed.has(slot), centre: h.feed.reaches(slot, v.lat, v.lon), chasing, missing: h.block.isMissing(slot, Date.now()),
+      failing: h.failing, loading: h.loading.has(slot), firstDay: firstDayAsked(selected, h.dayAsk, h.day, h.dayAgain),
+    })
   }
 
   /** History: the half hours adsb.lol does not have, as far as known (the status's, and those it answered so here), on the bar. */
@@ -1158,17 +1181,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
-   * History, every second: the half hours the replay needs (askSlots; not while a scrubber seek has not rested), pruning,
-   * the selected aircraft's path from the feed until its day is known, the bar's note, and every HISTORY_STATUS_MS what
-   * exists (the clock's and the bar's bounds: the oldest moment adsb.lol keeps, the newest published) and what adsb.lol
-   * lacks (the bar's missing half hours).
+   * History, every second: pruning, the selected aircraft's path from the feed until its day is known, the bar's note,
+   * and every HISTORY_STATUS_MS what exists (the clock's and the bar's bounds: the oldest moment adsb.lol keeps, the
+   * newest published) and what adsb.lol lacks (the bar's missing half hours). The half hours are asked from the frame.
    */
   async function historyTick(h: HistoryMode): Promise<void> {
     const nowP = performance.now()
     const wall = Date.now()
     const t = h.clock.now(nowP)
     const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
-    if (h.seekRestMs === null && nowP >= h.flyUntilMs) askSlots(h, t) // a flight over the aircraft asks where it lands
     h.feed.retain(new Set([slot - SLOT_MS, slot, slot + SLOT_MS]))
     fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
@@ -1423,18 +1444,23 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     let all = NO_ENTRIES
     let s: RenderState | null = null
     let tSunMs = Date.now() // until the first reply; then the render time (server clock)
-    let histLoading = false // History: the replay waits for the data of its time
+    let histLoading = false // History: the data of its time loads (the bar's loader; the clock may wait for it)
+    let viewRect: RectDeg | null | undefined // History: the view as this frame sees it (undefined: not read)
     // A scenario: its aircraft at its clock's time, lit at that instant; no traffic around it.
     const sf = run?.frame(dtS) ?? null
     if (sf !== null) s = sf.state
     else if (hist !== null) {
       // History: everything at the replay clock's time with no render delay (the selected aircraft's track has its
-      // samples ahead of it), lit at that instant. A playing clock holds (stalls) while the data of its time loads.
+      // samples ahead of it), lit at that instant. A playing clock holds (stalls) only while nothing of its time is loaded
+      // where the view is (waitFor); a view partly out of what is loaded is asked for and plays on.
       const h = hist
       if (h.clock.atEnd(now)) h.clock.pause(now) // the newest published moment: there is no further
       if (h.seekRestMs !== null && now >= h.seekRestMs) jumped(h) // a scrubber seek at rest
-      histLoading = historyLoading(h, h.clock.now(now))
-      h.clock.stall(histLoading, now)
+      viewRect = viewRectangleDeg(viewer) // once a frame: the wait, the asks, keepInView and the list read it
+      const v = viewCircle(viewRect)
+      const wait = waitFor(h, h.clock.now(now), v)
+      histLoading = wait.ring
+      h.clock.stall(wait.stall, now)
       const t = h.clock.now(now)
       askDayWhenDue(h, t)
       // The selected aircraft at t as its day says (history/aircraftDay.ts); null until its day is known: as the feed has it.
@@ -1455,7 +1481,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
           s = ts
           histCardS = ts
         } else {
-          s = chasing ? chased : null // no track: a chase that is on stays where it was (as live's "Signal lost"); Esc leaves it
+          // No track. A chase that is on flies the estimate through a hole of its leg, else stays where it was (as live's
+          // "Signal lost"); Esc leaves it.
+          s = !chasing ? null : ds.kind === 'gap' && histAt !== undefined ? estimateState(histAt) : chased
           // Its last known numbers, or in a hole of its leg the estimate's (both dimmed: the card says not heard).
           histCardS = (ds.kind === 'quiet' || ds.kind === 'gap') && histAt !== undefined ? entryState(histAt) : null
         }
@@ -1469,7 +1497,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       card.setReplay(replayStatus(ds, t, quietS))
       trafficCard.setReplay(replayStatus(null, t, quietS))
       statusPanel.setHistory({ loading: histLoading })
-      keepInView(h, now, day, ds)
+      keepInView(h, now, t, day, ds, viewRect, v)
+      askWhenDue(h, now, t, v, ds) // after keepInView: a flight it starts asks where it lands
     } else if (api.ready) {
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
@@ -1496,7 +1525,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
     if (sf === null) { // a scenario leaves the list as it was
-      const inView = entriesIn(all, viewRectangleDeg(viewer), onScreen, selected)
+      const inView = entriesIn(all, viewRect === undefined ? viewRectangleDeg(viewer) : viewRect, onScreen, selected)
       const anyData = status !== NO_STATUS || hist !== null
       table.update(all, inView, selected, anyData) // refreshes every 10 s itself
       if (now - lastBadgeMs > 1000) {
@@ -1647,9 +1676,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /** Centre and radius of the view poll: browse, around the visible map; else the chased aircraft, else the globe point at the canvas centre, else below the camera. */
-  function viewCircle(): { lat: number; lon: number; nm: number } {
+  function viewCircle(rect?: RectDeg | null): { lat: number; lon: number; nm: number } {
     if (!chasing) {
-      const r = viewRectangleDeg(viewer)
+      const r = rect === undefined ? viewRectangleDeg(viewer) : rect
       const under = viewer.camera.positionCartographic // browse looks straight down: the screen centre
       const c = r === null ? null : browseCircle(r, { lat: CesiumMath.toDegrees(under.latitude), lon: CesiumMath.toDegrees(under.longitude) })
       // A rectangle spanning every longitude (the globe, or a pole in view) says nothing by its centre: then the point

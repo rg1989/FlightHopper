@@ -367,6 +367,19 @@ test('covers: a circle of EVERYTHING_NM holds the whole world (the server keeps 
   assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: 3000 }), false, 'one nm less: a circle like any other (8,200 nm away)')
 })
 
+test('reaches: something of the slot is loaded at a point (its circle holds it, at any step); not held, nothing', () => {
+  const f = new HistoryFeed()
+  f.add(slot([], T0, 30), HOME) // 32, 34.8, 100 nm, coarse slices
+  assert.equal(f.reaches(T0, 32, 34.8), true, 'its centre')
+  assert.equal(f.reaches(T0, 33.4, 34.8), true, '84 nm out: inside, where covers a 40 nm view would not')
+  assert.equal(f.covers(T0, { lat: 32, lon: 34.8, nm: 50 }), false, 'a view wanting finer slices than those held…')
+  assert.equal(f.reaches(T0, 32, 34.8), true, '…still has something loaded at its centre')
+  assert.equal(f.reaches(T0, 34, 34.8), false, '120 nm out')
+  assert.equal(f.reaches(T1, 32, 34.8), false, 'a slot that is not held')
+  f.add(slot([], T1, 300), { lat: 0, lon: 0, nm: EVERYTHING_NM })
+  assert.equal(f.reaches(T1, -33, 151), true, 'the whole world')
+})
+
 test('an aircraft with no positions in the slot is not held at all', () => {
   const f = new HistoryFeed()
   f.add(slot([track('eeeeee', [], { callsign: 'GHOST1', squawk: '7700' }), ELY]), HOME)

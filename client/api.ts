@@ -87,9 +87,9 @@ export class ApiClient {
     return (await res.json()) as HistoryStatus
   }
 
-  /** One aircraft's flight leg flying at atMs (null: now); null when adsb.lol has no trace of it. */
-  trace(hex: string, atMs: number | null = null): Promise<TraceReply | null> {
-    return this.#getOrNull(`/trace?hex=${encodeURIComponent(hex)}${atMs === null ? '' : `&at=${atMs}`}`, TIMEOUT_MS)
+  /** One aircraft's flight leg flying now (live: its flown path); null when adsb.lol has no trace of it. */
+  trace(hex: string): Promise<TraceReply | null> {
+    return this.#getOrNull(`/trace?hex=${encodeURIComponent(hex)}`, TIMEOUT_MS)
   }
 
   /**

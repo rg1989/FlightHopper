@@ -9,7 +9,10 @@ import { bearingDeg, distanceNm } from '../../shared/geo.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
-import { MapMoves, atClock, daySpan, flyOver, insetContains, placeSelected, replayStatus, selectedInfo } from './selected.ts'
+import {
+  MapMoves, atClock, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver, historyWait, insetContains, keepLegs, placeSelected,
+  replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+} from './selected.ts'
 
 const MIN = 60_000
 const H = 3_600_000
@@ -356,4 +359,132 @@ test('flyOver: a jump brings it in when it is outside; playing follows one that 
   assert.equal(flyOver({ ...left, playing: false }), false, 'paused: only a jump moves the map')
   assert.equal(flyOver({ bring: true, playing: false, wasInside: false, inside: false, moved: false }), true, 'a jump: wherever it was')
   assert.equal(flyOver({ bring: true, playing: false, wasInside: false, inside: true, moved: false }), false, 'a jump: in view already')
+})
+
+// ---------- the app's gates (app.ts acts on them) ----------
+
+test('estimateState: the chase flies the estimate in a hole: nose along the bearing, pitched by the climb, wings level', () => {
+  const own = entry('xxxxxx')
+  const info: AircraftInfo = { ...FEED, callsign: 'ISR595' }
+  const t = T + 10_000 + 10 * MIN
+  placeSelected([], '738abc', dayState([GAP], t), t, null, info, [], own)
+  const s = estimateState(own)
+  assert.deepEqual([s.lat, s.lon, s.hM, s.headingDeg, s.trackDeg, s.rollDeg, s.altBaroFt, s.vsFpm, s.gsKt, s.onGround],
+    [own.lat, own.lon, own.hM, own.trackDeg, own.trackDeg, 0, 25_000, -500, own.gsKt, false])
+  const fall = (-500 * 0.3048) / 60 // m/s
+  const fwd = (own.gsKt! * 1852) / 3600
+  assert.ok(Math.abs(s.pitchDeg - (Math.atan2(fall, fwd) * 180) / Math.PI) < 1e-9 && s.pitchDeg < 0, 'nose a little down')
+  assert.deepEqual([s.mode, s.callsign, s.typeCode, s.ageS], ['interp', 'ISR595', 'B38M', 600])
+  assert.equal(estimateState({ ...own, gsKt: 0, vsFpm: null }).pitchDeg, 0, 'no speed: level')
+})
+
+test('chaseAskAt: the chase asks for where its aircraft will be two minutes on, along its leg; off a leg, where it is', () => {
+  const l = leg(T, [0, 60, 120, 180, 240], { lat: [32, 32.1, 32.2, 32.3, 32.4] }) // 6 nm a minute north
+  assert.deepEqual(chaseAskAt(dayState([l], T), T), { lat: 32.2, lon: 34.8 }, 'two minutes on: its point then')
+  assert.deepEqual(chaseAskAt(dayState([l], T + 30_000), T + 30_000), { lat: 32.2, lon: 34.8 }, 'its last point by then')
+  assert.deepEqual(chaseAskAt(dayState([l], T + 200_000), T + 200_000), { lat: 32.4, lon: 34.8 }, 'past the leg’s end: where it ends')
+  const t = T + 10_000 + 2 * MIN // in the hole of GAP: two minutes on is still in it
+  const ahead = chaseAskAt(dayState([GAP], t), t)!
+  assert.ok(Math.abs(distanceNm(32, 34, ahead.lat, ahead.lon) - GAP_NM_ALL * (4 / 20)) < 1e-6, 'along the hole, as the estimate goes')
+  assert.equal(chaseAskAt(null, T), null, 'its day not known')
+  assert.equal(chaseAskAt(dayState([l], T + 3 * H), T + 3 * H), null, 'quiet')
+  assert.equal(chaseAskAt(dayState([], T), T), null, 'none that day')
+})
+
+test('historyWait: the clock stalls only where nothing of its half hour is loaded around the view’s centre, or for the first day', () => {
+  const base = { held: true, centre: true, chasing: false, missing: false, failing: false, loading: false, firstDay: false }
+  assert.deepEqual(historyWait(base), { stall: false, ring: false }, 'loaded')
+  assert.deepEqual(historyWait({ ...base, loading: true }), { stall: false, ring: true }, 'partly out of what is loaded: asked, playing on, the loader turns')
+  assert.deepEqual(historyWait({ ...base, centre: false }), { stall: true, ring: true }, 'nothing around its centre: a jump, a pan to an area never loaded')
+  assert.deepEqual(historyWait({ ...base, held: false, centre: false }), { stall: true, ring: true }, 'nothing at all')
+  assert.deepEqual(historyWait({ ...base, centre: false, chasing: true }), { stall: false, ring: false }, 'the chase outran what is loaded: never a stall')
+  assert.deepEqual(historyWait({ ...base, held: false, centre: false, chasing: true }), { stall: true, ring: true }, 'the chase, nothing of the half hour at all')
+  assert.deepEqual(historyWait({ ...base, held: false, centre: false, missing: true }), { stall: false, ring: false }, 'missing at adsb.lol: nothing to wait for')
+  assert.deepEqual(historyWait({ ...base, held: false, centre: false, failing: true }), { stall: false, ring: false }, 'failing: its note says so')
+  assert.deepEqual(historyWait({ ...base, firstDay: true }), { stall: true, ring: true }, 'the selection’s first day of flights')
+})
+
+test('dayAsk: asks a day not answered, once; waits after a failure; answered, nothing', () => {
+  const want = { hex: '738abc', startMs: T }
+  const day = { ...want, toMs: T + 24 * H }
+  assert.deepEqual(dayAsk(want, T + H, null, null, null, 0), { ask: true, inFlight: null })
+  const flying = { ...want }
+  assert.deepEqual(dayAsk(want, T + H, null, flying, null, 0), { ask: false, inFlight: flying }, 'its ask in flight')
+  assert.equal(dayAsk(want, T + H, null, flying, null, 0).inFlight, flying, 'the same ask (its reply is matched by it)')
+  assert.deepEqual(dayAsk(want, T + H, day, null, null, 0), { ask: false, inFlight: null }, 'answered')
+  assert.deepEqual(dayAsk(want, T + 25 * H, day, null, null, 0), { ask: true, inFlight: null }, 'an answer short of t: again')
+  const again = { ...want, atMs: 15_000 }
+  assert.deepEqual(dayAsk(want, T + H, null, null, again, 14_999), { ask: false, inFlight: null }, 'failed a moment ago')
+  assert.deepEqual(dayAsk(want, T + H, null, null, again, 15_000), { ask: true, inFlight: null })
+  assert.deepEqual(dayAsk({ ...want, hex: 'aaaaaa' }, T + H, day, null, again, 0), { ask: true, inFlight: null }, 'another aircraft')
+})
+
+test('dayAsk: an ask in flight for another day is dropped, so its reply cannot replace this day’s answer', () => {
+  const day2 = { hex: '738abc', startMs: T + 24 * H }
+  const day1 = { hex: '738abc', startMs: T }
+  const answered = { ...day2, toMs: T + 48 * H }
+  // Day 2 answered; ‹ asks day 1; › back to day 2 before day 1's reply came:
+  const back = dayAsk(day2, T + 30 * H, answered, day1, null, 0)
+  assert.deepEqual(back, { ask: false, inFlight: null }, 'day 2 stands; day 1’s ask is dropped')
+  assert.deepEqual(dayAsk(day2, T + 30 * H, null, day1, null, 0), { ask: true, inFlight: null }, 'not answered: day 2 is asked instead')
+})
+
+test('firstDayAsked: the selection’s first ask in flight, nothing answered or failed for it yet', () => {
+  const ask = { hex: '738abc', startMs: T }
+  assert.equal(firstDayAsked('738abc', ask, null, null), true)
+  assert.equal(firstDayAsked('738abc', null, null, null), false, 'nothing asked')
+  assert.equal(firstDayAsked('738abc', ask, { hex: '738abc', startMs: T - 24 * H }, null), false, 'another day of it answered: no wait')
+  assert.equal(firstDayAsked('738abc', ask, { hex: 'aaaaaa', startMs: T }, null), true, 'another aircraft’s answer says nothing')
+  assert.equal(firstDayAsked('738abc', ask, null, { hex: '738abc', startMs: T }), false, 'a retry waits for nothing')
+  assert.equal(firstDayAsked(null, ask, null, null), false, 'nothing selected')
+  assert.equal(firstDayAsked('738abc', { hex: 'aaaaaa', startMs: T }, null, null), false, 'an ask for another one')
+})
+
+test('keepLegs: a fresh answer keeps the held legs it repeats (the track goes by the leg itself)', () => {
+  const a = leg(T, [0, 600])
+  const b = leg(T + H, [0, 600, 1200])
+  const held = [a, b]
+  assert.equal(keepLegs(held, [leg(T, [0, 600]), leg(T + H, [0, 600, 1200])]), held, 'the same legs: the held array')
+  const grown = leg(T + H, [0, 600, 1200, 1800]) // today's leg, heard further since
+  const out = keepLegs(held, [leg(T, [0, 600]), grown])
+  assert.deepEqual([out[0] === a, out[1] === grown, out.length], [true, true, 2], 'the one it repeats kept, the grown one new')
+  const c = leg(T + 3 * H, [0, 60])
+  const more = keepLegs(held, [leg(T, [0, 600]), leg(T + H, [0, 600, 1200]), c])
+  assert.deepEqual([more[0] === a, more[1] === b, more[2] === c], [true, true, true], 'a leg added after them')
+  assert.deepEqual(keepLegs(held, []), [], 'none now')
+})
+
+test('trackSource and restartsTrack: the feed until its day is known, its leg while heard, none otherwise; another source restarts', () => {
+  const l = leg(T, [0, 600, 1210, 1220], { lat: [32, 32.01, 33, 33.01] })
+  assert.equal(trackSource(null), 'feed')
+  assert.equal(trackSource(dayState([l], T + 60_000)), l)
+  assert.equal(trackSource(dayState([l], T + 900_000)), 'none', 'in a hole of its leg: no track')
+  assert.equal(trackSource(dayState([l], T + 3 * H)), 'none')
+  assert.equal(restartsTrack(null, 'feed'), false, 'the first source, the feed: it keeps the selection’s seed')
+  assert.equal(restartsTrack(null, l), true)
+  assert.equal(restartsTrack('feed', l), true)
+  assert.equal(restartsTrack(l, 'none'), true, 'into a hole')
+  assert.equal(restartsTrack('none', l), true, 'heard again after it')
+  assert.equal(restartsTrack(l, l), false)
+  assert.equal(restartsTrack(l, leg(T, [0, 600, 1210, 1220])), true, 'another object is another leg (keepLegs keeps the same one)')
+})
+
+test('viewMove: a jump brings it in, playing follows it out of the view; nothing while the map flies or a seek rests', () => {
+  const base = { busy: false, bring: false, had: true, at: true, playing: false, wasInside: false, inside: false, moved: false, dayKnown: true, nowhere: false }
+  assert.deepEqual(viewMove({ ...base, bring: true }), { fly: 'bring', bring: false }, 'a jump, its day known: brought in, done')
+  assert.deepEqual(viewMove({ ...base, bring: true, dayKnown: false }), { fly: 'bring', bring: true }, 'brought in again when its day comes')
+  assert.deepEqual(viewMove({ ...base, bring: true, inside: true }), { fly: null, bring: false }, 'in view already')
+  assert.deepEqual(viewMove({ ...base, bring: true, at: false, nowhere: true }), { fly: null, bring: false }, 'nowhere that day: done')
+  assert.deepEqual(viewMove({ ...base, bring: true, at: false }), { fly: null, bring: true }, 'not placed yet: pending')
+  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true }), { fly: 'follow', bring: false }, 'playing, it just left the view')
+  assert.deepEqual(viewMove({ ...base, playing: true, wasInside: true, moved: true }), { fly: null, bring: false }, 'the person moves the map')
+  assert.deepEqual(viewMove({ ...base, bring: true, busy: true }), { fly: null, bring: true }, 'the map flies already, or a seek rests')
+})
+
+test('viewMove: its first position after none brings it in (before its first leg to heard, a day answer placing it), unless the map was moved', () => {
+  const first = { busy: false, bring: false, had: false, at: true, playing: true, wasInside: false, inside: false, moved: false, dayKnown: true, nowhere: false }
+  assert.deepEqual(viewMove(first), { fly: 'bring', bring: false })
+  assert.deepEqual(viewMove({ ...first, inside: true }), { fly: null, bring: false }, 'in view: nothing to do')
+  assert.deepEqual(viewMove({ ...first, moved: true }), { fly: null, bring: false }, 'the person moved the map in the last 1.5 s')
+  assert.deepEqual(viewMove({ ...first, had: true }), { fly: null, bring: false }, 'it had one: outside already, left alone')
 })
