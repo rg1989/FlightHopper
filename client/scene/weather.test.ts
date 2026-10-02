@@ -5,7 +5,7 @@ import { Event, ImageryLayerCollection, Request, RequestState, UrlTemplateImager
 import type { Metar } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarSource, type SourceTile } from './radar.ts'
-import { MARKER_PX, RadarLayer, RadarProvider, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow } from './weather.ts'
+import { MARKER_PX, RadarLayer, RadarProvider, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow, type WeatherOptions } from './weather.ts'
 
 const metric: Units = { alt: 'm', speed: 'kmh', vs: 'ms' }
 const wind = (wdir: number | null, wspd: number, cat: Metar['cat'] = 'VFR'): Pick<Metar, 'cat' | 'wdir' | 'wspd'> => ({ cat, wdir, wspd })
@@ -111,6 +111,29 @@ test('radar layer: a frame goes on top of the imagery, drawn smooth to level 12 
   assert.equal(l.show, false, 'hidden until shown')
   r.show = true
   assert.equal(l.show, true)
+})
+
+test('radar layer: given an index it adds each layer there, asked each time, so what lies from it up stays over the rain', () => {
+  const { imageryLayers, viewer, render, radar } = fakeViewer()
+  const over = imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url: 'https://over.invalid/{z}/{x}/{y}.png' })) // as the map's ink
+  const at = (...ls: ImageryLayer[]): number[] => ls.map((l) => imageryLayers.indexOf(l))
+  let index = 1
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark, () => index)
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  const [a] = radar()
+  assert.deepEqual(at(a, over), [1, 2], 'under what was at that index')
+  index = 2 // the layer it lies under has moved up
+  r.frame(HOST, '/v2/radar/b')
+  const [, b] = radar()
+  assert.deepEqual(at(a, b, over), [1, 2, 3], 'a new frame: at the index asked just then, over the old one')
+  r.palette = RAIN_PALETTE.light // the frame nobody saw goes; its replacement is added the same way
+  const [, c] = radar()
+  assert.deepEqual(at(a, c, over), [1, 2, 3])
+  render()
+  render()
+  assert.deepEqual(radar(), [c])
+  assert.deepEqual(at(c, over), [1, 2])
 })
 
 test('radar layer: the same frame is not loaded again; a new one loads unseen and takes over in one frame once its tiles are in', () => {
@@ -290,9 +313,9 @@ test('RadarProvider: dropped, its tiles still waiting are not drawn, and Cesium 
   })
 })
 
-test('Weather: the radar in the dark palette until told the theme; a theme change redraws the frame it has in the other', async () => {
-  const { viewer, radar } = fakeViewer()
-  const v = Object.assign(viewer, {
+/** A Weather over the fake viewer, with a fake document and fetch (RainViewer's index holds one frame, all else is empty). */
+async function withWeather(fake: ReturnType<typeof fakeViewer>, opts: WeatherOptions, run: (w: Weather, seen: { asked: string[]; lines: (string | null)[] }) => Promise<void>): Promise<void> {
+  const v = Object.assign(fake.viewer, {
     canvas: { addEventListener() {}, removeEventListener() {} },
     camera: { computeViewRectangle: () => undefined },
     dataSources: { add: async () => {}, remove: async () => {} },
@@ -309,8 +332,19 @@ test('Weather: the radar in the dark palette until told the theme; a theme chang
     return new Response(JSON.stringify(body))
   }
   const lines: (string | null)[] = []
-  const w = new Weather(v, '/api', { append() {} } as unknown as HTMLElement, (t) => lines.push(t))
+  const w = new Weather(v, '/api', { append() {} } as unknown as HTMLElement, (t) => lines.push(t), opts)
   try {
+    await run(w, { asked, lines })
+  } finally {
+    w.destroy()
+    for (const [k, val] of saved) g[k] = val
+  }
+}
+
+test('Weather: the radar in the dark palette until told the theme; a theme change redraws the frame it has in the other', async () => {
+  const fake = fakeViewer()
+  const { radar } = fake
+  await withWeather(fake, {}, async (w, { asked, lines }) => {
     assert.equal(w.theme, 'dark')
     w.show = true
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -326,9 +360,23 @@ test('Weather: the radar in the dark palette until told the theme; a theme chang
     assert.equal(drawer(light).palette, RAIN_PALETTE.light)
     assert.equal(drawer(light).source, drawer(frame).source)
     assert.equal(asked.filter((u) => u.includes('weather-maps.json')).length, 1)
-  } finally {
-    w.destroy()
-    for (const [k, val] of saved) g[k] = val
-  }
+  })
+  assert.deepEqual(radar(), [])
+})
+
+test('Weather: radarIndex puts the radar, every frame and palette, under the layers from that index up (the map\'s ink)', async () => {
+  const fake = fakeViewer()
+  const { imageryLayers, radar } = fake
+  const over = imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url: 'https://over.invalid/{z}/{x}/{y}.png' }))
+  const at = (...ls: ImageryLayer[]): number[] => ls.map((l) => imageryLayers.indexOf(l))
+  await withWeather(fake, { radarIndex: () => imageryLayers.indexOf(over) }, async (w) => {
+    w.show = true
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const [frame] = radar()
+    assert.deepEqual(at(frame, over), [1, 2], 'not on top')
+    w.theme = 'light'
+    const [, light] = radar()
+    assert.deepEqual(at(frame, light, over), [1, 2, 3])
+  })
   assert.deepEqual(radar(), [])
 })
