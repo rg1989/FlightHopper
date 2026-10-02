@@ -1593,7 +1593,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }) : null
   const urlHist = readHist(location.search) // ?hist=<unix s>: History at that time, paused
   if (urlScenario !== null) void startScenario(urlScenario.id, { t: urlScenario.t ?? undefined, cam: urlView.cam, fromUrl: true })
-  else if (urlHist !== null) enterHistory(urlHist)
+  else if (urlHist !== null) enterHistory(urlHist) // fetches the selected aircraft's leg itself
+  else if (selected !== null) fetchTrace(selected) // ?hex= selects without select(): its flown path all the same
 
   return {
     stop(): void {
