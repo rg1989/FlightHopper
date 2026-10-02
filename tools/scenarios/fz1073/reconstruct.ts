@@ -26,7 +26,10 @@
 // The attitude is the app's flight-mechanics model (client/track/attitude.ts) on that path, with an upset's limits
 // around the dive: the recorded attitude is not published, and the aircraft certainly pitched more sharply than the path.
 //
-//   node tools/scenarios/fz1073/reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV>
+// Heights where no open network heard it: Flightradar24's granular data as its blog published it (pressure altitude about
+// once a second, time-stamped to the millisecond on the playback's clock: the playback's rows are a subsample of it).
+//
+//   node tools/scenarios/fz1073/reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV> <Flightradar24 granular CSV>
 import { readFileSync, writeFileSync } from 'node:fs'
 import { AttitudeFilter, NORMAL_LIMITS, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
 import type { Knot3, Obs } from '../../../client/track/smoother.ts'
@@ -104,8 +107,8 @@ const END = TD + 45
 // tar1090 trace rows: [dt, lat, lon, alt_baro | "ground", gs, track, flags, baro_rate, details | null, kind, alt_geom,
 // geom_rate, ias, roll]; flags & 1: a stale position. alt_geom is the GNSS height above the WGS84 ellipsoid.
 type Row = [number, number, number, number | 'ground', number | null, number | null, number, number | null, Record<string, unknown> | null, string, number | null, number | null, number | null, number | null]
-const [traceFile, fr24File] = process.argv.slice(2)
-if (!traceFile || !fr24File) throw new Error('usage: reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV>')
+const [traceFile, fr24File, granularFile] = process.argv.slice(2)
+if (!traceFile || !fr24File || !granularFile) throw new Error('usage: reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV> <Flightradar24 granular CSV>')
 const trace = JSON.parse(readFileSync(traceFile, 'utf8')) as { icao: string; timestamp: number; trace: Row[] }
 const pts = trace.trace
   .map((r) => ({ t: trace.timestamp + r[0] - DAY0, r }))
@@ -115,6 +118,11 @@ const fr24 = readFileSync(fr24File, 'utf8').trim().split('\n').slice(1).map((l) 
   const [time, lat, lon, baro, gs, , trk] = l.split(',')
   return { t: hms(time), lat: Number(lat), lon: Number(lon), baro: Number(baro), gs: Number(gs), trk: Number(trk) }
 })
+// Flightradar24's granular rows: "2026-09-30 05:22:36Z.049", alt_ft_baro, gs_kt, vs_fpm.
+const granular = readFileSync(granularFile, 'utf8').trim().split('\n').slice(1).map((l) => {
+  const [stamp, baro] = l.split(',')
+  return { t: hms(stamp.slice(11, 19)) + Number(stamp.split('Z')[1] || 0), baro: baro === '' ? null : Number(baro) }
+}).filter((g): g is { t: number; baro: number } => g.baro !== null)
 const adsbTimes = pts.map((p) => p.t)
 /** Where no open network heard the aircraft for over a minute: Flightradar24 fills in. */
 const unheard = (t: number): boolean => {
@@ -189,7 +197,15 @@ for (const f of fr24) {
   const upset = f.t > UPSET_FROM && f.t < UPSET_TO
   hos.push({ t: f.t, lat: f.lat, lon: f.lon, sd: Math.hypot(FR24_POS_SD_M, FR24_SD_T * f.gs * KT), ve, vn, sdV: upset ? FR24_VEL_SD_UPSET_MS : FR24_VEL_SD_MS })
   heard.push(f.t)
-  vObs.push({ t: f.t, hFt: sat ? tabukMsl(f.baro) : mslOf(f.baro, f.lat, f.lon, f.t), sdFt: upset ? ALT_SD_UPSET_FT : 50, sdT: FR24_SD_T })
+  // In the upset, only the playback's heights (one every 2–3 s): the granular data's second-by-second pressure altitudes
+  // there (static-pressure errors: 27,950 → 19,350 ft in 10.6 s, ~49,000 ft/min) make the smoother jump.
+  if (sat) vObs.push({ t: f.t, hFt: tabukMsl(f.baro), sdFt: 50, sdT: FR24_SD_T })
+  else if (upset) vObs.push({ t: f.t, hFt: mslOf(f.baro, f.lat, f.lon, f.t), sdFt: ALT_SD_UPSET_FT, sdT: FR24_SD_T })
+}
+for (const g of granular) {
+  if (!(unheard(g.t) && g.t > hms('03:10:00') && g.t <= hms('06:13:37') + 1) || (g.t > UPSET_FROM && g.t < UPSET_TO)) continue
+  const f = fr24.reduce((a, b) => (Math.abs(b.t - g.t) < Math.abs(a.t - g.t) ? b : a)) // where, for the geoid and the air
+  vObs.push({ t: g.t, hFt: mslOf(g.baro, f.lat, f.lon, g.t), sdFt: 50, sdT: FR24_SD_T })
 }
 heard.sort((a, b) => a - b)
 // The dive between adsb.lol's last reception (27,950 ft at 05:22:13) and Flightradar24's 16,850 ft at 05:22:36: ~29,000 ft/min

@@ -8,11 +8,28 @@
   "clockLabel": "UTC",
   "start": "03:04:20",
   "end": "06:45:34",
-  "note": "A reconstruction from the aircraft's own ADS-B broadcasts of a serious incident in which everyone aboard landed safely. The take-off roll and the last half hour before landing rest on few positions and are partly reconstructed; what happened in the cockpit has not been officially established.",
+  "note": "A reconstruction from the aircraft's own ADS-B broadcasts of what Israel calls an attempted suicide terror attack, in which everyone aboard survived. The take-off roll and the last half hour before landing rest on few positions and are partly reconstructed; the Saudi and UAE investigations have not concluded.",
   "summary": [
-    "flydubai 1073, a Boeing 737 MAX 8, from Dubai to Tel Aviv on 30 September 2026.",
-    "Over northern Saudi Arabia the aircraft left 34,000 ft without a descent selected and dived steeply. It declared an emergency (7700), then set 7500 (unlawful interference), turned back over Jordan and landed at Tabuk at about 06:45 UTC.",
-    "Israeli security officials attributed the emergency to a confrontation between the two pilots. The cause is under investigation."
+    "flydubai 1073, a Boeing 737 MAX 8, from Dubai to Tel Aviv on 30 September 2026 with 174 passengers, most of them Israelis.",
+    "Over northern Saudi Arabia the first officer stabbed the captain and the aircraft dived from 34,000 to 16,600 ft in about a minute, far past its speed limits. The wounded captain opened the cockpit door; cabin crew and passengers overpowered the attacker, and two off-duty flydubai pilots flew on and landed at Tabuk at about 06:45 UTC.",
+    "Israel's assessment: an attempted jihadist suicide attack by a first officer radicalized over the past year, acting alone. Saudi Arabia's preliminary inquiry found he assaulted the captain; the UAE is investigating a terrorist link."
+  ],
+  "crew": [
+    {
+      "role": "Captain",
+      "name": "Smit Machchhar",
+      "detail": "pilot flying; Indian national; stabbed, opened the cockpit door"
+    },
+    {
+      "role": "First officer",
+      "name": "",
+      "detail": "pilot monitoring; Omani national, with flydubai about a year; the attacker, by Saudi and Israeli accounts"
+    },
+    {
+      "role": "Relief pilots",
+      "name": "",
+      "detail": "two off-duty flydubai pilots in the cabin, rostered for the return leg; landed the aircraft"
+    }
   ],
   "aircraft": {
     "registration": "A6-FKF",
@@ -28,10 +45,10 @@
     "card": {
       "title": "flydubai Flight 1073",
       "lines": [
-        "30 September 2026 · Boeing 737 MAX 8 A6-FKF, Dubai to Tel Aviv.",
-        "It landed on runway 31 at Tabuk at about 06:45 UTC. flydubai said all passengers were safe.",
-        "Israeli security officials said the emergency stemmed from a confrontation between the two pilots. Its cause, and whether the dive was deliberate, have not been officially established.",
-        "From the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL) and, where no open network heard it, by Flightradar24. The take-off roll and the 15 minutes before the final approach are reconstructed."
+        "30 September 2026 · Boeing 737 MAX 8 A6-FKF, Dubai to Tel Aviv, 174 passengers and 6 crew.",
+        "The first officer stabbed the captain and the aircraft dived. Cabin crew and passengers broke into the cockpit and overpowered him; two off-duty flydubai pilots landed it on runway 31 at Tabuk at about 06:45 UTC. Everyone aboard survived; the captain, Smit Machchhar, is recovering from his wounds.",
+        "Israel calls it an attempted jihadist suicide attack by a first officer radicalized over the past year. Saudi Arabia's preliminary inquiry found he assaulted the captain; the UAE, which now holds him, is investigating a link to terrorism. There is no official finding on the motive yet.",
+        "From the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL) and, where no open network heard it, by Flightradar24, including the data it published. The take-off roll and the 15 minutes before the final approach are reconstructed."
       ]
     }
   },
@@ -58,13 +75,31 @@
       "id": "FR24",
       "title": "Flightradar24, playback of flight FDB1073 (41e663ed), read 2026-09-30",
       "url": "https://fr24.com/FDB1073/41e663ed",
-      "note": "Used only where no open network heard the aircraft: the cruise 03:54–05:16, the dive and zoom 05:22–05:31 (a fix every 2–3 s), 05:53–06:13 from its ground receivers, then its space-based fixes at 06:28:37 and 06:43:39 (and 06:58:59, stopped at Tabuk). Its 03:04:54 fix times the take-off roll. Rows marked A are within 5 s of a fix."
+      "note": "Used only where no open network heard the aircraft: the cruise 03:54–05:16, the dive and zoom 05:22–05:31 (a fix every 2–3 s), 05:53–06:13 from its ground receivers, then its space-based fixes at 06:28:37 and 06:43:39 (and 06:58:59, stopped at Tabuk). Its 03:04:54 fix times the take-off roll. Rows marked A are within 5 s of a fix. Its positions only: the heights there are from its published data (FR24BLOG)."
+    },
+    {
+      "id": "FR24BLOG",
+      "title": "Flightradar24 blog, \"FlyDubai flight to Tel Aviv diverts to Tabuk amid onboard incident\", with its granular data (Flightradar24-Granular-Data-FZ1073-30-September-2026.csv)",
+      "url": "https://www.flightradar24.com/blog/flight-tracking-news/major-incident/flydubai-flight-to-tel-aviv-diverts-to-tabuk-amid-onboard-incident/",
+      "note": "Pressure altitude, ground speed and vertical rate about once a second, on the playback's clock. The heights wherever no open network heard the aircraft, except in the steepest 40 s of the dive, where the pressure altitude is unreliable. Bottom of the dive 16,600 ft at 05:22:40; 598 kt over the ground at 05:22:36–38; the vertical rate pinned at the format's limit, 32,640 ft/min, 05:22:15–25. Flightradar24 on X put the landing at ~06:45."
+    },
+    {
+      "id": "ISRAEL",
+      "title": "Israel's assessment: Prime Minister Netanyahu (Fox News, 1 October), Defence Minister Katz (30 September), Israeli intelligence officials (N12, 1–2 October)",
+      "url": "https://www.axios.com/2026/10/01/netanyahu-flydubai-omani-co-pilot-islamic-radicalization",
+      "note": "The first officer underwent Islamist radicalization over the past year, acted alone and meant to bring the aircraft down; Netanyahu: \"clear he was suicidal\"; Katz: \"an attempted jihadist terror attack\". Israeli officials found no Iranian involvement so far. An assessment, not an investigation's finding."
+    },
+    {
+      "id": "SAUDI",
+      "title": "Saudi Interior Ministry, preliminary inquiry (1 October), and the UAE Attorney General's investigation (1 October)",
+      "url": "https://www.aljazeera.com/news/2026/10/1/flydubai-co-pilot-assaulted-captain-before-landing-initial-saudi-probe",
+      "note": "Saudi Arabia: \"the pilot was assaulted by his co-pilot, resulting in various injuries to both\". The UAE, which received the first officer from Saudi Arabia on 2 October, is examining a possible connection to terrorist activity or intent and prior planning."
     },
     {
       "id": "MEDIA",
-      "title": "News reports of 30 September 2026 (The Times of Israel, \"What we know about the flydubai plane incident\"; Al Jazeera Arabic; Channel 12)",
-      "url": "https://www.timesofisrael.com/liveblog_entry/what-we-know-about-the-flydubai-plane-incident",
-      "note": "Secondary sources for what happened on board: as reported, not established."
+      "title": "News reports, 30 September–2 October 2026 (passenger accounts in ABC News and CBS News; The Times of Israel's photos of the tail; The Aviation Herald; flydubai's statements)",
+      "url": "https://www.abc.net.au/news/2026-10-01/passengers-recount-flydubai-flight/107214804",
+      "note": "Passengers: the wounded captain released the cockpit door; cabin crew and passengers overpowered the first officer, one passenger pulled back on the controls, and two off-duty flydubai pilots took over and landed. Photos at Tabuk: much of the rudder missing (The Times of Israel, 30 September). flydubai: the aircraft was \"secured by on-duty flydubai crew travelling on the flight\"."
     }
   ]
 }

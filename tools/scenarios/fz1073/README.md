@@ -2,7 +2,10 @@
 
 flydubai Flight 1073, 30 September 2026, Boeing 737 MAX 8 A6-FKF (ICAO 8965D1), Dubai → Tel Aviv, diverted to Tabuk
 (`public/scenarios/fz1073/`). There is no investigation report yet, so this package is a reconstruction from the
-aircraft's own ADS-B broadcasts, and has no captions: the story messages give the data and attribute the reports.
+aircraft's own ADS-B broadcasts, and has no captions: the story messages give the data and attribute the reports. What
+happened on board follows Israel's assessment (an attempted suicide terror attack by a radicalized first officer),
+attributed as such, with the Saudi and UAE inquiries beside it (updated 2 October 2026; notes in
+`articles/17_updates_2026-10-01_02.md`).
 
 Inputs (not in the repository; `.work/fz1073/sources/` in the main checkout):
 
@@ -12,7 +15,13 @@ Inputs (not in the repository; `.work/fz1073/sources/` in the main checkout):
 - `tracks/fr24_playback_41e663ed.csv`: Flightradar24's playback of the flight (`https://fr24.com/FDB1073/41e663ed`), used
   only where no open network heard it: the cruise 03:54–05:16, the dive and zoom 05:22–05:31, 05:53–06:13, and its
   satellite fixes at 06:28:37 and 06:43:39. Its time stamps scatter −5…+6 s against adsb.lol's; its fixes count for
-  that. (Flightradar24's terms restrict republishing its data: the track rows it shaped are marked `src=FR24`.)
+  that. (Flightradar24's terms restrict republishing its data: the track rows it shaped are marked `src=FR24`.) Its
+  positions only: the heights there come from the next file.
+- `tracks/fr24_blog_granular.csv`: the granular data Flightradar24 published with its blog post on the flight
+  (`https://www.flightradar24.com/blog/wp-content/uploads/2026/09/Flightradar24-Granular-Data-FZ1073-30-September-2026.csv`):
+  pressure altitude, ground speed and vertical rate about once a second, on the playback's clock (the playback's rows
+  are a subsample of it). The heights wherever no open network heard the aircraft, except 05:21:44–05:23:00, where the
+  pressure altitude is unreliable and the playback's sparser heights are kept.
 - `osm_runways_omdb.json`, `osm_runways_oetb.json`: OpenStreetMap's runways at Dubai and Tabuk (Overpass, ODbL), for
   `airport.json`.
 - `adsb/adsbx_trace_full.json`, `adsb/theairtraffic_trace_full.json`, `adsb/opensky_track.json`: the same flight from
@@ -24,7 +33,7 @@ Steps:
 
 ```bash
 node tools/scenarios/fz1073/airports.ts
-node tools/scenarios/fz1073/reconstruct.ts .work/fz1073/sources/adsb/adsblol_trace_full.json .work/fz1073/sources/tracks/fr24_playback_41e663ed.csv
+node tools/scenarios/fz1073/reconstruct.ts .work/fz1073/sources/adsb/adsblol_trace_full.json .work/fz1073/sources/tracks/fr24_playback_41e663ed.csv .work/fz1073/sources/tracks/fr24_blog_granular.csv
 node --test client/scenario/format.test.ts client/scenario/physics.test.ts
 ```
 
