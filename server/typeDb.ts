@@ -6,8 +6,8 @@
 //   aircrafts.json  { "4A0481": { "r": "YR-ADA", "t": "A320", "f": "00", "d": "…" }, … }  452,000 addresses, upper-case hex
 //   types.json      { "A320": { "desc": "L2J", "wtc": "M" }, … }                        2,788 types
 // A type's desc is its ICAO Doc 8643 description: kind (L landplane, S seaplane, A amphibian, H helicopter, G gyrocopter;
-// this table writes R for a tiltrotor, V a surface vehicle, D a drone), engine count, engine kind (P piston, T turboprop,
-// J jet, E electric). wtc is the wake category (L, M, H; J super).
+// this table writes R for a tiltrotor, V a surface vehicle, D a drone, B a balloon or airship), engine count, engine kind
+// (P piston, T turboprop, J jet, E electric). wtc is the wake category (L, M, H; J super).
 // Downloaded when the server starts and checked once a day after (a conditional GET: the zip changes weekly), read with
 // Node's own zlib, held in memory only and compact: the addresses sorted in a Uint32Array, a type index per address, a
 // category per type (about 2.6 MB). Never written to disk. Not tar1090-db or ADS-B Exchange's database: their licences
@@ -30,24 +30,28 @@ const NO_DESIGNATOR = 'ZZZZ' // ICAO's "no designator assigned": no type
 const LOCAL = 0x04034b50
 const CENTRAL = 0x02014b50
 const END = 0x06054b50
+const DESCRIPTOR = 0x08074b50
+const ZIP64 = 0xffffffff // a size or offset in the zip64 record instead
 
 /**
  * The entries of a zip archive, by name: each one stored (method 0) or deflated (method 8), checked against its size and
  * CRC-32. `want` names the entries to read; the others are skipped unread. Throws on anything else: no end record, a
- * broken directory, another method, an entry cut short, a wrong size or CRC.
- * The end record is found from the back (a comment of up to 64 KB may follow it); the sizes come from the central
- * directory, which has them even where a local header defers them to a data descriptor.
- * ponytail: no zip64 (an archive over 4 GB or 65,535 entries) and no encryption; the zip comes from GitHub over https,
- * so an entry's size is not capped. Add both if a source ever needs them.
+ * broken directory, zip64, another method, an entry cut short, a wrong size or CRC, a deflated entry that inflates past
+ * its size (it stops there).
+ * The end record is found from the back: the one whose comment (up to 64 KB) runs exactly to the file's end, so the
+ * signature inside a comment is not taken for it. The sizes come from the central directory, which has them even where a
+ * local header defers them to a data descriptor (flag bit 3: zeros there).
+ * ponytail: no zip64 (an archive over 4 GB or 65,535 entries, refused) and no encryption. Add them if a source ever needs.
  */
 export async function readZip(zip: Uint8Array, want?: ReadonlySet<string>): Promise<Map<string, Uint8Array>> {
   const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
   let end = zip.byteLength - 22
   const farthest = Math.max(0, end - 0xffff)
-  while (end >= farthest && dv.getUint32(end, true) !== END) end--
+  while (end >= farthest && !(dv.getUint32(end, true) === END && end + 22 + dv.getUint16(end + 20, true) === zip.byteLength)) end--
   if (end < farthest) throw new Error('not a zip: no end of central directory')
   const count = dv.getUint16(end + 10, true)
   let o = dv.getUint32(end + 16, true)
+  if (count === 0xffff || o === ZIP64) throw new Error('zip: zip64 is not read')
   const out = new Map<string, Uint8Array>()
   for (let i = 0; i < count; i++) {
     if (dv.getUint32(o, true) !== CENTRAL) throw new Error(`zip: no central directory entry at ${o}`)
@@ -60,12 +64,14 @@ export async function readZip(zip: Uint8Array, want?: ReadonlySet<string>): Prom
     const name = new TextDecoder().decode(zip.subarray(o + 46, o + 46 + nameLength))
     o += 46 + nameLength + dv.getUint16(o + 30, true) + dv.getUint16(o + 32, true) // name, extra field, comment
     if (want !== undefined && !want.has(name)) continue
+    if (size === ZIP64 || plainSize === ZIP64 || local === ZIP64) throw new Error(`zip: ${name} is zip64, not read`)
     if (dv.getUint32(local, true) !== LOCAL) throw new Error(`zip: no local header for ${name}`)
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true) // its own name and extra lengths
     const data = zip.subarray(start, start + size)
     if (data.length !== size) throw new Error(`zip: ${name} is cut short`)
     if (method !== 0 && method !== 8) throw new Error(`zip: ${name} uses method ${method}`)
-    const plain: Uint8Array = method === 0 ? data : await inflateRawAsync(data)
+    // Inflated no further than its size (at least 1: zlib's floor): a bomb stops there and fails the size check.
+    const plain: Uint8Array = method === 0 ? data : await inflateRawAsync(data, { maxOutputLength: Math.max(1, plainSize) })
     if (plain.length !== plainSize || crc32(plain) !== crc) throw new Error(`zip: ${name} does not match its size or CRC`)
     out.set(name, plain)
   }
@@ -74,9 +80,11 @@ export async function readZip(zip: Uint8Array, want?: ReadonlySet<string>): Prom
 
 /**
  * Test helper: a zip archive of the given entries, stored (0) or deflated (8), with an optional archive comment.
- * localExtra writes that many bytes of extra field into an entry's local header only, as some zip tools do.
+ * localExtra writes that many bytes of extra field into an entry's local header only, as some zip tools do. descriptor
+ * writes an entry as a streaming zip tool does: flag bit 3, zeros for its CRC and sizes in its local header, and a data
+ * descriptor holding them after its data (the central directory has them too).
  */
-export function encodeZip(entries: { name: string; data: Uint8Array; method: 0 | 8; localExtra?: number }[], comment = ''): Uint8Array<ArrayBuffer> {
+export function encodeZip(entries: { name: string; data: Uint8Array; method: 0 | 8; localExtra?: number; descriptor?: boolean }[], comment = ''): Uint8Array<ArrayBuffer> {
   const parts: Buffer[] = []
   const central: Buffer[] = []
   let offset = 0
@@ -99,9 +107,19 @@ export function encodeZip(entries: { name: string; data: Uint8Array; method: 0 |
     head.copy(dir, 10, 8, 28) // method, time, date, CRC, sizes and name length: the same fields
     dir.writeUInt32LE(offset, 42)
     head.writeUInt16LE(extra.length, 28)
-    parts.push(head, name, extra, body)
+    const after = Buffer.alloc(e.descriptor === true ? 16 : 0)
+    if (e.descriptor === true) {
+      head.writeUInt16LE(8, 6) // flag bit 3: the CRC and sizes follow the data
+      dir.writeUInt16LE(8, 8)
+      head.fill(0, 14, 26)
+      after.writeUInt32LE(DESCRIPTOR, 0)
+      after.writeUInt32LE(crc32(e.data), 4)
+      after.writeUInt32LE(body.length, 8)
+      after.writeUInt32LE(e.data.length, 12)
+    }
+    parts.push(head, name, extra, body, after)
     central.push(dir, name)
-    offset += head.length + name.length + extra.length + body.length
+    offset += head.length + name.length + extra.length + body.length + after.length
   }
   const dirBytes = Buffer.concat(central)
   const tail = Buffer.alloc(22)
@@ -133,11 +151,14 @@ const BY_TYPE = new Map<string, string>([
 /**
  * The ADS-B emitter category (DO-260B) a type implies, for the client's iconFor: the silhouette live mode draws from
  * the broadcast category. From the type's name for the few above, else from its ICAO description and wake category:
- * helicopter, gyrocopter or tiltrotor A7; drone B6; heavy or super wake A5; piston, turboprop or electric A1; any other A3.
+ * a surface vehicle C2 and a balloon or airship B2 (the kinds of those named, for one that is not); helicopter,
+ * gyrocopter or tiltrotor A7; drone B6; heavy or super wake A5; piston, turboprop or electric A1; any other A3.
  */
 export function categoryOf(type: string, desc: string, wtc: string): string {
   const named = BY_TYPE.get(type)
   if (named !== undefined) return named
+  if (desc.startsWith('V')) return 'C2'
+  if (desc.startsWith('B')) return 'B2'
   if (/^[HGTR]/.test(desc)) return 'A7'
   if (desc.startsWith('D')) return 'B6'
   if (wtc === 'H' || wtc === 'J') return 'A5'
@@ -146,6 +167,7 @@ export function categoryOf(type: string, desc: string, wtc: string): string {
 }
 
 const CATEGORIES: readonly (string | null)[] = [null, 'A1', 'A3', 'A5', 'A7', 'B1', 'B2', 'B4', 'B6', 'C1', 'C2', 'C3']
+const NOT_TYPED = Object.freeze({ type: null, category: null })
 
 /** The addresses that have a type, sorted, each with its type's index; per type, its designator and category. */
 export interface TypeTable {
@@ -211,9 +233,9 @@ export interface TypeDbOpts {
 }
 
 /**
- * The type table and its download. type() and category() answer from the table in memory; ready() waits for the first
- * one. tick() loads when it is due (call it every minute): at once, a day after a good load, 10 min after a failed one.
- * A failure keeps the table there was. Nothing here runs a timer.
+ * The type table and its download. lookup() answers from the table in memory; ready() waits for the first one. tick()
+ * loads when it is due (call it every minute): at once, a day after a good load, 10 min after a failed one. A failure
+ * keeps the table there was. Nothing here runs a timer.
  */
 export class TypeDb {
   #url: string
@@ -224,7 +246,8 @@ export class TypeDb {
   #etag: string | null = null
   #nextMs = 0 // when tick() loads again
   #loading: Promise<boolean> | null = null
-  #waiting = new Set<() => void>() // ready() calls waiting for the first table
+  #failed = false // the last load failed with no table in: none is coming before the next try, 10 min on
+  #waiting = new Set<(ok: boolean) => void>() // ready() calls waiting for the first table
   #stop = new AbortController() // close() aborts the download under way
 
   constructor(o: TypeDbOpts) {
@@ -235,25 +258,30 @@ export class TypeDb {
     this.#table = o.table ?? null
   }
 
-  /** The ICAO type designator registered for an address, or null: none known, or a '~' address. */
-  type(hex: string): string | null {
+  /**
+   * An address's ICAO type designator and the emitter category it implies (categoryOf), from one search of the table.
+   * type null: none known, or a '~' address; category null as well, or for a type with no description.
+   */
+  lookup(hex: string): { type: string | null; category: string | null } {
     const i = this.#find(hex)
-    return i < 0 ? null : this.#table!.codes[this.#table!.typeOf[i]]
+    if (i < 0) return NOT_TYPED
+    const t = this.#table!
+    const ix = t.typeOf[i]
+    return { type: t.codes[ix], category: CATEGORIES[t.cats[ix]] ?? null }
   }
 
-  /** The emitter category its type implies (categoryOf), or null: no type known, or a type with no description. */
-  category(hex: string): string | null {
-    const i = this.#find(hex)
-    return i < 0 ? null : (CATEGORIES[this.#table!.cats[this.#table!.typeOf[i]]] ?? null)
-  }
-
-  /** True once a table is in (at once if one is), false after ms without one. Never rejects. */
+  /**
+   * True once a table is in (at once if one is); false after ms without one, and at once when a load has failed with no
+   * table in and none is under way (none is coming before the next try): the first ask after a failed start does not wait.
+   * Never rejects.
+   */
   ready(ms: number): Promise<boolean> {
     if (this.#table !== null) return Promise.resolve(true)
+    if (this.#failed && this.#loading === null) return Promise.resolve(false)
     return new Promise((resolve) => {
-      const done = (): void => {
+      const done = (ok: boolean): void => {
         clearTimeout(timer)
-        resolve(true)
+        resolve(ok)
       }
       const timer = setTimeout(() => {
         this.#waiting.delete(done)
@@ -314,14 +342,16 @@ export class TypeDb {
       if (table.addrs.length === 0) return false // a file with no type in it is no table
       this.#table = table
       this.#etag = res.headers.get('etag')
-      for (const done of this.#waiting) done()
-      this.#waiting.clear()
       ok = true
       return true
     } catch {
       return false
     } finally {
       this.#nextMs = this.#now() + (ok ? REFRESH_MS : RETRY_MS)
+      this.#failed = this.#table === null
+      // A table in: the waiting have it. None (this load failed): none is coming before the next try, they wait no more.
+      for (const done of this.#waiting) done(this.#table !== null)
+      this.#waiting.clear()
     }
   }
 

@@ -107,6 +107,9 @@ const low = (r: Row): boolean => typeof r[3] !== 'number' || r[3] < EDGE_LOW_FT 
  * Whether a file's first point p starts a new leg after prev, the last point of the file before: after a gap of over 25 min
  * with the aircraft on the ground at either end, or low at both (it landed, out of coverage or not, and took off again).
  * A gap at cruise is a coverage hole of one flight.
+ * ponytail: a guess at what readsb would have marked, and it misses both ways: a low flight (a helicopter, a turboprop under
+ * 10,000 ft) unheard for over 25 min across a file edge is split in two; one last heard at cruise and next heard low (it
+ * landed and took off again unheard) stays one leg. Upgrade: judge it by the speed the gap implies (distance over time).
  */
 function legAtEdge(prev: Point, p: Point): boolean {
   if (p.ms - prev.ms <= EDGE_GAP_MS) return false
@@ -261,7 +264,10 @@ export class TraceStore {
         parts.push({ url: dayUrl(this.#base, h, d), ttlMs: DAY_TTL_MS, fromMs: d, toMs: Math.min(d + DAY_MS, cut) })
       }
     }
-    if (toMs >= cut) parts.push({ url: liveUrl(this.#base, h), ttlMs: LIVE_TTL_MS, fromMs: cut, toMs: Infinity })
+    // The live file from the cut when day files come before it, else all of it (a leg begun before the cut starts where it
+    // did); with no live file, the last day file to its day's end (a leg running on past the cut ends where it did).
+    if (toMs >= cut) parts.push({ url: liveUrl(this.#base, h), ttlMs: LIVE_TTL_MS, fromMs: parts.length > 0 ? cut : -Infinity, toMs: Infinity })
+    else parts[parts.length - 1].toMs = parts[parts.length - 1].fromMs + DAY_MS
     const files = await Promise.all(parts.map((p) => this.#file(p.url, p.ttlMs)))
     if (files.includes(FAILED)) return 'unavailable'
     return traceDay(h, parts.map((p, i) => ({ json: files[i], fromMs: p.fromMs, toMs: p.toMs })), fromMs, toMs)

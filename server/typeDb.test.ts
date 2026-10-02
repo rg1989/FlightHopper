@@ -54,6 +54,47 @@ test("readZip: a zip written by Info-ZIP's zip 3.0 (macOS): extended-timestamp f
   assert.equal(text(files.get('types.json')), '{"A320":{"desc":"L2J","wtc":"M"},"A321":{"desc":"L2J","wtc":"M"},"A322":{"desc":"L2J","wtc":"M"}}')
 })
 
+test('readZip: an entry written with a data descriptor (flag bit 3, zeros in its local header) reads by the central directory', async () => {
+  const zip = encodeZip([{ name: 'types.json', data: bytes('{"A320":{}}'), method: 8, descriptor: true }, { name: 'b.json', data: bytes('[1]'), method: 0, descriptor: true }])
+  const dv = new DataView(zip.buffer)
+  assert.deepEqual([dv.getUint16(6, true) & 8, dv.getUint32(14, true), dv.getUint32(18, true), dv.getUint32(22, true)], [8, 0, 0, 0], 'flag bit 3, no CRC or sizes in its local header')
+  const files = await readZip(zip)
+  assert.equal(text(files.get('types.json')), '{"A320":{}}')
+  assert.equal(text(files.get('b.json')), '[1]')
+})
+
+test('readZip: zip64 is refused, not misread: 65,535 entries, or a size or offset of 0xFFFFFFFF', async () => {
+  const zip = (): Uint8Array<ArrayBuffer> => encodeZip([{ name: 'a.json', data: bytes('[1,2,3]'), method: 8 }])
+  const endOf = (z: Uint8Array): number => z.length - 22
+  const count = zip()
+  new DataView(count.buffer).setUint16(endOf(count) + 10, 0xffff, true)
+  await assert.rejects(readZip(count), /zip64/, 'the entries counted in the zip64 record')
+  const offset = zip()
+  new DataView(offset.buffer).setUint32(endOf(offset) + 16, 0xffffffff, true)
+  await assert.rejects(readZip(offset), /zip64/, 'the directory found by the zip64 record')
+  for (const [field, what] of [[20, 'its size'], [24, 'its size unzipped'], [42, 'its local header']] as const) {
+    const z = zip()
+    const dv = new DataView(z.buffer)
+    dv.setUint32(dv.getUint32(endOf(z) + 16, true) + field, 0xffffffff, true)
+    await assert.rejects(readZip(z), /zip64/, what)
+  }
+})
+
+test('readZip: the end record is the one whose comment runs to the file’s end: its signature inside the comment is not it', async () => {
+  const comment = 'Made available under PK\x05\x06 the Open Data Commons Attribution License.'
+  const files = await readZip(encodeZip([{ name: 'a.json', data: bytes('[1,2,3]'), method: 8 }], comment))
+  assert.equal(text(files.get('a.json')), '[1,2,3]')
+  const tail = encodeZip([{ name: 'a.json', data: bytes('[1,2,3]'), method: 8 }])
+  await assert.rejects(readZip(new Uint8Array([...tail, 1, 2, 3])), /no end of central directory/, 'bytes after it that no comment holds')
+})
+
+test('readZip: a deflated entry is inflated no further than the size it claims', async () => {
+  const z = encodeZip([{ name: 'a.json', data: new Uint8Array(100_000).fill(97), method: 8 }]) // 100 KB of "a": a few hundred bytes deflated
+  const dv = new DataView(z.buffer)
+  dv.setUint32(dv.getUint32(z.length - 22 + 16, true) + 24, 10, true) // its central entry says 10 bytes
+  await assert.rejects(readZip(z), { code: 'ERR_BUFFER_TOO_LARGE' }, 'it stops at 10 bytes, not after 100 KB')
+})
+
 /** A zip whose second entry claims method 99 in its central directory. */
 function zipWithMethod99(): Uint8Array {
   const zip = encodeZip([{ name: 'types.json', data: bytes('{}'), method: 8 }, { name: 'odd.bin', data: bytes('xyz'), method: 0 }])
@@ -96,6 +137,8 @@ test('categoryOf: every rule, in its order, with real types', () => {
     ['R44', 'H1P', 'L', 'A7'], ['H60', 'H2T', 'M', 'A7'], ['MI26', 'H2T', 'H', 'A7'], ['UHEL', 'H0-', '-', 'A7'],
     ['GYRO', 'G0-', '-', 'A7'], ['A002', 'G1P', 'L', 'A7'], ['V22', 'R2T', 'M', 'A7'], ['B609', 'R2T', 'M', 'A7'], ['XTLT', 'T2T', 'M', 'A7'],
     ['DRON', 'D0-', '-', 'B6'], ['VFHC', 'D0-', '-', 'B6'],
+    // by its kind, for one not named: a surface vehicle, a balloon or airship (designators made up: the named are the real ones)
+    ['XVEH', 'V0-', '-', 'C2'], ['XTUG', 'V1-', '-', 'C2'], ['XBLN', 'B0-', '-', 'B2'], ['XAIR', 'B2P', 'L', 'B2'],
     // heavy or super wake, before the engines
     ['A388', 'L4J', 'H', 'A5'], ['B744', 'L4J', 'H', 'A5'], ['A400', 'L4T', 'H', 'A5'], ['XSUP', 'L4J', 'J', 'A5'],
     // piston, turboprop, electric
@@ -134,17 +177,18 @@ test('buildTypeTable: the typed addresses sorted, one type index each; per type 
   assert.equal(t.cats.length, t.codes.length)
 })
 
-test('type and category: a hit in either case, a miss, a ~ address and what is no address are null', () => {
+test('lookup: an address’s type and category from one search; a hit in either case; a miss, a ~ address and what is no address are null', () => {
   const db = tableDb()
-  assert.deepEqual([db.type('4a0481'), db.category('4a0481')], ['A320', 'A3'])
-  assert.deepEqual([db.type('4A0481'), db.category('4A0481')], ['A320', 'A3'])
-  assert.deepEqual([db.type('738063'), db.type('00830b'), db.type('a00018'), db.type('109866'), db.type('106593'), db.type('3f232b')], ['B738', 'R44', 'C172', 'GND', 'TWR', 'SHIP'])
-  assert.deepEqual([db.category('738063'), db.category('00830b'), db.category('a00018'), db.category('109866'), db.category('106593'), db.category('3f232b')], ['A3', 'A7', 'A1', 'C2', 'C3', 'B2'])
-  assert.deepEqual([db.type('4b1234'), db.category('4b1234')], ['NEW1', null], 'a type with no description: no category')
+  assert.deepEqual(db.lookup('4a0481'), { type: 'A320', category: 'A3' })
+  assert.deepEqual(db.lookup('4A0481'), { type: 'A320', category: 'A3' })
+  const hexes = ['738063', '00830b', 'a00018', '109866', '106593', '3f232b']
+  assert.deepEqual(hexes.map((h) => db.lookup(h).type), ['B738', 'R44', 'C172', 'GND', 'TWR', 'SHIP'])
+  assert.deepEqual(hexes.map((h) => db.lookup(h).category), ['A3', 'A7', 'A1', 'C2', 'C3', 'B2'])
+  assert.deepEqual(db.lookup('4b1234'), { type: 'NEW1', category: null }, 'a type with no description: no category')
   for (const hex of ['ffffff', '000000', '142635', '386426', '~4a0481', '~abc123', '4a048', '4a04811', 'xyzxyz', '', ' 4a0481']) {
-    assert.deepEqual([db.type(hex), db.category(hex)], [null, null], JSON.stringify(hex))
+    assert.deepEqual(db.lookup(hex), { type: null, category: null }, JSON.stringify(hex))
   }
-  assert.deepEqual([new TypeDb({ userAgent: 't' }).type('4a0481'), new TypeDb({ userAgent: 't' }).category('4a0481')], [null, null], 'no table yet')
+  assert.deepEqual(new TypeDb({ userAgent: 't' }).lookup('4a0481'), { type: null, category: null }, 'no table yet')
 })
 
 test('buildTypeTable: what is not an address with a designator is left out; one address twice is kept once; junk is an empty table', () => {
@@ -187,7 +231,7 @@ test('load: from Mictronics on GitHub, with the user agent and a time limit; the
   assert.equal(calls[0].headers.get('user-agent'), 'FlightHopper-test')
   assert.equal(calls[0].headers.get('if-none-match'), null, 'the first is not conditional')
   assert.ok(calls[0].signal instanceof AbortSignal && !calls[0].signal.aborted, 'a stuck download ends by itself')
-  assert.deepEqual([db.type('4a0481'), db.category('00830b')], ['A320', 'A7'])
+  assert.deepEqual([db.lookup('4a0481').type, db.lookup('00830b').category], ['A320', 'A7'])
 })
 
 test('load: conditional after the first; a 304 keeps the table; a new zip replaces it whole', async () => {
@@ -196,10 +240,10 @@ test('load: conditional after the first; a 304 keeps the table; a new zip replac
   next(new Response(null, { status: 304 }))
   assert.equal(await db.load(), true)
   assert.equal(calls[1].headers.get('if-none-match'), '"v1"')
-  assert.equal(db.type('4a0481'), 'A320', 'kept')
+  assert.equal(db.lookup('4a0481').type, 'A320', 'kept')
   next(zipResponse({ '738063': { t: 'B38M' } }, '"v2"'))
   assert.equal(await db.load(), true)
-  assert.deepEqual([db.type('738063'), db.type('4a0481')], ['B38M', null], 'the new table only')
+  assert.deepEqual([db.lookup('738063').type, db.lookup('4a0481').type], ['B38M', null], 'the new table only')
   next(new Response(null, { status: 304 }))
   await db.load()
   assert.equal(calls[3].headers.get('if-none-match'), '"v2"')
@@ -221,11 +265,11 @@ test('load: a failure keeps the old table: a bad status, a network error, a time
   for (const [what, answer] of failures) {
     next(answer)
     assert.equal(await db.load(), false, what)
-    assert.equal(db.type('4a0481'), 'A320', `${what}: the old table stays`)
+    assert.equal(db.lookup('4a0481').type, 'A320', `${what}: the old table stays`)
   }
   const fresh = host(new Error('ECONNREFUSED'))
   assert.equal(await fresh.db.load(), false)
-  assert.equal(fresh.db.type('4a0481'), null, 'no table yet, none after')
+  assert.equal(fresh.db.lookup('4a0481').type, null, 'no table yet, none after')
 })
 
 test('load: calls during a download share it', async () => {
@@ -248,7 +292,7 @@ test('tick: loads at once, again a day after a good load, 10 minutes after a fai
   next(new Error('ECONNRESET'))
   await db.tick()
   assert.equal(calls.length, 2, 'a day on: checked again')
-  assert.equal(db.type('4a0481'), 'A320', 'it failed: the table stays')
+  assert.equal(db.lookup('4a0481').type, 'A320', 'it failed: the table stays')
   clock.t += 10 * MIN - 1
   await db.tick()
   assert.equal(calls.length, 2, 'retried after 10 minutes, not sooner')
@@ -267,9 +311,7 @@ test('ready: true at once with a table; false after ms without one; true as soon
   const { db } = host(new Error('ECONNRESET'))
   const t0 = performance.now()
   assert.equal(await db.ready(40), false)
-  assert.ok(performance.now() - t0 >= 35, 'it waited')
-  await db.load() // fails: the waiting goes on to its end, it does not reject
-  assert.equal(await db.ready(20), false)
+  assert.ok(performance.now() - t0 >= 35, 'it waited: no load had failed yet')
 
   let release!: (r: Response) => void
   const gated = host(new Promise<Response>((r) => (release = r)))
@@ -281,6 +323,24 @@ test('ready: true at once with a table; false after ms without one; true as soon
   assert.deepEqual(await Promise.all(waits), [true, true])
   assert.ok(performance.now() - t1 < 1000, 'not the whole 5 s')
   assert.equal(await loading, true)
+})
+
+test('ready: a load that failed with no table in ends the waiting at once, and a later ask does not wait (none is coming before the next try)', async () => {
+  let release!: (r: Response) => void
+  const { db, next } = host(new Promise<Response>((r) => (release = r)))
+  const waiting = db.ready(5000)
+  const loading = db.load()
+  const t0 = performance.now()
+  release(new Response('Server Error', { status: 500 }))
+  assert.deepEqual(await Promise.all([loading, waiting]), [false, false])
+  assert.ok(performance.now() - t0 < 1000, 'not the whole 5 s')
+  const t1 = performance.now()
+  assert.equal(await db.ready(5000), false, 'the first ask after a failed start')
+  assert.ok(performance.now() - t1 < 100, 'answered at once')
+  next(zipResponse(AIRCRAFT))
+  const again = db.load() // the next try: an ask waits for it
+  const w = db.ready(5000)
+  assert.deepEqual(await Promise.all([again, w]), [true, true])
 })
 
 test('close: the download under way is aborted and fails, the table stays; nothing is asked after it', async () => {
@@ -297,7 +357,7 @@ test('close: the download under way is aborted and fails, the table stays; nothi
   db.close()
   assert.equal(signals[0].aborted, true)
   assert.equal(await pending, false)
-  assert.equal(db.type('4a0481'), 'A320')
+  assert.equal(db.lookup('4a0481').type, 'A320')
   assert.equal(await db.load(), false)
   await db.tick()
   assert.equal(signals.length, 1, 'closed: nothing new is asked')

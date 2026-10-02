@@ -543,6 +543,22 @@ test('TraceStore.day: rows taken by time, day files before the cut, the live fil
   assert.deepEqual([d.hex, d.reg, d.typeCode, d.fromMs, d.toMs], [HEX, 'SX-DND', 'A320', at('2026-10-01T03:30:00Z'), NOW])
 })
 
+test('TraceStore.day: from at or after the cut, the live file whole: a leg begun before the cut starts where it did', async () => {
+  // A flight from 03:50 to 04:20: the live file still holds its first rows from before the cut (04:00).
+  const { calls, store } = spanHost({ [LIVE_URL]: liveOf(every('2026-10-01T03:50:00Z', '2026-10-01T04:20:00Z', 20, 35000)) })
+  const d = await daySpan(store, at('2026-10-01T04:10:00Z'), NOW)
+  assert.deepEqual(calls.map((c) => c.url), [LIVE_URL], 'no day file')
+  assert.deepEqual(spans(d), [['2026-10-01T03:50:00Z', '2026-10-01T04:20:00Z']], 'not cut at 04:00')
+  assert.equal(d.legs[0].t.length, 91)
+})
+
+test('TraceStore.day: a span ending before the cut, the last day file to its day’s end: a leg running past the cut ends where it did', async () => {
+  const { calls, store } = spanHost({ [dayUrlOf('2026/10/01')]: dayOf('2026/10/01', every('2026-10-01T03:20:00Z', '2026-10-01T04:30:00Z', 60, 35000)) })
+  const d = await daySpan(store, at('2026-10-01T00:00:00Z'), at('2026-10-01T03:30:00Z'))
+  assert.deepEqual(calls.map((c) => c.url), [dayUrlOf('2026/10/01')], 'no live file')
+  assert.deepEqual(spans(d), [['2026-10-01T03:20:00Z', '2026-10-01T04:30:00Z']], 'not cut at 04:00')
+})
+
 test('traceDay: a leg crossing midnight stays one: rows on through it, or a coverage hole at cruise', () => {
   const files = (before: Pt[], after: Pt[]) => [
     { json: dayOf('2026/09/29', before), fromMs: at('2026-09-29T00:00:00Z'), toMs: at('2026-09-30T00:00:00Z') },

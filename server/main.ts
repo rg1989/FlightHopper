@@ -388,8 +388,9 @@ export function createServer(
     if (r === 'missing') return [404, { error: 'no data for this half hour' }]
     if (r === 'unavailable') return [503, { error: 'this half hour cannot be had now, try again' }]
     for (const a of r.aircraft) {
-      a.type = types?.type(a.hex) ?? null
-      a.category = types?.category(a.hex) ?? null
+      const typed = types?.lookup(a.hex)
+      a.type = typed?.type ?? null
+      a.category = typed?.category ?? null
     }
     return [200, r]
   }
@@ -413,10 +414,11 @@ export function createServer(
   }
 
   /**
-   * One aircraft's legs over a span (TraceDay): from and to in UTC ms, at most 48 h apart; to is capped at now and from raised
-   * to the oldest day adsb.lol keeps, and the reply says the span it answered. 400 when it is no span of the past (from after
-   * to, over 48 h, from in the future, to before the oldest day); 200 with no legs when it did not fly then; 503 when a file
-   * of the span could not be had (a partial day must not read as "not heard"). No origin: the route is today's flight's.
+   * One aircraft's legs over a span (TraceDay): from and to in UTC ms, at most 48 h apart once to is capped at now; from is
+   * raised to the oldest day adsb.lol keeps, and the reply says the span it answered. 400 when it is no span of the past
+   * (from after to, over 48 h, from in the future, to before the oldest day); 200 with no legs when it did not fly then; 503
+   * when a file of the span could not be had (a partial day must not read as "not heard"). No origin: the route is today's
+   * flight's.
    */
   async function traceSpan(q: URLSearchParams, hex: string): Promise<[number, unknown]> {
     check(!q.has('at'), 'give at, or from and to, not both')
@@ -424,11 +426,12 @@ export function createServer(
     const to = num(q, 'to')
     const now = nowMs()
     const oldest = history.oldestSlotMs()
+    const until = Math.min(to, now)
     check(from <= to, 'from must not be after to')
-    check(to - from <= SPAN_MAX_MS, 'from and to must be at most 48 h apart')
     check(from <= now, 'from must not be in the future')
+    check(until - from <= SPAN_MAX_MS, 'from and to must be at most 48 h apart')
     check(to >= oldest, `to must not be before the oldest day adsb.lol keeps, ${new Date(oldest).toISOString()}`)
-    const r = await traces.day(hex, Math.max(from, oldest), Math.min(to, now))
+    const r = await traces.day(hex, Math.max(from, oldest), until)
     if (r === null) throw new BadRequest('from and to must be times in ms') // cannot be, once checked: both are past days now
     if (r === 'unavailable') return [503, { error: 'its trace cannot be had now, try again' }]
     return [200, r]

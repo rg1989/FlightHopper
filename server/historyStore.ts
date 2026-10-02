@@ -133,10 +133,10 @@ export class HistoryStore {
 
   /**
    * Looks for the oldest UTC day adsb.lol still has: a binary search over the days from 60 back to yesterday, asking with
-   * HEAD whether a day's first half hour (NN 00) is there. adsb.lol drops whole days, oldest first, and no day at the edge is
-   * partial (checked 2026-10-02), so the days it has run unbroken to yesterday: 6 requests at most find the first. The day
-   * found is kept for oldestSlotMs(). null: a request failed (anything but 200, 404 or 410), or none of the 60 days is there;
-   * nothing is changed then.
+   * HEAD whether a day is there (#dayThere: its first half hour, else its last). adsb.lol drops whole days, oldest first,
+   * and no day at the edge is partial (checked 2026-10-02), so the days it has run unbroken to yesterday: 6 days asked at
+   * most find the first (12 requests, a day not there costing two). The day found is kept for oldestSlotMs(). null: a
+   * request failed (anything but 200, 404 or 410), or none of the 60 days is there; nothing is changed then.
    */
   async findOldest(): Promise<number | null> {
     const today = dayStart(this.#now())
@@ -236,11 +236,21 @@ export class HistoryStore {
     }
   }
 
-  /** Whether adsb.lol has the day starting at dayMs (a HEAD of its first half hour): true; false on a 404 or 410; null when it could not say. */
+  /**
+   * Whether adsb.lol has the day starting at dayMs: a HEAD of its first half hour (NN 00) and, when that answers 404 or 410,
+   * of its last (NN 47), so one file missing, rebuilt or late does not hide the day (and the search every day after it):
+   * true when either is there; false when both answer 404 or 410; null when it could not say.
+   */
   async #dayThere(dayMs: number): Promise<boolean | null> {
+    const first = await this.#there(dayMs)
+    return first === false ? this.#there(dayMs + DAY_MS - SLOT_MS) : first
+  }
+
+  /** Whether the half hour at slotMs is there (a HEAD): true; false on a 404 or 410; null when it could not say. */
+  async #there(slotMs: number): Promise<boolean | null> {
     if (this.#stop.signal.aborted) return null
     try {
-      const res = await this.#fetch(heatmapUrl(this.#base, dayMs), {
+      const res = await this.#fetch(heatmapUrl(this.#base, slotMs), {
         method: 'HEAD',
         headers: { 'user-agent': this.#userAgent },
         signal: AbortSignal.any([this.#stop.signal, AbortSignal.timeout(HEAD_TIMEOUT_MS)]),

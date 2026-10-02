@@ -221,8 +221,11 @@ test('file: a half hour before the oldest day kept is missing with no request; u
   assert.equal(told.calls.length, 1, 'the oldest day itself is asked')
 })
 
-/** A store whose host has the days from `oldest` up to today (HEAD of a day's 00.bin.ttf: 200) and none before (404). */
-function daysHost(oldest: number | null, fail?: (url: string) => Response | Error | null) {
+/**
+ * A store whose host has the days from `oldest` up to today (HEAD of a day's 00.bin.ttf or 47.bin.ttf: 200) and none before
+ * (404); `gone` lists files that answer 404 though their day is there.
+ */
+function daysHost(oldest: number | null, fail?: (url: string) => Response | Error | null, gone: ReadonlySet<string> = new Set()) {
   const clock = { t: NOW }
   const heads: { url: string; method: string | undefined; headers: Headers; signal: AbortSignal | null | undefined }[] = []
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -231,31 +234,34 @@ function daysHost(oldest: number | null, fail?: (url: string) => Response | Erro
     const trouble = fail?.(url) ?? null
     if (trouble instanceof Error) throw trouble
     if (trouble !== null) return trouble
-    const m = /\/globe_history\/(\d{4})\/(\d{2})\/(\d{2})\/heatmap\/00\.bin\.ttf$/.exec(url)
+    const m = /\/globe_history\/(\d{4})\/(\d{2})\/(\d{2})\/heatmap\/(00|47)\.bin\.ttf$/.exec(url)
     assert.ok(m !== null, url)
     const day = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-    return new Response(null, { status: oldest !== null && day >= oldest ? 200 : 404 })
+    return new Response(null, { status: oldest !== null && day >= oldest && !gone.has(url) ? 200 : 404 })
   }) as typeof fetch
   const store = new HistoryStore({ userAgent: 'FlightHopper-test', fetchFn, nowMs: () => clock.t })
   return { store, clock, heads }
 }
 
-test('findOldest: a binary search with HEAD over the days from 60 back to yesterday finds the oldest one there, in 6 requests at most', async () => {
+/** The days a search asked about: its HEADs of a first half hour (a day not there is asked for its last too). */
+const daysAsked = (heads: { url: string }[]): number => heads.filter((h) => h.url.endsWith('/00.bin.ttf')).length
+
+test('findOldest: a binary search with HEAD over the days from 60 back to yesterday finds the oldest one there, asking 6 days at most', async () => {
   const { store, heads } = daysHost(TODAY - 42 * DAY) // 2026-08-20, as adsb.lol had it on 2026-10-02 (42 days)
   assert.equal(await store.findOldest(), TODAY - 42 * DAY)
   assert.equal(store.oldestSlotMs(), TODAY - 42 * DAY)
   assert.equal(store.status().oldestSlotMs, TODAY - 42 * DAY)
-  assert.ok(heads.length <= 6, `${heads.length} requests`)
+  assert.ok(daysAsked(heads) <= 6 && heads.length <= 12, `${heads.length} requests`)
   for (const h of heads) {
     assert.equal(h.method, 'HEAD')
-    assert.match(h.url, /^https:\/\/adsb\.lol\/globe_history\/2026\/(07|08|09)\/\d\d\/heatmap\/00\.bin\.ttf$/)
+    assert.match(h.url, /^https:\/\/adsb\.lol\/globe_history\/2026\/(07|08|09)\/\d\d\/heatmap\/(00|47)\.bin\.ttf$/)
     assert.equal(h.headers.get('user-agent'), 'FlightHopper-test')
     assert.ok(h.signal instanceof AbortSignal && !h.signal.aborted, 'a stuck request ends by itself')
   }
   for (let back = 1; back <= 60; back++) {
     const host = daysHost(TODAY - back * DAY)
     assert.equal(await host.store.findOldest(), TODAY - back * DAY, `${back} days back`)
-    assert.ok(host.heads.length <= 6, `${back} days back: ${host.heads.length} requests`)
+    assert.ok(daysAsked(host.heads) <= 6, `${back} days back: ${daysAsked(host.heads)} days asked`)
   }
   const deeper = daysHost(TODAY - 90 * DAY)
   assert.equal(await deeper.store.findOldest(), TODAY - 60 * DAY, 'older than the search looks: the farthest day it looks at')
@@ -265,7 +271,7 @@ test('findOldest: none of the days there, or a request that fails, is null and c
   const none = daysHost(null)
   assert.equal(await none.store.findOldest(), null)
   assert.equal(none.store.oldestSlotMs(), TODAY - 30 * DAY, 'still the guess')
-  assert.ok(none.heads.length <= 6)
+  assert.ok(daysAsked(none.heads) <= 6)
   for (const trouble of [new Response(null, { status: 503 }), new Response(null, { status: 429 }), new Error('ECONNRESET')]) {
     const host = daysHost(TODAY - 42 * DAY, () => trouble)
     assert.equal(await host.store.findOldest(), null, String(trouble))
@@ -278,6 +284,20 @@ test('findOldest: none of the days there, or a request that fails, is null and c
   failing = true
   assert.equal(await found.store.findOldest(), null)
   assert.equal(found.store.oldestSlotMs(), TODAY - 42 * DAY, 'a failed search keeps what the last one found')
+})
+
+test('findOldest: a day whose first half hour answers 404 is asked for its last before it counts as gone (one late or rebuilt file hides no history)', async () => {
+  const day30 = new Date(TODAY - 30 * DAY).toISOString().slice(0, 10).replaceAll('-', '/') // the search's first day asked
+  const first = `https://adsb.lol/globe_history/${day30}/heatmap/00.bin.ttf`
+  const last = `https://adsb.lol/globe_history/${day30}/heatmap/47.bin.ttf`
+  const lateFile = daysHost(TODAY - 42 * DAY, undefined, new Set([first]))
+  assert.equal(await lateFile.store.findOldest(), TODAY - 42 * DAY, 'not 29 days back: the day is there')
+  assert.deepEqual(lateFile.heads.slice(0, 2).map((h) => h.url), [first, last])
+  const gone = daysHost(TODAY - 42 * DAY, undefined, new Set([first, last])) // both: the day counts as gone
+  assert.equal(await gone.store.findOldest(), TODAY - 29 * DAY)
+  const trouble = daysHost(TODAY - 42 * DAY, (url) => (url === last ? new Response(null, { status: 503 }) : null), new Set([first]))
+  assert.equal(await trouble.store.findOldest(), null, 'the last half hour cannot say: no answer, nothing changed')
+  assert.equal(trouble.store.oldestSlotMs(), TODAY - 30 * DAY)
 })
 
 test('tickOldest: searches at once, again 6 h after a search that found the day, 10 minutes after one that did not', async () => {

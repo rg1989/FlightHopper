@@ -308,6 +308,8 @@ test('/api/trace?hex&from&to: every leg of the span, each with its calls and no 
   assert.deepEqual(up.urls.slice(before), [`https://adsb.lol/globe_history/${day}/traces/c4/trace_full_4691c4.json`], 'not the day before it')
 
   assert.equal((await span(`hex=4691ca&from=${T0 - 48 * HOUR}&to=${T0}`)).status, 200, '48 h is the most')
+  const capped = await span(`hex=4691ca&from=${T0 - 48 * HOUR}&to=${T0 + 6 * HOUR}`)
+  assert.deepEqual([capped.status, capped.body.toMs], [200, T0], '54 h asked, 48 h once to is capped at now: the span is measured after')
   for (const bad of [
     `hex=4691ca&from=${T0 - 48 * HOUR - 1}&to=${T0}`, // over 48 h
     `hex=4691ca&from=${T0}&to=${T0 - 1}`, // from after to
