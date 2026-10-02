@@ -323,6 +323,22 @@
   outline-offset: 1px;
 }
 
+/* A short note right after the title (setNote: the history bar's "No data for this time"), in the error tone, in the
+   title's small caps. */
+.fh-playbar-notice {
+  overflow: hidden;
+  color: var(--fh-err);
+  font: 600 10px/1.3 var(--fh-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fh-playbar-notice[hidden] {
+  display: none;
+}
+
 /* Extra controls (opts.tools: the history bar's calendar), between the speed and the exit. */
 .fh-playbar.fh-has-tools {
   grid-template-columns: auto clamp(150px, 20vw, 230px) minmax(0, 1fr) auto auto auto;

@@ -12,6 +12,8 @@ import { mountPlaybar, type PlaybarHandle, type PlaybarSegment } from '../ui/pla
 import './bar.css'
 
 const H_MS = 3_600_000
+// ponytail: English day and month names, as the rest of the UI ('Tue 22 Sep'; Intl's en-GB would say 'Sept'). Upgrade:
+// Intl.DateTimeFormat parts for the label when the UI is translated.
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -50,6 +52,12 @@ export function hourScale(day: LocalDay, everyH: number): { t: number; label: st
     out.push({ t: (ms - day.startMs) / 1000, label: pad2(h) })
   }
   return out
+}
+
+/** The scrubber's t (seconds after the day's start) as ms, whole. Its right edge is the day's last ms (23:59:59), not
+ *  the next midnight: End or a drag to the edge stays in the day (only playing crosses midnight, and moves the bar on). */
+export function dayMs(day: LocalDay, t: number): number {
+  return Math.max(day.startMs, Math.min(Math.round(day.startMs + t * 1000), day.endMs - 1))
 }
 
 /** The Go to popover's quick jumps back from now. */
@@ -131,7 +139,9 @@ export interface HistoryBarHandle {
   update(v: { tMs: number; playing: boolean; rate: number }): void // every frame; a new day mounts the bar again
   setSlots(slots: HistoryStatus['slots'], loading: readonly number[]): void // loading: the half hours the client awaits
   setLimit(maxMs: number): void // the newest published time: hatched past it, and out of reach
+  setNote(text: string | null): void // a short note after the title ('No data for this time'); null: none. Kept by day
   openGoTo(): void // opens the popover with the focus on it, for the keyboard (Tab goes on into it)
+  closeGoTo(): boolean // closes the popover; whether it was open (the app's Back asks it first: Esc, the TV remote)
   destroy(): void
 }
 
@@ -208,6 +218,7 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
   let loading: readonly number[] = []
   let limitMs: number | null = null
   let lastMs: number | null = null // the replay time of the last update: the fields' first value
+  let note: string | null = null
   let destroyed = false
 
   // Esc closes the popover, and only that: caught on its way down, before the app's own Esc (back one level) sees it.
@@ -264,12 +275,17 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
   go.addEventListener('click', (e) => (goByPointer = e.detail > 0)) // Enter in a field clicks it too, with detail 0
   pop.addEventListener('submit', (e) => {
     e.preventDefault()
+    // ponytail: the date field keeps to the last 30 days (min/max), the time field to nothing: later than now today, or
+    // before minMs on the first day, goes to onGoTo as typed and the replay clock clamps it to its bounds. Upgrade:
+    // clamp here if the clock stops doing so.
     const tMs = parseLocal(date.value, time.value)
     if (tMs !== null) pick(tMs, goByPointer)
     goByPointer = false
   })
 
   // The play bar for one day: its seconds after the day's start.
+  // ponytail: the scrubber keeps the play bar's keys, ←/→ 10 s and Shift or PgUp/PgDn 60 s: small steps across 24 h (Home,
+  // End and the mouse cover the rest). Upgrade: a step option on the play bar (10 min, 1 h) if keyboard use asks for it.
   let day = localDay(o.nowMs())
   let mounts = 0
   const limitT = (d: LocalDay): number | null =>
@@ -279,7 +295,7 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     const b = mountPlaybar(root, {
       start: 0, stop: lenS, end: lenS, marks: [], clockLabel: o.zone, title: `Replay · ${d.label}`,
       onToggle: () => o.onToggle(),
-      onSeek: (t) => o.onSeek(Math.round(d.startMs + t * 1000)),
+      onSeek: (t) => o.onSeek(dayMs(d, t)), // its right edge is 23:59:59, not the next day's bar
       onRate: () => o.onRate(),
       onExit: () => o.onLive(),
       className: mounts++ === 0 ? 'fh-playbar-history' : 'fh-playbar-history fh-playbar-again', // again: no entrance
@@ -287,6 +303,7 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     })
     b.setSegments(daySegments(d, slots, loading))
     b.setLimit(limitT(d))
+    b.setNote(note)
     return b
   }
   let bar = mount(day)
@@ -301,8 +318,10 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
     const was = bar
     day = next
     bar = mount(next)
+    const fresh = cal.closest<HTMLElement>('.fh-playbar')
+    if (old !== null && fresh !== null) old.replaceWith(fresh) // where the old one was: the tab order holds
     was.destroy()
-    const to = same ?? (cls === null ? null : (cal.closest('.fh-playbar')?.querySelector<HTMLElement>(`.${cls}`) ?? null))
+    const to = same ?? (cls === null ? null : (fresh?.querySelector<HTMLElement>(`.${cls}`) ?? null))
     to?.focus({ preventScroll: true })
   }
 
@@ -322,8 +341,17 @@ export function mountHistoryBar(root: HTMLElement, o: HistoryBarOpts): HistoryBa
       limitMs = maxMs
       if (!destroyed) bar.setLimit(limitT(day))
     },
+    setNote(text) {
+      note = text
+      if (!destroyed) bar.setNote(text)
+    },
     openGoTo() {
       openGoTo(pop)
+    },
+    closeGoTo() {
+      const open = !pop.hidden
+      closeGoTo(true) // as Esc: the keyboard goes back to the calendar when it was in the popover
+      return open
     },
     destroy() {
       if (destroyed) return

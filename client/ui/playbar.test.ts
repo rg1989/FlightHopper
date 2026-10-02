@@ -32,7 +32,10 @@ class El {
   style = { props: {} as Record<string, string>, setProperty: (k: string, v: string): void => void ((this.writes++, this.style.props[k] = v)) }
   #classes = new Set<string>()
   classList = {
-    add: (c: string): void => void this.#classes.add(c),
+    add: (c: string): void => {
+      if (c === '' || /\s/.test(c)) throw new Error(`classList.add('${c}'): a browser throws on an empty or spaced token`)
+      this.#classes.add(c)
+    },
     remove: (c: string): void => void this.#classes.delete(c),
     toggle: (c: string, on?: boolean): boolean => {
       if (on ?? !this.#classes.has(c)) this.#classes.add(c)
@@ -67,6 +70,22 @@ class El {
       c.remove()
       c.parent = this
       this.children.push(c)
+    }
+  }
+  prepend(...cs: El[]): void {
+    for (const c of [...cs].reverse()) {
+      c.remove()
+      c.parent = this
+      this.children.unshift(c)
+    }
+  }
+  /** Inserts cs right after this element, in its parent. */
+  after(...cs: El[]): void {
+    const p = this.parent!
+    for (const [i, c] of cs.entries()) {
+      c.remove()
+      c.parent = p
+      p.children.splice(p.children.indexOf(this) + 1 + i, 0, c)
     }
   }
   replaceChildren(...cs: El[]): void {
@@ -370,4 +389,181 @@ test('with a recording: no note; without audio: no sound controls, and M does no
   assert.equal(all(none.root).filter((e) => e.has('fh-playbar-sound')).length, 0)
   assert.ok(!one(none.root, 'fh-playbar').has('fh-has-sound'))
   none.bar.toggleMute()
+})
+
+// The history time bar's options (history/bar.ts): a day of 86,400 s, no marks unless given.
+const DAY = 86_400
+const none = (root: El, cls: string): void => assert.equal(all(root).filter((e) => e.has(cls)).length, 0, `no .${cls}`)
+const writesIn = (root: El): number => all(root).reduce((n, e) => n + e.writes, 0)
+type Opts = Parameters<typeof mountPlaybar>[1]
+function mountDay(over: Partial<Opts> = {}) {
+  const root = new El('div')
+  const calls: string[] = []
+  const bar = mountPlaybar(root as unknown as HTMLElement, {
+    start: 0, stop: DAY, end: DAY, marks: [], clockLabel: 'IDT', title: 'Replay · Tue 22 Sep',
+    onToggle: () => calls.push('toggle'),
+    onSeek: (t) => calls.push(`seek ${t}`),
+    onRate: () => calls.push('rate'),
+    onExit: () => calls.push('exit'),
+    ...over,
+  })
+  const range = all(root).find((e) => e.tag === 'input')!
+  return { root, bar, calls, range, rail: one(root, 'fh-playbar-rail'), barEl: one(root, 'fh-playbar') }
+}
+
+test('without the options it is the scenario bar: no extra class, the × exit, no tools, scale, spans, hatch or note', () => {
+  const { root, rail, barEl, range } = mountDay()
+  const exit = one(root, 'fh-playbar-exit')
+  assert.ok(exit.has('fh-ibtn') && !exit.has('fh-playbar-exit-text'))
+  assert.deepEqual([exit.attrs['aria-label'], exit.title, exit.children.length], ['Exit scenario', 'Exit scenario', 1])
+  for (const c of ['fh-playbar-tools', 'fh-playbar-scale', 'fh-playbar-segs', 'fh-playbar-limit', 'fh-playbar-notice', 'fh-has-tools', 'fh-has-scale']) none(root, c)
+  assert.deepEqual(barEl.children.map((c) => c.className), ['fh-ibtn fh-playbar-play', 'fh-playbar-meta', 'fh-playbar-track', 'fh-playbar-rate fh-num', 'fh-ibtn fh-playbar-exit'])
+  assert.deepEqual(rail.children.map((c) => c.className), ['fh-playbar-fill'])
+  assert.equal(range.attrs['aria-label'], 'Scenario time')
+  assert.equal(barEl.className, 'fh-playbar fh-glass')
+})
+
+test('className (one class or several), timeLabel', () => {
+  const { barEl, range } = mountDay({ className: ' fh-playbar-history  fh-playbar-again ', timeLabel: 'Replay time' })
+  assert.ok(barEl.has('fh-playbar-history') && barEl.has('fh-playbar-again') && barEl.has('fh-glass'))
+  assert.equal(range.attrs['aria-label'], 'Replay time')
+})
+
+test('exitText: the exit is a text pill (no icon) named by exitLabel, and still exits; exitLabel alone renames the ×', () => {
+  const { root, calls } = mountDay({ exitLabel: 'Back to live', exitText: 'Live' })
+  const exit = one(root, 'fh-playbar-exit')
+  assert.deepEqual([exit.tag, exit.type, text(exit), exit.children.length], ['button', 'button', 'Live', 0])
+  assert.ok(exit.has('fh-playbar-exit-text') && !exit.has('fh-ibtn'))
+  assert.deepEqual([exit.attrs['aria-label'], exit.title], ['Back to live', 'Back to live'])
+  exit.click(1)
+  assert.deepEqual(calls, ['exit'])
+  const renamed = one(mountDay({ exitLabel: 'Leave' }).root, 'fh-playbar-exit')
+  assert.ok(renamed.has('fh-ibtn'))
+  assert.equal(renamed.attrs['aria-label'], 'Leave')
+})
+
+test('tools: in one box between the speed and the exit (after the voices when there are some)', () => {
+  const a = new El('button')
+  const b = new El('div')
+  const { barEl } = mountDay({ tools: [a, b] as unknown as HTMLElement[] })
+  assert.ok(barEl.has('fh-has-tools'))
+  assert.deepEqual(barEl.children.map((c) => c.className.split(' ').at(-1)), ['fh-playbar-play', 'fh-playbar-meta', 'fh-playbar-track', 'fh-num', 'fh-playbar-tools', 'fh-playbar-exit'])
+  assert.deepEqual(one(barEl, 'fh-playbar-tools').children, [a, b])
+  stored.clear()
+  const withSound = mountDay({ tools: [new El('button')] as unknown as HTMLElement[], sound: { reenacted: false, onGain: () => {} } })
+  assert.deepEqual(withSound.barEl.children.map((c) => c.className.split(' ')[0]), ['fh-ibtn', 'fh-playbar-meta', 'fh-playbar-track', 'fh-playbar-sound', 'fh-playbar-rate', 'fh-playbar-tools', 'fh-ibtn'])
+})
+
+test('scale: labels under the rail at their place, hidden from screen readers; outside the timeline none', () => {
+  const { root, barEl } = mountDay({ scale: [{ t: 0, label: '00' }, { t: 21_600, label: '06' }, { t: DAY, label: '24' }, { t: DAY + 1, label: 'x' }, { t: -1, label: 'y' }] })
+  assert.ok(barEl.has('fh-has-scale'))
+  const scale = one(root, 'fh-playbar-scale')
+  assert.equal(scale.attrs['aria-hidden'], 'true')
+  assert.equal(scale.parent, one(root, 'fh-playbar-track'))
+  assert.deepEqual(scale.children.map((s) => [s.textContent, s.style.props.left]), [['00', '0.000%'], ['06', '25.000%'], ['24', '100.000%']])
+})
+
+test('setSegments: spans first in the rail (under the played part and the dots), placed, sized and clipped; the same ones write nothing', () => {
+  const { root, bar, rail } = mountDay()
+  const segs = [
+    { from: 61_200, to: 66_600, state: 'ready' as const },
+    { from: 66_600, to: 68_400, state: 'loading' as const },
+    { from: 70_000, to: 72_000, state: 'missing' as const },
+    { from: -1800, to: 900, state: 'ready' as const }, // clipped at the start
+    { from: 86_000, to: 90_000, state: 'ready' as const }, // clipped at the stop
+    { from: 90_000, to: 91_000, state: 'ready' as const }, // past it: none
+    { from: 500, to: 500, state: 'ready' as const }, // empty: none
+  ]
+  bar.setSegments(segs)
+  const box = one(root, 'fh-playbar-segs')
+  assert.equal(rail.children[0], box)
+  assert.deepEqual(box.children.map((s) => [s.attrs['data-state'], s.style.props.left, s.style.props.width]), [
+    ['ready', '70.833%', '6.250%'], ['loading', '77.083%', '2.083%'], ['missing', '81.019%', '2.315%'],
+    ['ready', '0.000%', '1.042%'], ['ready', '99.537%', '0.463%'],
+  ])
+  const before = writesIn(root)
+  bar.setSegments(segs.map((s) => ({ ...s })))
+  assert.equal(writesIn(root), before, 'the same spans: nothing written')
+  bar.setSegments([{ from: 0, to: 1800, state: 'loading' }])
+  assert.deepEqual(one(root, 'fh-playbar-segs').children.map((s) => s.attrs['data-state']), ['loading'])
+  bar.setSegments([])
+  assert.equal(one(root, 'fh-playbar-segs').children.length, 0)
+})
+
+test('setLimit: hatched past it; a drag past it holds the thumb there and seeks there', () => {
+  const { bar, range, rail, calls, root } = mountDay()
+  bar.setLimit(63_000)
+  assert.equal(one(root, 'fh-playbar-limit').hidden, false)
+  assert.ok(rail.classList.contains('fh-has-limit'))
+  assert.equal(rail.style.props['--fh-lim'], '72.917%')
+  range.fire('pointerdown')
+  for (const v of ['62000', '64000.5']) {
+    range.value = v
+    range.fire('input')
+  }
+  assert.deepEqual(calls, ['seek 62000', 'seek 63000'])
+  assert.equal(range.value, '63000', 'the thumb held at the limit')
+})
+
+test('setLimit: keys and marks past it seek to it; null takes it away; at or past stop is none; before start is start', () => {
+  const { bar, range, calls, root } = mountDay({ marks: [{ t: 70_000, label: 'Late' }] })
+  bar.setLimit(63_000)
+  bar.update({ t: 62_995, playing: false, rate: 1, clock: '17:29:55', phase: null })
+  for (const key of ['ArrowRight', 'PageUp', 'End']) range.fire('keydown', { key })
+  one(root, 'fh-playbar-tick').click()
+  range.fire('keydown', { key: 'Home' })
+  assert.deepEqual(calls, ['seek 63000', 'seek 63000', 'seek 63000', 'seek 63000', 'seek 0'])
+  calls.length = 0
+  bar.setLimit(null)
+  assert.equal(one(root, 'fh-playbar-limit').hidden, true)
+  assert.ok(!one(root, 'fh-playbar-rail').classList.contains('fh-has-limit'))
+  range.fire('keydown', { key: 'End' })
+  one(root, 'fh-playbar-tick').click()
+  assert.deepEqual(calls, [`seek ${DAY}`, 'seek 70000'])
+  calls.length = 0
+  for (const lim of [DAY, -50, Number.NaN]) {
+    bar.setLimit(lim)
+    range.fire('keydown', { key: 'End' })
+  }
+  assert.deepEqual(calls, [`seek ${DAY}`, 'seek 0', `seek ${DAY}`])
+  bar.setLimit(40_000)
+  const before = writesIn(root)
+  bar.setLimit(40_000)
+  assert.equal(writesIn(root), before, 'the same limit: nothing written')
+})
+
+test('setLimit(null) on a bar never given a limit makes no hatch', () => {
+  const { bar, root } = mountDay()
+  bar.setLimit(null)
+  none(root, 'fh-playbar-limit')
+})
+
+test('setTitle: the title and the bar\'s name; the same title writes nothing', () => {
+  const { bar, barEl, root } = mountDay()
+  bar.setTitle('Replay · Wed 23 Sep')
+  assert.equal(text(one(root, 'fh-playbar-title')), 'Replay · Wed 23 Sep')
+  assert.equal(barEl.attrs['aria-label'], 'Playback: Replay · Wed 23 Sep')
+  const before = writesIn(root)
+  bar.setTitle('Replay · Wed 23 Sep')
+  assert.equal(writesIn(root), before)
+})
+
+test('setNote: a note right after the title, made on first use, announced; null hides it; the same note writes nothing', () => {
+  const { bar, barEl, root } = mountDay()
+  bar.setNote(null)
+  none(root, 'fh-playbar-notice')
+  bar.setNote('No data for this time')
+  const note = one(root, 'fh-playbar-notice')
+  const meta = one(root, 'fh-playbar-meta')
+  assert.equal(meta.children.indexOf(note), meta.children.indexOf(one(root, 'fh-playbar-title')) + 1)
+  assert.deepEqual([text(note), note.hidden, note.attrs.role], ['No data for this time', false, 'status'])
+  assert.ok(barEl.has('fh-has-notice'))
+  const before = writesIn(root)
+  bar.setNote('No data for this time')
+  assert.equal(writesIn(root), before, 'the same note: nothing written')
+  bar.setNote(null)
+  assert.equal(note.hidden, true)
+  assert.ok(!barEl.has('fh-has-notice'))
+  bar.setNote('Loading')
+  assert.deepEqual([text(one(root, 'fh-playbar-notice')), note.hidden], ['Loading', false])
 })

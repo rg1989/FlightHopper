@@ -192,14 +192,15 @@
 }
 
 /* Phones: a card 8 px in from the edges, above the tab bar, in two rows (the play bar's own phone layout has the clock
-   on a row of its own). The popover spans the bar. */
+   on a row of its own). Three classes: it outranks the play bar's phone rules (.fh-playbar.fh-has-tools among them)
+   whatever order the files load in. A note takes the date's line (no room for three). The popover spans the bar. */
 @media (max-width: 640px) {
   :root:has(.fh-playbar-history) {
     --fh-playbar-h: 96px; /* 1 border + 6 + the 44 px controls row + the 40 px scrubber row + 4 + 1 */
     --fh-playbar-space: calc(var(--fh-tabbar-h) + 8px + var(--fh-playbar-h));
   }
 
-  .fh-playbar.fh-playbar-history {
+  .fh-playbar.fh-playbar-history.fh-has-tools {
     right: 8px;
     bottom: calc(var(--fh-tabbar-h) + 8px);
     left: 8px;
@@ -236,6 +237,17 @@
   .fh-playbar-history .fh-playbar-title {
     display: block;
     max-width: 100%;
+  }
+
+  .fh-playbar-history.fh-has-notice .fh-playbar-title {
+    display: none;
+  }
+
+  .fh-playbar-history .fh-playbar-notice {
+    max-width: 100%;
+    font-size: 11px;
+    letter-spacing: 0;
+    text-transform: none; /* narrower than the caps: the whole note fits from 375 px */
   }
 
   .fh-playbar-history .fh-playbar-clock {

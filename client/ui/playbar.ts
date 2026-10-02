@@ -5,8 +5,8 @@
 // onExit, sound.onGain; the app answers through update(), which is cheap to call every frame (it writes only what
 // changed, and leaves the thumb alone under a dragging finger).
 // The history time bar (history/bar.ts) is this bar with options: labels under the rail (scale), spans on it
-// (setSegments), a limit past which it is hatched and cannot be reached (setLimit), extra controls (tools) and Live as a
-// text pill (exitText). Without them it is the scenario bar exactly.
+// (setSegments), a limit past which it is hatched and cannot be reached (setLimit), extra controls (tools), Live as a
+// text pill (exitText) and a note after the title (setNote). Without them it is the scenario bar exactly.
 // Keys on the focused scrubber: ←/→ ±10 s (Shift ±60 s), PgUp/PgDn ±60 s, Home/End, Space play/pause. Every other key,
 // and all keys on the bar's buttons except Space (which presses them), belong to the app's own handler. A mouse or finger
 // press leaves no focus on speed or a tick, so a later Space reaches the app (play/pause) instead of pressing them again.
@@ -63,6 +63,7 @@ export interface PlaybarHandle {
   setSegments(segs: readonly PlaybarSegment[]): void // replaces the spans; unchanged ones write nothing
   setLimit(maxT: number | null): void // past maxT the rail is hatched, and a drag, key or mark past it seeks to maxT
   setTitle(title: string): void
+  setNote(text: string | null): void // a short note right after the title ('No data for this time'); null hides it
   destroy(): void
 }
 
@@ -285,6 +286,8 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   // never asks (a scenario's) keeps its DOM as it was.
   let segsEl: HTMLElement | null = null
   let limitEl: HTMLElement | null = null
+  let noteEl: HTMLElement | null = null // the note after the title, also made on first use
+  let shownNote: string | null = null
 
   const fill = (at: number): void => {
     const f = `${pct(at).toFixed(2)}%`
@@ -432,6 +435,21 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
       shownTitle = text
       title.textContent = text
       bar.setAttribute('aria-label', `Playback: ${text}`)
+    },
+    setNote(text) {
+      if (text === shownNote) return
+      shownNote = text
+      if (noteEl === null) {
+        noteEl = h('span', 'fh-playbar-notice')
+        noteEl.setAttribute('role', 'status') // said when it changes
+        title.after(noteEl)
+      }
+      if (text !== null) {
+        noteEl.textContent = text
+        noteEl.title = text // the whole of it, where the bar cuts it short
+      }
+      noteEl.hidden = text === null
+      bar.classList.toggle('fh-has-notice', text !== null)
     },
     destroy() {
       bar.remove()

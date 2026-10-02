@@ -11,7 +11,7 @@ import { SLOT_MS, slotOf } from '../../shared/history.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { localDay, hourScale, quickTimes, parseLocal, daySegments, inputDate, inputTime, localClock } = await import('./bar.ts')
+const { localDay, hourScale, quickTimes, parseLocal, daySegments, inputDate, inputTime, localClock, dayMs } = await import('./bar.ts')
 
 const H = 3_600_000
 const at = (y: number, m: number, d: number, h = 0, min = 0, s = 0, ms = 0): number => new Date(y, m, d, h, min, s, ms).getTime()
@@ -149,4 +149,27 @@ test('daySegments: the half hours in the day as spans of seconds after its start
     { from: off + kEnd * 1800, to: lenS, state: 'ready' },
   ])
   assert.deepEqual(daySegments(day, [], []), [])
+})
+
+test('dayMs: the scrubber\'s seconds to ms in the day, whole; its right edge is the day\'s last ms, not the next midnight', () => {
+  const day = localDay(at(2026, 5, 15, 12))
+  const lenS = (day.endMs - day.startMs) / 1000
+  assert.equal(dayMs(day, 0), day.startMs)
+  assert.equal(dayMs(day, 3600), day.startMs + H)
+  assert.equal(dayMs(day, 63_000.1), day.startMs + 63_000_100, 'whole ms (the scrubber steps 0.1 s)')
+  assert.equal(dayMs(day, lenS), day.endMs - 1, 'End, or a drag to the edge')
+  assert.equal(dayMs(day, lenS + 60), day.endMs - 1)
+  assert.equal(dayMs(day, -5), day.startMs)
+  assert.deepEqual(localDay(dayMs(day, lenS)), day, 'still this day: the bar is not mounted again under the finger')
+  assert.equal(localClock(dayMs(day, lenS)), '23:59:59')
+})
+
+test('dayMs on the days the clocks change: the edge is still the day\'s last ms', (t) => {
+  const days = clockChangeDays()
+  if (days.length === 0) return t.skip(`no clock changes in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`)
+  for (const { y, m, d, lenS } of days) {
+    const day = localDay(at(y, m, d, 12))
+    assert.equal(dayMs(day, lenS), day.endMs - 1)
+    assert.deepEqual(localDay(dayMs(day, lenS)), day)
+  }
 })
