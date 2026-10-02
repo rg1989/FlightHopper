@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
+import { RAIN_PALETTE } from '../scene/radar.ts'
 import { CATEGORY_COLOR } from '../scene/wxText.ts'
 import type { ScenePrefs } from '../types.ts'
 
@@ -10,7 +11,7 @@ import type { ScenePrefs } from '../types.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { mountSceneToggles } = await import('./sceneToggles.ts')
+const { mountSceneToggles, rainTheme } = await import('./sceneToggles.ts')
 const { DEFAULT_PREFS } = await import('./scenePrefs.ts')
 
 // Node has no DOM: just enough of one for mountSceneToggles (and icons.ts), plus recorders for listeners outside it.
@@ -25,7 +26,13 @@ class El {
   #hidden = false
   classList = { add: (): void => {} } // icons.ts marks its svg
   vars: Record<string, string> = {}
-  style = { setProperty: (k: string, v: string): void => void (this.vars[k] = v) }
+  styleWrites = 0
+  style = {
+    setProperty: (k: string, v: string): void => {
+      this.styleWrites++
+      this.vars[k] = v
+    },
+  }
   attrs: Record<string, string> = {}
   attrWrites = 0
   hiddenWrites = 0
@@ -212,7 +219,7 @@ test('update() only re-renders: no onChange, and the next click toggles from the
 
 test('update() and setChasing() with nothing changed write nothing (both run every frame)', () => {
   const { root, light, t } = mount({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
-  const writes = (): number => all(root).reduce((n, e) => n + e.attrWrites + e.hiddenWrites, 0)
+  const writes = (): number => all(root).reduce((n, e) => n + e.attrWrites + e.hiddenWrites + e.styleWrites, 0)
   const before = writes()
   for (let i = 0; i < 100; i++) {
     t.update({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
@@ -319,4 +326,29 @@ test('weather is the top-down map\'s: in the chase its row, legend and line go, 
   assert.ok(!visible(root).some((e) => e.className === 'fh-wx-line'))
   t.setChasing(false)
   assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'weather legend'])
+})
+
+test('weather: a rain scale above the airports legend, Light to Heavy, in the radar\'s colours for the map on screen', () => {
+  const { wxMore, t } = mount({ ...DEFAULT_PREFS, wx: true })
+  assert.deepEqual(wxMore.children.map((e) => e.className), ['fh-wx-rain', 'fh-wx-legend', 'fh-wx-line'])
+  const [rain] = wxMore.children
+  assert.deepEqual(rain.children.map((e) => [e.className, e.textContent]), [['fh-wx-rain-end', 'Light'], ['fh-wx-scale', ''], ['fh-wx-rain-end', 'Heavy']])
+  const scale = rain.children[1]
+  const gradient = (theme: 'light' | 'dark'): string => `linear-gradient(90deg, ${RAIN_PALETTE[theme].rain.map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`).join(', ')})`
+  assert.equal(scale.vars['--scale'], gradient('light')) // the light street map
+  t.update({ ...DEFAULT_PREFS, wx: true, dark: true })
+  assert.equal(scale.vars['--scale'], gradient('dark'))
+  t.update({ ...DEFAULT_PREFS, wx: true, mapTop: false })
+  assert.equal(scale.vars['--scale'], gradient('dark'), 'the satellite: dark under the rain')
+  t.update({ ...DEFAULT_PREFS, wx: true })
+  assert.equal(scale.vars['--scale'], gradient('light'))
+  assert.equal(RAIN_PALETTE.light.rain.length, 11)
+})
+
+test('rainTheme: the radar\'s light palette only over the light street map; the dark map and the satellite take the dark', () => {
+  assert.equal(rainTheme(DEFAULT_PREFS, false), 'light')
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, dark: true }, false), 'dark')
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapTop: false }, false), 'dark')
+  assert.equal(rainTheme(DEFAULT_PREFS, true), 'dark') // the chase's base: the satellite by default
+  assert.equal(rainTheme({ ...DEFAULT_PREFS, mapChase: true }, true), 'light')
 })

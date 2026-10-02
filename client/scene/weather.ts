@@ -1,8 +1,8 @@
 // client/scene/weather.ts
 // Aviation weather on the top-down map (the Layers panel's Weather switch; in the chase it is hidden: drawing real
 // clouds there is a later piece of work):
-// - rain radar: RainViewer's newest past frame (keyless tiles, CORS *; its free API serves zoom ≤ 7, deeper tiles are a
-//   "zoom not supported" picture, so Cesium upsamples z7). Checked 2026-09-30: https://www.rainviewer.com/api.html
+// - rain radar: RainViewer's newest past frame (keyless tiles, CORS *; its free API serves zoom ≤ 7). Checked 2026-09-30:
+//   https://www.rainviewer.com/api.html. radar.ts draws it smooth to zoom 12, in a palette for the map under it (theme).
 // - airports: each METAR a marker, north up: a dark disc ringed in its flight-rules colour (good green, marginal blue, poor
 //   red, very poor magenta) holding the wind speed in the flight-data frame's unit, and an arrow out of it pointing where
 //   the wind blows to (none when calm or variable), for the view's whole-degree box when it spans ≤ 40° (server/wx.ts).
@@ -23,19 +23,17 @@ import {
   Math as CesiumMath,
   NearFarScalar,
   SceneTransforms,
-  UrlTemplateImageryProvider,
   VerticalOrigin,
   type Billboard,
   type Viewer,
 } from 'cesium'
 import type { FlightCategory, Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, speedIn, type Units } from '../ui/units.ts'
+import { RAIN_PALETTE, RadarProvider, RadarSource, type Palette } from './radar.ts'
 import { metarCard, sigmetCards } from './wxCard.ts'
 import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
 const RADAR_INDEX = 'https://api.rainviewer.com/public/weather-maps.json'
-const RADAR_MAX_LEVEL = 7
-const RADAR_ALPHA = 0.7
 const METAR_EVERY_MS = 5 * 60_000
 const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and radar
 const VIEW_CHECK_MS = 2_000
@@ -162,9 +160,93 @@ export interface WeatherOptions {
   units?: () => Units // what speeds and heights are worded in (the flight-data frame's); default knots and feet
 }
 
+/**
+ * The rain radar's imagery layer: a RainViewer frame (one RadarSource, so a palette change fetches nothing again) drawn
+ * in a palette, on top of all imagery. A new frame or palette goes on top at once and the layers it replaces stay under
+ * it until its tiles are in (as the street map's theme swap), or go at once while hidden: the rain never blinks out.
+ */
+export class RadarLayer {
+  private readonly viewer: Viewer
+  private pal: Palette
+  private shown = false
+  private source: RadarSource | null = null
+  private path = ''
+  private layer: ImageryLayer | null = null
+  private old: ImageryLayer[] = [] // replaced, under the newest while its tiles load
+  private stopWait: (() => void) | null = null
+  private gone = false
+
+  constructor(viewer: Viewer, palette: Palette) {
+    this.viewer = viewer
+    this.pal = palette
+  }
+
+  get show(): boolean {
+    return this.shown
+  }
+
+  set show(on: boolean) {
+    this.shown = on
+    if (this.layer) this.layer.show = on
+    if (!on) this.drop()
+  }
+
+  get palette(): Palette {
+    return this.pal
+  }
+
+  set palette(p: Palette) {
+    if (p === this.pal) return
+    this.pal = p
+    if (this.source) this.put()
+  }
+
+  /** RainViewer's frame at host + path; the frame already drawn is not loaded again. */
+  frame(host: string, path: string): void {
+    if (path === this.path) return
+    this.path = path
+    this.source = new RadarSource(host, path)
+    this.put()
+  }
+
+  private put(): void {
+    if (this.gone || this.source === null) return
+    const next = new ImageryLayer(new RadarProvider(this.source, this.pal), { show: this.shown })
+    this.viewer.imageryLayers.add(next)
+    if (this.layer) this.old.push(this.layer)
+    this.layer = next
+    this.stopWait?.()
+    this.stopWait = null
+    if (!this.shown) return this.drop()
+    // A new layer has no tiles yet: the first frame queues them, then the old go once they are in.
+    const scene = this.viewer.scene
+    let frames = 0
+    this.stopWait = scene.postRender.addEventListener(() => {
+      if (frames++ < 1 || !scene.globe.tilesLoaded) return
+      this.drop()
+    })
+  }
+
+  /** Removes the replaced layers. */
+  private drop(): void {
+    this.stopWait?.()
+    this.stopWait = null
+    for (const l of this.old) this.viewer.imageryLayers.remove(l, true)
+    this.old = []
+  }
+
+  destroy(): void {
+    this.gone = true
+    this.drop()
+    if (this.layer) this.viewer.imageryLayers.remove(this.layer, true)
+    this.layer = null
+  }
+}
+
 export class Weather {
   private shown = false
-  private radar: ImageryLayer | null = null
+  private readonly radar: RadarLayer
+  private mapTheme: 'light' | 'dark' = 'dark'
   private radarTime = ''
   private readonly stations = new BillboardCollection()
   private metars: Metar[] = []
@@ -194,6 +276,7 @@ export class Weather {
     this.apiBase = apiBase
     this.onStatus = onStatus
     this.units = opts.units ?? (() => DEFAULT_UNITS)
+    this.radar = new RadarLayer(viewer, RAIN_PALETTE[this.mapTheme])
     viewer.scene.primitives.add(this.stations)
     this.stations.show = false
     void viewer.dataSources.add(this.areas)
@@ -216,7 +299,7 @@ export class Weather {
     this.shown = on
     this.stations.show = on
     this.areas.show = on
-    if (this.radar) this.radar.show = on
+    this.radar.show = on
     if (!on) {
       this.onLeave()
       if (this.timer !== null) clearInterval(this.timer)
@@ -265,18 +348,21 @@ export class Weather {
     }
   }
 
+  /** The map under the rain, which picks the radar's palette: light for the light street map, else dark (the default). */
+  get theme(): 'light' | 'dark' {
+    return this.mapTheme
+  }
+
+  set theme(t: 'light' | 'dark') {
+    this.mapTheme = t
+    this.radar.palette = RAIN_PALETTE[t]
+  }
+
   private async loadRadar(): Promise<void> {
     const idx = await this.get<{ host: string; radar: { past: { time: number; path: string }[] } }>(RADAR_INDEX)
     const last = idx?.radar.past.at(-1)
     if (!idx || !last) return this.status()
-    const layers = this.viewer.imageryLayers
-    const next = new ImageryLayer(
-      new UrlTemplateImageryProvider({ url: `${idx.host}${last.path}/256/{z}/{x}/{y}/2/1_1.png`, maximumLevel: RADAR_MAX_LEVEL }),
-      { alpha: RADAR_ALPHA, show: this.shown },
-    )
-    layers.add(next) // on top of the map, the satellite and the roads
-    if (this.radar) layers.remove(this.radar, true)
-    this.radar = next
+    this.radar.frame(idx.host, last.path)
     this.radarTime = hhmm(last.time * 1000)
     this.status()
   }
@@ -409,7 +495,7 @@ export class Weather {
     c.removeEventListener('pointerdown', this.onPointer)
     c.removeEventListener('pointerleave', this.onLeave)
     this.tip.remove()
-    if (this.radar) this.viewer.imageryLayers.remove(this.radar, true)
+    this.radar.destroy()
     this.viewer.scene.primitives.remove(this.stations)
     void this.viewer.dataSources.remove(this.areas, true)
   }

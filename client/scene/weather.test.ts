@@ -1,9 +1,11 @@
 // client/scene/weather.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { Event, ImageryLayerCollection, UrlTemplateImageryProvider, type ImageryLayer, type Viewer } from 'cesium'
 import type { Metar } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { MARKER_PX, inRing, lookKey, lookOf, statusText, viewBox, windArrow } from './weather.ts'
+import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarProvider } from './radar.ts'
+import { MARKER_PX, RadarLayer, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow } from './weather.ts'
 
 const metric: Units = { alt: 'm', speed: 'kmh', vs: 'ms' }
 const wind = (wdir: number | null, wspd: number, cat: Metar['cat'] = 'VFR'): Pick<Metar, 'cat' | 'wdir' | 'wspd'> => ({ cat, wdir, wspd })
@@ -77,4 +79,153 @@ test('windArrow: in every direction the arrow and its 5 px halo stay inside the 
     const a = windArrow(deg)
     for (const [x, y] of [...a.shaft, ...a.head]) assert.ok(Math.max(Math.abs(x), Math.abs(y)) + 2.5 <= MARKER_PX / 2 + 1e-9, `${deg}°: ${x}, ${y}`)
   }
+})
+
+/** The imagery collection with a satellite-like base layer, and a scene to render. No network. */
+function fakeViewer() {
+  const imageryLayers = new ImageryLayerCollection()
+  imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url: 'https://satellite.invalid/{z}/{x}/{y}.jpg' }))
+  const scene = { postRender: new Event(), globe: { tilesLoaded: true } }
+  const render = (): void => void scene.postRender.raiseEvent()
+  const radar = (): ImageryLayer[] => [...Array(imageryLayers.length).keys()].map((i) => imageryLayers.get(i)).filter((l) => l.imageryProvider instanceof RadarProvider)
+  return { imageryLayers, scene, render, radar, viewer: { imageryLayers, scene } as unknown as Viewer }
+}
+const HOST = 'https://tilecache.rainviewer.com'
+const drawer = (l: ImageryLayer): RadarProvider => l.imageryProvider as RadarProvider
+
+test('radar layer: a frame goes on top of the imagery, drawn smooth to level 12 from its RainViewer tiles; the palette carries the alpha', () => {
+  const { imageryLayers, viewer, radar } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.palette = RAIN_PALETTE.light // no frame yet: nothing to draw
+  assert.equal(imageryLayers.length, 1)
+  r.frame(HOST, '/v2/radar/abc')
+  assert.equal(imageryLayers.length, 2)
+  const [l] = radar()
+  assert.equal(imageryLayers.indexOf(l), 1, 'on top')
+  assert.equal(drawer(l).source.url, `${HOST}/v2/radar/abc/256/{z}/{x}/{y}/2/0_1.png`)
+  assert.equal(drawer(l).palette, RAIN_PALETTE.light)
+  assert.equal(drawer(l).maximumLevel, RADAR_MAX_LEVEL)
+  assert.equal(l.alpha, 1)
+  assert.equal(l.show, false, 'hidden until shown')
+  r.show = true
+  assert.equal(l.show, true)
+})
+
+test('radar layer: the same frame is not loaded again; a new one gets its own source and replaces the old once its tiles are in', () => {
+  const { viewer, scene, render, radar } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  const [a] = radar()
+  r.frame(HOST, '/v2/radar/a')
+  assert.deepEqual(radar(), [a])
+  r.frame(HOST, '/v2/radar/b')
+  const [, b] = radar()
+  assert.deepEqual(radar(), [a, b], 'the new frame on top, the old under it while it loads')
+  assert.notEqual(drawer(b).source, drawer(a).source)
+  assert.match(drawer(b).source.url, /\/v2\/radar\/b\//)
+  assert.deepEqual([a.show, b.show], [true, true])
+  render() // the frame that queues the new tiles
+  assert.deepEqual(radar(), [a, b])
+  scene.globe.tilesLoaded = false
+  render()
+  assert.deepEqual(radar(), [a, b], 'still loading')
+  scene.globe.tilesLoaded = true
+  render()
+  assert.deepEqual(radar(), [b])
+  assert.ok(a.isDestroyed())
+  assert.equal(scene.postRender.numberOfListeners, 0)
+})
+
+test('radar layer: a palette change draws the same source in the other palette, without a gap', () => {
+  const { viewer, render, radar, scene } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  const [dark] = radar()
+  r.palette = RAIN_PALETTE.light
+  const [, light] = radar()
+  assert.equal(drawer(light).palette, RAIN_PALETTE.light)
+  assert.equal(drawer(light).source, drawer(dark).source, 'no tile fetched again')
+  r.palette = RAIN_PALETTE.light // unchanged: nothing new
+  assert.deepEqual(radar(), [dark, light])
+  r.palette = RAIN_PALETTE.dark // and back before the light one is in: both stay under the newest
+  const [, , back] = radar()
+  assert.deepEqual(radar(), [dark, light, back])
+  render()
+  render()
+  assert.deepEqual(radar(), [back])
+  assert.equal(scene.postRender.numberOfListeners, 0)
+})
+
+test('radar layer: hidden, a replaced layer goes at once; hiding mid-swap drops the old ones at once', () => {
+  const { viewer, radar, scene } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.frame(HOST, '/v2/radar/a')
+  r.frame(HOST, '/v2/radar/b')
+  assert.equal(radar().length, 1)
+  assert.match(drawer(radar()[0]).source.url, /\/b\//)
+  assert.equal(scene.postRender.numberOfListeners, 0)
+  r.show = true
+  r.palette = RAIN_PALETTE.light
+  assert.equal(radar().length, 2)
+  r.show = false
+  assert.equal(radar().length, 1)
+  assert.equal(drawer(radar()[0]).palette, RAIN_PALETTE.light)
+  assert.equal(radar()[0].show, false)
+  assert.equal(scene.postRender.numberOfListeners, 0)
+})
+
+test('radar layer: destroy removes its layers and stops waiting; twice is harmless', () => {
+  const { imageryLayers, viewer, scene } = fakeViewer()
+  const r = new RadarLayer(viewer, RAIN_PALETTE.dark)
+  r.show = true
+  r.frame(HOST, '/v2/radar/a')
+  r.frame(HOST, '/v2/radar/b')
+  r.destroy()
+  r.destroy()
+  assert.equal(imageryLayers.length, 1)
+  assert.equal(scene.postRender.numberOfListeners, 0)
+})
+
+test('Weather: the radar in the dark palette until told the theme; a theme change redraws the frame it has in the other', async () => {
+  const { viewer, radar } = fakeViewer()
+  const v = Object.assign(viewer, {
+    canvas: { addEventListener() {}, removeEventListener() {} },
+    camera: { computeViewRectangle: () => undefined },
+    dataSources: { add: async () => {}, remove: async () => {} },
+  })
+  Object.assign(v.scene, { primitives: { add() {}, remove() {} } })
+  const g = globalThis as unknown as Record<string, unknown>
+  const saved = [['document', g.document], ['fetch', g.fetch], ['cancelAnimationFrame', g.cancelAnimationFrame]] as const
+  const asked: string[] = []
+  g.document = { createElement: () => ({ className: '', hidden: false, remove() {} }) }
+  g.cancelAnimationFrame = () => {}
+  g.fetch = async (url: string): Promise<Response> => {
+    asked.push(url)
+    const body = url.includes('weather-maps.json') ? { host: HOST, radar: { past: [{ time: 1759420200, path: '/v2/radar/abc' }] } } : []
+    return new Response(JSON.stringify(body))
+  }
+  const lines: (string | null)[] = []
+  const w = new Weather(v, '/api', { append() {} } as unknown as HTMLElement, (t) => lines.push(t))
+  try {
+    assert.equal(w.theme, 'dark')
+    w.show = true
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const [frame] = radar()
+    assert.equal(drawer(frame).palette, RAIN_PALETTE.dark)
+    assert.match(drawer(frame).source.url, /\/v2\/radar\/abc\//)
+    assert.equal(frame.show, true)
+    assert.match(String(lines.at(-1)), /^Radar \d\d:\d\d/)
+    w.theme = 'light'
+    assert.equal(w.theme, 'light')
+    const [, light] = radar()
+    assert.equal(drawer(light).palette, RAIN_PALETTE.light)
+    assert.equal(drawer(light).source, drawer(frame).source)
+    assert.equal(asked.filter((u) => u.includes('weather-maps.json')).length, 1)
+  } finally {
+    w.destroy()
+    for (const [k, val] of saved) g[k] = val
+  }
+  assert.deepEqual(radar(), [])
 })

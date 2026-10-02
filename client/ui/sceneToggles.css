@@ -151,6 +151,23 @@
   padding: 0 14px 10px 58px;
 }
 
+/* The rain scale: Light, a bar in the radar's colours, Heavy. */
+.fh-wx-rain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--fh-muted);
+  font: 400 11px/1 var(--fh-font);
+}
+
+.fh-wx-scale {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--scale);
+}
+
 .fh-wx-legend {
   display: flex;
   flex-wrap: wrap;

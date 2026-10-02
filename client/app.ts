@@ -88,7 +88,7 @@ import { mountScenarioPanel, type ScenarioPanelHandle } from './ui/scenarioPanel
 import { mountSettings } from './ui/settings.ts'
 import { PREFS_KEY, readScenePrefs, writeScenePrefs } from './ui/scenePrefs.ts'
 import { FRAME_PREFS_KEY, readFramePrefs, writeFramePrefs } from './ui/framePrefs.ts'
-import { baseKey, mountSceneToggles } from './ui/sceneToggles.ts'
+import { baseKey, mountSceneToggles, rainTheme } from './ui/sceneToggles.ts'
 import { badgeView } from './ui/imageryBadge.ts'
 import { mountStatusPanel, sourceName, statusDot, type StatusPanelHandle } from './ui/sourceBadge.ts'
 import { readHist, readScenario, readView, writeUrl, type Orbit } from './ui/urlState.ts'
@@ -723,7 +723,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits })
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
-   * satellite, weather top-down and live only (it is today's: it says nothing of the past).
+   * satellite, weather top-down and live only (it is today's: it says nothing of the past), its rain in the colours for
+   * the map under it (the satellite is dark under the rain).
    */
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
@@ -731,6 +732,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     map.dark = prefs.dark
     roads.show = prefs.roads && !onMap
     places.show = prefs.places && !onMap
+    weather.theme = rainTheme(prefs, chasing)
     weather.show = prefs.wx && !chasing && hist === null
     if (hist !== null && prefs.wx) toggles.setWeather('Live only') // the chase has no weather row to say anything on
     else if (!prefs.wx) toggles.setWeather(null)
