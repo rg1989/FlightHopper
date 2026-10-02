@@ -150,6 +150,38 @@ test('a start before minMs begins at minMs', () => {
   assert.equal(c.now(0), MIN)
 })
 
+test('a start before minMs waits as asked: bounds short of it leave the time; the first that reach it take the clock there, once', () => {
+  const c = clock({}, MIN - 5000) // a ?hist= link older than the 30 days guessed until the server's status
+  assert.deepEqual([c.now(0), c.asked], [MIN, MIN - 5000])
+  assert.equal(c.setBounds(MIN - 1000, MAX, 1000), false, 'still short of it (a server just started reports its own guess)')
+  assert.deepEqual([c.now(1000), c.asked], [MIN, MIN - 5000], 'the time stays where it is, the start still asked')
+  assert.equal(c.setBounds(MIN - 10_000, MAX, 2000), true, 'the oldest day found: a jump')
+  assert.deepEqual([c.now(2000), c.asked, c.playing], [MIN - 5000, null, false])
+  assert.equal(c.setBounds(MIN - 20_000, MAX, 3000), false, 'taken once: later bounds leave the time')
+  assert.equal(c.now(3000), MIN - 5000)
+})
+
+test('a start asked for: a seek before the bounds reach it wins; a playing clock plays on meanwhile and is taken there still playing', () => {
+  const c = clock({ playing: true, rate: 10 }, MIN - 5000)
+  c.seek(T, 1000)
+  assert.equal(c.asked, null)
+  assert.equal(c.setBounds(MIN - 10_000, MAX, 2000), false)
+  assert.equal(c.now(2000), T + 10_000, 'the seek stands')
+  const d = clock({ playing: true, rate: 10 }, MIN - 5000)
+  assert.equal(d.now(1000), MIN + 10_000, 'played on from minMs')
+  assert.equal(d.setBounds(MIN - 5000, MAX, 2000), true)
+  assert.deepEqual([d.now(2000), d.now(3000), d.playing], [MIN - 5000, MIN + 5000, true])
+})
+
+test('a start inside the bounds, past maxMs or not a number asks for nothing', () => {
+  assert.equal(clock().asked, null)
+  assert.equal(clock({}, MAX + 5000).asked, null, 'the newest end is known from the start: past it is not there yet')
+  assert.equal(clock({}, NaN).asked, null)
+  const c = clock({}, MAX + 5000)
+  assert.equal(c.setBounds(MIN, MAX + 10_000, 0), false)
+  assert.equal(c.now(0), MAX, 'a longer clock does not move it')
+})
+
 test('a perfMs earlier than the last change does not run the clock backwards', () => {
   // A frame timestamp can be a few ms older than the performance.now() of a click handled just before it.
   const c = clock({ playing: true, rate: 60 })

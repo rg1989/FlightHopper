@@ -145,8 +145,13 @@ const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
 // History (history/): the past from adsb.lol's half-hour files, replayed through the live pipeline.
-// ponytail: what exists until the server's first status says (it reports the oldest day adsb.lol keeps, ~42): 30 days
-// back, as the time bar guesses too. Upgrade: none, while the first status comes within a second.
+// What exists until the server's status says (it reports the oldest day adsb.lol keeps, ~42): 30 days back, as the time
+// bar guesses too. A time asked for further back (a ?hist= link, a reload) waits in the clock (HistoryClock.asked), the
+// address bar keeping it, until a status reaches it: every status is checked, as a server just started reports its own
+// 30-day guess until it has found the oldest day (seconds).
+// ponytail: a time older than everything adsb.lol keeps waits until the person seeks, the replay meanwhile at the guess's
+// oldest moment and the address bar at the time asked. Upgrade: a status that says whether its oldest day was found or
+// guessed, so such a time goes to the oldest moment there is.
 const HISTORY_GUESS_MS = 30 * 86_400_000
 const HISTORY_RATE = 10 // a replay starts at 10×: a half hour in three minutes
 const HISTORY_JUMP_MS = 120_000 // the replay clock moving further than this between frames is a seek
@@ -794,7 +799,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const o = chaseCam.orbit
     const orbit = chasing ? { headingDeg: o.headingOffsetDeg, pitchDeg: o.pitchDeg, rangeM: o.rangeM } : null
     const scenario = run === null ? null : { id: run.scenario.id, t: run.player.clock.t } // replaces at, hex and chase
-    const next = writeUrl(location.search, { at, hex: selected, chase: chasing, cam: orbit, prefs, scenario, hist: hist === null ? null : hist.clock.now(now) })
+    // History: the replay time; a time asked for that the clock waits for (HistoryClock.asked) stays, not the one it waits at.
+    const histMs = hist === null ? null : (hist.clock.asked ?? hist.clock.now(now))
+    const next = writeUrl(location.search, { at, hex: selected, chase: chasing, cam: orbit, prefs, scenario, hist: histMs })
     if (next !== location.search) history.replaceState(history.state, '', `${location.pathname}${next}${location.hash}`)
   }
 
@@ -1079,18 +1086,21 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     return under === null ? { lat: e.lat, lon: e.lon } : cameraTarget(e, viewer.camera.positionCartographic.height, under, middle)
   }
 
-  /** Opens History at tMs (null: the start of the newest published half hour), paused unless play. */
+  /**
+   * Opens History at tMs (null: the start of the newest published half hour), paused unless play. A tMs further back than
+   * the guess of what exists waits in the clock for a status that reaches it (HistoryClock.asked; see HISTORY_GUESS_MS).
+   */
   function enterHistory(tMs: number | null, play = false): void {
     if (run !== null || loadingScenario !== null) exitScenario()
     const nowP = performance.now()
     const wall = Date.now()
-    // Until the server's first status: HISTORY_GUESS_MS back, and the end of the newest half hour published (the bar's
-    // own guess, too).
+    // Until the server's status says: HISTORY_GUESS_MS back, and the end of the newest half hour published (the bar's own
+    // guess, too).
     const minMs = wall - HISTORY_GUESS_MS
     const maxMs = newestSlotMs(wall) + SLOT_MS
-    const t0 = Math.min(maxMs, Math.max(minMs, tMs ?? maxMs - SLOT_MS))
+    const asked = tMs ?? maxMs - SLOT_MS
     if (hist !== null) {
-      hist.clock.seek(t0, nowP)
+      hist.clock.seek(asked, nowP) // inside the bounds as the clock knows them
       return jumped(hist)
     }
     const bar = mountHistoryBar(ui, {
@@ -1101,9 +1111,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       onLive: () => exitHistory(),
       onGoTo: (t) => seekHistory(t, true),
     })
-    bar.setBounds(minMs, maxMs) // the clock's guess, until the server's first status
+    bar.setBounds(minMs, maxMs) // the clock's guess, until the server's status
+    const clock = new HistoryClock(asked, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP)
+    const t0 = clock.now(nowP) // inside the guess
     const h: HistoryMode = {
-      clock: new HistoryClock(t0, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP), feed: new HistoryFeed(), bar,
+      clock, feed: new HistoryFeed(), bar,
       fedMs: t0, regMs: t0, regFrom: null, known: new KnownHexes(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
       missingShown: '', lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity,
       reload: false, seekRestMs: null, dayOfT: localDay(t0), day: null, dayAsk: null, dayAgain: null, legsShown: NO_LEGS,
@@ -1262,7 +1274,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const minMs = st.oldestSlotMs
       const maxMs = st.newestSlotMs + SLOT_MS
       if (Number.isFinite(minMs) && Number.isFinite(maxMs) && minMs <= maxMs) { // a server older than the field: the guess stays
-        h.clock.setBounds(minMs, maxMs, performance.now())
+        // Every status: the clock goes to a time asked for further back than the guess once one reaches it (a jump).
+        if (h.clock.setBounds(minMs, maxMs, performance.now())) jumped(h)
         h.bar.setBounds(minMs, maxMs)
       }
       showMissing(h)

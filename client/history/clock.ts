@@ -3,7 +3,9 @@
 // [minMs, maxMs]. Pure: no timers, no DOM. Every method is told performance.now() (perfMs), so the app asks it once a
 // frame and a test drives it with plain numbers. At maxMs the clock does not stop itself, it waits there (atEnd): the
 // app decides, and setBounds lets a clock that waited carry on when the next half hour is published. Stalled (stall), a
-// playing clock holds its time without leaving playing: the app is waiting for the data of the time under it.
+// playing clock holds its time without leaving playing: the app is waiting for the data of the time under it. A start
+// older than minMs (a ?hist= link or a reload further back than the bounds known yet) waits as asked: the first bounds
+// that reach it take the clock there, unless a seek came first.
 
 export const RATES: readonly number[] = [1, 10, 60]
 
@@ -15,8 +17,12 @@ export class HistoryClock {
   #rate: number
   #minMs: number
   #maxMs: number
+  #asked: number | null // a start older than minMs, waiting for bounds that reach it; null: none
 
-  /** Starts paused at 1x unless o says otherwise; tMs is clamped to the bounds. */
+  /**
+   * Starts paused at 1x unless o says otherwise; tMs is clamped to the bounds. One older than minMs is kept as asked: the
+   * oldest end is the one a guess holds until the server says (the newest is known from the start).
+   */
   constructor(tMs: number, o: { minMs: number; maxMs: number; playing?: boolean; rate?: number }, perfMs: number) {
     this.#minMs = o.minMs
     this.#maxMs = o.maxMs
@@ -24,6 +30,7 @@ export class HistoryClock {
     this.#rate = o.rate ?? 1
     this.#baseMs = this.#clamp(tMs)
     this.#basePerf = perfMs
+    this.#asked = tMs < o.minMs ? tMs : null
   }
 
   /** The replay time at perfMs: moves by rate × elapsed while playing (and not stalled), never outside [minMs, maxMs]. */
@@ -49,6 +56,11 @@ export class HistoryClock {
 
   get maxMs(): number {
     return this.#maxMs
+  }
+
+  /** The start asked for that the bounds do not reach yet (the time the clock goes to when they do); null: none waiting. */
+  get asked(): number | null {
+    return this.#asked
   }
 
   /** Playing and waiting at maxMs: nothing newer to show. */
@@ -84,10 +96,11 @@ export class HistoryClock {
     else this.play(perfMs)
   }
 
-  /** Jumps to tMs, clamped to the bounds. Playing or paused stays as it is. */
+  /** Jumps to tMs, clamped to the bounds. Playing or paused stays as it is. A start still asked for is dropped: the seek wins. */
   seek(tMs: number, perfMs: number): void {
     this.#baseMs = this.#clamp(tMs)
     this.#basePerf = this.#stamp(perfMs)
+    this.#asked = null
   }
 
   /** The next of RATES (the first after the last; the next larger one for a rate not in RATES). The time does not jump. */
@@ -97,12 +110,21 @@ export class HistoryClock {
     return this.#rate
   }
 
-  /** New bounds (minMs ≤ maxMs). The time stays where it is, pulled inside them when it is outside. */
-  setBounds(minMs: number, maxMs: number, perfMs: number): void {
+  /**
+   * New bounds (minMs ≤ maxMs). The time stays where it is, pulled inside them when it is outside; or, when they are the
+   * first to reach the start asked for (asked), it goes there: true (a jump, as a seek; playing or paused stays as it is).
+   */
+  setBounds(minMs: number, maxMs: number, perfMs: number): boolean {
     this.#rebase(perfMs) // under the old bounds: a clock that waited at the old end continues from it, it does not jump
     this.#minMs = minMs
     this.#maxMs = maxMs
+    const asked = this.#asked
+    if (asked !== null && asked >= minMs) {
+      this.seek(asked, perfMs)
+      return true
+    }
     this.#baseMs = this.#clamp(this.#baseMs)
+    return false
   }
 
   #rebase(perfMs: number): void {
