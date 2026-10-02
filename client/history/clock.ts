@@ -2,7 +2,8 @@
 // The replay clock of History mode: a time in the past (UTC ms) that runs at 1x, 10x or 60x while playing, kept inside
 // [minMs, maxMs]. Pure: no timers, no DOM. Every method is told performance.now() (perfMs), so the app asks it once a
 // frame and a test drives it with plain numbers. At maxMs the clock does not stop itself, it waits there (atEnd): the
-// app decides, and setBounds lets a clock that waited carry on when the next half hour is published.
+// app decides, and setBounds lets a clock that waited carry on when the next half hour is published. Stalled (stall), a
+// playing clock holds its time without leaving playing: the app is waiting for the data of the time under it.
 
 export const RATES: readonly number[] = [1, 10, 60]
 
@@ -10,6 +11,7 @@ export class HistoryClock {
   #baseMs: number // the replay time at #basePerf (the time itself while paused)
   #basePerf: number
   #playing: boolean
+  #stalled = false // holding its time whatever else it does: waiting for data (buffering), not paused
   #rate: number
   #minMs: number
   #maxMs: number
@@ -24,9 +26,9 @@ export class HistoryClock {
     this.#basePerf = perfMs
   }
 
-  /** The replay time at perfMs: moves by rate × elapsed while playing, never outside [minMs, maxMs]. */
+  /** The replay time at perfMs: moves by rate × elapsed while playing (and not stalled), never outside [minMs, maxMs]. */
   now(perfMs: number): number {
-    if (!this.#playing) return this.#baseMs
+    if (!this.#playing || this.#stalled) return this.#baseMs
     // A perfMs older than the last change (a frame timestamp a few ms before the performance.now() of a click handled
     // in the same frame) counts as no time elapsed: the clock never runs backwards by itself.
     const elapsed = perfMs > this.#basePerf ? perfMs - this.#basePerf : 0
@@ -35,6 +37,10 @@ export class HistoryClock {
 
   get playing(): boolean {
     return this.#playing
+  }
+
+  get stalled(): boolean {
+    return this.#stalled
   }
 
   get rate(): number {
@@ -48,6 +54,17 @@ export class HistoryClock {
   /** Playing and waiting at maxMs: nothing newer to show. */
   atEnd(perfMs: number): boolean {
     return this.#playing && this.now(perfMs) >= this.#maxMs
+  }
+
+  /**
+   * Holds the time (on) or lets it run again (off) without changing playing: a clock waiting for the data of its time does
+   * not run over an empty map. The time held is the one at perfMs and it goes on from there, no jump over the wait. Seek,
+   * rate, pause and play work meanwhile (a paused clock holds anyway; a played one waits for the stall to end).
+   */
+  stall(on: boolean, perfMs: number): void {
+    if (on === this.#stalled) return
+    this.#rebase(perfMs) // the time up to now, as it ran or was held until now: neither way jumps
+    this.#stalled = on
   }
 
   play(perfMs: number): void {

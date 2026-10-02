@@ -178,6 +178,113 @@ test('a call stamped before the last change counts the overlap once: nothing mov
   }
 })
 
+test('stalled, a playing clock holds its time and stays playing; un-stalled it goes on from that time, no jump', () => {
+  const c = clock({ playing: true, rate: 10 })
+  assert.equal(c.stalled, false)
+  assert.equal(c.now(1000), T + 10_000)
+  c.stall(true, 1000)
+  assert.equal(c.stalled, true)
+  assert.equal(c.playing, true, 'waiting, not paused')
+  assert.equal(c.now(1000), T + 10_000)
+  assert.equal(c.now(9000), T + 10_000, 'the wall clock does not move it')
+  c.stall(false, 9000)
+  assert.equal(c.stalled, false)
+  assert.equal(c.now(9000), T + 10_000, 'no jump over the wait')
+  assert.equal(c.now(10_000), T + 20_000, 'it runs on at the same rate')
+})
+
+test('stalling a stalled clock, or un-stalling a running one, changes nothing', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.stall(false, 500)
+  assert.equal(c.now(1000), T + 10_000, 'not stalled: nothing was held')
+  c.stall(true, 1000)
+  c.stall(true, 5000)
+  assert.equal(c.now(5000), T + 10_000, 'held from the first stall, not the second')
+  c.stall(false, 6000)
+  c.stall(false, 9000)
+  assert.equal(c.now(7000), T + 20_000, 'it runs from the first un-stall (6000), not the second')
+})
+
+test('a seek while stalled moves the held time (inside the bounds); un-stalled it runs on from there', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.stall(true, 1000)
+  c.seek(T + 600_000, 2000)
+  assert.equal(c.now(3000), T + 600_000, 'held at the new time')
+  assert.equal(c.playing, true)
+  c.seek(MAX + 99_999, 3000)
+  assert.equal(c.now(3000), MAX, 'clamped as ever')
+  c.seek(T + 600_000, 3500)
+  c.stall(false, 4000)
+  assert.equal(c.now(4000), T + 600_000, 'no jump')
+  assert.equal(c.now(5000), T + 610_000)
+})
+
+test('a rate change while stalled keeps the held time; the new rate runs from the un-stall', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.stall(true, 1000)
+  assert.equal(c.nextRate(2000), 60)
+  assert.equal(c.now(3000), T + 10_000)
+  c.stall(false, 4000)
+  assert.equal(c.now(5000), T + 10_000 + 60_000)
+})
+
+test('pause and play while stalled work: a paused clock holds anyway, a played one waits for the stall to end', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.stall(true, 1000)
+  c.pause(2000)
+  assert.deepEqual([c.playing, c.stalled], [false, true])
+  assert.equal(c.now(9000), T + 10_000)
+  c.stall(false, 9000)
+  assert.equal(c.now(12_000), T + 10_000, 'paused: the end of the stall moves nothing')
+  c.stall(true, 12_000)
+  c.play(13_000) // played while waiting for data: playing, and still holding
+  assert.deepEqual([c.playing, c.stalled], [true, true])
+  assert.equal(c.now(20_000), T + 10_000)
+  c.stall(false, 20_000)
+  assert.equal(c.now(21_000), T + 20_000, 'it runs on once the data is there')
+})
+
+test('a paused clock can be stalled: only the flag changes, and a play then waits', () => {
+  const c = clock()
+  c.stall(true, 0)
+  assert.deepEqual([c.playing, c.stalled, c.now(5000)], [false, true, T])
+  c.play(1000)
+  assert.equal(c.now(5000), T, 'playing, held')
+  c.stall(false, 5000)
+  assert.equal(c.now(6000), T + 1000)
+})
+
+test('bounds hold while stalled: new bounds pull the held time inside them, and a clock held at the end is at the end', () => {
+  const c = clock({ playing: true, rate: 60 }, MAX - 120_000)
+  assert.equal(c.now(1000), MAX - 60_000)
+  c.stall(true, 1000)
+  c.setBounds(MIN, MAX - 90_000, 2000)
+  assert.equal(c.now(2000), MAX - 90_000)
+  assert.equal(c.atEnd(2000), true, 'held at the end of the new bounds')
+  c.setBounds(MIN, MAX, 3000)
+  assert.equal(c.now(3000), MAX - 90_000, 'a longer clock does not move it by itself')
+  assert.equal(c.atEnd(3000), false)
+})
+
+test('a stall stamped before the last change counts nothing twice and never moves the base back', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.seek(T, 5000)
+  c.stall(true, 4990) // a frame timestamp 10 ms behind the click's performance.now()
+  assert.equal(c.now(5000), T)
+  assert.equal(c.now(9000), T)
+  c.stall(false, 4990)
+  assert.equal(c.now(5000), T)
+  assert.equal(c.now(5010), T + 100, 'the 10 ms are counted once, at 10x')
+})
+
+test('a stall stamped with a perfMs that is not a number holds the time as of the last change', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.stall(true, NaN)
+  assert.deepEqual([c.stalled, c.now(1000)], [true, T])
+  c.stall(false, NaN)
+  assert.equal(c.now(1000), T + 10_000, 'as if stamped at the last change, like every other call')
+})
+
 test('a perfMs that is not a number moves nothing and cannot stall the clock', () => {
   const c = clock({ playing: true, rate: 10 })
   c.setBounds(MIN, MAX, NaN)

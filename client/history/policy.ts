@@ -1,8 +1,8 @@
 // client/history/policy.ts
-// History's decisions that need no map (app.ts acts on them): which half hours to ask for, how long one stays
-// unasked after it was missing or failed, how far back a fresh fleet starts and how far ahead the selected aircraft's
-// track is fed (both scaled to the slices the files were cut at), how wide a circle to ask for, and whether the
-// selected aircraft's leg covers the replay time.
+// History's decisions that need no map (app.ts acts on them): which half hours to ask for and how early the next one,
+// how long one stays unasked after it was missing or failed, how far back a fresh fleet starts and how far ahead the
+// selected aircraft's track is fed (both scaled to the slices the files were cut at), how wide a circle to ask for, and
+// whether the selected aircraft's leg covers the replay time.
 import type { HistoryStatus } from '../../shared/api.ts'
 import { SLOT_MS, STEP_BANDS, slotOf } from '../../shared/history.ts'
 
@@ -11,6 +11,8 @@ const LOOKAHEAD_MIN_MS = 20_000
 const MISSING_KEEP_MS = 10 * 60_000 // the server remembers a missing file this long too
 const RETRY_MS = 15_000 // a failed ask (the server busy or unreachable): asked again after this
 const LEG_MARGIN_MS = 60_000
+const PREFETCH_MIN_MS = 5 * 60_000
+const PREFETCH_WALL_MS = 20_000 // a download is given this long of wall time, at any replay speed
 const MARGIN = 1.3 // a half hour is asked for a circle this much wider than the view: small pans ask nothing
 const MIN_ASK_NM = 20
 const CHASE_ASK_NM = 100 // the chase view moves with its aircraft: a small circle would be asked again every few seconds
@@ -27,11 +29,22 @@ export function lookaheadMs(stepS: number): number {
 
 /**
  * The half hours to ask for at replay time t: the one holding it, never the one still in progress (maxMs, the end of
- * the newest published, is its start), and the next one prefetchMs before it starts when that is published.
+ * the newest published, is its start), and the next one aheadMs before it starts (prefetchMs of the rate) when that is
+ * published.
  */
-export function wantedSlots(t: number, maxMs: number, prefetchMs: number): number[] {
+export function wantedSlots(t: number, maxMs: number, aheadMs: number): number[] {
   const slot = slotOf(Math.min(t, maxMs - 1))
-  return t - slot > SLOT_MS - prefetchMs && slot + SLOT_MS < maxMs ? [slot, slot + SLOT_MS] : [slot]
+  return t - slot > SLOT_MS - aheadMs && slot + SLOT_MS < maxMs ? [slot, slot + SLOT_MS] : [slot]
+}
+
+/**
+ * How long before a half hour ends the next one is asked for while playing, in replay time (wantedSlots' aheadMs): 5
+ * minutes, and 20 s of wall time at the rate (60x passes 20 minutes in them), so a download that takes seconds never stalls
+ * a fast replay.
+ */
+export function prefetchMs(rate: number): number {
+  const ahead = rate * PREFETCH_WALL_MS
+  return ahead > PREFETCH_MIN_MS ? ahead : PREFETCH_MIN_MS // a rate that is not a number gets the 5 minutes
 }
 
 /** Half hours not to ask for now: missing (adsb.lol has no file: MISSING_KEEP_MS) or failed (RETRY_MS). */

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SLOT_MS } from '../../shared/history.ts'
-import { SlotBlock, askNm, backMs, legCovers, legFeeds, legStarted, lookaheadMs, wantedSlots } from './policy.ts'
+import { SlotBlock, askNm, backMs, legCovers, legFeeds, legStarted, lookaheadMs, prefetchMs, wantedSlots } from './policy.ts'
 
 const H = Date.parse('2026-10-01T10:00:00Z') // a slot start
 const MIN = 60_000
@@ -12,6 +12,19 @@ test('the half hour asked for holds the replay time, never the one still in prog
   assert.deepEqual(wantedSlots(maxMs, maxMs, 5 * MIN), [H], 'at the very end: still the newest published one')
   assert.deepEqual(wantedSlots(H - 3 * MIN, maxMs, 5 * MIN), [H - SLOT_MS, H], 'near its end: the next one too')
   assert.deepEqual(wantedSlots(H + 27 * MIN, maxMs, 5 * MIN), [H], 'no next one past the newest published')
+})
+
+test('the next half hour is asked for 5 minutes ahead, or 20 s of wall time at the replay rate when that is more', () => {
+  assert.deepEqual([prefetchMs(1), prefetchMs(10), prefetchMs(60)], [5 * MIN, 5 * MIN, 20 * MIN], '1x and 10x: the 5 minutes; 60x: 20 s × 60')
+  assert.equal(prefetchMs(NaN), 5 * MIN, 'a rate that is not a number gets the least')
+})
+
+test('at 60x the next half hour is asked for 20 minutes before the end, so its download never stalls the replay', () => {
+  const maxMs = H + 10 * SLOT_MS // published far ahead: the next half hour is always there to ask for
+  const asked = (rate: number, minLeft: number): boolean => wantedSlots(H + SLOT_MS - minLeft * MIN, maxMs, prefetchMs(rate)).length === 2
+  assert.deepEqual([25, 19, 6, 4].map((left) => asked(1, left)), [false, false, false, true], '1x: from 5 minutes before')
+  assert.deepEqual([25, 19, 6, 4].map((left) => asked(10, left)), [false, false, false, true], '10x: the same 5 minutes')
+  assert.deepEqual([25, 19, 6, 4].map((left) => asked(60, left)), [false, true, true, true], '60x: from 20 minutes before')
 })
 
 test('a fresh fleet starts far enough back, and the track is fed far enough ahead, for the slice step', () => {
