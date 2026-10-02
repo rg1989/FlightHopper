@@ -114,7 +114,7 @@ export class HistoryStore {
     for (const slotMs of this.#loading.keys()) state.set(slotMs, 'loading')
     for (const slotMs of this.#files.keys()) state.set(slotMs, 'ready') // a fetch that has just finished is in both
     const slots = [...state].map(([slotMs, s]) => ({ slotMs, state: s })).sort((a, b) => a.slotMs - b.slotMs)
-    return { newestSlotMs: newestSlotMs(now), slots }
+    return { newestSlotMs: newestSlotMs(now), oldestSlotMs: 0, slots } // ponytail: oldestSlotMs set in the next commit
   }
 
   /** Aborts the downloads under way (they end as unavailable); no new one starts. A server calls it when it closes. */

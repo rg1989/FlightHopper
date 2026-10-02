@@ -4,7 +4,7 @@ import type { TraceReply } from '../../shared/api.ts'
 import { traceInfo, tracePath, traceSamples } from './trace.ts'
 
 const TR: TraceReply = {
-  hex: '4691c4', callsign: 'AEE4266', reg: 'SX-DND', typeCode: 'A320', t0Ms: 1_790_086_432_000,
+  hex: '4691c4', callsign: 'AEE4266', calls: [[0, 'AEE4266']], reg: 'SX-DND', typeCode: 'A320', t0Ms: 1_790_086_432_000,
   t: [0, 4.5, 9],
   lat: [34.14418, 34.13, 34.11], lon: [31.18918, 31.21, 31.25],
   alt: ['g', 37000, null], gs: [12, 451.2, null], trk: [90, 112.5, null], vs: [null, -64, 0], roll: [null, 0.4, null],

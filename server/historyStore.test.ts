@@ -313,12 +313,13 @@ test('status: the newest published slot and every slot held, loading or missing,
   serve(AGO(1), ok(AGO(1)))
   serve(AGO(2), gate.promise)
   serve(AGO(3), { status: 404 })
-  assert.deepEqual(store.status(), { newestSlotMs: NEWEST, slots: [] })
+  assert.deepEqual(store.status(), { newestSlotMs: NEWEST, oldestSlotMs: 0, slots: [] })
   await store.file(AGO(1))
   await store.file(AGO(3))
   const loading = store.file(AGO(2))
   assert.deepEqual(store.status(), {
     newestSlotMs: NEWEST,
+    oldestSlotMs: 0,
     slots: [
       { slotMs: AGO(3), state: 'missing' },
       { slotMs: AGO(2), state: 'loading' },

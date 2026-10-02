@@ -167,7 +167,7 @@ export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon:
     const key = w0 & KEY_MASK
     let trk = tracks.get(key)
     if (trk === undefined) {
-      trk = { hex: '', callsign: null, squawk: null, nM: Math.round(geoidN(lat, lon) * 10) / 10, t: [], lat: [], lon: [], alt: [], gs: [] }
+      trk = { hex: '', callsign: null, squawk: null, type: null, nM: Math.round(geoidN(lat, lon) * 10) / 10, t: [], lat: [], lon: [], alt: [], gs: [] }
       tracks.set(key, trk)
     }
     const alt = dv.getInt16(o + 12, true)

@@ -35,7 +35,7 @@ type Pt = [t: number, lat: number, lon: number, alt: number | 'g' | null, gs: nu
 /** A track from rows of [t, lat, lon, alt, gs]. */
 function track(hex: string, rows: Pt[], o: Partial<HistoryTrack> = {}): HistoryTrack {
   return {
-    hex, callsign: null, squawk: null, nM: 19.6,
+    hex, callsign: null, squawk: null, type: null, nM: 19.6,
     t: rows.map((r) => r[0]), lat: rows.map((r) => r[1]), lon: rows.map((r) => r[2]),
     alt: rows.map((r) => r[3]), gs: rows.map((r) => r[4]),
     ...o,
@@ -522,7 +522,7 @@ function parsedSlot(aircraftN: number, points: number): HistorySlot {
       alt.push(a % 25 === 0 && i < 10 ? 'g' : 25 * Math.round((5000 + i * 20) / 25))
       gs.push(i === 0 ? null : Math.round((300 + (i % 50) * 1.3) * 10) / 10) // no speed at the first fix, as often happens
     }
-    aircraft.push({ hex: (0xa00000 + a).toString(16), callsign: `TST${a}`, squawk: '1200', nM: 19.6, t, lat, lon, alt, gs })
+    aircraft.push({ hex: (0xa00000 + a).toString(16), callsign: `TST${a}`, squawk: '1200', type: null, nM: 19.6, t, lat, lon, alt, gs })
   }
   return JSON.parse(JSON.stringify({ slotMs: T0, stepS: 10, aircraft })) as HistorySlot
 }

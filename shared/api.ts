@@ -45,6 +45,7 @@ export interface HistoryTrack {
   lon: number[]
   alt: (number | 'g' | null)[]   // baro ft (25 ft steps), 'g' on the ground, null unknown
   gs: (number | null)[]          // ground speed, kt (0.1)
+  type: string | null            // ICAO type designator from the server's address table (the files carry none); null unknown
 }
 
 /** A UTC half hour of the past in one circle (GET /api/history?slot&lat&lon&nm): adsb.lol's tar1090 heatmap file. */
@@ -57,13 +58,15 @@ export interface HistorySlot {
 /** What the server holds of the past (GET /api/history/status). */
 export interface HistoryStatus {
   newestSlotMs: number           // the newest half hour published upstream: its file appears just after it ends
+  oldestSlotMs: number           // the oldest half hour upstream still keeps
   slots: { slotMs: number; state: 'ready' | 'loading' | 'missing' }[]
 }
 
 /** One aircraft's flight leg (GET /api/trace?hex&at): adsb.lol's trace of it, the leg flying at `at`. Columnar. */
 export interface TraceReply {
   hex: string
-  callsign: string | null
+  callsign: string | null        // the leg's last
+  calls: [number, string][]      // every callsign it sent and from when: [s after t0Ms, callsign], in time order
   reg: string | null
   typeCode: string | null
   t0Ms: number                   // the leg's first point, UTC ms
@@ -77,6 +80,16 @@ export interface TraceReply {
   roll: (number | null)[]        // °
   nM: number[]                   // geoid N, m (0.1)
   origin?: RoutePlace | null     // the route's first airport, when the server knows the route
+}
+
+/** One aircraft's flights over a span (GET /api/trace?hex&from&to): every leg overlapping it, in time order. */
+export interface TraceDay {
+  hex: string
+  reg: string | null
+  typeCode: string | null
+  fromMs: number                 // the span asked for, as answered (to is capped at the server's now)
+  toMs: number
+  legs: TraceReply[]
 }
 
 /** One flight being recorded to its own file (server/flightLog.ts). Times on the server clock. */

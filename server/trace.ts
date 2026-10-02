@@ -88,7 +88,7 @@ export function traceReply(json: unknown, hex: string, atMs: number): TraceReply
 
   const dt0 = leg[0][0] as number
   const out: TraceReply = {
-    hex, callsign: null, reg: nonEmpty(f.r), typeCode: nonEmpty(f.t), t0Ms: timeMs(leg[0]),
+    hex, callsign: null, calls: [], reg: nonEmpty(f.r), typeCode: nonEmpty(f.t), t0Ms: timeMs(leg[0]),
     t: [], lat: [], lon: [], alt: [], gs: [], trk: [], vs: [], roll: [], nM: [],
   }
   for (const r of leg) {
