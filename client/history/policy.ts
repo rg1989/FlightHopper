@@ -1,8 +1,8 @@
 // client/history/policy.ts
 // History's decisions that need no map (app.ts acts on them): which half hours to ask for and how early the next one,
 // how long one stays unasked after it was missing or failed, how far back a fresh fleet starts and how far ahead the
-// selected aircraft's track is fed (both scaled to the slices the files were cut at), how wide a circle to ask for, and
-// whether the selected aircraft's leg covers the replay time.
+// selected aircraft's track is fed (both scaled to the slices the files were cut at), how wide a circle to ask for,
+// which aircraft the fleet is given the info of again, and whether the selected aircraft's leg covers the replay time.
 import type { HistoryStatus } from '../../shared/api.ts'
 import { SLOT_MS, STEP_BANDS, slotOf } from '../../shared/history.ts'
 
@@ -82,6 +82,35 @@ export class SlotBlock {
         if (!this.#missing.has(s.slotMs)) this.missing(s.slotMs, nowMs)
       } else if (this.#missing.delete(s.slotMs)) this.#until.delete(s.slotMs)
     }
+  }
+}
+
+/**
+ * The aircraft the fleet was given the info of (app.ts feedHistory gives an aircraft's info with its first sample, not
+ * with each), forgotten whenever the half hour under the clock changes. The Fleet forgets an aircraft's info an hour after
+ * its last sample (browse/fleet.ts INFO_KEEP_MS), and the half hour under the clock changes at least once in any hour, so
+ * one heard again after that (parked with its transponder off, out of the circle and back) is given it again rather than
+ * drawn as the generic arrow with no callsign or type; and a half hour answered later may know types an earlier one did
+ * not (the server's type table still loading), which reach the aircraft already known by the next half hour.
+ */
+export class KnownHexes {
+  #slot = Number.NaN // the half hour under the clock the hexes were given in
+  readonly #hexes = new Set<string>()
+
+  /** Whether hex's info goes with this sample, at a replay time whose half hour is slot: its first in that half hour (or since clear). */
+  first(hex: string, slot: number): boolean {
+    if (slot !== this.#slot) {
+      this.#slot = slot
+      this.#hexes.clear()
+    }
+    if (this.#hexes.has(hex)) return false
+    this.#hexes.add(hex)
+    return true
+  }
+
+  /** A fresh fleet: every aircraft is given its info again. */
+  clear(): void {
+    this.#hexes.clear()
   }
 }
 

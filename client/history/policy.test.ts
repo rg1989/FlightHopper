@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { SLOT_MS } from '../../shared/history.ts'
-import { SlotBlock, askNm, backMs, legCovers, legFeeds, lookaheadMs, prefetchMs, wantedSlots } from './policy.ts'
+import { SLOT_MS, slotOf } from '../../shared/history.ts'
+import type { AircraftInfo } from '../../shared/info.ts'
+import type { Sample } from '../../shared/types.ts'
+import { Fleet } from '../browse/fleet.ts'
+import { KnownHexes, SlotBlock, askNm, backMs, legCovers, legFeeds, lookaheadMs, prefetchMs, wantedSlots } from './policy.ts'
 
 const H = Date.parse('2026-10-01T10:00:00Z') // a slot start
 const MIN = 60_000
@@ -62,4 +65,45 @@ test("a half hour is asked for a wider circle than the view, within the view's s
 test('a leg feeds the track only from its first point, to a minute after its last', () => {
   const leg = { t0Ms: H, t: [0, 600, 1200] } // 10:00 to 10:20
   assert.deepEqual([H - 1, H, H + 21 * MIN, H + 21 * MIN + 1].map((t) => legFeeds(leg, t)), [false, true, true, false])
+})
+
+test("an aircraft's info goes with its first sample in each half hour under the clock, and again after clear (a fresh fleet)", () => {
+  const k = new KnownHexes()
+  assert.deepEqual([k.first('738abc', H), k.first('738abc', H), k.first('aaaaaa', H)], [true, false, true])
+  assert.deepEqual([k.first('738abc', H + SLOT_MS), k.first('738abc', H + SLOT_MS)], [true, false], 'the next half hour: once more')
+  k.clear()
+  assert.equal(k.first('738abc', H + SLOT_MS), true)
+})
+
+/** A sample of hex at tMs over Israel, as the feed makes one (the files carry no type). */
+const sample = (hex: string, tMs: number): Sample => ({
+  hex, tMs, rxMs: tMs, lat: 32, lon: 34.8, onGround: false, altBaroFt: 3000, altGeomFt: null, gsKt: 150, trackDeg: 90,
+  trueHeadingDeg: null, rollDeg: null, baroRateFpm: null, geomRateFpm: null, navQnhHpa: null, version: null, nic: null,
+  quality: 'adsb2', nM: 19.6, callsign: 'ISR595', typeCode: null, reg: null,
+})
+const INFO: AircraftInfo = {
+  hex: '738abc', callsign: 'ISR595', reg: null, typeCode: 'B738', category: 'A3', squawk: null, emergency: null, military: false, route: null,
+}
+
+test('an aircraft heard again after the fleet forgot its info (an hour after its last sample) is given it again, not drawn as a triangle', () => {
+  // app.ts feedHistory, as the clock plays: its info with the samples the gate lets it go with.
+  const play = (fleet: Fleet, gate: (hex: string, clockMs: number) => boolean, tMs: number): void =>
+    fleet.ingest([sample('738abc', tMs)], gate('738abc', tMs) ? [INFO] : undefined)
+  const run = (gate: (hex: string, clockMs: number) => boolean): AircraftInfo | null => {
+    const fleet = new Fleet()
+    play(fleet, gate, H + 5 * MIN) // heard at 10:05
+    fleet.prune(H + 10 * MIN, 60) // gone from the circle: dropped
+    fleet.prune(H + 66 * MIN, 60) // an hour after its last sample the fleet forgets its info too
+    play(fleet, gate, H + 70 * MIN) // back at 11:10
+    return fleet.get('738abc')?.info ?? null
+  }
+  const seen = new Set<string>() // the old rule: an aircraft given its info once was known until a seek
+  const once = (hex: string): boolean => {
+    if (seen.has(hex)) return false
+    seen.add(hex)
+    return true
+  }
+  assert.equal(run(once), null, 'the old rule: no info, the generic arrow with no callsign or type')
+  const known = new KnownHexes()
+  assert.equal(run((hex, clockMs) => known.first(hex, slotOf(clockMs))), INFO, 'given again in the half hour it came back in')
 })

@@ -47,7 +47,7 @@ import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
 import { localDay, mountHistoryBar, type HistoryBarHandle, type LocalDay } from './history/bar.ts'
 import { HistoryClock } from './history/clock.ts'
 import { HistoryFeed, type Circle } from './history/feed.ts'
-import { SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
+import { KnownHexes, SlotBlock, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
   MapMoves, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea, inSight, keepLegs,
   placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
@@ -487,7 +487,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     fedMs: number // the fleet holds the feed's samples up to here
     regMs: number // the selected aircraft's track holds its samples up to here
     regFrom: TraceReply | 'feed' | 'none' | null // they came from this leg of its day, the feed, or none (not heard); null: none yet
-    known: Set<string> // the hexes whose info the fleet has
+    known: KnownHexes // the aircraft whose info the fleet was given in the half hour under the clock
     loading: Set<number> // half hours being fetched
     block: SlotBlock // half hours not to ask for now: missing at adsb.lol, or failed a moment ago
     missing: Set<number> // half hours adsb.lol answered it does not have (with the status's: the bar's red hatch)
@@ -895,10 +895,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
 
   /**
-   * History, every frame: the feed's samples up to t into the fleet (after a seek, from back(step) before t), and the
-   * selected aircraft's up to t + lookahead(step) into its track, as its day says (ds): heard, its leg's (its trace: 1–4 s
-   * points with track, rate and roll, where the files have 10 s points without them); not heard (a hole in its leg too),
-   * none (no track: it is drawn where it was last heard, or estimated to be); its day not known yet, the feed's.
+   * History, every frame: the feed's samples up to t into the fleet (after a seek, from back(step) before t), each
+   * aircraft's info with its first sample in the half hour under the clock (policy.ts KnownHexes: the fleet forgets an
+   * info an hour after its last sample), and the selected aircraft's samples up to t + lookahead(step) into its track, as
+   * its day says (ds): heard, its leg's (its trace: 1–4 s points with track, rate and roll, where the files have 10 s
+   * points without them); not heard (a hole in its leg too), none (no track: it is drawn where it was last heard, or
+   * estimated to be); its day not known yet, the feed's.
    * The chase traffic is drawn from the fleet (its samples already point at their next position): no tracks of its own,
    * which on 10 s samples would stop between them.
    */
@@ -908,10 +910,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const fresh = h.feed.take(h.fedMs, t)
     h.fedMs = t
     if (fresh.length > 0) {
+      const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
       let infos: AircraftInfo[] | undefined
       for (const x of fresh) {
-        if (h.known.has(x.hex)) continue
-        h.known.add(x.hex)
+        if (!h.known.first(x.hex, slot)) continue
         const i = x.hex === selected && chaseInfo !== null ? chaseInfo : h.feed.info(x.hex)
         if (i !== null) (infos ??= []).push(i)
       }
@@ -1102,7 +1104,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     bar.setBounds(minMs, maxMs) // the clock's guess, until the server's first status
     const h: HistoryMode = {
       clock: new HistoryClock(t0, { minMs, maxMs, playing: play, rate: HISTORY_RATE }, nowP), feed: new HistoryFeed(), bar,
-      fedMs: t0, regMs: t0, regFrom: null, known: new Set(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
+      fedMs: t0, regMs: t0, regFrom: null, known: new KnownHexes(), loading: new Set(), block: new SlotBlock(), missing: new Set(),
       missingShown: '', lastWant: slotOf(Math.min(t0, maxMs - 1)), failing: false, status: null, statusAtMs: -Infinity,
       reload: false, seekRestMs: null, dayOfT: localDay(t0), day: null, dayAsk: null, dayAgain: null, legsShown: NO_LEGS,
       pathLeg: undefined, bring: false, inside: false, flyUntilMs: -Infinity, hadAt: false, askedMs: -Infinity,
