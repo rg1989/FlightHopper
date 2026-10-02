@@ -1,13 +1,13 @@
 // server/trace.test.ts
-// traceUrl, traceReply and TraceStore on small synthetic trace files and a fake fetch on a fake clock. Nothing here
+// traceUrl, traceReply, traceDay and TraceStore on small synthetic trace files and a fake fetch on a fake clock. Nothing here
 // touches the network. The file layout is adsb.lol's readsb "trace json", checked on a real live file and a real day
 // file (2026-10-02): { icao, r, t, timestamp, trace: [[dtS, lat, lon, alt | "ground" | null, gs, track, flags, vrate,
 // acObj | null, source, geomAlt, geomRate, ias, roll], …] }; `flight` in an acObj is padded to 8 characters.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gzipSync } from 'node:zlib'
-import type { TraceReply } from '../shared/api.ts'
-import { TraceStore, traceReply, traceUrl } from './trace.ts'
+import type { TraceDay, TraceReply } from '../shared/api.ts'
+import { TraceStore, traceDay, traceReply, traceUrl } from './trace.ts'
 
 const BASE = 'https://adsb.lol'
 const HOUR = 3_600_000
@@ -179,6 +179,20 @@ test('traceReply: a blank flight or the all-zero identification (@@@@@@@@) is no
   const rows = ids.map((flight, i) => row(100 + i * 10, 37.9, 23.9, 5000, { ac: { flight } }))
   assert.equal(leg({ timestamp: DAY_S, trace: rows }, DAY_S * 1000 + 100_000).callsign, 'AEE4266')
   assert.equal(leg({ timestamp: DAY_S, trace: rows.slice(1) }, DAY_S * 1000 + 110_000).callsign, null)
+})
+
+test('traceReply: calls are the callsigns of the leg from the point each starts, s after t0Ms; the callsign is the last of them', () => {
+  assert.deepEqual(leg(FILE, LEG1_MS).calls, [[0, 'AEE490'], [20.4, 'AEE4266']])
+  assert.equal(leg(FILE, LEG1_MS).callsign, 'AEE4266')
+  assert.deepEqual(leg(FILE, LEG2_MS).calls, [], 'leg 2 sent none')
+})
+
+test('traceReply: calls skip blanks and readsb\'s @@@@@@@@, and a repeat of the one before; a callsign that comes back is a change', () => {
+  const flights = ['ISR884  ', 'ISR884  ', '@@@@@@@@', '        ', 'ISR884', 'ISR345  ', 'ISR345  ', '', 'ISR884  ', null]
+  const rows = flights.map((flight, i) => row(100 + i * 10, 32, 34.8, 30000, { ac: flight === null ? null : { flight } }))
+  const r = leg({ timestamp: DAY_S, trace: rows }, DAY_S * 1000 + 100_000)
+  assert.deepEqual(r.calls, [[0, 'ISR884'], [50, 'ISR345'], [80, 'ISR884']])
+  assert.equal(r.callsign, 'ISR884')
 })
 
 test('traceReply: null once the leg ended more than 6 h before atMs, even if a later leg has not started', () => {
@@ -451,4 +465,204 @@ test('TraceStore: a time that is no date from the year 2000 to 9999 is null with
     'https://adsb.lol/globe_history/2000/01/01/traces/c4/trace_full_4691c4.json',
     'https://adsb.lol/data/traces/c4/trace_full_4691c4.json', // the far future is "within 25 h" of now
   ])
+})
+
+// ---- a span of up to 48 h: the day files and the live file merged (TraceStore.day, traceDay) ----
+
+const at = (iso: string): number => Date.parse(iso)
+const iso = (ms: number): string => new Date(ms).toISOString().replace('.000Z', 'Z')
+const CUT = NOW - 25 * HOUR // 2026-10-01T04:00:00Z: before it the day files, from it the live file
+const LIVE_URL = 'https://adsb.lol/data/traces/c4/trace_full_4691c4.json'
+const dayUrlOf = (ymd: string): string => `https://adsb.lol/globe_history/${ymd}/traces/c4/trace_full_4691c4.json`
+
+interface Pt { at: string; alt: number | 'ground' | null; flags?: number; flight?: string }
+/** A trace file of HEX stamped stampMs (a day file: its UTC midnight; a live file: its first point), one row per Pt at its time. */
+function traceAt(stampMs: number, pts: Pt[], names: { r?: string; t?: string } = { r: 'SX-DND', t: 'A320' }) {
+  return {
+    icao: HEX, ...names, timestamp: stampMs / 1000,
+    trace: pts.map((p, i) => row((at(p.at) - stampMs) / 1000, 32 + i * 0.01, 34.8, p.alt, { flags: p.flags, ac: p.flight === undefined ? null : { flight: p.flight } })),
+  }
+}
+const dayOf = (ymd: string, pts: Pt[], names?: { r?: string; t?: string }) => traceAt(Date.parse(`${ymd.replaceAll('/', '-')}T00:00:00Z`), pts, names)
+const liveOf = (pts: Pt[], names?: { r?: string; t?: string }) => traceAt(at(pts[0].at), pts, names)
+/** Points every `stepS` from `from` to `to` (inclusive) at one altitude. */
+function every(from: string, to: string, stepS: number, alt: number | 'ground', flight?: string): Pt[] {
+  const out: Pt[] = []
+  for (let t = at(from); t <= at(to); t += stepS * 1000) out.push({ at: iso(t), alt, flight })
+  return out
+}
+
+/** A store on a host serving these files by URL (a number: that status; an Error: thrown); anything else 404. */
+function spanHost(files: Record<string, unknown>, clock = { t: NOW }) {
+  const { calls, fetchFn } = fakeHost((url) => {
+    const f = files[url]
+    if (f instanceof Error) throw f
+    if (typeof f === 'number') return new Response('trouble', { status: f })
+    return f === undefined ? new Response('not found', { status: 404 }) : json(f)
+  })
+  return { calls, store: storeOn(fetchFn, clock), clock }
+}
+async function daySpan(store: TraceStore, fromMs: number, toMs: number): Promise<TraceDay> {
+  const r = await store.day(HEX, fromMs, toMs)
+  assert.ok(r !== null && r !== 'unavailable', `a span, not ${String(r)}`)
+  return r
+}
+/** Each leg as [its first point, its last point]. */
+const spans = (d: TraceDay): [string, string][] => d.legs.map((l) => [iso(l.t0Ms), iso(l.t0Ms + l.t[l.t.length - 1] * 1000)])
+
+test('TraceStore.day: the live file for the part at or after now − 25 h, the day file of every UTC date the part before it overlaps', async () => {
+  const urls = async (from: string, to: string): Promise<string[]> => {
+    const { calls, store } = spanHost({})
+    await store.day(HEX, at(from), at(to))
+    return calls.map((c) => c.url).sort()
+  }
+  assert.equal(iso(CUT), '2026-10-01T04:00:00Z')
+  assert.deepEqual(await urls('2026-10-01T04:00:00Z', '2026-10-02T05:00:00Z'), [LIVE_URL], 'from the cut on: the live file only')
+  assert.deepEqual(await urls('2026-10-01T03:59:59.999Z', '2026-10-02T05:00:00Z'), [LIVE_URL, dayUrlOf('2026/10/01')].sort(), 'a ms before it: that day too')
+  assert.deepEqual(await urls('2026-10-01T00:00:00Z', '2026-10-01T03:59:59.999Z'), [dayUrlOf('2026/10/01')], 'ending before the cut: no live file')
+  assert.deepEqual(await urls('2026-10-01T00:00:00Z', '2026-10-01T04:00:00Z'), [LIVE_URL, dayUrlOf('2026/10/01')].sort(), 'ending at the cut: the live file too')
+  assert.deepEqual(await urls('2026-09-30T12:00:00Z', '2026-10-01T12:00:00Z'), [LIVE_URL, dayUrlOf('2026/09/30'), dayUrlOf('2026/10/01')].sort())
+  assert.deepEqual(await urls('2026-09-29T00:00:00Z', '2026-09-30T23:59:59.999Z'), [dayUrlOf('2026/09/29'), dayUrlOf('2026/09/30')], '48 h of two whole days')
+  assert.deepEqual(await urls('2026-09-28T23:59:59.999Z', '2026-09-30T23:59:59.999Z'), [dayUrlOf('2026/09/28'), dayUrlOf('2026/09/29'), dayUrlOf('2026/09/30')], 'three dates at most')
+  assert.deepEqual(await urls('2026-09-29T23:59:59.999Z', '2026-09-30T00:00:00Z'), [dayUrlOf('2026/09/29'), dayUrlOf('2026/09/30')], 'a ms either side of midnight')
+  assert.deepEqual(await urls('2026-09-30T00:00:00Z', '2026-09-30T00:00:00Z'), [dayUrlOf('2026/09/30')], 'midnight belongs to its own day')
+})
+
+test('TraceStore.day: rows taken by time, day files before the cut, the live file at and after it: nothing twice, one leg across the cut', async () => {
+  // The same flight in both files around the cut: the day file has it to 04:10, the live file from 03:55.
+  const { store } = spanHost({
+    [dayUrlOf('2026/10/01')]: dayOf('2026/10/01', every('2026-10-01T03:50:00Z', '2026-10-01T04:10:00Z', 20, 35000, 'AEE4266 ')),
+    [LIVE_URL]: liveOf(every('2026-10-01T03:55:00Z', '2026-10-01T04:20:00Z', 20, 35000, 'AEE4266 ')),
+  })
+  const d = await daySpan(store, at('2026-10-01T03:30:00Z'), NOW)
+  assert.deepEqual(spans(d), [['2026-10-01T03:50:00Z', '2026-10-01T04:20:00Z']], 'one leg: the live file\'s first kept row is no file\'s first')
+  const times = d.legs[0].t.map((t) => d.legs[0].t0Ms + t * 1000)
+  assert.equal(times.length, 91, '30 rows from the day file (03:50 to 03:59:40), 61 from the live file (04:00 to 04:20)')
+  assert.ok(times.every((t, i) => i === 0 || t - times[i - 1] === 20_000), 'every 20 s, in order, none twice')
+  assert.deepEqual(d.legs[0].calls, [[0, 'AEE4266']])
+  assert.deepEqual([d.hex, d.reg, d.typeCode, d.fromMs, d.toMs], [HEX, 'SX-DND', 'A320', at('2026-10-01T03:30:00Z'), NOW])
+})
+
+test('traceDay: a leg crossing midnight stays one: rows on through it, or a coverage hole at cruise', () => {
+  const files = (before: Pt[], after: Pt[]) => [
+    { json: dayOf('2026/09/29', before), fromMs: at('2026-09-29T00:00:00Z'), toMs: at('2026-09-30T00:00:00Z') },
+    { json: dayOf('2026/09/30', after), fromMs: at('2026-09-30T00:00:00Z'), toMs: at('2026-10-01T00:00:00Z') },
+  ]
+  const span = [at('2026-09-29T12:00:00Z'), at('2026-09-30T12:00:00Z')] as const
+  const through = traceDay(HEX, files(every('2026-09-29T23:50:00Z', '2026-09-29T23:59:50Z', 10, 37000), every('2026-09-30T00:00:00Z', '2026-09-30T00:10:00Z', 10, 37000)), ...span)
+  assert.deepEqual(spans(through), [['2026-09-29T23:50:00Z', '2026-09-30T00:10:00Z']])
+  const hole = traceDay(HEX, files([{ at: '2026-09-29T23:20:00Z', alt: 37000 }], [{ at: '2026-09-30T01:20:00Z', alt: 36000 }, { at: '2026-09-30T01:20:20Z', alt: 36000 }]), ...span)
+  assert.deepEqual(spans(hole), [['2026-09-29T23:20:00Z', '2026-09-30T01:20:20Z']], '2 h unheard at cruise: one flight')
+  const climbing = traceDay(HEX, files([{ at: '2026-09-29T23:20:00Z', alt: 9000 }], [{ at: '2026-09-30T01:20:00Z', alt: 36000 }]), ...span)
+  assert.equal(climbing.legs.length, 1, 'low at one end, cruising at the other: still one flight')
+  const short = traceDay(HEX, files([{ at: '2026-09-29T23:50:00Z', alt: 'ground' }], [{ at: '2026-09-30T00:14:59Z', alt: 'ground' }]), ...span)
+  assert.equal(short.legs.length, 1, 'on the ground, but 25 min or less unheard: one leg')
+})
+
+test('traceDay: a file\'s first point starts a leg after a gap over 25 min on the ground at either end or low at both (readsb could not mark it)', () => {
+  const two = (before: Pt[], after: Pt[]) =>
+    traceDay(HEX, [
+      { json: dayOf('2026/09/29', before), fromMs: at('2026-09-29T00:00:00Z'), toMs: at('2026-09-30T00:00:00Z') },
+      { json: dayOf('2026/09/30', after), fromMs: at('2026-09-30T00:00:00Z'), toMs: at('2026-10-01T00:00:00Z') },
+    ], at('2026-09-29T12:00:00Z'), at('2026-09-30T12:00:00Z'))
+  // Parked overnight with the transponder off: landed 19:00, first heard again at the gate at 05:30.
+  const parked = two([...every('2026-09-29T18:00:00Z', '2026-09-29T18:59:00Z', 60, 20000), ...every('2026-09-29T19:00:00Z', '2026-09-29T19:10:00Z', 60, 'ground')],
+    [...every('2026-09-30T05:30:00Z', '2026-09-30T05:40:00Z', 60, 'ground'), ...every('2026-09-30T05:41:00Z', '2026-09-30T06:00:00Z', 60, 8000)])
+  assert.deepEqual(spans(parked), [['2026-09-29T18:00:00Z', '2026-09-29T19:10:00Z'], ['2026-09-30T05:30:00Z', '2026-09-30T06:00:00Z']])
+  const offGround = two([{ at: '2026-09-29T23:00:00Z', alt: 'ground' }], [{ at: '2026-09-30T00:30:00Z', alt: 30000 }])
+  assert.equal(offGround.legs.length, 2, 'on the ground at one end')
+  const uncovered = two([{ at: '2026-09-29T21:00:00Z', alt: 3000 }], [{ at: '2026-09-30T07:00:00Z', alt: 2000 }])
+  assert.equal(uncovered.legs.length, 2, 'landed and took off out of coverage: low at both ends')
+  const noAlt = two([{ at: '2026-09-29T21:00:00Z', alt: null }], [{ at: '2026-09-30T07:00:00Z', alt: 9999 }])
+  assert.equal(noAlt.legs.length, 2, 'no altitude counts as low')
+  const marked = two([{ at: '2026-09-29T23:59:00Z', alt: 37000 }], [{ at: '2026-09-30T00:01:00Z', alt: 37000, flags: 2 }])
+  assert.equal(marked.legs.length, 2, 'a first point readsb did mark is a new leg, gap or not')
+})
+
+test('TraceStore.day: at the cut too, the live file\'s first point after a parked night starts a leg', async () => {
+  const { store } = spanHost({
+    [dayUrlOf('2026/10/01')]: dayOf('2026/10/01', [...every('2026-10-01T00:30:00Z', '2026-10-01T01:00:00Z', 60, 5000), { at: '2026-10-01T01:05:00Z', alt: 'ground' }]),
+    [LIVE_URL]: liveOf([{ at: '2026-10-01T06:00:00Z', alt: 'ground' }, ...every('2026-10-01T06:10:00Z', '2026-10-01T06:30:00Z', 60, 4000)]),
+  })
+  const d = await daySpan(store, at('2026-10-01T00:00:00Z'), NOW)
+  assert.deepEqual(spans(d), [['2026-10-01T00:30:00Z', '2026-10-01T01:05:00Z'], ['2026-10-01T06:00:00Z', '2026-10-01T06:30:00Z']])
+})
+
+test('traceDay: every leg overlapping the span, each whole (its points outside the span too), in time order; none in it is no legs', () => {
+  const marks = (from: string, to: string, alt: number): Pt[] => every(from, to, 300, alt).map((p, i) => (i === 0 ? { ...p, flags: 2 } : p))
+  const file = dayOf('2026/09/30', [
+    ...marks('2026-09-30T06:00:00Z', '2026-09-30T07:00:00Z', 30000), // before the span
+    ...marks('2026-09-30T09:30:00Z', '2026-09-30T10:30:00Z', 30000), // across its start
+    ...marks('2026-09-30T11:00:00Z', '2026-09-30T12:00:00Z', 30000), // inside
+    ...marks('2026-09-30T13:30:00Z', '2026-09-30T15:00:00Z', 30000), // across its end
+    ...marks('2026-09-30T16:00:00Z', '2026-09-30T17:00:00Z', 30000), // after it
+  ])
+  const files = [{ json: file, fromMs: at('2026-09-30T00:00:00Z'), toMs: at('2026-10-01T00:00:00Z') }]
+  const d = traceDay(HEX, files, at('2026-09-30T10:00:00Z'), at('2026-09-30T14:00:00Z'))
+  assert.deepEqual(spans(d), [
+    ['2026-09-30T09:30:00Z', '2026-09-30T10:30:00Z'],
+    ['2026-09-30T11:00:00Z', '2026-09-30T12:00:00Z'],
+    ['2026-09-30T13:30:00Z', '2026-09-30T15:00:00Z'],
+  ])
+  assert.deepEqual(spans(traceDay(HEX, files, at('2026-09-30T07:00:00Z'), at('2026-09-30T07:00:00Z'))), [['2026-09-30T06:00:00Z', '2026-09-30T07:00:00Z']], 'a span of one instant on a leg\'s last point')
+  assert.deepEqual(traceDay(HEX, files, at('2026-09-30T07:00:00.001Z'), at('2026-09-30T09:29:59.999Z')).legs, [], 'between two legs: none')
+  assert.deepEqual(traceDay(HEX, [{ json: null, fromMs: 0, toMs: Infinity }], 0, NOW), { hex: HEX, reg: null, typeCode: null, fromMs: 0, toMs: NOW, legs: [] }, 'no file: no legs')
+})
+
+test('traceDay: each leg is the TraceReply the at mode builds for it', () => {
+  const files = [{ json: FILE, fromMs: Date.UTC(2026, 8, 22), toMs: Date.UTC(2026, 8, 23) }]
+  const d = traceDay(HEX, files, Date.UTC(2026, 8, 22), Date.UTC(2026, 8, 22, 23, 59))
+  assert.deepEqual(d.legs, [traceReply(FILE, HEX, LEG1_MS), traceReply(FILE, HEX, LEG2_MS)])
+  assert.ok(d.legs.every((l) => !('origin' in l)), 'no origin in this mode')
+})
+
+test('traceDay: reg and typeCode from the newest file that names them; the calls of a leg across files in time order', () => {
+  const day = (names?: { r?: string; t?: string }) => ({ json: dayOf('2026/09/30', [{ at: '2026-09-30T23:59:00Z', alt: 30000, flight: 'ELY001  ' }], names), fromMs: at('2026-09-30T00:00:00Z'), toMs: at('2026-10-01T00:00:00Z') })
+  const next = (names?: { r?: string; t?: string }) => ({ json: dayOf('2026/10/01', [{ at: '2026-10-01T00:00:20Z', alt: 30000, flight: 'ELY002  ' }, { at: '2026-10-01T00:00:40Z', alt: 30000, flight: 'ELY002' }], names), fromMs: at('2026-10-01T00:00:00Z'), toMs: at('2026-10-02T00:00:00Z') })
+  const span = [at('2026-09-30T12:00:00Z'), at('2026-10-01T12:00:00Z')] as const
+  const d = traceDay(HEX, [day({ r: '4X-EKA', t: 'B738' }), next({})], ...span)
+  assert.deepEqual([d.reg, d.typeCode], ['4X-EKA', 'B738'], 'the newer names none: the older\'s')
+  assert.deepEqual([d.legs[0].reg, d.legs[0].typeCode], ['4X-EKA', 'B738'])
+  assert.deepEqual(d.legs[0].calls, [[0, 'ELY001'], [80, 'ELY002']])
+  assert.equal(d.legs[0].callsign, 'ELY002')
+  assert.deepEqual([traceDay(HEX, [day({ r: '4X-EKA', t: 'B738' }), next({ r: '4X-EKB', t: 'B38M' })], ...span).reg], ['4X-EKB'])
+})
+
+test('TraceStore.day: a file that is not there adds nothing; one that cannot be had makes the span unavailable', async () => {
+  const live = liveOf(every('2026-10-01T10:00:00Z', '2026-10-01T10:10:00Z', 60, 30000))
+  const notThere = spanHost({ [LIVE_URL]: live })
+  assert.deepEqual(spans(await daySpan(notThere.store, at('2026-09-30T12:00:00Z'), NOW)), [['2026-10-01T10:00:00Z', '2026-10-01T10:10:00Z']], 'the day files 404: the live file\'s legs')
+  assert.deepEqual((await daySpan(spanHost({}).store, at('2026-09-30T12:00:00Z'), NOW)).legs, [], 'nothing anywhere: no legs, not an error')
+  for (const trouble of [500, 503, 429, 403, new Error('ECONNRESET')]) {
+    const { store } = spanHost({ [LIVE_URL]: live, [dayUrlOf('2026/09/30')]: trouble })
+    assert.equal(await store.day(HEX, at('2026-09-30T12:00:00Z'), NOW), 'unavailable', String(trouble))
+  }
+  const junk = fakeHost((url) => (url === LIVE_URL ? new Response('<html>busy</html>') : new Response('not found', { status: 404 })))
+  assert.equal(await storeOn(junk.fetchFn, { t: NOW }).day(HEX, at('2026-10-01T12:00:00Z'), NOW), 'unavailable', 'a body that is not JSON')
+})
+
+test('TraceStore.day: through the same cache as the at mode: a day file kept 1 h, the live file 30 s; asking again costs nothing', async () => {
+  const { calls, store, clock } = spanHost({
+    [LIVE_URL]: liveOf(every('2026-10-01T10:00:00Z', '2026-10-01T10:10:00Z', 60, 30000)),
+    [dayUrlOf('2026/09/30')]: dayOf('2026/09/30', every('2026-09-30T10:00:00Z', '2026-09-30T10:10:00Z', 60, 30000)),
+  })
+  await store.get(HEX, NOW - HOUR) // the at mode reads the live file
+  await daySpan(store, at('2026-09-30T00:00:00Z'), NOW)
+  await daySpan(store, at('2026-09-30T00:00:00Z'), NOW)
+  assert.deepEqual(calls.map((c) => c.url).sort(), [LIVE_URL, dayUrlOf('2026/09/30'), dayUrlOf('2026/10/01')].sort(), 'each file once')
+  clock.t += 31_000
+  await daySpan(store, at('2026-09-30T00:00:00Z'), clock.t)
+  assert.deepEqual(calls.slice(3).map((c) => c.url), [LIVE_URL], 'the live file again after 30 s, the day files are kept')
+})
+
+test('TraceStore.day: no request for a hex that is no address or a span that is no span; after close, unavailable', async () => {
+  const { calls, store } = spanHost({})
+  for (const [hex, from, to] of [['xyz', CUT, NOW], ['4691c45', CUT, NOW], [HEX, NOW, CUT], [HEX, Number.NaN, NOW], [HEX, CUT, Number.POSITIVE_INFINITY], [HEX, Date.UTC(1999, 0, 1), NOW]] as const) {
+    assert.equal(await store.day(hex, from, to), null, `${hex} ${from} ${to}`)
+  }
+  assert.equal(calls.length, 0)
+  assert.equal((await daySpan(store, NOW - HOUR, NOW)).hex, HEX)
+  assert.equal((await store.day('4691C4', NOW - HOUR, NOW) as TraceDay).hex, '4691c4', 'upper case is fine, answered lower')
+  store.close()
+  assert.equal(await store.day(HEX, at('2026-09-01T00:00:00Z'), at('2026-09-01T01:00:00Z')), 'unavailable')
 })
