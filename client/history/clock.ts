@@ -70,7 +70,7 @@ export class HistoryClock {
   /** Jumps to tMs, clamped to the bounds. Playing or paused stays as it is. */
   seek(tMs: number, perfMs: number): void {
     this.#baseMs = this.#clamp(tMs)
-    this.#basePerf = perfMs
+    this.#basePerf = this.#stamp(perfMs)
   }
 
   /** The next of RATES (the first after the last; the next larger one for a rate not in RATES). The time does not jump. */
@@ -90,7 +90,14 @@ export class HistoryClock {
 
   #rebase(perfMs: number): void {
     this.#baseMs = this.now(perfMs)
-    this.#basePerf = perfMs
+    this.#basePerf = this.#stamp(perfMs)
+  }
+
+  // The instant a change takes effect: perfMs, but never earlier than the last change. A call stamped earlier than the
+  // last one (frame timestamps run a few ms behind a click's performance.now()) would move the base back and count that
+  // overlap twice. Written so that a perfMs that is not a number is ignored: with Math.max a NaN would stall the clock.
+  #stamp(perfMs: number): number {
+    return perfMs > this.#basePerf ? perfMs : this.#basePerf
   }
 
   // Written so that NaN lands on minMs: a time that is not a number must not reach the render loop.

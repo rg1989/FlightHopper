@@ -24,7 +24,7 @@ import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
 import type { ChaseResponse, RecordingInfo, RecordResponse, StatusBrief, ViewResponse } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
-import { SLOT_MS } from '../shared/history.ts'
+import { EVERYTHING_NM, SLOT_MS } from '../shared/history.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { TokenBucket } from './budget.ts'
@@ -344,7 +344,7 @@ export function createServer(
     check(slot > 0 && slot % SLOT_MS === 0, 'slot must be the start of a UTC half hour, in ms')
     check(Math.abs(lat) <= 90, 'lat must be in [-90, 90]')
     check(Math.abs(lon) <= 180, 'lon must be in [-180, 180]')
-    check(nm > 0 && nm <= 5400, 'nm must be in (0, 5400]')
+    check(nm > 0 && nm <= EVERYTHING_NM, `nm must be in (0, ${EVERYTHING_NM}]`)
     const r = await history.query(slot, { lat, lon, nm })
     return r === null ? [404, { error: 'no data for this half hour' }] : [200, r]
   }

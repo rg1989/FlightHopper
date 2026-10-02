@@ -16,6 +16,9 @@ export function newestSlotMs(nowMs: number): number {
   return slotOf(nowMs - PUBLISH_DELAY_MS) - SLOT_MS
 }
 
+/** The whole-world radius, nm (a quarter of the way round the earth): a circle this wide holds every position. */
+export const EVERYTHING_NM = 5400
+
 /** Seconds between the slices kept for a circle of radius nm: every 10 s slice near, fewer for a wide view (payload). */
 export function stepFor(nm: number): number {
   if (nm <= 300) return 10

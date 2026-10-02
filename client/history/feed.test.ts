@@ -5,7 +5,7 @@ import v8 from 'node:v8'
 import vm from 'node:vm'
 import type { HistorySlot, HistoryTrack } from '../../shared/api.ts'
 import { bearingDeg, destination, distanceNm } from '../../shared/geo.ts'
-import { SLOT_MS } from '../../shared/history.ts'
+import { EVERYTHING_NM, SLOT_MS } from '../../shared/history.ts'
 import type { Sample } from '../../shared/types.ts'
 import { Fleet } from '../browse/fleet.ts'
 import { HistoryFeed } from './feed.ts'
@@ -312,14 +312,14 @@ test('covers also needs slices as fine as the view wants: a wide fetch does not 
   assert.equal(f.covers(T0, { ...here, nm: 800 }), true)
 })
 
-test('covers: a circle of 5,400 nm holds the whole world (the server keeps every position), whatever its centre', () => {
+test('covers: a circle of EVERYTHING_NM holds the whole world (the server keeps every position), any centre', () => {
   const f = new HistoryFeed()
-  f.add(slot([], T0, 300), { lat: 0, lon: 0, nm: 5400 })
-  assert.equal(f.covers(T0, { lat: 0, lon: 0, nm: 5400 }), true)
-  assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: 5400 }), true, 'the widest view, panned across the earth')
+  f.add(slot([], T0, 300), { lat: 0, lon: 0, nm: EVERYTHING_NM })
+  assert.equal(f.covers(T0, { lat: 0, lon: 0, nm: EVERYTHING_NM }), true)
+  assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: EVERYTHING_NM }), true, 'the widest view, panned across the earth')
   assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: 3000 }), true)
   assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: 2500 }), false, 'but it wants 60 s slices, not 300 s')
-  f.add(slot([], T0, 300), { lat: 0, lon: 0, nm: 5399 })
+  f.add(slot([], T0, 300), { lat: 0, lon: 0, nm: EVERYTHING_NM - 1 })
   assert.equal(f.covers(T0, { lat: -33, lon: 151, nm: 3000 }), false, 'one nm less: a circle like any other (8,200 nm away)')
 })
 
@@ -527,7 +527,7 @@ function parsedSlot(aircraftN: number, points: number): HistorySlot {
   return JSON.parse(JSON.stringify({ slotMs: T0, stepS: 10, aircraft })) as HistorySlot
 }
 
-test('a held position costs under 100 bytes (45-57 in Node): the columns as they arrived, not an object each', () => {
+test('a held position costs under 70 bytes (~59 in Node, worst mix): the columns as they arrived, no object each', () => {
   const AIRCRAFT = 700
   const POINTS = 150
   const used = (): number => {
@@ -543,5 +543,5 @@ test('a held position costs under 100 bytes (45-57 in Node): the columns as they
   gc()
   const perPosition = (used() - before) / (AIRCRAFT * POINTS)
   assert.equal(f.take(T0 + 100_000, T0 + 110_000).length, AIRCRAFT, 'it still serves them (and the feed lives to here)')
-  assert.ok(perPosition < 100, `${perPosition.toFixed(1)} bytes per held position (an object per position was ~370)`)
+  assert.ok(perPosition < 70, `${perPosition.toFixed(1)} bytes per held position (an object per position was ~370)`)
 })

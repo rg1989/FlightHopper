@@ -158,6 +158,34 @@ test('a perfMs earlier than the last change does not run the clock backwards', (
   assert.equal(c.now(5010), T + 1000 + 600)
 })
 
+test('a call stamped before the last change counts the overlap once: nothing moves the base back', () => {
+  // The last change is at 5000. Each call below is stamped 4990, 10 ms older (a frame timestamp against a click's
+  // performance.now()); 10 ms after the change, at 5010, the clock must be 10 ms × 10 on from where the call left it.
+  const cases: [string, { playing: boolean; rate: number }, (c: HistoryClock) => void, number][] = [
+    ['seek', { playing: true, rate: 10 }, (c) => c.seek(T + 60_000, 4990), T + 60_000],
+    ['setBounds', { playing: true, rate: 10 }, (c) => c.setBounds(MIN, MAX + 1000, 4990), T],
+    ['nextRate (1x to 10x)', { playing: true, rate: 1 }, (c) => assert.equal(c.nextRate(4990), 10), T],
+    ['pause then play', { playing: true, rate: 10 }, (c) => { c.pause(4990); c.play(4990) }, T],
+    ['play', { playing: false, rate: 10 }, (c) => c.play(4990), T],
+    ['toggle', { playing: false, rate: 10 }, (c) => c.toggle(4990), T],
+  ]
+  for (const [name, start, call, from] of cases) {
+    const c = clock(start)
+    c.seek(T, 5000)
+    call(c)
+    assert.equal(c.now(5000), from, `${name}: at the change`)
+    assert.equal(c.now(5010), from + 100, `${name}: 10 ms later, at 10x`)
+  }
+})
+
+test('a perfMs that is not a number moves nothing and cannot stall the clock', () => {
+  const c = clock({ playing: true, rate: 10 })
+  c.setBounds(MIN, MAX, NaN)
+  assert.equal(c.now(1000), T + 10_000, 'it runs on as if the call had been stamped at the last change')
+  c.seek(T + 5000, NaN)
+  assert.equal(c.now(2000), T + 5000 + 20_000)
+})
+
 test('a time that is not a number goes to minMs and never poisons the clock', () => {
   const c = clock({ playing: true })
   c.seek(NaN, 0)

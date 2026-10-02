@@ -8,7 +8,7 @@
 // half hours are independent (the last point of a slot has no next one), so a slot never needs its neighbour.
 import type { HistorySlot, HistoryTrack } from '../../shared/api.ts'
 import { bearingDeg, distanceNm } from '../../shared/geo.ts'
-import { stepFor } from '../../shared/history.ts'
+import { EVERYTHING_NM, stepFor } from '../../shared/history.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Sample } from '../../shared/types.ts'
 
@@ -24,8 +24,6 @@ export interface Circle {
 const MIN_STEP_NM = 0.005
 // A climb rate is stated only over a step this short; across a longer gap it would average several phases of flight.
 const MAX_RATE_STEP_S = 120
-// A circle this wide holds every position, wherever its centre is (server/heatmap.ts EVERYTHING_NM).
-const WORLD_NM = 5400
 
 /** One aircraft in one slot: its columns as they arrived (not copied, never changed here) and where its flags start. */
 interface Rec {
@@ -105,9 +103,11 @@ export class HistoryFeed {
    * ponytail: the columns stay as parsed JSON and only the direction is precomputed, as one flag byte a position (does
    * the step to the next position have a direction of its own); speed and climb come from the neighbours when a sample is
    * built, so take() and samplesOf() make new Sample objects on every call: keep what you need rather than asking again
-   * each frame. Measured in Node (8-byte pointers): ~0.04 µs a position here and ~45 bytes a position held, up to ~57 when
-   * every track misses a speed (V8 then boxes its whole speed column); the feed's own part is ~2.
-   * Upgrade: copy the columns into typed arrays (Int32 degrees × 1e5, Int16 speeds and altitudes, Uint16 times: ~15 bytes).
+   * each frame. Measured in Node (8-byte pointers), tracks of 150 positions: ~0.04 µs a position here and ~44 bytes a
+   * position held, ~59 when every track misses a speed (V8 then boxes its whole speed column); the feed's own part is ~2.
+   * A track adds ~380 bytes of its own (strings, array headers), so short tracks cost more a position.
+   * Upgrade: copy the columns into typed arrays (Int32 degrees × 1e5, Int16 speeds in 0.1 kt and altitudes in 25 ft units,
+   * Uint16 times in s: ~15 bytes a position).
    */
   add(slot: HistorySlot, c: Circle): void {
     let positions = 0
@@ -142,14 +142,14 @@ export class HistoryFeed {
 
   /**
    * The slot is held for a circle that covers c: c lies wholly inside the held circle (distance of the centres + c.nm ≤
-   * held.nm; a held circle of 5,400 nm holds the whole world, so any centre does) and the held slices are at least as
+   * held.nm; a held circle of EVERYTHING_NM holds the whole world, so any centre does) and the held slices are at least as
    * fine as the view wants (held step ≤ stepFor(c.nm)): zooming in from a wide view asks again for finer slices.
    */
   covers(slotMs: number, c: Circle): boolean {
     const h = this.#slots.get(slotMs)
     if (h === undefined) return false
     if (h.stepS > stepFor(c.nm)) return false
-    if (h.circle.nm >= WORLD_NM) return true
+    if (h.circle.nm >= EVERYTHING_NM) return true
     return distanceNm(h.circle.lat, h.circle.lon, c.lat, c.lon) + c.nm <= h.circle.nm
   }
 
@@ -187,6 +187,8 @@ export class HistoryFeed {
   /**
    * What the files know of it: callsign and squawk (the rest null, military false, route null), each from the newest held
    * slot that has one; null when no held slot has the hex. A fresh object each call.
+   * ponytail: no time argument, so it answers from the newest held slot whatever the replay time: a callsign (or squawk)
+   * that changed between held slots shows the later one. Upgrade: take the replay time and prefer the slot that holds it.
    */
   info(hex: string): AircraftInfo | null {
     let found = false

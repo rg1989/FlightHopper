@@ -14,7 +14,7 @@
 import type { HistorySlot, HistoryTrack } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
-import { slotOf } from '../shared/history.ts'
+import { EVERYTHING_NM, slotOf } from '../shared/history.ts'
 
 export const HEAT_MAGIC = 0x0e7f7c9d
 
@@ -44,11 +44,6 @@ const NO_ALT = -124
 const NO_GS = -1
 const MAX_LAT = 90_000_000 // micro-degrees, as the file has them
 const MAX_LON = 180_000_000
-/**
- * The History brief's product rule: a circle of this radius or more is "everything". It is hemisphere-sized (5,400 nm is a
- * quarter of the way round the earth), so every position is kept, with no distance test.
- */
-const EVERYTHING_NM = 5400
 
 /** The address word of a hex like '738a10' or '~abc123'. */
 function addressOf(hex: string): number {
@@ -125,7 +120,7 @@ function callsignAt(buf: Uint8Array, o: number): string | null {
 export function readSlot(buf: Uint8Array, q: { lat: number; lon: number; nm: number; stepS: number }): HistorySlot | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
   const end = buf.byteLength - (buf.byteLength % REC) // a half record at the end is not read
-  const everything = q.nm >= EVERYTHING_NM
+  const everything = q.nm >= EVERYTHING_NM // the whole-world circle keeps every position, with no distance test
   // A degree of latitude is 60 nm and a bit, so a position more than nm / 60 + 0.1 degrees of latitude from the centre
   // is outside the circle. In micro-degrees, as the file has them.
   const band = (q.nm / 60 + 0.1) * 1e6
