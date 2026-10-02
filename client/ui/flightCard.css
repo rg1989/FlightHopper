@@ -182,7 +182,8 @@
   color: #ffb4b4;
 }
 
-.fh-card-status[data-state='predict'] {
+.fh-card-status[data-state='predict'],
+.fh-card-status[data-state='replay'] {
   color: #f5d38a;
 }
 

@@ -20,10 +20,11 @@ import './flightCard.css'
 
 /** Seconds after a selection with no position during which the card says "Locating…" (then "No recent position"). */
 export const LOCATING_S = 12
+const REPLAY_QUIET_S = 60 // History: a position older than this at the replay time reads "not heard"
 /** A focused aircraft is asked (/api/chase) at least this often whatever the zoom: every poll while it is on screen. */
 export const FOCUS_ASK_MS = 10_000
 
-export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none'
+export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none' | 'replay'
 
 export interface CardStat {
   key: 'alt' | 'gs' | 'vs' | 'hdg'
@@ -78,7 +79,7 @@ function split(v: string): [string, string] {
  */
 export function cardView(
   selHex: string | null, s: RenderState | null, raw: ReadsbAircraft | null, info: AircraftInfo | null, status: StatusBrief, lookup: Lookup,
-  sinceSelectS: number, chasing = true, range: CardRange | null = null,
+  sinceSelectS: number, chasing = true, range: CardRange | null = null, replay: string | null = null,
 ): CardView {
   const sections = detailRows(s, raw, info, lookup)
   const get = (key: string): string | null => {
@@ -104,6 +105,11 @@ export function cardView(
   if (s === null) {
     state = sinceSelectS < LOCATING_S ? 'locating' : 'none'
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
+  } else if (replay !== null) {
+    // History: the status is the replay clock; a position over a minute old was not heard then (the files hold gaps).
+    const quiet = Number.isFinite(s.ageS) && s.ageS > REPLAY_QUIET_S
+    state = quiet ? 'lost' : 'replay'
+    text = quiet ? `${replay} · not heard` : replay
   } else if (lost) {
     state = 'lost'
     // ponytail: `seen` is as of the last chase reply (≤ FOCUS_ASK_MS old), so "GPS" may outlast a real silence by that.
@@ -184,6 +190,8 @@ export interface FlightCardHandle {
    * undefined when the server records nothing (no Record button). serverNowMs dates it.
    */
   setRecording(hex: string, rec: RecordingState | null | undefined, serverNowMs: number): void
+  /** History: the status line reads text ("Replay · 17:43", amber) instead of Live; null: live again. */
+  setReplay(text: string | null): void
   destroy(): void
 }
 
@@ -367,6 +375,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   let curStatus: StatusBrief | null = null
   let curChasing = false
   let curRange: CardRange | null = null
+  let curReplay: string | null = null // History: "Replay · 17:43", else null (live)
   let shown: string | null = null
   let selectedAtMs = 0
   let lastMs = -Infinity
@@ -479,7 +488,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       lk = opts.lookup(hex, cs)
       lkKey = key
     }
-    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange)
+    const v = cardView(hex, curS, curRaw, curInfo, curStatus, lk, (Date.now() - selectedAtMs) / 1000, curChasing, curRange, curReplay)
     paintChase(curChasing)
     set(flag, v.flag)
     set(callsign, v.callsign)
@@ -494,7 +503,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       e.box.classList.toggle('fh-dim', st.dim)
     }
     if (dot.dataset.state !== v.state) {
-      dot.dataset.state = v.state === 'live' ? 'live' : v.state === 'predict' ? 'replay' : v.state === 'lost' || v.state === 'none' ? 'trouble' : 'wait'
+      dot.dataset.state = v.state === 'live' ? 'live' : v.state === 'predict' || v.state === 'replay' ? 'replay' : v.state === 'lost' || v.state === 'none' ? 'trouble' : 'wait'
       statusRow.dataset.state = v.state
     }
     spin.hidden = v.state !== 'locating'
@@ -610,6 +619,11 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       const wait = lastMs + UPDATE_MS - Date.now()
       if (wait <= 0) render()
       else if (timer === null) timer = setTimeout(render, wait)
+    },
+    setReplay(text) {
+      if (destroyed || text === curReplay) return
+      curReplay = text
+      if (hexOf() !== null) render()
     },
     setRecording(hex, state, serverNowMs) {
       if (destroyed || recBusy) return

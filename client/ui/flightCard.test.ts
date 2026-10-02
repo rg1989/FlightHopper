@@ -463,3 +463,12 @@ test('mountFlightCard: lookup once per hex and callsign, close button, destroy r
   mock.timers.tick(1000) // the pending render must not run after destroy
   assert.equal(statValue(card, 1), '337')
 }))
+
+test('cardView in a replay: the status is the replay clock (amber), "not heard" once its position is over a minute old', () => {
+  const v = cardView('4691c4', { ...S, ageS: 4 }, null, INFO, LIVE, GR, 30, false, null, 'Replay · 17:43')
+  assert.deepEqual([v.state, v.status], ['replay', 'Replay · 17:43'])
+  assert.ok(v.stats.every((st) => !st.dim || st.value === '—'))
+  const quiet = cardView('4691c4', { ...S, mode: 'stale', ageS: 75 }, null, INFO, LIVE, GR, 30, true, null, 'Replay · 17:43')
+  assert.deepEqual([quiet.state, quiet.status], ['lost', 'Replay · 17:43 · not heard'])
+  assert.equal(cardView('4691c4', null, null, INFO, LIVE, GR, 2, false, null, 'Replay · 17:43').state, 'locating', 'no position yet: as live')
+})

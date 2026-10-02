@@ -146,4 +146,5 @@ test('needRoutes(only): just those hexes; dest: the route\'s last airport once i
   assert.equal(store.dest('a1c7e4'), null, 'route, but not where its airports are')
   store.setPlaces([{ code: 'RJAA', lat: 35.76, lon: 140.39 }, { code: 'KSFO', lat: 37.62, lon: -122.38 }])
   assert.deepEqual(store.dest('A1C7E4'), { code: 'KSFO', lat: 37.62, lon: -122.38 })
+  assert.deepEqual(store.origin('a1c7e4'), { code: 'RJAA', lat: 35.76, lon: 140.39 })
 })

@@ -114,6 +114,14 @@ export class InfoStore {
     return this.#places.get(route.slice(route.lastIndexOf('-') + 1)) ?? null
   }
 
+  /** The first airport of this aircraft's route, when both are known (its flown path's lead-in starts there). */
+  origin(hex: string): RoutePlace | null {
+    const route = this.get(hex)?.route
+    if (!route) return null
+    const i = route.indexOf('-')
+    return this.#places.get(i < 0 ? route : route.slice(0, i)) ?? null
+  }
+
   /**
    * Up to max airline callsigns (with the aircraft's position) that have no fresh cached answer:
    * never-asked ones first, then expired ones. Each callsign once. only: just the aircraft with these hexes.

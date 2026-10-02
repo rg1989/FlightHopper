@@ -1,10 +1,12 @@
 // client/api.ts
-// Browser client for the FlightHopper server: GET /view and /chase with a per-key `since`, plus the server clock.
-import type { ChaseResponse, RecordingInfo, RecordingTrack, RecordResponse, ViewResponse } from '../shared/api.ts'
+// Browser client for the FlightHopper server: GET /view and /chase with a per-key `since`, plus the server clock; the
+// past (/history, /trace) for the flown path and the History mode.
+import type { ChaseResponse, HistorySlot, HistoryStatus, RecordingInfo, RecordingTrack, RecordResponse, TraceReply, ViewResponse } from '../shared/api.ts'
 import { MinOffset } from '../shared/clock.ts'
 
 const OFFSET_WINDOW_MS = 60_000
 const TIMEOUT_MS = 10_000 // a hung request must not stall the 1 Hz poll loop
+const HISTORY_TIMEOUT_MS = 60_000 // the server may first fetch a 12–25 MB file from adsb.lol
 // ponytail: plain insertion-order eviction; a camera panning for hours creates many view keys. Upgrade to real LRU if
 // a key ever gets evicted while still polled (it would only cost one full `since=0` reply).
 const MAX_KEYS = 100
@@ -70,6 +72,30 @@ export class ApiClient {
     const res = await this.#fetch(`${this.#base}/recordings/track?file=${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(30_000) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return (await res.json()) as RecordingTrack
+  }
+
+  /** One past half hour in a circle (the server may fetch its file first); null when adsb.lol has none for it. */
+  history(slotMs: number, lat: number, lon: number, nm: number): Promise<HistorySlot | null> {
+    return this.#getOrNull(`/history?slot=${slotMs}&lat=${lat}&lon=${lon}&nm=${nm}`, HISTORY_TIMEOUT_MS)
+  }
+
+  /** The half hours the server holds or is fetching, and the newest one published. */
+  async historyStatus(): Promise<HistoryStatus> {
+    const res = await this.#fetch(`${this.#base}/history/status`, { signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as HistoryStatus
+  }
+
+  /** One aircraft's flight leg flying at atMs (null: now); null when adsb.lol has no trace of it. */
+  trace(hex: string, atMs: number | null = null): Promise<TraceReply | null> {
+    return this.#getOrNull(`/trace?hex=${encodeURIComponent(hex)}${atMs === null ? '' : `&at=${atMs}`}`, TIMEOUT_MS)
+  }
+
+  async #getOrNull<T>(path: string, timeoutMs: number): Promise<T | null> {
+    const res = await this.#fetch(`${this.#base}${path}`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as T
   }
 
   /** Server clock now, from the local clock and the smallest (receive − serverNowMs) of the last 60 s. Throws before `ready`. */

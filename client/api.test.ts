@@ -147,3 +147,29 @@ test('default fetch is the global one, called unbound (a browser throws "Illegal
   assert.equal(r.serverNowMs, 1)
   assert.equal(seenThis.length, 1)
 })
+
+test('history, historyStatus and trace ask their endpoints; a 404 is null, not an error', async () => {
+  const urls: string[] = []
+  const answers: Response[] = []
+  const fetchFn = (async (input: string | URL | Request) => {
+    urls.push(String(input))
+    return answers.shift()!
+  }) as typeof fetch
+  const api = new ApiClient('http://host/api', fetchFn, () => 0)
+  const slot = { slotMs: 1_790_740_800_000, stepS: 10, aircraft: [] }
+  answers.push(new Response(JSON.stringify(slot)), new Response('{"error":"none"}', { status: 404 }))
+  assert.deepEqual(await api.history(1_790_740_800_000, 32.1, 34.8, 120), slot)
+  assert.equal(await api.history(1_790_742_600_000, 32.1, 34.8, 120), null)
+  assert.equal(urls[0], 'http://host/api/history?slot=1790740800000&lat=32.1&lon=34.8&nm=120')
+  answers.push(new Response(JSON.stringify({ newestSlotMs: 5, slots: [] })))
+  assert.deepEqual(await api.historyStatus(), { newestSlotMs: 5, slots: [] })
+  assert.equal(urls[2], 'http://host/api/history/status')
+  answers.push(new Response('{"error":"none"}', { status: 404 }), new Response('{"hex":"4691c4"}'))
+  assert.equal(await api.trace('4691c4'), null)
+  assert.deepEqual(await api.trace('~abc123', 1_790_740_800_000), { hex: '4691c4' })
+  assert.equal(urls[3], 'http://host/api/trace?hex=4691c4')
+  assert.equal(urls[4], 'http://host/api/trace?hex=~abc123&at=1790740800000')
+  answers.push(new Response('', { status: 502 }))
+  await assert.rejects(api.historyStatus(), { message: 'HTTP 502' })
+  assert.equal(api.ready, false, 'the history endpoints do not set the server clock')
+})

@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_PREFS } from './scenePrefs.ts'
-import { readScenario, readView, writeUrl } from './urlState.ts'
+import { readHist, readScenario, readView, writeUrl } from './urlState.ts'
 
 test('writeUrl: camera, chase, orbit and non-default toggles; other parameters kept; round trip through readView', () => {
   const url = writeUrl('?bench=1&at=1,2,3&glass=1', {
@@ -70,4 +70,14 @@ test('a recording replay names its file in ?scenario=rec:…, and a reload reads
   const url = writeUrl('', { at: null, hex: null, chase: false, cam: null, prefs: DEFAULT_PREFS, scenario: { id, t: 1771.4 } })
   assert.equal(readScenario(url)?.id, id)
   for (const bad of ['rec:../x', 'rec:2026-09-30/../../x', 'rec:', 'rec:2026-09-30/002932Z-ITY810-4cae1d.jsonl']) assert.equal(readScenario(`?scenario=${encodeURIComponent(bad)}`), null, bad)
+})
+
+test('a replay writes ?hist=<unix s> beside the view and the focus, and a reload reads it back as ms', () => {
+  const s = { at: { lat: 32, lon: 34.8, heightKm: 120 }, hex: '4691c4', chase: false, cam: null, prefs: DEFAULT_PREFS, hist: 1_790_088_235_900 }
+  const out = writeUrl('?tv=1', s)
+  assert.equal(new URLSearchParams(out).get('hist'), '1790088235')
+  assert.equal(new URLSearchParams(out).get('hex'), '4691c4')
+  assert.equal(readHist(out), 1_790_088_235_000)
+  assert.equal(new URLSearchParams(writeUrl(out, { ...s, hist: null })).get('hist'), null, 'live again: gone')
+  for (const bad of ['?hist=', '?hist=abc', '?hist=-5', '?hist=12.5', '?hist=100']) assert.equal(readHist(bad), null, bad)
 })
