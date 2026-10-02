@@ -16,9 +16,20 @@ make                         # live traffic (adsb.fi) + client; prints the link,
 make replay                  # the same, replaying the newest recording
 ```
 
+## The past
+
+- **Flown path:** select an aircraft and its whole leg so far shows behind it, coloured by altitude; dotted where no
+  receiver heard it, and from its origin airport when the route is known.
+- **History** (the rail's clock button, or `?hist=<unix s>`): the map as it was at any time of the last ~30 days, every
+  aircraft in view on a replay clock, with a time bar (play, scrub over the day, 1×/10×/60×, Go to, Live). Chase in 3-D
+  works in the past too. Design: [`.planning/history-design.md`](.planning/history-design.md).
+- A live server keeps the newest hour of the past in memory (two half-hour files, ~25 MB per 30 min while it runs); older
+  half hours are fetched when the replay needs them and dropped again. Nothing is written to disk.
+
 ## Data sources
 
 - Live aircraft: [adsb.fi](https://adsb.fi) open data (personal, non-commercial use), the default; [adsb.lol](https://adsb.lol) — data © adsb.lol contributors, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) — for recordings and `LIVE_SOURCE=adsblol`. Later: the author's own receiver.
+- The past: adsb.lol's tar1090 heatmap files (every aircraft, 10 s) and per-aircraft traces, the same ODbL 1.0 data.
 - Airports: [OurAirports](https://ourairports.com/data/) (public domain).
 - Search places: airports and countries from OurAirports, cities of 15 000+ people and their regions from [GeoNames](https://www.geonames.org/) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)); `node tools/build-places.ts` rebuilds `public/search/places.json`.
 - Terrain / imagery: Cesium ion (Community plan), Re:Earth terrain, Esri World Imagery (optional `VITE_ARCGIS_KEY`), EOX Sentinel-2 cloudless.
