@@ -30,7 +30,53 @@ export interface ChaseResponse {
   raw?: ReadsbAircraft | null    // newest full upstream object for the detail panel
   info?: AircraftInfo | null
   dest?: RoutePlace | null       // the route's last airport, when the route and its position are known
+  origin?: RoutePlace | null     // the route's first airport, likewise (the flown path's lead-in from it)
   rec?: RecordingState | null    // this aircraft is being recorded (server/flightLog.ts)
+}
+
+/** One aircraft in a history slot (GET /api/history): a position per kept slice while it was heard. Columnar. */
+export interface HistoryTrack {
+  hex: string                    // 6 hex digits, '~' first for a non-ICAO address
+  callsign: string | null        // the newest in the slot
+  squawk: string | null
+  nM: number                     // geoid N at its first position in the slot, m (0.1)
+  t: number[]                    // s after the slot's start
+  lat: number[]                  // °, 5 decimals
+  lon: number[]
+  alt: (number | 'g' | null)[]   // baro ft (25 ft steps), 'g' on the ground, null unknown
+  gs: (number | null)[]          // ground speed, kt (0.1)
+}
+
+/** A UTC half hour of the past in one circle (GET /api/history?slot&lat&lon&nm): adsb.lol's tar1090 heatmap file. */
+export interface HistorySlot {
+  slotMs: number                 // its start, UTC ms, a multiple of 30 min
+  stepS: number                  // seconds between the slices kept: 10 for a near view, coarser for a wide one
+  aircraft: HistoryTrack[]
+}
+
+/** What the server holds of the past (GET /api/history/status). */
+export interface HistoryStatus {
+  newestSlotMs: number           // the newest half hour published upstream: its file appears just after it ends
+  slots: { slotMs: number; state: 'ready' | 'loading' | 'missing' }[]
+}
+
+/** One aircraft's flight leg (GET /api/trace?hex&at): adsb.lol's trace of it, the leg flying at `at`. Columnar. */
+export interface TraceReply {
+  hex: string
+  callsign: string | null
+  reg: string | null
+  typeCode: string | null
+  t0Ms: number                   // the leg's first point, UTC ms
+  t: number[]                    // s after t0Ms (0.1)
+  lat: number[]                  // °, 5 decimals
+  lon: number[]
+  alt: (number | 'g' | null)[]   // baro ft (geometric when that is all it sent), 'g' on the ground, null unknown
+  gs: (number | null)[]          // kt
+  trk: (number | null)[]         // true track, °
+  vs: (number | null)[]          // vertical rate, fpm (baro, else geometric)
+  roll: (number | null)[]        // °
+  nM: number[]                   // geoid N, m (0.1)
+  origin?: RoutePlace | null     // the route's first airport, when the server knows the route
 }
 
 /** One flight being recorded to its own file (server/flightLog.ts). Times on the server clock. */
