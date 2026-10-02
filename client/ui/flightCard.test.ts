@@ -193,6 +193,11 @@ const button = (root: FakeEl, label: RegExp): FakeEl => {
 /** The value text of stat i (0 alt, 1 speed, 2 V/S, 3 track). */
 const statValue = (root: FakeEl, i: number): string => byClass(root, 'fh-card-stats').children[i].children[0].children[0].textContent
 const pillText = (root: FakeEl): string => byClass(root, 'fh-pill').children[1].textContent
+/** The pill as read: its text shown (or null: its icon alone), its name, whether it is off. */
+const pillAs = (root: FakeEl): [string | null, string | undefined, boolean] => {
+  const pill = byClass(root, 'fh-pill')
+  return [pill.children[1].hidden ? null : pill.children[1].textContent, pill.props['aria-label'], pill.disabled]
+}
 
 const PHOTO_BODY = {
   photos: [{
@@ -520,21 +525,21 @@ test("cardView in History, 'replay' with no sample yet: the text as given, dashe
 })
 
 test("cardView in History, 'quiet': the text as given on the grey dot, the last known numbers dimmed, dashes with no sample", () => {
-  const since = replay('quiet', 'Not heard since 10:20')
+  const since = replay('quiet', 'Last heard 10:20')
   const v = inHistory({ ...GAP, ageS: 3000 }, since)
-  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', 'Not heard since 10:20', true])
+  assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', 'Last heard 10:20', true])
   assert.deepEqual(stats(v), ['Alt 7,975 ft (dim)', 'Speed 337 kt (dim)', 'V/S -950 fpm (dim)', 'Track 102° (dim)'])
-  const parked = inHistory({ ...GAP, onGround: true, gsKt: 0, ageS: 3000 }, replay('quiet', 'On the ground since 10:20'))
-  assert.deepEqual([parked.status, parked.stats[0]], ['On the ground since 10:20', { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: true }])
+  const parked = inHistory({ ...GAP, onGround: true, gsKt: 0, ageS: 3000 }, since) // on the ground: its ALT says so
+  assert.deepEqual([parked.status, parked.stats[0]], ['Last heard 10:20', { key: 'alt', label: 'Alt', value: 'GND', unit: '', dim: true }])
   const none = inHistory(null, since)
-  assert.deepEqual([none.state, none.dot, none.status, none.chaseDisabled], ['quiet', 'quiet', 'Not heard since 10:20', true])
+  assert.deepEqual([none.state, none.dot, none.status, none.chaseDisabled], ['quiet', 'quiet', 'Last heard 10:20', true])
   assert.deepEqual(stats(none), dashes())
   assert.equal(inHistory({ ...S, ageS: 2 }, since).state, 'quiet', 'the app knows better than a fresh-looking sample')
   assert.ok(inHistory({ ...S, ageS: 2 }, since).stats.every((st) => st.dim))
 })
 
 test("cardView in History, 'none': the text as given on the grey dot, dashes even where a sample is held, who it is kept", () => {
-  for (const text of ['Not heard until 07:20', 'Not heard this day']) {
+  for (const text of ['First heard 07:20', 'Not heard this day']) {
     const v = inHistory({ ...S, onGround: true }, replay('none', text))
     assert.deepEqual([v.state, v.dot, v.status, v.chaseDisabled], ['quiet', 'quiet', text, true])
     assert.deepEqual(stats(v), dashes(), 'not GND either: it has no position then')
@@ -567,8 +572,8 @@ test('cardView: Chase is off in History unless the replay has a sample that was 
     ['replay, heard', R1310, heard, false],
     ['replay, not heard', R1310, { ...GAP, ageS: 75 }, true],
     ['replay, no sample', R1310, null, true],
-    ['quiet, with a sample', replay('quiet', 'Not heard since 10:20'), heard, true],
-    ['quiet, no sample', replay('quiet', 'Not heard since 10:20'), null, true],
+    ['quiet, with a sample', replay('quiet', 'Last heard 10:20'), heard, true],
+    ['quiet, no sample', replay('quiet', 'Last heard 10:20'), null, true],
     ['none', replay('none', 'Not heard this day'), heard, true],
   ]
   for (const [name, r, s, off] of cases) {
@@ -591,20 +596,22 @@ test('mountFlightCard in History: the dot and the line follow the replay; Chase 
   assert.deepEqual(now(), ['replay', 'replay', 'Replay · 13:10', false, CHASE])
   pill.fire('click')
   assert.deepEqual(chases, [true], 'heard: it chases')
-  c.setReplay(replay('quiet', 'Not heard since 10:20'))
-  assert.deepEqual(now(), ['quiet', 'quiet', 'Not heard since 10:20', true, 'No position at this time'])
-  assert.equal(pillText(card), 'Chase in 3-D', 'dimmed, not renamed')
+  c.setReplay(replay('quiet', 'Last heard 10:20'))
+  assert.deepEqual(now(), ['quiet', 'quiet', 'Last heard 10:20', true, 'No position at this time'])
+  assert.deepEqual(pillAs(card), [null, 'Chase in 3-D', true], 'dimmed, its icon alone (the line has the room), its name kept')
   pill.fire('click')
   assert.deepEqual(chases, [true], 'a click that gets through anyway asks for nothing')
-  c.setReplay(replay('none', 'Not heard until 07:20'))
-  assert.deepEqual(now(), ['quiet', 'quiet', 'Not heard until 07:20', true, 'No position at this time'])
+  c.setReplay(replay('none', 'First heard 07:20'))
+  assert.deepEqual(now(), ['quiet', 'quiet', 'First heard 07:20', true, 'No position at this time'])
   assert.equal(statValue(card, 1), '—')
   c.setReplay(R1310)
   assert.deepEqual(now(), ['replay', 'replay', 'Replay · 13:10', false, CHASE], 'heard again: on again')
+  assert.deepEqual(pillAs(card), ['Chase in 3-D', 'Chase in 3-D', false], 'its text back')
   // In the chase the button reads Map and takes the person back: never off.
   c.update('4691c4', { ...S, ageS: 4 }, RAW, INFO, LIVE, true)
-  c.setReplay(replay('quiet', 'Not heard since 10:20'))
+  c.setReplay(replay('quiet', 'Last heard 10:20'))
   assert.deepEqual([pillText(card), pill.disabled, pill.title], ['Map', false, 'Back to the top-down map (Esc)'])
+  assert.deepEqual(pillAs(card), ['Map', 'Map', false], 'never off, so never short of its text')
   pill.fire('click')
   assert.deepEqual(chases, [true, false])
   // Live again: the live card, as it was.
@@ -621,7 +628,7 @@ test('mountFlightCard in History: with no sample the card says so, never "Locati
   const spin = byClass(line, 'fh-spin') // the status line's, not the photo box's
   c.update('4691c4', null, null, INFO, LIVE, false) // selected, nothing known of it at this time
   assert.deepEqual([dot.dataset.state, dot.hidden, spin.hidden, byClass(card, 'fh-card-status-t').textContent], ['wait', true, false, 'Locating aircraft…'], 'live')
-  for (const r of [R1310, replay('quiet', 'Not heard since 10:20'), replay('none', 'Not heard this day')]) {
+  for (const r of [R1310, replay('quiet', 'Last heard 10:20'), replay('none', 'Not heard this day')]) {
     c.setReplay(r)
     assert.deepEqual([dot.hidden, spin.hidden, byClass(card, 'fh-card-status-t').textContent], [false, true, r.text], r.state)
     assert.notEqual(dot.dataset.state, 'trouble')
@@ -673,6 +680,7 @@ test('mountFlightCard, traffic, in History: "not heard" by age, and its Chase of
   c.update('4691c4', entryState({ ...ENTRY, ageS: 75 }), null, INFO, LIVE, false, near)
   assert.deepEqual([byClass(card, 'fh-card-status-t').textContent, byClass(card, 'fh-dot').dataset.state], ['Replay · 13:10 · not heard', 'quiet'])
   assert.deepEqual([pill.disabled, pill.title, pillText(card)], [true, 'No position at this time', 'Chase'])
+  assert.deepEqual(pillAs(card), [null, 'Chase', true], 'its icon alone')
   pill.fire('click')
   assert.deepEqual(chases, [true])
   c.destroy()

@@ -41,16 +41,15 @@ export function atClock(ms: number, t: number): string {
 }
 
 /**
- * The card's status line at t (flightCard.ts setReplay). Heard, or its day not known yet: the replay's clock, and the
- * files' quiet rule for a sample (quietS). Quiet: since when it was not heard ("On the ground since" when its leg ended
- * there); so in a hole of its leg (its numbers there are the estimate's). Before its first leg: until when. No leg that
- * day: that.
+ * The card's status line at t (flightCard.ts setReplay), short enough for the card's foot. Heard, or its day not known
+ * yet: the replay's clock, and the files' quiet rule for a sample (quietS). Quiet, or in a hole of its leg: when it was
+ * last heard (on the ground or not: its ALT says GND; in a hole its numbers are the estimate's). Before its first leg:
+ * when it is first heard. No leg that day: that. A time on another day than t carries its weekday ("Thu 22:58").
  */
 export function replayStatus(ds: DayState | null, t: number, quietS: number): ReplayStatus {
   if (ds === null || ds.kind === 'heard') return { text: `Replay · ${hhmm(new Date(t))}`, state: 'replay', quietS }
-  if (ds.kind === 'gap') return { text: `Last heard ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
-  if (ds.kind === 'quiet') return { text: `${ds.ground ? 'On the ground' : 'Not heard'} since ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
-  if (ds.kind === 'before') return { text: `Not heard until ${atClock(ds.untilMs, t)}`, state: 'none' }
+  if (ds.kind === 'quiet' || ds.kind === 'gap') return { text: `Last heard ${atClock(ds.sinceMs, t)}`, state: 'quiet' }
+  if (ds.kind === 'before') return { text: `First heard ${atClock(ds.untilMs, t)}`, state: 'none' }
   return { text: 'Not heard this day', state: 'none' }
 }
 

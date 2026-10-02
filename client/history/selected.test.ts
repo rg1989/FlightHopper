@@ -66,21 +66,33 @@ test('replayStatus: heard, or its day not known yet, is the replay’s clock wit
   assert.deepEqual(replayStatus(dayState([l], t), t, 60), { text: 'Replay · 13:10', state: 'replay', quietS: 60 })
 })
 
-test('replayStatus: quiet says since when (on the ground when it ended there), before until when, none this day', () => {
+test('replayStatus: quiet says when it was last heard (on the ground or not), before when it is first heard, none this day', () => {
   const morning = leg(at(2026, 9, 2, 8, 0), [0, 600, 1200]) // 08:00 to 08:20, airborne at its end
   const noon = leg(at(2026, 9, 2, 12, 0), [0, 1800, 3600], { alt: [3000, 'g', 'g'] }) // 12:00 to 13:00, then on the ground
   const legs = [morning, noon]
   const say = (t: number): ReturnType<typeof replayStatus> => replayStatus(dayState(legs, t), t, 60)
-  assert.deepEqual(say(at(2026, 9, 2, 10, 0)), { text: 'Not heard since 08:20', state: 'quiet' })
-  assert.deepEqual(say(at(2026, 9, 2, 13, 10)), { text: 'On the ground since 13:00', state: 'quiet' })
-  assert.deepEqual(say(at(2026, 9, 2, 7, 0)), { text: 'Not heard until 08:00', state: 'none' })
+  assert.deepEqual(say(at(2026, 9, 2, 10, 0)), { text: 'Last heard 08:20', state: 'quiet' })
+  assert.deepEqual(say(at(2026, 9, 2, 13, 10)), { text: 'Last heard 13:00', state: 'quiet' }, 'on the ground: its ALT says GND')
+  assert.deepEqual(say(at(2026, 9, 2, 7, 0)), { text: 'First heard 08:00', state: 'none' })
   assert.deepEqual(replayStatus(dayState([], T), T, 60), { text: 'Not heard this day', state: 'none' })
 })
 
 test('replayStatus: a moment on another day than the replay time carries its weekday (parked since last night)', () => {
   const evening = leg(at(2026, 9, 1, 22, 0), [0, 58 * 60]) // Thu 22:00 to 22:58
   const t = at(2026, 9, 2, 6, 30) // Fri 06:30
-  assert.equal(replayStatus(dayState([evening], t), t, 60).text, 'Not heard since Thu 22:58')
+  assert.equal(replayStatus(dayState([evening], t), t, 60).text, 'Last heard Thu 22:58')
+})
+
+test('replayStatus: no line is longer than 20 characters, whatever the weekday (the card’s foot holds that beside the Chase icon)', () => {
+  const texts = [replayStatus(null, T, 60).text, replayStatus(dayState([], T), T, 60).text]
+  const late = leg(at(2026, 9, 2, 23, 0), [0, 60])
+  texts.push(replayStatus(dayState([late], at(2026, 9, 2, 1, 0)), at(2026, 9, 2, 1, 0), 60).text)
+  for (let d = 0; d < 7; d++) { // parked since the evening before, on each day of a week
+    const t = at(2026, 9, 2 + d, 6, 30)
+    texts.push(replayStatus(dayState([leg(at(2026, 9, 1 + d, 22, 0), [0, 58 * 60])], t), t, 60).text)
+  }
+  assert.equal(new Set(texts.slice(3)).size, 7, 'seven weekdays')
+  for (const x of texts) assert.ok(x.length <= 20, `${x}: ${x.length} characters`)
 })
 
 test('replayStatus: in a hole of its leg, when it was last heard (the point before the hole), its weekday on another day', () => {

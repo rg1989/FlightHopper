@@ -4,9 +4,9 @@
 // Predicting · Signal lost · Locating) with the expand toggle beside it, which shows every detail section below
 // (detail.ts detailRows). It replaces the old detail panel, HUD and chase
 // banner. cardView() is the pure text; mountFlightCard() builds the DOM once and rewrites texts at most 4 times a second.
-// In History the status line is the replay's (setReplay: "Replay · 13:10", "Not heard since 10:20"): the app knows where
-// the aircraft stood at that time, so the card never speaks live there (no "Locating…", no red dot), and Chase is
-// offered only with a position.
+// In History the status line is the replay's (setReplay: "Replay · 13:10", "Last heard 10:20"): the app knows where the
+// aircraft stood at that time, so the card never speaks live there (no "Locating…", no red dot), and Chase is offered
+// only with a position (off, it is its icon alone, and the status line has its room).
 // The same card, mounted with `traffic`, shows a chase-traffic aircraft (a click in its brackets): top right, with its
 // distance from the chased aircraft, and Chase to fly behind it instead.
 // With onRecord (the server records flights: FLIGHTS_DIR), a Record button in the header records the aircraft to a
@@ -226,11 +226,11 @@ export interface FlightCardHandle {
    * History: the status line instead of Live. null: live again.
    * 'replay': amber dot, the text as given ("Replay · 13:10"); a sample older than quietS at the replay time reads
    *   "<text> · not heard" with the stats dimmed (as now; the traffic card relies on this).
-   * 'quiet': grey dot, the text as given ("Not heard since 10:20", "On the ground since 10:20"), the stats are the last
-   *   known ones, dimmed.
-   * 'none': grey dot, the text as given ("Not heard until 07:20", "Not heard this day"), the stats '—'.
-   * In History "Chase in 3-D" is off (title "No position at this time") unless the state is 'replay' with a sample that
-   * was heard, and there is no Record button. May be called every frame: an equal status is not a repaint.
+   * 'quiet': grey dot, the text as given ("Last heard 10:20"), the stats are the last known (or estimated) ones, dimmed.
+   * 'none': grey dot, the text as given ("First heard 07:20", "Not heard this day"), the stats '—'.
+   * In History "Chase in 3-D" is off (its icon alone, title "No position at this time") unless the state is 'replay'
+   * with a sample that was heard, and there is no Record button. May be called every frame: an equal status is not a
+   * repaint.
    */
   setReplay(v: ReplayStatus | null): void
   destroy(): void
@@ -315,13 +315,18 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
   const chaseText = h('span', '')
   chaseBtn.append(chaseIcon, chaseText)
   let chaseShown: string | null = null
-  // off: History, no position to fly behind (only the button that starts a chase: the one back to the map stays).
+  // off: History, no position to fly behind (only the button that starts a chase: the one back to the map stays). Off,
+  // the pill is its icon alone (flightCard.css), so the status line beside it holds its time ("Last heard Thu 22:58"); its
+  // label stays its name, its title says why it is off.
   const paintChase = (chasing: boolean, off: boolean): void => {
     const key = `${chasing}/${off}`
     if (chaseShown === key) return
     chaseShown = key
     chaseIcon.replaceChildren(icon(chasing ? 'map' : 'plane', 16))
-    chaseText.textContent = chasing ? 'Map' : traffic ? 'Chase' : 'Chase in 3-D' // short: the status line and the toggle share the row
+    const label = chasing ? 'Map' : traffic ? 'Chase' : 'Chase in 3-D' // short: the status line and the toggle share the row
+    chaseText.textContent = label
+    chaseText.hidden = off
+    chaseBtn.setAttribute('aria-label', label)
     chaseBtn.title = off ? 'No position at this time' : chasing ? 'Back to the top-down map (Esc)' : traffic ? 'Fly behind this aircraft instead' : 'Fly behind this aircraft in 3-D'
     chaseBtn.disabled = off
     chaseBtn.classList.toggle('fh-pill-secondary', chasing)

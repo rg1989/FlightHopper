@@ -11,7 +11,7 @@ import { legFeeds } from './policy.ts'
 export type DayState =
   | { kind: 'heard'; leg: TraceReply } // t from the leg's first point to a minute after its last (policy.ts legFeeds), except in a hole
   | { kind: 'gap'; leg: TraceReply; sinceMs: number; untilMs: number } // strictly inside a hole of the leg: its points either side
-  | { kind: 'quiet'; leg: TraceReply; sinceMs: number; ground: boolean } // after that leg, before the next: where it ended
+  | { kind: 'quiet'; leg: TraceReply; sinceMs: number } // after that leg, before the next: where it ended (sinceMs: its last point)
   | { kind: 'before'; leg: TraceReply; untilMs: number } // earlier than its first leg (leg): not heard until its first point
   | { kind: 'none' } // no legs
 
@@ -48,7 +48,7 @@ export function pointsUpTo(leg: TraceReply, t: number): number {
  * at the later one's first point. Heard is policy.ts's legFeeds of it, so the map, the card and the track agree on when a
  * leg is the aircraft, except strictly inside a step the flown path draws dotted (scene/pathGap.ts isGap): a gap, between
  * the points either side (at either point it is heard). Otherwise it has ended and the aircraft is quiet where it ended
- * (sinceMs its last point; ground when that point was on the ground).
+ * (sinceMs its last point).
  * ponytail: the last leg started is found by a scan: a day has a handful of legs. Upgrade: a binary search on t0Ms if a
  * day ever held thousands.
  */
@@ -57,7 +57,7 @@ export function dayState(legs: readonly TraceReply[], t: number): DayState {
   const started = legs.findLastIndex((leg) => leg.t0Ms <= t)
   if (started < 0) return { kind: 'before', leg: legs[0], untilMs: legs[0].t0Ms }
   const leg = legs[started]
-  if (!legFeeds(leg, t)) return { kind: 'quiet', leg, sinceMs: legEndMs(leg), ground: leg.alt.at(-1) === 'g' }
+  if (!legFeeds(leg, t)) return { kind: 'quiet', leg, sinceMs: legEndMs(leg) }
   const n = pointsUpTo(leg, t)
   if (n === 0 || n === leg.t.length) return { kind: 'heard', leg } // no step around t: no point yet, or the minute after its last
   const a = { tMs: legMs(leg.t0Ms, leg.t[n - 1]), lat: leg.lat[n - 1], lon: leg.lon[n - 1] }

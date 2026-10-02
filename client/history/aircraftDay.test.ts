@@ -32,8 +32,8 @@ test('one leg: not heard before its first point, heard from it to a minute after
   for (const t of [H, H + 10 * MIN, H + 20 * MIN, H + 21 * MIN]) {
     assert.deepEqual(dayState([A], t), { kind: 'heard', leg: A }, `${(t - H) / 1000} s in`)
   }
-  assert.deepEqual(dayState([A], H + 21 * MIN + 1), { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN, ground: false })
-  assert.deepEqual(dayState([A], H + 12 * 60 * MIN), { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN, ground: false }, 'for the rest of the day')
+  assert.deepEqual(dayState([A], H + 21 * MIN + 1), { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN })
+  assert.deepEqual(dayState([A], H + 12 * 60 * MIN), { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN }, 'for the rest of the day')
 })
 
 test('before its first leg of several: not heard until that leg starts, the first one named whatever the time', () => {
@@ -43,23 +43,21 @@ test('before its first leg of several: not heard until that leg starts, the firs
 
 test('between two legs it is quiet since the earlier one ended; the later one is heard from its first point', () => {
   const day = [A, B]
-  const quiet = { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN, ground: false }
+  const quiet = { kind: 'quiet', leg: A, sinceMs: H + 20 * MIN }
   assert.deepEqual(dayState(day, H + 21 * MIN + 1), quiet, 'the minute after A is over')
   assert.deepEqual(dayState(day, H + 40 * MIN), quiet)
   assert.deepEqual(dayState(day, B.t0Ms - 1), quiet, 'a moment before B starts')
   assert.deepEqual(dayState(day, B.t0Ms), { kind: 'heard', leg: B }, 'B: its first point')
   assert.deepEqual(dayState(day, H + 90 * MIN), { kind: 'heard', leg: B }, 'B: its last point')
   assert.deepEqual(dayState(day, H + 91 * MIN), { kind: 'heard', leg: B }, 'B: a minute after it')
-  assert.deepEqual(dayState(day, H + 91 * MIN + 1), { kind: 'quiet', leg: B, sinceMs: H + 90 * MIN, ground: false }, 'B ended: quiet since then')
+  assert.deepEqual(dayState(day, H + 91 * MIN + 1), { kind: 'quiet', leg: B, sinceMs: H + 90 * MIN }, 'B ended: quiet since then')
 })
 
-test('quiet on the ground when the leg ended on the ground (transponder on), in the air otherwise: its last point decides', () => {
+test('quiet since its last point whether the leg ended on the ground or in the air (the ghost’s own numbers say which)', () => {
   const t = H + 30 * MIN
-  const ended = (alt: (number | 'g' | null)[]) => dayState([leg(H, [0, 600, 1200], { alt })], t)
-  assert.deepEqual(ended([3000, 100, 'g']), { kind: 'quiet', leg: leg(H, [0, 600, 1200], { alt: [3000, 100, 'g'] }), sinceMs: H + 20 * MIN, ground: true })
-  for (const alt of [[3000, 100, 400], [3000, 100, null], ['g', 'g', 3000], ['g', 3000, null]] as (number | 'g' | null)[][]) {
-    const s = ended(alt)
-    assert.deepEqual([s.kind, s.kind === 'quiet' && s.ground], ['quiet', false], JSON.stringify(alt))
+  for (const alt of [[3000, 100, 'g'], [3000, 100, 400], [3000, 100, null], ['g', 'g', 3000]] as (number | 'g' | null)[][]) {
+    const l = leg(H, [0, 600, 1200], { alt })
+    assert.deepEqual(dayState([l], t), { kind: 'quiet', leg: l, sinceMs: H + 20 * MIN }, JSON.stringify(alt))
   }
 })
 
@@ -71,7 +69,7 @@ test('legs that touch or overlap by a few seconds hand over at the later one’s
   assert.deepEqual(dayState(day, b.t0Ms), { kind: 'heard', leg: b }, 'the later leg wins from its first point…')
   assert.deepEqual(dayState(day, b.t0Ms + 2000), { kind: 'heard', leg: b }, '…while a still feeds (to a minute after its last)')
   assert.deepEqual(dayState(day, H + 30 * MIN + 3000 + MIN), { kind: 'heard', leg: b }, 'a ends its minute: still b')
-  assert.deepEqual(dayState(day, H + 40 * MIN + MIN + 1), { kind: 'quiet', leg: b, sinceMs: H + 40 * MIN, ground: false })
+  assert.deepEqual(dayState(day, H + 40 * MIN + MIN + 1), { kind: 'quiet', leg: b, sinceMs: H + 40 * MIN })
   const c = leg(H + 1_803_000, [0, 60]) // starts at the very ms a's last point is
   assert.deepEqual(dayState([a, c], H + 1_803_000), { kind: 'heard', leg: c }, 'touching: the later one')
   assert.deepEqual(dayState([a, c], H + 1_802_999), { kind: 'heard', leg: a })

@@ -356,8 +356,13 @@
   padding-bottom: 0;
 }
 
-/* Chase with no position to fly behind (History, the aircraft not heard at the replay time): dimmed; its title says why. */
+/* Chase with no position to fly behind (History, the aircraft not heard at the replay time): dimmed, and its icon alone
+   (flightCard.ts hides its text) on a tile the toggle's size, so the status line holds its longest time ("Last heard
+   Wed 22:58" is 125 px at 12 px: beside the whole pill it had 100 px at 320 px wide, now 188); its title says why. */
 .fh-card .fh-pill:disabled {
+  justify-content: center;
+  width: 32px;
+  padding: 0;
   cursor: default;
   opacity: 0.4;
   filter: none;
@@ -443,6 +448,10 @@
     padding: 0 16px 0 14px;
     border-radius: 12px;
     font-size: 14px;
+  }
+
+  .fh-card .fh-pill:disabled {
+    width: 44px;
   }
 }
 
