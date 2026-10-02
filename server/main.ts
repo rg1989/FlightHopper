@@ -9,9 +9,13 @@
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
+//   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), 404: none
+//   GET /api/history/status             the half hours held, being fetched or missing, and the newest published
+//   GET /api/trace?hex&at               an aircraft's flight leg flying at `at` (default now; adsb.lol's trace: trace.ts), 404: none
 //   GET /*                              dist/ (index.html for client routes)
 // JSON over 1 KB is gzipped when the client accepts it. ADSB_SOURCE=adsblol with ROUTES=1 also looks up flight routes;
 // any other live source with a CONTACT looks up only the routes of the aircraft selected or recorded (adsbdb.com).
+// A live source also keeps the newest hour of the past in memory (two heatmap files, refreshed each half hour).
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -20,12 +24,14 @@ import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
 import type { ChaseResponse, RecordingInfo, RecordResponse, StatusBrief, ViewResponse } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
+import { SLOT_MS } from '../shared/history.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { TokenBucket } from './budget.ts'
 import { readServerConfig, type ServerConfig } from './config.ts'
 import { AdsbdbRoutes } from './adsbdb.ts'
 import { FlightLog } from './flightLog.ts'
+import { HistoryStore } from './historyStore.ts'
 import { InfoStore } from './infoStore.ts'
 import { POLLER_DEFAULTS, Poller } from './poller.ts'
 import { Recorder } from './recorder.ts'
@@ -33,6 +39,7 @@ import { RouteFetcher } from './routes.ts'
 import { makeSource, userAgent } from './sources/index.ts'
 import type { Source } from './sources/types.ts'
 import { SampleStore } from './store.ts'
+import { TraceStore } from './trace.ts'
 import { WxError, makeWx } from './wx.ts'
 
 // ponytail: loopback only. Cloudflare Tunnel and the Vite dev proxy both connect locally, but other machines on the
@@ -51,6 +58,9 @@ const ROUTE_TICK_MS = 100 // RouteFetcher.tick itself keeps ≥ 60 s between req
 const SELECTED_ROUTE_GAP_MS = 5000
 const SELECTED_ROUTE_RPS = 1 / 60
 const FLIGHT_LOG_TICK_MS = 5000
+const HISTORY_TICK_MS = 60_000 // the rolling fetch of the newest half hours: a new file appears every 30 min
+// Half-hour files held in memory (13-25 MB each): the newest two (rolling), and a replay's previous, current and next.
+const HISTORY_SLOTS = 5
 const gzipAsync = promisify(gzip)
 const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete']) // the only writes
 
@@ -199,10 +209,11 @@ async function serveStatic(root: string, pathname: string, range: string | undef
  * deps.nowMs is the server clock for the poller and the budget; it must be the clock the source stamps tRecvMs with
  * (Date.now for live sources, the same injected clock for a replay built with it).
  * deps.routesFetch replaces fetch for the route lookups (tests); routes run only with ADSB_SOURCE=adsblol and ROUTES=1.
+ * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files; tests).
  */
 export function createServer(
   cfg: ServerConfig,
-  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch } = {},
+  deps: { source?: Source; nowMs?: () => number; routesFetch?: typeof fetch; wxFetch?: typeof fetch; historyFetch?: typeof fetch } = {},
 ): { listen(port: number): Promise<string>; close(): Promise<void>; poller: Poller; info: InfoStore } {
   const nowMs = deps.nowMs ?? Date.now
   const source = deps.source ?? makeSource(cfg)
@@ -243,6 +254,11 @@ export function createServer(
   let routeTimer: ReturnType<typeof setInterval> | null = null
   const root = resolve(cfg.staticDir)
   const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch })
+  // The past (History mode, the flown path): adsb.lol's files, fetched when asked and held in memory only.
+  const pastUa = userAgent(cfg.contact ?? 'personal use')
+  const history = new HistoryStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs, maxSlots: HISTORY_SLOTS })
+  const traces = new TraceStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs })
+  let historyTimer: ReturnType<typeof setInterval> | null = null
 
   /**
    * The AircraftInfo this client lacks for the aircraft in a view answer. since = 0: all of them. Otherwise an
@@ -314,9 +330,33 @@ export function createServer(
     check(since >= 0, 'since must be ≥ 0')
     poller.touchChase(hex)
     const now = nowMs()
-    const out: ChaseResponse = { serverNowMs: now, samples: store.track(hex, since), status: brief(), raw: rawAt(hex, now), info: info.get(hex), dest: info.dest(hex) }
+    const out: ChaseResponse = { serverNowMs: now, samples: store.track(hex, since), status: brief(), raw: rawAt(hex, now), info: info.get(hex), dest: info.dest(hex), origin: info.origin(hex) }
     if (flights !== null) out.rec = flights.get(hex)
     return out
+  }
+
+  /** One past half hour in a circle: [200, HistorySlot] or [404, …] when adsb.lol has no file for it. */
+  async function pastSlot(q: URLSearchParams): Promise<[number, unknown]> {
+    const slot = num(q, 'slot')
+    const lat = num(q, 'lat')
+    const lon = num(q, 'lon')
+    const nm = num(q, 'nm')
+    check(slot > 0 && slot % SLOT_MS === 0, 'slot must be the start of a UTC half hour, in ms')
+    check(Math.abs(lat) <= 90, 'lat must be in [-90, 90]')
+    check(Math.abs(lon) <= 180, 'lon must be in [-180, 180]')
+    check(nm > 0 && nm <= 5400, 'nm must be in (0, 5400]')
+    const r = await history.query(slot, { lat, lon, nm })
+    return r === null ? [404, { error: 'no data for this half hour' }] : [200, r]
+  }
+
+  /** One aircraft's flight leg flying at `at` (default now), with its route's first airport when known. */
+  async function trace(q: URLSearchParams): Promise<[number, unknown]> {
+    const hex = (q.get('hex') ?? '').trim().toLowerCase()
+    check(HEX.test(hex), 'hex must be 6 hex digits (optionally prefixed with ~)')
+    const at = num(q, 'at', nowMs())
+    check(at > 0, 'at must be a time in ms')
+    const r = await traces.get(hex, at)
+    return r === null ? [404, { error: 'no trace' }] : [200, { ...r, origin: info.origin(hex) }]
   }
 
   function recordings(): { recordings: RecordingInfo[] } {
@@ -362,6 +402,9 @@ export function createServer(
       else if (url.pathname === '/api/view') body = view(url.searchParams)
       else if (url.pathname === '/api/chase') body = chase(url.searchParams)
       else if (url.pathname === '/api/status') body = poller.report()
+      else if (url.pathname === '/api/history') [status, body] = await pastSlot(url.searchParams)
+      else if (url.pathname === '/api/history/status') body = history.status()
+      else if (url.pathname === '/api/trace') [status, body] = await trace(url.searchParams)
       else if (url.pathname === '/api/record') body = record(url.searchParams, post)
       else if (url.pathname === '/api/recordings') body = recordings()
       else if (post && url.pathname === '/api/recordings/rename') [status, body] = editRecording(url.searchParams, 'rename')
@@ -405,6 +448,14 @@ export function createServer(
             }, ROUTE_TICK_MS)
             routeTimer.unref()
           }
+          // A live source keeps the newest hour of the past ready (History opens on it without a wait). A replay
+          // fetches the past only when asked.
+          if (source.caps.kind !== 'replay' && historyTimer === null) {
+            const roll = (): void => void history.tick().catch((e: unknown) => console.error('history: tick failed:', e))
+            roll()
+            historyTimer = setInterval(roll, HISTORY_TICK_MS)
+            historyTimer.unref()
+          }
           if (flights !== null && flightTimer === null) {
             flightTimer = setInterval(() => flights.tick(), FLIGHT_LOG_TICK_MS)
             flightTimer.unref()
@@ -419,6 +470,8 @@ export function createServer(
       routeTimer = null
       if (flightTimer !== null) clearInterval(flightTimer)
       flightTimer = null
+      if (historyTimer !== null) clearInterval(historyTimer)
+      historyTimer = null
       poller.stop()
       if (!server.listening) return Promise.resolve()
       return new Promise((done, fail) => {
