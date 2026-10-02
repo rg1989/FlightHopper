@@ -1,6 +1,7 @@
 // client/ui/sourceBadge.ts
 // Where the aircraft come from: the Status panel ("Live traffic", the source linked as adsb.fi's terms ask, "Replay ·
-// <recording time>" for a recording), how often the map refreshes, areas still loading, and the rail's status dot.
+// <recording time>" for a recording, "Replay" from adsb.lol in History), how often the map refreshes, areas still
+// loading, and the rail's status dot.
 import type { StatusBrief } from '../../shared/api.ts'
 import type { SourceKind } from '../../shared/types.ts'
 import './sourceBadge.css'
@@ -50,9 +51,55 @@ export function statusDot(status: StatusBrief | null): 'live' | 'replay' | 'trou
   return status.source === 'replay' ? 'replay' : 'live'
 }
 
+/** What the Status panel says, as texts: pure, the DOM only paints it. */
+export interface PanelView {
+  dot: 'live' | 'replay' | 'trouble' | 'wait' // theme.css .fh-dot's data-state
+  mode: string
+  source: { name: string; href: string | null; title: string } | null // null: no source line
+  refresh: string
+  coverage: { text: string; loading: boolean } // loading: the spinner goes before the text
+}
+
+const DASH = '—'
+
+/**
+ * The panel for a status (null before the first one). history: History is open, and the panel describes the replay,
+ * not the live feed: "Replay" from adsb.lol (ODbL 1.0, linked), no refresh period, the loader while its half hours
+ * load, the replay's amber dot. The live status says nothing then (its updates may keep coming): it is not read.
+ */
+export function panelView(status: StatusBrief | null, serverNowMs: number | null, history: { loading: boolean } | null = null): PanelView {
+  if (history !== null) {
+    const src = SOURCES.adsblol
+    return {
+      dot: 'replay',
+      mode: 'Replay',
+      source: { name: src.name, href: src.href, title: 'History from adsb.lol, ODbL 1.0' },
+      refresh: DASH,
+      coverage: history.loading ? { text: 'Loading', loading: true } : { text: DASH, loading: false },
+    }
+  }
+  const v = status === null ? null : sourceView(status, serverNowMs)
+  const src = status === null ? null : SOURCES[status.source]
+  // In trouble the pending count means nothing (no answers are coming): no "Loading" spinner then.
+  const pending = status !== null && status.degraded === null ? (status.pendingAreas ?? 0) : 0
+  const every = status?.viewEveryS
+  return {
+    dot: statusDot(status),
+    mode: v === null ? 'Connecting…' : v.text.split(' · ')[0] === 'REPLAY' ? v.text.replace('REPLAY', 'Replay') : v.state === 'trouble' ? v.title : 'Live traffic',
+    source: src === null ? null : { name: src.name, href: src.href, title: '' },
+    refresh: every === undefined ? DASH : every < 60 ? `every ${Math.round(every)} s` : `every ${Math.round(every / 60)} min`,
+    coverage: pending > 0
+      ? { text: `Loading ${pending} area${pending === 1 ? '' : 's'}`, loading: true }
+      : { text: status === null ? DASH : status.degraded !== null ? 'Waiting for the source' : 'Up to date', loading: false },
+  }
+}
+
 export interface StatusPanelHandle {
+  /** The live status (null before the first). In History it only keeps the recording row up to date: the rest is the replay's. */
   update(status: StatusBrief | null, serverNowMs: number | null): void
   setImagery(text: string, state: 'ok' | 'fallback' | 'plain'): void
+  /** History: the panel describes the replay instead of the live feed; null: live again (the next update() repaints). */
+  setHistory(v: { loading: boolean } | null): void
 }
 
 /**
@@ -93,46 +140,56 @@ export function mountStatusPanel(root: HTMLElement, opts: { onPick?(hex: string)
   recV.hidden = recL.hidden = true
   root.append(hero, rows)
 
+  let status: StatusBrief | null = null
+  let serverNowMs: number | null = null
+  let history: { loading: boolean } | null = null
   let shown = ''
+  function paint(): void {
+    const v = panelView(status, serverNowMs, history)
+    const rec = status?.recording ?? []
+    const key = `${JSON.stringify(v)}|${rec.map((r) => `${r.hex}:${r.callsign}`).join()}`
+    if (key === shown) return
+    shown = key
+    recV.hidden = recL.hidden = rec.length === 0
+    recV.replaceChildren(...rec.map((r) => {
+      const b = h('button', 'fh-status-recbtn', r.callsign ?? r.hex.toUpperCase())
+      b.type = 'button'
+      b.title = 'Being recorded: show it'
+      b.addEventListener('click', () => opts.onPick?.(r.hex))
+      return b
+    }))
+    dot.dataset.state = v.dot
+    mode.textContent = v.mode
+    if (v.source !== null && v.source.href !== null) {
+      link.href = v.source.href
+      link.textContent = v.source.name
+      sourceLine.hidden = false
+    } else {
+      link.removeAttribute('href')
+      link.textContent = v.source?.name ?? ''
+      sourceLine.hidden = v.source === null
+    }
+    link.title = v.source?.title ?? ''
+    refreshV.textContent = v.refresh
+    coverageV.replaceChildren()
+    if (v.coverage.loading) coverageV.append(h('span', 'fh-spin'), document.createTextNode(` ${v.coverage.text}`))
+    else coverageV.textContent = v.coverage.text
+  }
   return {
-    update(status, serverNowMs) {
-      const v = status === null ? null : sourceView(status, serverNowMs)
-      const src = status === null ? null : SOURCES[status.source]
-      // In trouble the pending count means nothing (no answers are coming): no "Loading" spinner then.
-      const pending = status !== null && status.degraded === null ? (status.pendingAreas ?? 0) : 0
-      const every = status?.viewEveryS
-      const rec = status?.recording ?? []
-      const key = `${v?.text}|${v?.state}|${v?.title}|${pending}|${every}|${statusDot(status)}|${rec.map((r) => `${r.hex}:${r.callsign}`).join()}`
-      if (key === shown) return
-      shown = key
-      recV.hidden = recL.hidden = rec.length === 0
-      recV.replaceChildren(...rec.map((r) => {
-        const b = h('button', 'fh-status-recbtn', r.callsign ?? r.hex.toUpperCase())
-        b.type = 'button'
-        b.title = 'Being recorded: show it'
-        b.addEventListener('click', () => opts.onPick?.(r.hex))
-        return b
-      }))
-      dot.dataset.state = statusDot(status)
-      mode.textContent = v === null ? 'Connecting…' : v.text.split(' · ')[0] === 'REPLAY' ? v.text.replace('REPLAY', 'Replay') : v.state === 'trouble' ? v.title : 'Live traffic'
-      if (src !== null && src.href !== null) {
-        link.href = src.href
-        link.textContent = src.name
-        sourceLine.hidden = false
-      } else {
-        link.removeAttribute('href')
-        link.textContent = src?.name ?? ''
-        sourceLine.hidden = src === null
-      }
-      refreshV.textContent = every === undefined ? '—' : every < 60 ? `every ${Math.round(every)} s` : `every ${Math.round(every / 60)} min`
-      coverageV.replaceChildren()
-      if (pending > 0) {
-        coverageV.append(h('span', 'fh-spin'), document.createTextNode(` Loading ${pending} area${pending === 1 ? '' : 's'}`))
-      } else coverageV.textContent = status === null ? '—' : status.degraded !== null ? 'Waiting for the source' : 'Up to date'
+    update(s, now) {
+      status = s
+      serverNowMs = now
+      paint()
     },
     setImagery(text, state) {
       imageryV.textContent = text.replace(/^Imagery: /, '')
       imageryV.dataset.state = state
+    },
+    setHistory(v) {
+      // Said every frame, as a new object: equal in value is not a repaint (null: both undefined).
+      if (history?.loading === v?.loading) return
+      history = v === null ? null : { loading: v.loading }
+      paint()
     },
   }
 }
