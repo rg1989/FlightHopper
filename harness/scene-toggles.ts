@@ -69,6 +69,8 @@ function button(label: string, onClick: () => void): void {
   controls.append(b)
 }
 for (const bg of ['satellite', 'snow', 'night']) button(`bg: ${bg}`, () => (document.body.dataset.bg = bg))
+button('chase view', () => toggles.setChasing(true)) // the panel shows the rows of the view on screen
+button('top-down view', () => toggles.setChasing(false))
 button('forget stored', () => {
   try {
     storage?.removeItem(PREFS_KEY)

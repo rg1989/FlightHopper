@@ -382,7 +382,7 @@ export function mountSearchBox(root: HTMLElement, opts: SearchBoxOpts): SearchBo
     schedule()
   })
   input.addEventListener('keydown', (e) => {
-    // The app's own keys (Esc steps back, T L X M R W toggle the scene) stay out of the field.
+    // The app's own keys (Esc steps back, T L X M R P W toggle the scene) stay out of the field.
     e.stopPropagation()
     if (e.isComposing) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
