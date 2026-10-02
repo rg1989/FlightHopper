@@ -139,6 +139,9 @@ const HISTORY_JUMP_MS = 120_000 // the replay clock moving further than this bet
 const HISTORY_STATUS_MS = 5000 // how often the time bar learns what exists and what adsb.lol lacks
 const SEEK_REST_MS = 300 // a scrubber seek asks for its half hours (and brings the aircraft into view) once it rests this long
 const DAY_AGAIN_MS = 15_000 // the selected aircraft's day: a failed ask, or an answer short of the replay time, again after this
+// An answer for its day decides the replay times inside the span it answered, and this far past its end: a replay playing
+// on over midnight keeps its legs while the next day is asked (a jump elsewhere waits for that day's, as at first).
+const DAY_PAST_MS = 30 * 60_000
 const BRING_FLY_S = 0.8 // the map's flight over the selected aircraft after a jump in time
 const FOLLOW_FLY_S = 0.6 // …and to follow it out of the view while playing
 const NO_LEGS: readonly TraceReply[] = []
@@ -488,13 +491,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     pathLeg: TraceReply | null | undefined // the leg the flown path shows (null none; undefined: the feed's samples meanwhile)
     bring: boolean // bring the selected aircraft into view (a jump), until its day for that time is known
     inside: boolean // it was inside the view (inset) last frame: playing, the map follows it out of it
-    flyUntilMs: number // the map is flying over it until then (performance.now()): no other flight meanwhile
+    flyUntilMs: number // the map is flying over it until then (performance.now(); -Infinity: not): no other flight meanwhile
   }
   /** The selected aircraft's flights over a local day and the 12 h before it (GET /api/trace?hex&from&to). */
   interface SelectedDay {
     hex: string
     startMs: number // the local day asked for (LocalDay.startMs)
-    toMs: number // answered up to here (the server's now at most)
+    fromMs: number // the span answered (to: the server's now at most)
+    toMs: number
     legs: TraceReply[]
     reg: string | null
     typeCode: string | null
@@ -908,8 +912,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (mine.length > 0) registry.ingest(mine)
   }
 
-  /** History: the selected aircraft's day as last answered (for the bar's day of the replay time, or the one before it until that comes); null: none yet. */
-  const selectedDay = (h: HistoryMode): SelectedDay | null => (selected !== null && h.day !== null && h.day.hex === selected ? h.day : null)
+  /**
+   * History: the selected aircraft's day as last answered, when it speaks for t (inside the span it answered, to
+   * DAY_PAST_MS past it); null: none yet, or none for t (as before the first: the feed's samples until it comes).
+   */
+  function selectedDay(h: HistoryMode, t: number): SelectedDay | null {
+    const d = h.day
+    return selected !== null && d !== null && d.hex === selected && t >= d.fromMs && t <= d.toMs + DAY_PAST_MS ? d : null
+  }
 
   /**
    * History: the selected aircraft's day of flights (GET /api/trace?hex&from&to over selected.ts daySpan) for the bar's
@@ -939,7 +949,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
     api.traceDay(hex, span.fromMs, span.toMs).then((r) => {
       // None at adsb.lol at all (404): no flight that day.
-      if (settle()) h.day = { hex, startMs, toMs: r?.toMs ?? span.toMs, legs: r?.legs ?? [], reg: r?.reg ?? null, typeCode: r?.typeCode ?? null }
+      if (!settle()) return
+      h.day = {
+        hex, startMs, fromMs: r?.fromMs ?? span.fromMs, toMs: r?.toMs ?? span.toMs, legs: r?.legs ?? [], reg: r?.reg ?? null,
+        typeCode: r?.typeCode ?? null,
+      }
     }, (e: unknown) => {
       if (settle()) console.warn('FlightHopper: no day of flights:', e)
     })
@@ -959,8 +973,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    * the leg it is heard on or was last (cut at the replay time by the line), none before its first or on a day it did
    * not fly; until its day is known, the feed's samples (historyTick).
    */
-  function showSelectedDay(h: HistoryMode, ds: DayState | null): void {
-    const legs = selectedDay(h)?.legs ?? NO_LEGS
+  function showSelectedDay(h: HistoryMode, day: SelectedDay | null, ds: DayState | null): void {
+    const legs = day?.legs ?? NO_LEGS
     if (legs !== h.legsShown) {
       h.legsShown = legs
       h.bar.setLegs(legSpans(legs))
@@ -974,10 +988,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /**
    * History, top-down: the selected aircraft into view after a jump (h.bring: once its position at the replay time is
    * known, and again when its day for that time comes, which may put it elsewhere), and followed while playing when it
-   * leaves the view (selected.ts flyOver). The map flies over it at the height it has. Not in the chase, which needs no
-   * help, nor while a scrubber seek rests or a flight is under way.
+   * leaves the view (selected.ts flyOver). The map flies over it at the height it has, and asks for the half hours of
+   * where it lands at once. Not in the chase, which needs no help, nor while a scrubber seek rests or a flight is under way.
    */
-  function keepInView(h: HistoryMode, now: number, ds: DayState | null): void {
+  function keepInView(h: HistoryMode, now: number, day: SelectedDay | null, ds: DayState | null): void {
+    if (h.flyUntilMs !== -Infinity && now >= h.flyUntilMs) {
+      h.flyUntilMs = -Infinity
+      askSlots(h, h.clock.now(now)) // the map has arrived: its half hours at once, as after a jump
+    }
     const at = histAt
     if (chasing || selected === null) {
       h.bring = false
@@ -992,7 +1010,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         h.flyUntilMs = now + flyS * 1000
       }
       // Brought in once its day for this time said where it was (or that it was nowhere: before its first leg, none).
-      const day = selectedDay(h)
       if (h.bring && ds !== null && day !== null && day.startMs === h.dayOfT.startMs && (at !== undefined || ds.kind === 'before' || ds.kind === 'none')) {
         h.bring = false
       }
@@ -1123,7 +1140,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   function historyLoading(h: HistoryMode, t: number): boolean {
     const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
     if (!h.feed.covers(slot, viewCircle()) && !h.block.isMissing(slot, Date.now()) && !h.failing) return true
-    return selected !== null && h.dayAsk !== null && h.dayAsk.hex === selected && selectedDay(h) === null && h.dayAgain?.hex !== selected
+    return selected !== null && h.dayAsk !== null && h.dayAsk.hex === selected && h.day?.hex !== selected && h.dayAgain?.hex !== selected
   }
 
   /** History: the half hours adsb.lol does not have, as far as known (the status's, and those it answered so here), on the bar. */
@@ -1150,11 +1167,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const wall = Date.now()
     const t = h.clock.now(nowP)
     const slot = slotOf(Math.min(t, h.clock.maxMs - 1))
-    if (h.seekRestMs === null) askSlots(h, t)
+    if (h.seekRestMs === null && nowP >= h.flyUntilMs) askSlots(h, t) // a flight over the aircraft asks where it lands
     h.feed.retain(new Set([slot - SLOT_MS, slot, slot + SLOT_MS]))
     fleet.setHintS(2.5 * stepAt(h, t))
     fleet.prune(t, PRUNE_AGE_S)
-    if (selected !== null && selectedDay(h) === null) rebuildPath() // the feed's samples until its day is known
+    if (selected !== null && selectedDay(h, t) === null) rebuildPath() // the feed's samples until its day for t is known
     h.bar.setNote(h.block.isMissing(slot, wall) ? 'No data for this time' : h.failing ? 'Could not load this time · retrying' : null)
     if (nowP - h.statusAtMs < HISTORY_STATUS_MS) return
     h.statusAtMs = nowP
@@ -1420,7 +1437,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       const t = h.clock.now(now)
       askDayWhenDue(h, t)
       // The selected aircraft at t as its day says (history/aircraftDay.ts); null until its day is known: as the feed has it.
-      const day = selectedDay(h)
+      const day = selectedDay(h, t)
       const ds = day === null ? null : dayState(day.legs, t)
       feedHistory(h, t, ds)
       tSunMs = t
@@ -1444,13 +1461,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         histAt = undefined
         histCardS = null
       }
-      showSelectedDay(h, ds)
+      showSelectedDay(h, day, ds)
       h.bar.update({ tMs: t, playing: h.clock.playing, rate: h.clock.rate, loading: histLoading })
       const quietS = Math.max(60, 2.5 * stepAt(h, t)) // a coarse file's aircraft is heard once a slice
       card.setReplay(replayStatus(ds, t, quietS))
       trafficCard.setReplay(replayStatus(null, t, quietS))
       statusPanel.setHistory({ loading: histLoading })
-      keepInView(h, now, ds)
+      keepInView(h, now, day, ds)
     } else if (api.ready) {
       const tServerMs = api.serverNowMs()
       const tRenderMs = clock.tick(tServerMs, delayTargetS(), dtS)
