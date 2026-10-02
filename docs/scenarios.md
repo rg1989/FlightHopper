@@ -90,8 +90,9 @@ The JAL 123 file is a complete example. The fields:
 | `livery.body` | no | A body-wrap decal (stripes, titles, registration), path relative to the folder, normally `livery/body.png`. |
 | `livery.finLogo` | no | A fin logo image. Put a logo under trademark in `local/`. If the file is missing, the fin stays plain. |
 
-The body decal, the `fin` damage and a separate gear model need measurements of the model. They are in the model's
-entry in `public/models/manifest.json` (`paint.body`, `paint.cut`, `gear`). Today only `b744` has them. For another
+The body decal, the damage and a separate gear model need measurements of the model. They are in the model's
+entry in `public/models/manifest.json` (`paint.body`, `paint.cut`, `gear`). Today `b744` has all three, and `b738` and `b38m` have
+`paint.cut`. For another
 model, ask for the measurements to be added. That is a code change, not a package change.
 
 ### 1.4 track.csv
@@ -130,7 +131,7 @@ Columns: `time,type,value,label,src`.
 | `mark` | empty | A tick on the timeline. Its tooltip is `label` and the time. A click on it jumps there. |
 | `gear` | `1` down, `0` up | Shows or hides the landing gear. The flight-data frame shows GEAR DN. |
 | `flaps` | a number (flap units) | The frame shows FLAPS n. At 0 the chip goes away. |
-| `damage` | `fin` | From this time the model has no upper fin, rudder or tail cone (b744 only, see 1.3). |
+| `damage` | `fin`, `rudder:<from>-<to>` | From this time the model has no upper fin, rudder or tail cone (`fin`), or no rudder between two heights given as fractions of the fin, 0 root … 1 tip (`rudder:0.35-0.88`). Models with `paint.cut` only (b744, b738, b38m; see 1.3). |
 | `story` | seconds on screen (empty: 12) | A short narrative message, top-left, that fades in at this time and out after its seconds (at least 5 s of real time at any speed). Write `label` as one or two plain sentences: what happens and why it matters. Only facts from the record; cite `src`. |
 
 - Events have no `q` column. When a time is an estimate, say so in `label`, for example "Gear up (not recorded,

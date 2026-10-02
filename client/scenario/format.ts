@@ -2,6 +2,7 @@
 // Scenario package validation and assembly (.planning/scenarios-design.md §3): turns scenario.json + the CSV text
 // of a package into a typed, validated Scenario, or throws one ScenarioError listing every problem found.
 import { parseCsv } from './csv.ts'
+import { damagePart } from './timeline.ts'
 import type {
   AircraftSpec,
   AudioClip,
@@ -467,7 +468,7 @@ function parseEvents(file: string, text: string, sourceIds: ReadonlySet<string>,
     const value = cell(row, col('value'))
     if (type === 'gear' && value !== '0' && value !== '1') problems.push(`${file}:${r}: value: gear must be 0 or 1: ${JSON.stringify(value)}`)
     if (type === 'flaps' && (value === '' || !Number.isFinite(Number(value)))) problems.push(`${file}:${r}: value: flaps must be a number: ${JSON.stringify(value)}`)
-    if (type === 'damage' && value === '') problems.push(`${file}:${r}: value: damage requires a value`)
+    if (type === 'damage' && damagePart(value) === null) problems.push(`${file}:${r}: value: damage is 'fin' or 'rudder:<from>-<to>' (fractions of the fin's height, 0 root … 1 tip): ${JSON.stringify(value)}`)
     if (type === 'story' && value !== '' && !(Number(value) > 0)) problems.push(`${file}:${r}: value: a story's seconds on screen must be a positive number: ${JSON.stringify(value)}`)
     const label = cell(row, col('label'))
     if (type === 'story' && label.trim() === '') problems.push(`${file}:${r}: label: a story needs its text`)

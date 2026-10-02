@@ -2,8 +2,9 @@
 // WP-V3 model calibration: place the chase model so that its nose points along RenderState.headingDeg.
 // The aircraft must never fly sideways. model.test.ts proves it from the GLB's own geometry.
 // ChaseModel also carries a scenario's look: its livery, a folded span, damage and a separate landing gear.
-import { Axis, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, Quaternion, Transforms } from 'cesium'
+import { Axis, Cartesian2, Cartesian3, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, Quaternion, Transforms } from 'cesium'
 import type { CustomShader, ModelNode, Viewer } from 'cesium'
+import type { Damage } from '../scenario/timeline.ts'
 import type { ModelManifestEntry, RenderState } from '../types.ts'
 import { GearMotion, swingLegs } from './gear.ts'
 import { LiveryShaders } from './livery.ts'
@@ -196,7 +197,7 @@ export class ChaseModel {
   private readonly gears = new Map<string, Model>() // loaded gear models by uri, in the scene (hidden unless drawn)
   private readonly gearAsked = new Set<string>()
   private halfSpanM: number | null = null
-  private damaged = false
+  private damage: Damage = { fin: false, rudder: null }
   private gearDown = false // the target: down (true) or up
   private readonly gear = new GearMotion()
   private readonly legs = new Map<Model, Array<ModelNode | undefined>>() // each gear model's leg nodes, in its manifest order
@@ -276,10 +277,14 @@ export class ChaseModel {
     this.look()
   }
 
-  /** Shows the paint map's cut (the lost fin and tail cone) and the model's inside through it. Cheap when unchanged. */
-  setDamage(on: boolean): void {
-    if (on === this.damaged) return
-    this.damaged = on
+  /**
+   * Shows the paint map's cut: the lost fin and tail cone (d.fin), the rudder lost between two heights (d.rudder), and
+   * the model's inside through the holes. Only where the paint map has a cut. Cheap when unchanged.
+   */
+  setDamage(d: Damage): void {
+    const [a, b] = [d.rudder, this.damage.rudder]
+    if (d.fin === this.damage.fin && (a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1]))) return
+    this.damage = d
     this.look()
   }
 
@@ -352,15 +357,20 @@ export class ChaseModel {
   }
 
   /**
-   * Writes the shape and the damage onto the drawn model: its shader's u_span (mesh metres) and u_cut, and back faces
-   * drawn only while damaged. Shaders are cached and shared by the models of one entry, so every switch rewrites them.
+   * Writes the shape and the damage onto the drawn model: its shader's u_span (mesh metres), u_cut and u_rudder (the
+   * lost band's mesh heights, along the fin from finEdges' root to its tip), and back faces drawn only while damaged.
+   * Shaders are cached and shared by the models of one entry, so every switch rewrites them.
    */
   private look(): void {
-    this.model.backFaceCulling = !this.damaged
+    const { fin, rudder } = this.damage
+    const edges = this.m.paint?.cut?.finEdges
+    const band = rudder === null || edges === undefined ? null : rudder.map((f) => edges[0] + f * (edges[3] - edges[0]))
+    this.model.backFaceCulling = !fin && band === null
     const s = this.model.customShader
     if (s === undefined) return
     s.setUniform('u_span', this.halfSpanM === null ? 0 : this.halfSpanM / this.m.scale)
-    s.setUniform('u_cut', this.damaged ? 1 : 0)
+    s.setUniform('u_cut', fin ? 1 : 0)
+    s.setUniform('u_rudder', band === null ? new Cartesian2() : new Cartesian2(band[0], band[1]))
   }
 
   /** The gear drawn now: not fully up, the entry has one, and it has loaded (the others hidden). */

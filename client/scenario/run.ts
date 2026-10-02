@@ -18,7 +18,7 @@ import { mountStory } from '../ui/story.ts'
 import { AudioSync } from './audio.ts'
 import { ScenarioClock } from './clock.ts'
 import { PoseTrack, type PoseData } from './pose.ts'
-import { captionsAt, endingAt, eventStateAt, markPassed, marks, storyAt, type EventState, type PassedMark, type Story } from './timeline.ts'
+import { NO_DAMAGE, captionsAt, endingAt, eventStateAt, markPassed, marks, storyAt, type Damage, type EventState, type PassedMark, type Story } from './timeline.ts'
 import type { ImagerySpec, Line, Scenario, SpeakerDef } from './types.ts'
 
 /** A move of the clock by more than this between two frames, other than by playing, is a seek: the camera snaps behind. */
@@ -171,7 +171,7 @@ export interface DressableModel {
   use(entry: ModelManifestEntry): boolean
   paintLivery(livery: Livery): void
   setShape(halfSpanM: number | null): void
-  setDamage(on: boolean): void
+  setDamage(d: Damage): void
   setGear(on: boolean): void
 }
 
@@ -193,7 +193,7 @@ export class Dresser {
   }
 
   /** True when the drawn model switched this call: the Sun re-attaches its light to it. */
-  apply(model: DressableModel, damage: boolean, gear: boolean): boolean {
+  apply(model: DressableModel, damage: Damage, gear: boolean): boolean {
     const switched = this.#entry !== null && model.use(this.#entry)
     if (model.entry !== this.#dressed) {
       this.#dressed = model.entry
@@ -208,7 +208,7 @@ export class Dresser {
   /** Back to the live chase's model: no fold, no damage, no separate gear. Its next paint(code) repaints it. */
   static undress(model: DressableModel): void {
     model.setShape(null)
-    model.setDamage(false)
+    model.setDamage(NO_DAMAGE)
     model.setGear(false)
   }
 }

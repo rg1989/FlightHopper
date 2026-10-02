@@ -38,6 +38,33 @@ export function eventStateAt(events: readonly EventRow[], t: number): EventState
   return { phase, gear, flaps, damage }
 }
 
+/**
+ * A scenario's damage on the chase model: the paint map's whole cut (JAL 123: the upper fin, the rudders and the tail
+ * cone), and the rudder lost between two heights, as fractions of the fin's height (0 root … 1 tip).
+ */
+export interface Damage {
+  fin: boolean
+  rudder: readonly [number, number] | null
+}
+
+export const NO_DAMAGE: Damage = { fin: false, rudder: null }
+
+/** One damage event's value: 'fin', or 'rudder:<from>-<to>' (e.g. 'rudder:0.35-0.88'); null when it is neither. */
+export function damagePart(v: string): Partial<Damage> | null {
+  if (v === 'fin') return { fin: true }
+  const m = /^rudder:(\d*\.?\d+)-(\d*\.?\d+)$/.exec(v)
+  if (m === null) return null
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return a >= 0 && a < b && b <= 1 ? { rudder: [a, b] } : null
+}
+
+/** The damage the event state's parts add up to (an unknown part is ignored; format.ts rejects it). */
+export function damageOf(parts: ReadonlySet<string>): Damage {
+  let d = NO_DAMAGE
+  for (const v of parts) d = { ...d, ...damagePart(v) }
+  return d
+}
+
 /** How long a story message stays, in scenario seconds, when its row gives no value. */
 export const STORY_S = 12
 

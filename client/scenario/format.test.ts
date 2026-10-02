@@ -400,13 +400,17 @@ test('parseScenario: events.csv flaps value must be a number', () => {
   })
 })
 
-test('parseScenario: events.csv damage value must be non-empty', () => {
-  const events = ['time,type,value,label,src', '18:11:15,damage,,x,'].join('\n')
-  assert.throws(() => parseScenario(validFiles({ events })), (err: unknown) => {
-    assert.ok(err instanceof ScenarioError)
-    assert.ok(err.problems.some((p) => /^events\.csv:2: value:/.test(p)), err.problems.join('\n'))
-    return true
-  })
+test("parseScenario: events.csv damage value is 'fin' or 'rudder:<from>-<to>'", () => {
+  for (const v of ['', 'tail', 'rudder:0.9-0.3']) {
+    const events = ['time,type,value,label,src', `18:11:15,damage,${v},x,`].join('\n')
+    assert.throws(() => parseScenario(validFiles({ events })), (err: unknown) => {
+      assert.ok(err instanceof ScenarioError)
+      assert.ok(err.problems.some((p) => /^events\.csv:2: value:/.test(p)), err.problems.join('\n'))
+      return true
+    }, v)
+  }
+  const events = ['time,type,value,label,src', '18:11:15,damage,rudder:0.35-0.88,x,'].join('\n')
+  assert.doesNotThrow(() => parseScenario(validFiles({ events })))
 })
 
 test('parseScenario: events.csv times must be non-decreasing', () => {

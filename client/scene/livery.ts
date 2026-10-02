@@ -4,8 +4,8 @@
 // custom shader projects across the span; wings and tailplane take the design's flat colours. Airlines with only a
 // colours entry in liveries.json get it drawn the old way (legacy.ts); airlines in neither fly plain white. A scenario
 // brings its own livery (liveryFromSpec: colours, a body-wrap decal, a fin logo) and can fold the wing tips in (u_span)
-// and cut away a damaged fin and tail cone (u_cut) on models whose paint map measures them.
-import { Cartesian3, Cartesian4, Color, CustomShader, CustomShaderMode, TextureMinificationFilter, TextureUniform, UniformType, VaryingType } from 'cesium'
+// and cut away a damaged fin and tail cone (u_cut) or a torn-off rudder (u_rudder) on models whose paint map measures them.
+import { Cartesian2, Cartesian3, Cartesian4, Color, CustomShader, CustomShaderMode, TextureMinificationFilter, TextureUniform, UniformType, VaryingType } from 'cesium'
 import { operatorOf } from '../../shared/airlines.ts'
 import { DESIGNS } from '../livery/designs/index.ts'
 import { WHITE as WHITE_HEX, WING, bellyHalf, profileOf, variantOf } from '../livery/kit.ts'
@@ -75,23 +75,25 @@ export function liveryFromSpec(key: string, spec: LiverySpec, base: string, pres
 const f = (n: number): string => n.toFixed(3)
 
 /**
- * The damage (scenarios-design §6.3), in the turned frame. The fin goes above a jagged line at finKeepY and, below it,
- * in the aft rudderFrac of its local chord (edges interpolated through the two measured heights); the fuselage goes
- * aft of tailConeZ. Back faces, seen through the holes, are drawn dark.
+ * The damage (scenarios-design §6.3), in the turned frame. u_cut: the fin goes above a jagged line at finKeepY and,
+ * below it, in the aft rudderFrac of its local chord (edges interpolated through the two measured heights); the
+ * fuselage goes aft of tailConeZ. u_rudder: the rudder (that aft part of the chord) goes between two heights, torn
+ * jagged (FZ1073). Back faces, seen through the holes, are drawn dark.
  */
 function cutText(c: NonNullable<Paint['cut']>, finHalfWidth: number): string {
   const [y0, le0, te0, y1, le1, te1] = c.finEdges
   return `
-  if (u_cut > 0.5) {
+  if (u_cut > 0.5 || u_rudder.y > u_rudder.x) {
     if (abs(p.x) < ${f(finHalfWidth)}) {
       float k = (p.y - ${f(y0)}) / ${f(y1 - y0)};
       float le = mix(${f(le0)}, ${f(le1)}, k);
       float te = mix(${f(te0)}, ${f(te1)}, k);
       float jag = 0.6 * (abs(fract(p.z * 0.8) - 0.5) * 4.0 - 1.0) + 0.4 * (abs(fract(p.z * 2.3 + 0.37) - 0.5) * 4.0 - 1.0);
-      if (p.y > ${f(c.finKeepY)} + 0.35 * jag) discard;
-      if (p.y > ${f(y0)} && p.z < te + ${f(c.rudderFrac)} * (le - te)) discard;
+      bool rudder = p.y > ${f(y0)} && p.z < te + ${f(c.rudderFrac)} * (le - te);
+      if (u_cut > 0.5 && (p.y > ${f(c.finKeepY)} + 0.35 * jag || rudder)) discard;
+      if (rudder && p.y > u_rudder.x + 0.2 * jag && p.y < u_rudder.y - 0.2 * jag) discard;
     }
-    if (p.z < ${f(c.tailConeZ)} && abs(p.x) < ${f(c.tailHalfWidth)}) discard;
+    if (u_cut > 0.5 && p.z < ${f(c.tailConeZ)} && abs(p.x) < ${f(c.tailHalfWidth)}) discard;
     if (czm_backFacing()) { material.diffuse = vec3(0.04); return; }
   }`
 }
@@ -276,7 +278,7 @@ const later = (job: () => Promise<void>): void => {
 /**
  * One CustomShader per livery for one model, made on first use and shared by every model of that airline and type.
  * It starts in the design's flat colours and takes its atlases once raster.ts has drawn them (browser only). Every
- * shader declares u_span and u_cut (off), so ChaseModel can set them on whichever it draws, and the lights' uniforms
+ * shader declares u_span, u_cut and u_rudder (off), so ChaseModel can set them on whichever it draws, and the lights' uniforms
  * (aircraftLights.ts sets them on the chased aircraft's): u_env, u_navL, u_navR, u_navT, u_bcn0, u_bcn1 and u_strobe,
  * all off. u_night is every shader's at once (setNight).
  * detail: the atlases' resolution, 1 for the chased aircraft, 0.5 for traffic (sizesAt).
@@ -350,6 +352,7 @@ export class LiveryShaders {
         u_stab: { type: UniformType.VEC3, value: rgb(d.stab ?? d.wing ?? WING) },
         u_span: { type: UniformType.FLOAT, value: 0 },
         u_cut: { type: UniformType.FLOAT, value: 0 },
+        u_rudder: { type: UniformType.VEC2, value: new Cartesian2() },
         u_night: { type: UniformType.FLOAT, value: nightNow },
         u_env: { type: UniformType.FLOAT, value: 0 },
         u_navL: off(), u_navR: off(), u_navT: off(), u_bcn0: off(), u_bcn1: off(),

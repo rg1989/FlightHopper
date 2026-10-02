@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { UniformType } from 'cesium'
+import { Cartesian2, UniformType } from 'cesium'
 import { DESIGNS } from '../livery/designs/index.ts'
 import { drawDesign, profileOf } from '../livery/kit.ts'
 import type { Op } from '../livery/kit.ts'
@@ -127,6 +127,8 @@ test('every livery shader declares its atlases, u_span and u_cut (off by default
       assert.equal(cs.uniforms.u_span.value, 0)
       assert.equal(cs.uniforms.u_cut.type, UniformType.FLOAT)
       assert.equal(cs.uniforms.u_cut.value, 0)
+      assert.equal(cs.uniforms.u_rudder.type, UniformType.VEC2)
+      assert.equal((cs.uniforms.u_rudder.value as Cartesian2).y, 0)
       assert.equal(cs.uniforms.u_skin.type, UniformType.SAMPLER_2D)
       assert.equal((cs.uniforms.u_skin.value as { typedArray: Uint8Array }).typedArray.length, 4, 'a 1×1 flat colour until drawn')
     }
@@ -144,7 +146,8 @@ test('custom() caches by livery code, apart from the table liveries', () => {
 
 test('b744 shader: span fold at wingTipY and the damage branch; neither on a320', () => {
   const fs = paintShaderText(b744.paint!, profileOf(b744)!)
-  assert.match(fs, /if \(u_cut > 0\.5\)/)
+  assert.match(fs, /if \(u_cut > 0\.5 \|\| u_rudder\.y > u_rudder\.x\)/)
+  assert.match(fs, /p\.y > u_rudder\.x \+ 0\.2 \* jag && p\.y < u_rudder\.y - 0\.2 \* jag\) discard/)
   assert.match(fs, /discard/)
   assert.match(fs, /czm_backFacing\(\)\) \{ material\.diffuse = vec3\(0\.04\)/)
   const vs = paintVertexText(b744.paint!)

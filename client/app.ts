@@ -65,6 +65,7 @@ import { eoxOnEsriFailure, imageryStatus } from './scene/imagery.ts'
 import { listScenarios, loadScenario } from './scenario/format.ts'
 import { recordingFile, recordingScenario } from './scenario/fromRecording.ts'
 import { Dresser, ScenarioRun } from './scenario/run.ts'
+import { damageOf } from './scenario/timeline.ts'
 import type { Scenario } from './scenario/types.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
@@ -1281,7 +1282,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         const byHeight = run?.scenario.gearFromHeight === true
         const aglFt = groundM === null ? null : (s.hM - groundM) / FT
         const gear = byHeight ? gearWanted(sf.jumped ? null : liveGear, { onGround: placed.onGround, aglFt, vsFpm: placed.vsFpm, gsKt: placed.gsKt }) : sf.event.gear
-        if (model !== null && dress?.apply(model, sf.event.damage.has('fin'), gear)) sun.attachModel(model.model)
+        if (model !== null && dress?.apply(model, damageOf(sf.event.damage), gear)) sun.attachModel(model.model)
         if (sf.jumped || (byHeight && liveGear === null)) model?.snapGear(gear) // a seek or a first look: as it was then, not swinging there
         liveGear = byHeight ? gear : null
       } else {

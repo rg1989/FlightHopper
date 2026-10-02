@@ -112,7 +112,8 @@
       "paint": {
         "noseMinusZ": true, "bodyHalfWidth": 2.1, "bellyBelowY": -4.28,
         "fin": { "behindZ": -13.08, "aboveY": -1.46, "halfWidth": 0.41 }, "finSplit": [0.55, -19.74, 3.6],
-        "engines": [2.13, 9.98, -2.97, 6.16], "finLogo": [-16.11, 2.5, 3.96], "title": [7.9, -2.9, 8.69], "windows": [-3.1, -13.58, 14.61, 0.51]
+        "engines": [2.13, 9.98, -2.97, 6.16], "finLogo": [-16.11, 2.5, 3.96], "title": [7.9, -2.9, 8.69], "windows": [-3.1, -13.58, 14.61, 0.51],
+        "cut": { "finKeepY": 0.5, "rudderFrac": 0.3, "tailConeZ": -16.5, "tailHalfWidth": 0.9, "finEdges": [-2.0, -11.23, -17.87, 5.65, -17.67, -19.7] }
       }
     },
     {
@@ -131,7 +132,8 @@
       "paint": {
         "noseMinusZ": true, "bodyHalfWidth": 2.1, "bellyBelowY": -4.28,
         "fin": { "behindZ": -13.08, "aboveY": -1.46, "halfWidth": 0.41 }, "finSplit": [0.55, -19.74, 3.6],
-        "engines": [2.13, 9.98, -2.97, 6.52], "finLogo": [-16.11, 2.5, 3.96], "title": [7.9, -2.9, 8.69], "windows": [-3.1, -13.58, 14.61, 0.51]
+        "engines": [2.13, 9.98, -2.97, 6.52], "finLogo": [-16.11, 2.5, 3.96], "title": [7.9, -2.9, 8.69], "windows": [-3.1, -13.58, 14.61, 0.51],
+        "cut": { "finKeepY": 0.5, "rudderFrac": 0.3, "tailConeZ": -16.5, "tailHalfWidth": 0.9, "finEdges": [-2.0, -11.23, -17.87, 5.65, -17.67, -19.7] }
       }
     },
     {

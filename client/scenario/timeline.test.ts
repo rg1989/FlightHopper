@@ -1,7 +1,7 @@
 // client/scenario/timeline.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { captionsAt, endingAt, eventStateAt, marks, storyAt, STORY_S } from './timeline.ts'
+import { NO_DAMAGE, captionsAt, damageOf, damagePart, endingAt, eventStateAt, marks, storyAt, STORY_S } from './timeline.ts'
 import type { EndingSpec, EventRow, Line } from './types.ts'
 
 function ev(p: Partial<EventRow>): EventRow {
@@ -21,6 +21,15 @@ test('eventStateAt: gear toggles by value (1 down, 0 up)', () => {
   assert.equal(eventStateAt(events, 15).gear, true)
   assert.equal(eventStateAt(events, 20).gear, false)
   assert.equal(eventStateAt(events, 30).gear, true)
+})
+
+test("damagePart: 'fin', or the rudder lost between two fractions of the fin's height; anything else null", () => {
+  assert.deepEqual(damagePart('fin'), { fin: true })
+  assert.deepEqual(damagePart('rudder:0.35-0.88'), { rudder: [0.35, 0.88] })
+  assert.deepEqual(damagePart('rudder:0-1'), { rudder: [0, 1] })
+  for (const v of ['', 'rudder', 'rudder:0.9-0.3', 'rudder:0.5-1.2', 'rudder:a-b', 'tail']) assert.equal(damagePart(v), null, v)
+  assert.deepEqual(damageOf(new Set()), NO_DAMAGE)
+  assert.deepEqual(damageOf(new Set(['rudder:0.35-0.88', 'fin'])), { fin: true, rudder: [0.35, 0.88] })
 })
 
 test('eventStateAt: damage accumulates part ids (never clears)', () => {

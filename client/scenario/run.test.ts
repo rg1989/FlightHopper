@@ -9,6 +9,8 @@ import { registerHooks } from 'node:module'
 import type { FlightData, ModelManifestEntry, RenderState } from '../types.ts'
 import type { Livery } from '../scene/livery.ts'
 import type { PoseData } from './pose.ts'
+import { NO_DAMAGE, type Damage } from './timeline.ts'
+const FIN: Damage = { fin: true, rudder: null }
 
 // run.ts mounts the play bar, captions and ending, which import their CSS for Vite: Node loads every .css as nothing.
 registerHooks({
@@ -249,7 +251,7 @@ function fakeModel(start: ModelManifestEntry, loadAfter: number) {
     },
     paintLivery: (l: Livery) => log.push(`paint ${l.code} on ${m.entry.id}`),
     setShape: (h: number | null) => log.push(`shape ${h} on ${m.entry.id}`),
-    setDamage: (on: boolean) => log.push(`damage ${on}`),
+    setDamage: (d: Damage) => log.push(`damage ${d.fin}`),
     setGear: (on: boolean) => log.push(`gear ${on}`),
   }
   return m
@@ -261,23 +263,23 @@ test('Dresser: asks for the scenario model every frame until it is drawn, dressi
   const b744 = entry('b744')
   const m = fakeModel(entry('a320'), 2)
   const d = new Dresser(b744, LIVERY, 29.8)
-  assert.equal(d.apply(m, false, true), false)
+  assert.equal(d.apply(m, NO_DAMAGE, true), false)
   assert.deepEqual(m.log.splice(0), ['paint scenario:tiny on a320', 'shape 29.8 on a320', 'damage false', 'gear true'])
-  assert.equal(d.apply(m, false, true), false)
+  assert.equal(d.apply(m, NO_DAMAGE, true), false)
   assert.deepEqual(m.log.splice(0), ['damage false', 'gear true'], 'dressed already: nothing again')
-  assert.equal(d.apply(m, true, false), true, 'loaded: switched (the Sun re-attaches its light)')
+  assert.equal(d.apply(m, FIN, false), true, 'loaded: switched (the Sun re-attaches its light)')
   assert.deepEqual(m.log.splice(0), ['use b744', 'paint scenario:tiny on b744', 'shape 29.8 on b744', 'damage true', 'gear false'])
-  assert.equal(d.apply(m, true, false), false)
+  assert.equal(d.apply(m, FIN, false), false)
   assert.deepEqual(m.log.splice(0), ['damage true', 'gear false'])
 })
 
 test('Dresser: already on the scenario model it dresses at once; no livery or model: only shape, damage and gear', () => {
   const b744 = entry('b744')
   const m = fakeModel(b744, 0)
-  new Dresser(b744, LIVERY, null).apply(m, false, false)
+  new Dresser(b744, LIVERY, null).apply(m, NO_DAMAGE, false)
   assert.deepEqual(m.log, ['paint scenario:tiny on b744', 'shape null on b744', 'damage false', 'gear false'])
   const bare = fakeModel(b744, 0)
-  new Dresser(null, null, null).apply(bare, false, false)
+  new Dresser(null, null, null).apply(bare, NO_DAMAGE, false)
   assert.deepEqual(bare.log, ['shape null on b744', 'damage false', 'gear false'])
 })
 

@@ -10,6 +10,8 @@ import type { ModelManifest, RenderState } from '../types.ts'
 import { liveryFromSpec } from './livery.ts'
 import { RETRACT_S } from './gear.ts'
 import { ChaseModel, GLTF_TO_CESIUM, fixMatrix, hprFor, loadGearModel, measureGlb, modelMatrixFor, noseAzimuthDeg } from './model.ts'
+import { NO_DAMAGE, type Damage } from '../scenario/timeline.ts'
+const FIN: Damage = { fin: true, rudder: null }
 
 const root = new URL('../../', import.meta.url)
 const manifest: ModelManifest = JSON.parse(readFileSync(new URL('public/models/manifest.json', root), 'utf8'))
@@ -303,6 +305,29 @@ test("b744 manifest: body box, wing tip, damage cut and gear lie on the GLB's bo
   inside(-g.min.y, X, 'gear left')
 })
 
+test('every paint map with a cut: its fin edges, kept stump and tail break lie on its GLB (turned frame)', () => {
+  const cuts = manifest.models.filter((e) => e.paint?.cut !== undefined)
+  assert.ok(cuts.some((e) => e.id === 'b38m') && cuts.some((e) => e.id === 'b744'))
+  for (const e of cuts) {
+    const a = measureGlb(readFileSync(new URL(`public/${e.uri}`, root)))
+    const Y = [a.min.z, a.max.z]
+    const Z = [-a.max.x, -a.min.x]
+    const inside = (v: number, [lo, hi]: number[], what: string, tol = 0.05): void =>
+      assert.ok(v >= lo - tol && v <= hi + tol, `${e.id} ${what}: ${v} outside ${lo}…${hi}`)
+    const p = e.paint!
+    const c = p.cut!
+    const [yRoot, leRoot, teRoot, yTip, leTip, teTip] = c.finEdges
+    for (const y of [yRoot, yTip]) inside(y, Y, 'fin chord y')
+    for (const z of [leRoot, teRoot, leTip, teTip]) inside(z, Z, 'fin chord z')
+    assert.ok(leRoot > teRoot && leTip > teTip && yTip > yRoot, `${e.id}: leading edges nose-side, the tip above the root`)
+    near(yTip, Y[1], 0.2, `${e.id}: the fin tip is the model's top`)
+    inside(c.finKeepY, [yRoot, yTip], 'finKeepY between the fin root and tip', 0)
+    assert.ok(c.rudderFrac > 0 && c.rudderFrac < 1)
+    inside(c.tailConeZ, [Z[0], leRoot], 'tailConeZ between the tail and the fin root leading edge', 0)
+    assert.ok(c.tailHalfWidth > p.fin.halfWidth && c.tailHalfWidth < p.bodyHalfWidth, e.id)
+  }
+})
+
 interface FakeModel { modelMatrix: Matrix4; show: boolean; customShader: CustomShader | undefined; backFaceCulling: boolean; imageBasedLighting: { imageBasedLightingFactor: Cartesian2 } }
 const fakeModel = (): FakeModel => ({ modelMatrix: new Matrix4(), show: true, customShader: undefined, backFaceCulling: true, imageBasedLighting: { imageBasedLightingFactor: new Cartesian2(1, 1) } })
 const jal = liveryFromSpec('scenario:jal123', { base: '#f4f4f1', fin: '#f4f4f1' }, '/scenarios/jal123/', { body: false, finLogo: false })
@@ -320,7 +345,7 @@ test('ChaseModel.setShape/setDamage: u_span and u_cut on the current shader, re-
   assert.deepEqual([uniform(first, 'u_span'), uniform(first, 'u_cut'), first.backFaceCulling], [0, 0, true])
 
   cm.setShape(29.8)
-  cm.setDamage(true)
+  cm.setDamage(FIN)
   assert.deepEqual([uniform(first, 'u_span'), uniform(first, 'u_cut'), first.backFaceCulling], [29.8, 1, false], 'back faces drawn while damaged')
 
   cm.paintLivery(jal)
@@ -330,7 +355,7 @@ test('ChaseModel.setShape/setDamage: u_span and u_cut on the current shader, re-
   cm.paintLivery({ ...jal })
   assert.equal(first.customShader, scn, 'same livery code: same shader')
 
-  cm.setDamage(false)
+  cm.setDamage(NO_DAMAGE)
   cm.setShape(null)
   assert.deepEqual([uniform(first, 'u_span'), uniform(first, 'u_cut'), first.backFaceCulling], [0, 0, true])
   cm.setShape(29.8)
@@ -338,7 +363,7 @@ test('ChaseModel.setShape/setDamage: u_span and u_cut on the current shader, re-
   assert.equal(first.customShader, white, 'a table livery replaces the scenario livery')
   assert.deepEqual([uniform(first, 'u_span'), uniform(first, 'u_cut')], [29.8, 0], 'the stale values on the cached shader are rewritten')
 
-  cm.setDamage(true)
+  cm.setDamage(FIN)
   cm.use(clone)
   await Promise.resolve()
   assert.equal(cm.use(clone), true)
@@ -347,9 +372,18 @@ test('ChaseModel.setShape/setDamage: u_span and u_cut on the current shader, re-
   cm.paint(null)
   assert.deepEqual([uniform(other, 'u_span'), uniform(other, 'u_cut')], [29.8, 1])
   cm.setShape(null)
-  cm.setDamage(false)
+  cm.setDamage(NO_DAMAGE)
   assert.equal(cm.use(b744), true)
   assert.deepEqual([uniform(first, 'u_span'), uniform(first, 'u_cut'), first.backFaceCulling], [0, 0, true], 'back on the first model: its shader is rewritten')
+
+  cm.setDamage({ fin: false, rudder: [0.35, 0.88] })
+  const [y0, , , y1] = b744.paint!.cut!.finEdges
+  const band = first.customShader!.uniforms.u_rudder.value as Cartesian2
+  assert.deepEqual([uniform(first, 'u_cut'), first.backFaceCulling], [0, false], 'a lost rudder: back faces drawn, the fin kept')
+  near(band.x, y0 + 0.35 * (y1 - y0), 1e-9, 'the band from 35 %…')
+  near(band.y, y0 + 0.88 * (y1 - y0), 1e-9, '…to 88 % of the fin, root to tip')
+  cm.setDamage(NO_DAMAGE)
+  assert.deepEqual([(first.customShader!.uniforms.u_rudder.value as Cartesian2).y, first.backFaceCulling], [0, true])
 
   const half = new ChaseModel(fakes().viewer, { ...b744, scale: 0.5 }, fakeModel() as unknown as Model)
   half.paint(null)

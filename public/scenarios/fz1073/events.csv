@@ -20,9 +20,10 @@ time,type,value,label,src
 05:21:59,story,12,"Saudi Arabia's preliminary inquiry: the first officer attacked the captain. By Israeli accounts he stabbed him with a knife and the cockpit's emergency axe, and tried to crash the aircraft.",SAUDI
 05:22:13,story,12,"At 05:22:13, at 27,950 ft and diving at over 20,000 ft per minute, the aircraft drops out of the open networks' reach for nine minutes. Flightradar24's receivers keep hearing it: over 14,000 ft lost in under 30 seconds.",ADSBLOL
 05:22:28,story,12,"It pulls out at about 16,600 ft at 05:22:40, turning hard right through north-east at 598 kt over the ground: far beyond the 737 MAX's maximum operating speed.",FR24BLOG
+05:22:36,damage,rudder:0.35-0.88,"Most of the rudder torn away (when, exactly, is not known)",MEDIA
 05:22:40,mark,,"Bottom of the dive: 16,600 ft, 598 kt",FR24BLOG
 05:22:42,story,18,"The wounded captain fights him off long enough to release the cockpit door. Cabin crew and passengers, Israelis among them, break in and overpower the first officer; one passenger pulls back on the controls as he had seen on television. The two off-duty flydubai pilots take over.",MEDIA
-05:23:02,story,12,"Photos at Tabuk later show much of the rudder gone from the tail, most likely torn away by the speed of the dive.",MEDIA
+05:23:02,story,14,"Photos at Tabuk show most of the rudder torn from the fin, from its lower third almost to the tip, most likely by the speed of the dive. It is drawn gone from the dive's fastest moment; when it went is not known.",MEDIA
 05:23:23,mark,,"Zoom climb to 21,725 ft",FR24BLOG
 05:23:30,phase,,"Down again, turning north-west",FR24
 05:23:32,story,12,"A zoom climb to 21,725 ft at 05:23:23, then down again to 14,950 ft by 05:24:18, turning north-west.",FR24BLOG
