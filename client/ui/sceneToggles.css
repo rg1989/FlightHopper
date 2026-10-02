@@ -1,22 +1,16 @@
 /* client/ui/sceneToggles.css */
-/* The Scene panel: one row per switch (icon, label with its key, a hint line, the switch). */
+/* The Layers panel: one row per switch (icon, label with its key, a hint line, the switch). */
 .fh-scene {
   display: flex;
   flex-direction: column;
   padding: 6px 0;
 }
 
-.fh-scene-note {
-  margin: 10px 14px 2px;
-  padding: 8px 10px;
-  border-radius: var(--fh-radius-sm);
-  background: var(--fh-accent-soft);
-  color: #cfe4ff;
-  font-size: 12px;
-}
-
-.fh-scene-note[hidden] {
-  display: none;
+/* What does not apply to the view on screen, and parts with nothing to show (the rows and button groups are flex boxes,
+   which would override `hidden`). */
+.fh-scene[hidden],
+.fh-scene [hidden] {
+  display: none !important;
 }
 
 .fh-scene-row {
@@ -33,7 +27,8 @@
   background: var(--fh-hover);
 }
 
-.fh-scene-row + .fh-scene-row {
+/* A hairline between the rows that show (a hidden one before a row draws none). */
+.fh-scene-row:not([hidden]) ~ .fh-scene-row {
   border-top: 1px solid var(--fh-hairline);
 }
 
@@ -67,10 +62,6 @@
   font-size: 12px;
 }
 
-.fh-scene-row .fh-spin[hidden] {
-  display: none;
-}
-
 .fh-kbd {
   display: inline-grid;
   place-items: center;
@@ -93,7 +84,6 @@
 
 /* Phones: larger type. */
 @media (max-width: 640px) {
-  .fh-scene-note,
   .fh-scene-hint {
     font-size: 13px;
   }
@@ -159,11 +149,6 @@
 
 .fh-wx-more {
   padding: 0 14px 10px 58px;
-}
-
-.fh-wx-more[hidden],
-.fh-wx-line[hidden] {
-  display: none;
 }
 
 .fh-wx-legend {

@@ -1,6 +1,7 @@
 // client/ui/sceneToggles.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import type { ScenePrefs } from '../types.ts'
 
@@ -20,14 +21,22 @@ class El {
   textContent = ''
   title = ''
   type = ''
-  hidden = false
+  #hidden = false
   classList = { add: (): void => {} } // icons.ts marks its svg
   style = { setProperty: (): void => {} }
   attrs: Record<string, string> = {}
   attrWrites = 0
+  hiddenWrites = 0
   listeners = new Map<string, (() => void)[]>()
   constructor(tag: string) {
     this.tag = tag
+  }
+  get hidden(): boolean {
+    return this.#hidden
+  }
+  set hidden(v: boolean) {
+    this.hiddenWrites++
+    this.#hidden = v
   }
   append(...cs: El[]): void {
     for (const c of cs) {
@@ -63,6 +72,16 @@ Object.assign(globalThis, {
 
 const all = (el: El): El[] => [el, ...el.children.flatMap(all)]
 const text = (el: El): string => el.textContent + el.children.map(text).join('')
+/** What is on screen: the tree without its hidden parts. */
+const visible = (el: El): El[] => (el.hidden ? [] : [el, ...el.children.flatMap(visible)])
+/** The panel as it shows: section titles, button groups, switches and the weather's legend, top to bottom. */
+const screen = (root: El): string[] => visible(root).flatMap((e) => {
+  if (e.className === 'fh-scene-title') return [e.textContent]
+  if (e.attrs.role === 'group' || e.attrs.role === 'switch') return [e.attrs['aria-label']]
+  return e.className === 'fh-wx-more' ? ['weather legend'] : []
+})
+const MAP = ['Map', 'Base map']
+const SCENE = ['3-D scene', '3-D terrain', 'Sun', 'See-through buildings']
 
 function mount(prefs: ScenePrefs) {
   const root = new El('div')
@@ -71,33 +90,83 @@ function mount(prefs: ScenePrefs) {
   const sw = (label: string): El => all(root).find((e) => e.attrs.role === 'switch' && e.attrs['aria-label'] === label)!
   const [topo, light, glass] = ['3-D terrain', 'Sun', 'See-through buildings'].map(sw)
   const checked = (): [string, string, string] => [topo.attrs['aria-checked'], light.attrs['aria-checked'], glass.attrs['aria-checked']]
-  const note = all(root).find((e) => e.className === 'fh-scene-note')!
   const spinner = all(root).find((e) => e.className === 'fh-spin')!
-  const [roads, wx] = ['Roads & places', 'Weather'].map(sw)
+  const [roads, places, wx] = ['Roads', 'Borders & places', 'Weather'].map(sw)
   const [mapB, satB, lightB, darkB] = all(root).filter((e) => e.className === 'fh-seg-b')
   const theme = all(root).find((e) => e.attrs['aria-label'] === 'Map theme')!
   const wxLine = all(root).find((e) => e.className === 'fh-wx-line')!
   const wxMore = all(root).find((e) => e.className === 'fh-wx-more')!
   const view = all(root).find((e) => e.className === 'fh-scene-view')!
-  return { root, topo, light, glass, roads, wx, mapB, satB, lightB, darkB, theme, wxLine, wxMore, view, t, changes, checked, note, spinner }
+  return { root, topo, light, glass, roads, places, wx, mapB, satB, lightB, darkB, theme, wxLine, wxMore, view, t, changes, checked, spinner }
 }
 
-test('switch rows: Roads (R), Weather (W), 3-D terrain (T), Sun (L), See-through buildings (X), real buttons with a label each', () => {
-  const { root, topo, light, glass } = mount({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
+test('switch rows: Roads (R), Borders & places (P), Weather (W), 3-D terrain (T), Sun (L), See-through buildings (X), real buttons with a label each', () => {
+  const { root, topo, light, glass, roads, places, wx } = mount({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
   const rows = all(root).filter((e) => e.className === 'fh-scene-row')
   assert.deepEqual(rows.map((r) => text(r.children[1])), [
-    'Roads & placesRRoads, streets and city names over the satellite',
+    'RoadsRStreets and highways over the satellite',
+    'Borders & placesPCountry lines and city names over the satellite',
     'WeatherWRain radar, airport flight rules and wind, SIGMETs',
     '3-D terrainTMountains and valleys in relief',
     'SunLReal sun and moon light, day and night',
     'See-through buildingsXBuildings glassy, so they never hide the aircraft',
   ])
-  for (const b of [topo, light, glass]) {
+  for (const b of [roads, places, wx, topo, light, glass]) {
     assert.equal(b.tag, 'button')
     assert.equal(b.type, 'button') // never a form submit; Enter and Space work as on any button
     assert.equal(b.className, 'fh-switch')
   }
   assert.deepEqual([topo, light, glass].map((b) => b.attrs['aria-label']), ['3-D terrain', 'Sun', 'See-through buildings'])
+})
+
+test('only what applies to the view on screen: top-down or chase, on the map or the satellite', () => {
+  const cases: [string, boolean, Partial<ScenePrefs>, string[]][] = [
+    ['top-down, map', false, { mapTop: true }, [...MAP, 'Map theme', 'Weather']],
+    ['top-down, satellite', false, { mapTop: false }, [...MAP, 'Roads', 'Borders & places', 'Weather']],
+    ['chase, map', true, { mapChase: true }, [...MAP, 'Map theme', ...SCENE]],
+    ['chase, satellite', true, { mapChase: false }, [...MAP, 'Roads', 'Borders & places', ...SCENE]],
+  ]
+  for (const [name, chasing, base, want] of cases) {
+    const { root, t } = mount({ ...DEFAULT_PREFS, ...base })
+    t.setChasing(chasing)
+    assert.deepEqual(screen(root), want, name)
+    assert.ok(all(root).every((e) => e.className !== 'fh-scene-note'), `${name}: no note`) // the 3-D scene shows in the chase only
+  }
+})
+
+test('the rows follow the base and the view as they change: Satellite, the chase, Map there, and back', () => {
+  const { root, satB, t, changes } = mount({ ...DEFAULT_PREFS })
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather'])
+  satB.click()
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather'], 'not until the app answers')
+  t.update(changes.at(-1)!)
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather'])
+  t.setChasing(true) // the chase keeps its own base: the satellite by default
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', ...SCENE])
+  t.update({ ...DEFAULT_PREFS, mapTop: false, mapChase: true })
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', ...SCENE])
+  t.setChasing(false)
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather'])
+})
+
+test('Roads and Borders & places: each switch shows and asks for its own pref', () => {
+  const { roads, places, t, changes } = mount({ ...DEFAULT_PREFS, mapTop: false })
+  assert.deepEqual([roads.attrs['aria-checked'], places.attrs['aria-checked']], ['false', 'true']) // the defaults
+  roads.click()
+  assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, mapTop: false, roads: true })
+  places.click()
+  assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, mapTop: false, places: false })
+  t.update({ ...DEFAULT_PREFS, mapTop: false, roads: true, places: false })
+  assert.deepEqual([roads.attrs['aria-checked'], places.attrs['aria-checked']], ['true', 'false'])
+  places.click()
+  assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, mapTop: false, roads: true, places: true })
+})
+
+// .fh-seg and the rows are flex boxes, whose display beats the hidden attribute's own: the Light | Dark row stayed on the
+// satellite until the panel's [hidden] won. CSS, so checked as text.
+test('a hidden part of the panel really goes: there, [hidden] wins over the display of its rows and button groups', () => {
+  const css = readFileSync(new URL('./sceneToggles.css', import.meta.url), 'utf8')
+  assert.match(css, /\.fh-scene\[hidden\],\s*\.fh-scene \[hidden\] \{\s*display: none !important;\s*\}/)
 })
 
 test('See-through asks for glass toggled and keeps the others', () => {
@@ -139,29 +208,31 @@ test('update() only re-renders: no onChange, and the next click toggles from the
   assert.deepEqual(changes[1], { ...DEFAULT_PREFS, topo: false, light: true, glass: false })
 })
 
-test('update() with unchanged prefs writes nothing (cheap to call every frame)', () => {
-  const { topo, light, glass, t } = mount({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
-  const writes = (): number => topo.attrWrites + light.attrWrites + glass.attrWrites
+test('update() and setChasing() with nothing changed write nothing (both run every frame)', () => {
+  const { root, light, t } = mount({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
+  const writes = (): number => all(root).reduce((n, e) => n + e.attrWrites + e.hiddenWrites, 0)
   const before = writes()
-  for (let i = 0; i < 100; i++) t.update({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
+  for (let i = 0; i < 100; i++) {
+    t.update({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
+    t.setChasing(false)
+  }
   assert.equal(writes(), before)
   t.update({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
   assert.equal(writes(), before + 1) // only the switch that changed
+  assert.equal(light.attrs['aria-checked'], 'true')
+  t.setChasing(true)
+  const chased = writes()
+  for (let i = 0; i < 100; i++) t.setChasing(true)
+  assert.equal(writes(), chased)
 })
 
-test('setBusy shows the spinner on the terrain row; setChasing hides the "applies in the chase" note', () => {
-  const { t, spinner, note } = mount({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
+test('setBusy shows the spinner on the terrain row', () => {
+  const { t, spinner } = mount({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
   assert.equal(spinner.hidden, true)
   t.setBusy(true)
   assert.equal(spinner.hidden, false)
   t.setBusy(false)
   assert.equal(spinner.hidden, true)
-  assert.equal(note.hidden, false)
-  assert.match(note.textContent, /3-D chase view/)
-  t.setChasing(true)
-  assert.equal(note.hidden, true)
-  t.setChasing(false)
-  assert.equal(note.hidden, false)
 })
 
 test('keys and storage belong to the app: no listeners outside the panel', () => {
@@ -172,7 +243,7 @@ test('keys and storage belong to the app: no listeners outside the panel', () =>
   assert.deepEqual(outside, [])
 })
 
-test('destroy removes the rows and the note; twice is harmless', () => {
+test('destroy removes both sections; twice is harmless', () => {
   const { root, t } = mount({ ...DEFAULT_PREFS, topo: true, light: true, glass: false })
   t.destroy()
   assert.equal(root.children.length, 0)
@@ -224,4 +295,16 @@ test('weather: its legend shows while on, and setWeather writes the status line'
   assert.deepEqual([wxLine.hidden, wxLine.textContent], [false, 'Radar 12:00Z · 3 airports'])
   t.setWeather(null)
   assert.equal(wxLine.hidden, true)
+})
+
+test('weather is the top-down map\'s: in the chase its row, legend and line go, and come back with the map', () => {
+  const { root, t } = mount({ ...DEFAULT_PREFS, wx: true })
+  t.setWeather('Live only')
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'weather legend'])
+  assert.ok(visible(root).some((e) => e.className === 'fh-wx-line'))
+  t.setChasing(true) // on the satellite, the chase's default
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', ...SCENE])
+  assert.ok(!visible(root).some((e) => e.className === 'fh-wx-line'))
+  t.setChasing(false)
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'weather legend'])
 })

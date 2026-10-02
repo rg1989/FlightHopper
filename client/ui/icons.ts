@@ -21,7 +21,7 @@ const P: Record<string, string> = {
   hourglass: 'M6.5 3.5h11M6.5 20.5h11M7.5 3.5c0 5 9 5 9 8.5s-9 3.5-9 8.5M16.5 3.5c0 5-9 5-9 8.5s9 3.5 9 8.5',
   // A cloud: the weather.
   cloud: 'M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.5 9.6 4.5 4.5 0 0 0 7 18.5Z',
-  // A road running into the distance: roads and places.
+  // A road running into the distance: roads.
   road: 'M9.5 3.5 5 20.5M14.5 3.5l4.5 17M12 5v2.5M12 11v2.5M12 17v3',
   // Two peaks: 3-D terrain.
   mountain: 'M2.5 19.5 9 8l4 7 2.5-4 6 8.5h-19Z',
@@ -52,7 +52,7 @@ const P: Record<string, string> = {
   search: 'M10.5 17.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20.5 20.5l-5-5',
   // A control tower (the search's airports): the cab on its shaft.
   tower: 'M6.5 4.5h11l-1.5 5h-8l-1.5-5ZM12 2.5v2M9.5 9.5l-1 11M14.5 9.5l1 11M6 20.5h12',
-  // A flag on its pole (the search's countries).
+  // A flag on its pole: countries (the search's; borders and places in the Layers panel).
   flag: 'M5.5 21V3.5M5.5 4.5h12l-2.5 4.5 2.5 4.5h-12',
   // A clock face (the search's past picks).
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',

@@ -1,10 +1,12 @@
 // client/ui/sceneToggles.ts
-// The Layers panel (the square under the rail). Map: the base for the view on screen, Map or Satellite (M; the top-down
-// view and the chase each keep their own), the map's theme under Map, Light or Dark (both views; Settings › Display too), Roads & places over the satellite (R), Weather on the top-down map (W).
-// 3-D scene (design D11): a switch row each for 3-D terrain (T), Sun (L) and See-through buildings (X). Each row has
-// its icon and key. A click asks the app for the toggled prefs through onChange and changes nothing itself; update()
-// only re-renders. setBusy(true) shows a spinner on the terrain row while the relief grows or sinks; setWeather() shows
-// what the weather layer holds. The app owns the keys, the stored prefs and the panel.
+// The Layers panel (the square under the rail): only what applies to the view on screen. Map: the base for that view,
+// Map or Satellite (M; the top-down view and the chase each keep their own); under Map its theme, Light or Dark (both
+// views; Settings › Display too); under Satellite, Roads (R) and Borders & places (P) over it; on the top-down map,
+// Weather (W). In the chase, the 3-D scene (design D11): a switch row each for 3-D terrain (T), Sun (L) and See-through
+// buildings (X). Each row has its icon and key. A click asks the app for the toggled prefs through onChange and changes
+// nothing itself; update() only re-renders. A view or base change hides and shows rows (none is rebuilt, so the focus
+// stays put). setBusy(true) shows a spinner on the terrain row while the relief grows or sinks; setWeather() shows what
+// the weather layer holds. The app owns the keys, the stored prefs and the panel.
 import { icon, type IconName } from './icons.ts'
 import type { ScenePrefs } from '../types.ts'
 import './sceneToggles.css'
@@ -17,7 +19,7 @@ export interface SceneTogglesOpts {
 export interface SceneTogglesHandle {
   update(prefs: ScenePrefs): void
   setBusy(busy: boolean): void // the relief is animating
-  setChasing(chasing: boolean): void // the base picker follows the view; the 3-D rows' hint shows in the top-down view
+  setChasing(chasing: boolean): void // the base picker and the rows follow the view
   setWeather(text: string | null): void // a line under the weather row: what it shows, or why not
   destroy(): void
 }
@@ -25,7 +27,8 @@ export interface SceneTogglesHandle {
 type Key = Exclude<keyof ScenePrefs, 'mapTop' | 'mapChase' | 'dark'>
 interface Row { key: Key; icon: IconName; label: string; hint: string; shortcut: string }
 const LAYER_ROWS: Row[] = [
-  { key: 'roads', icon: 'road', label: 'Roads & places', hint: 'Roads, streets and city names over the satellite', shortcut: 'R' },
+  { key: 'roads', icon: 'road', label: 'Roads', hint: 'Streets and highways over the satellite', shortcut: 'R' },
+  { key: 'places', icon: 'flag', label: 'Borders & places', hint: 'Country lines and city names over the satellite', shortcut: 'P' },
   { key: 'wx', icon: 'cloud', label: 'Weather', hint: 'Rain radar, airport flight rules and wind, SIGMETs', shortcut: 'W' },
 ]
 const SCENE_ROWS: Row[] = [
@@ -106,14 +109,13 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     const map = prefs[baseKey(chasing)]
     mapBtn.setAttribute('aria-pressed', String(map))
     satBtn.setAttribute('aria-pressed', String(!map))
-    theme.hidden = !map
     lightBtn.setAttribute('aria-pressed', String(!prefs.dark))
     darkBtn.setAttribute('aria-pressed', String(prefs.dark))
     baseView.textContent = chasing ? 'Chase view' : 'Top-down view'
   }
   showBase()
-  const roadsRow = row(LAYER_ROWS[0])
-  const wxRow = row(LAYER_ROWS[1])
+  // The overlays, only while the view shows the satellite; the weather, only on the top-down map (the chase draws none).
+  const [roadsRow, placesRow, wxRow] = LAYER_ROWS.map(row)
   const wxMore = h('div', 'fh-wx-more')
   const legend = h('div', 'fh-wx-legend')
   for (const [cat, color] of CATEGORIES) {
@@ -124,17 +126,30 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   const wxLine = h('p', 'fh-wx-line')
   wxLine.hidden = true
   wxMore.append(legend, wxLine)
-  wxMore.hidden = !prefs.wx
-  layers.append(baseHead, seg, theme, roadsRow, wxRow, wxMore)
+  layers.append(baseHead, seg, theme, roadsRow, placesRow, wxRow, wxMore)
 
-  // 3-D scene.
+  // 3-D scene: the chase's only.
   const scene = h('div', 'fh-scene')
   const sceneHead = h('div', 'fh-scene-head')
   sceneHead.append(h('span', 'fh-scene-title', '3-D scene'))
-  const note = h('p', 'fh-scene-note')
-  note.textContent = 'These apply in the 3-D chase view: pick an aircraft, then press Chase.'
-  scene.append(sceneHead, note, ...SCENE_ROWS.map(row))
+  scene.append(sceneHead, ...SCENE_ROWS.map(row))
   root.append(layers, scene)
+
+  /** Shows el or hides it, writing only a change (update and setChasing run every frame). */
+  const show = (el: HTMLElement, on: boolean): void => {
+    if (el.hidden === on) el.hidden = !on
+  }
+  /** The rows that apply to the view on screen and its base. */
+  const fit = (): void => {
+    const map = prefs[baseKey(chasing)]
+    show(theme, map)
+    show(roadsRow, !map)
+    show(placesRow, !map)
+    show(wxRow, !chasing)
+    show(wxMore, !chasing && prefs.wx)
+    show(scene, chasing)
+  }
+  fit()
 
   return {
     update(next) {
@@ -142,18 +157,18 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
         if (next[r.key] !== prefs[r.key]) switches.get(r.key)!.setAttribute('aria-checked', String(next[r.key]))
       }
       const base = next[baseKey(chasing)] !== prefs[baseKey(chasing)] || next.dark !== prefs.dark
-      if (next.wx !== prefs.wx) wxMore.hidden = !next.wx
       prefs = { ...next }
       if (base) showBase()
+      fit()
     },
     setBusy(busy) {
       if (spinner && spinner.hidden === busy) spinner.hidden = !busy
     },
     setChasing(on) {
-      if (note.hidden !== on) note.hidden = on
       if (on === chasing) return
       chasing = on
       showBase()
+      fit()
     },
     setWeather(text) {
       if (wxLine.hidden !== (text === null)) wxLine.hidden = text === null
