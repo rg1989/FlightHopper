@@ -188,7 +188,8 @@
 }
 
 /* History, no position at the replay time (not heard since / until): a neutral grey dot, never the trouble red, with the
-   status text left in the card's muted grey. --fh-muted keeps 4.8:1 or more on the card's glass over any map, light or dark. */
+   status text left in the card's muted grey. --fh-muted reads at about 4.8:1 on the card's glass over a white map (the
+   worst case), better over a darker one. */
 .fh-card-status .fh-dot[data-state='quiet'] {
   background: var(--fh-muted);
 }
