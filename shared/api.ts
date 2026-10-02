@@ -46,6 +46,7 @@ export interface HistoryTrack {
   alt: (number | 'g' | null)[]   // baro ft (25 ft steps), 'g' on the ground, null unknown
   gs: (number | null)[]          // ground speed, kt (0.1)
   type: string | null            // ICAO type designator from the server's address table (the files carry none); null unknown
+  category?: string | null       // the emitter category its type implies (ICAO Doc 8643 class), for the icon; absent/null unknown
 }
 
 /** A UTC half hour of the past in one circle (GET /api/history?slot&lat&lon&nm): adsb.lol's tar1090 heatmap file. */
