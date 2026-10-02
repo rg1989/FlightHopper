@@ -61,5 +61,14 @@ Chase in 3-D is offered only while heard.
   loader while History loads.
 - Weather layers hide in History; the Layers switch shows disabled ("Live only") until Live.
 
-## Facts
-(filled from the research: type table source and licence, adsb.lol's oldest day, trace point spacing)
+## Facts (measured 2026-10-02)
+- Types: Mictronics aircraft database (`indexedDB_old.zip`, 4.3 MB, weekly, ODC-By 1.0: credit "Contains information
+  from the Mictronics aircraft database, made available under the ODC Attribution License"): 452k addresses, types with
+  their ICAO description (L2J, H1P…) and wake category; 94.9% of a real half hour's aircraft typed. tar1090-db (97.8%)
+  mixes in ADS-B Exchange data with no licence: not used. OpenSky's database is research-only: not used.
+- adsb.lol keeps 42 whole days (oldest 2026-08-21 today; 08-20 gone); no partial days at the edge. The newest half
+  hour's file appears 2–8 s after it ends (p90 8 s); the half hour in progress is never there.
+- A half hour downloads in 1–2 s here (15.6 MB at 13.6 MB/s) and decompresses in 0.06 s: the wait is not the download.
+- Traces: legs start at the first row and at rows flagged 2; a row flagged 1 follows a gap (every gap ≥ 30 s). Cruise
+  rows ~20 s apart, low ~2 s; gaps over 60 s are coverage holes (0.36% of pairs). A straight line across ≤ 60 s is good
+  to 0.1 nm: the flown path's dotted rule (over 60 s and over 2 nm) stays.
