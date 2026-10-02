@@ -15,14 +15,17 @@ export type DayState =
   | { kind: 'before'; leg: TraceReply; untilMs: number } // earlier than its first leg (leg): not heard until its first point
   | { kind: 'none' } // no legs
 
-/** A time in a leg (s after its t0Ms) as UTC ms, whole, as traceSamples and tracePath place its points. */
+/**
+ * A time in a leg (s after its t0Ms) as UTC ms, whole: its points (traceSamples, tracePath), its callsign changes and its
+ * span are all placed by it, so they agree to the ms (32.2 s × 1000 is 32200.000000000004 in floating point).
+ */
 export function legMs(t0Ms: number, s: number): number {
   return Math.round(t0Ms + s * 1000)
 }
 
 /** The time of the leg's last point, UTC ms, whole (as traceSamples gives it). */
 export function legEndMs(leg: TraceReply): number {
-  return Math.round(leg.t0Ms + (leg.t.at(-1) ?? 0) * 1000)
+  return legMs(leg.t0Ms, leg.t.at(-1) ?? 0)
 }
 
 /** Each leg from its first point to its last: its bar on the timeline. */
@@ -78,7 +81,7 @@ export function callsignAt(leg: TraceReply, t: number): string | null {
   let hi = calls.length
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
-    if (Math.round(leg.t0Ms + calls[mid][0] * 1000) <= t) lo = mid + 1
+    if (legMs(leg.t0Ms, calls[mid][0]) <= t) lo = mid + 1
     else hi = mid
   }
   return calls[lo > 0 ? lo - 1 : 0][1]

@@ -168,7 +168,9 @@ class FakeEl {
   addEventListener(type: string, f: () => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), f])
   }
+  /** As a browser: a disabled control gets no event. */
   fire(type: string): void {
+    if (this.disabled) return
     for (const f of this.listeners.get(type) ?? []) f()
   }
   has(cls: string): boolean {
@@ -599,8 +601,6 @@ test('mountFlightCard in History: the dot and the line follow the replay; Chase 
   c.setReplay(replay('quiet', 'Last heard 10:20'))
   assert.deepEqual(now(), ['quiet', 'quiet', 'Last heard 10:20', true, 'No position at this time'])
   assert.deepEqual(pillAs(card), [null, 'Chase in 3-D', true], 'dimmed, its icon alone (the line has the room), its name kept')
-  pill.fire('click')
-  assert.deepEqual(chases, [true], 'a click that gets through anyway asks for nothing')
   c.setReplay(replay('none', 'First heard 07:20'))
   assert.deepEqual(now(), ['quiet', 'quiet', 'First heard 07:20', true, 'No position at this time'])
   assert.equal(statValue(card, 1), '—')
@@ -681,8 +681,6 @@ test('mountFlightCard, traffic, in History: "not heard" by age, and its Chase of
   assert.deepEqual([byClass(card, 'fh-card-status-t').textContent, byClass(card, 'fh-dot').dataset.state], ['Replay · 13:10 · not heard', 'quiet'])
   assert.deepEqual([pill.disabled, pill.title, pillText(card)], [true, 'No position at this time', 'Chase'])
   assert.deepEqual(pillAs(card), [null, 'Chase', true], 'its icon alone')
-  pill.fire('click')
-  assert.deepEqual(chases, [true])
   c.destroy()
 }))
 

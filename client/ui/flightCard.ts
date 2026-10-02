@@ -632,9 +632,7 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
     render()
   })
   closeBtn.addEventListener('click', () => opts.onClose())
-  chaseBtn.addEventListener('click', () => {
-    if (!chaseBtn.disabled) opts.onChase(!curChasing) // a disabled button sends no click; this is for one sent anyway
-  })
+  chaseBtn.addEventListener('click', () => opts.onChase(!curChasing)) // a disabled one sends no click
   linkBtn.addEventListener('click', () => {
     if (shown === null) return
     // The address bar holds the whole view (camera, orbit, toggles: urlState.ts) once it names this aircraft.

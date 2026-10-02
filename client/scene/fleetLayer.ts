@@ -59,6 +59,7 @@ export function northAt(latDeg: number, lonDeg: number, out: Cartesian3): Cartes
 interface Slot {
   b: Billboard
   frame: number
+  ghostFrame: number // the frame a ghost entry of its hex was drawn in: an ordinary one of the hex gives way to it then
   n: number // creation order, staggers terrain re-samples
   show: boolean
   placed: boolean // placed this frame (its icon shown, or hidden for a 3-D model)
@@ -90,8 +91,8 @@ interface Slot {
  * pooled for the next new hex (adding or removing a billboard makes Cesium rebuild the whole vertex array).
  * One reused Label shows the hovered (else selected) callsign; one reused ring marks the selected aircraft.
  * A ghost entry (FleetEntry.ghost: History's selected aircraft not heard at the replay time) is placed whatever its age
- * and drawn at GHOST_ALPHA in its altitude colour. It is the only entry of its hex: the app hands one for a hex the fleet
- * no longer places.
+ * and drawn at GHOST_ALPHA in its altitude colour. Should an ordinary entry of its hex come too, before it or after it,
+ * the ghost is the one drawn.
  */
 export class FleetLayer {
   #scene: Scene
@@ -168,8 +169,10 @@ export class FleetLayer {
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]
       const s = this.#byHex.get(e.hex) ?? this.#add(e.hex)
+      if (s.ghostFrame === frame && e.ghost !== true) continue // a ghost of this hex was drawn this frame: it stands
       if (s.frame !== frame) touched++
       s.frame = frame
+      if (e.ghost === true) s.ghostFrame = frame
       // The Fleet's own age limit per aircraft (it prunes them later), which a ghost is not held to; the chased one gives
       // way to its 3-D model. In chase (models), only the traffic drawn as 3-D models is placed, with its icon hidden.
       s.placed = (e.ghost === true || e.ageS <= e.staleS) && !(modelShown && e.hex === selectedHex) &&
@@ -229,7 +232,7 @@ export class FleetLayer {
     const b = this.#free.pop() ?? this.#bbs.add({ position: Cartesian3.ZERO, scaleByDistance: SIZE_BY_DISTANCE })
     b.id = hex
     const s: Slot = {
-      b, frame: 0, n: this.#made++, show: b.show, placed: false, lat: NaN, lon: NaN, h: NaN, x: 0, y: 0, z: 0, cosLat: NaN, axisLat: NaN, axisLon: NaN, rot: NaN, color: -1,
+      b, frame: 0, ghostFrame: 0, n: this.#made++, show: b.show, placed: false, lat: NaN, lon: NaN, h: NaN, x: 0, y: 0, z: 0, cosLat: NaN, axisLat: NaN, axisLon: NaN, rot: NaN, color: -1,
       cat: undefined, type: undefined, kind: null, sel: null, groundH: NaN, groundLat: NaN, groundLon: NaN, groundAt: 0,
     }
     this.#byHex.set(hex, s)

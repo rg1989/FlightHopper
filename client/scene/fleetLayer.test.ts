@@ -247,6 +247,25 @@ test('a ghost that is heard again is drawn opaque, one that goes quiet again fad
   assert.equal(bb(f, 'dddddd').color.alpha, 1, 'and drawn opaque')
 })
 
+test('a ghost and an ordinary entry of its hex in one frame: the ghost is drawn, whichever comes first', () => {
+  for (const ghostFirst of [true, false]) {
+    const f = fakeViewer()
+    const layer = new FleetLayer(f.viewer)
+    const ghost = fe('aaaaaa', { ghost: true, altFt: 12_000, ageS: 7_200, lat: 47, lon: 11 })
+    const stale = fe('aaaaaa', { altFt: 3_000, ageS: 7_200, staleS: 60, lat: 48, lon: 12 }) // the fleet's own, aged out
+    layer.update(ghostFirst ? [ghost, stale, fe('bbbbbb')] : [stale, ghost, fe('bbbbbb')], 'aaaaaa', null)
+    const a = bb(f, 'aaaaaa')
+    const order = ghostFirst ? 'the ghost first' : 'the ghost last'
+    assert.equal(a.show, true, order)
+    assert.ok(Cartesian3.equalsEpsilon(layer.positionOf('aaaaaa')!, Cartesian3.fromDegrees(11, 47, 10_000), 0, 1e-6), `${order}: where the ghost is`)
+    near(a.color.alpha, 0.45, 1e-6, order)
+    assert.equal(halo(f).show, true, `${order}: selected`)
+    assert.equal(all(f).filter((b) => b.id === 'aaaaaa' && b.image !== HALO_ID).length, 1, `${order}: one icon`)
+    layer.update([stale], 'aaaaaa', null)
+    assert.equal(a.show, false, `${order}: the next frame without the ghost goes by the ordinary entry`)
+  }
+})
+
 test('hexes that leave are hidden and their billboards reused for new hexes (no vertex-array rebuild churn)', () => {
   const f = fakeViewer()
   const layer = new FleetLayer(f.viewer)

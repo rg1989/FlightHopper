@@ -174,7 +174,13 @@ test('history, historyStatus and trace ask their endpoints; a 404 is null, not a
   assert.equal(api.ready, false, 'the history endpoints do not set the server clock')
 })
 
-test('traceDay asks the legs of a span in whole ms; a 404 is null, another failure throws', async () => {
+test('traceDay asks the legs of a span in whole ms, given 30 s; a 404 is null, another failure throws', async (t) => {
+  const timeouts: number[] = []
+  const timeout = AbortSignal.timeout.bind(AbortSignal)
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    timeouts.push(ms)
+    return timeout(ms)
+  })
   const urls: string[] = []
   const inits: (RequestInit | undefined)[] = []
   const answers: Response[] = []
@@ -189,6 +195,7 @@ test('traceDay asks the legs of a span in whole ms; a 404 is null, another failu
   assert.deepEqual(await api.traceDay('4691c4', 1_790_640_000_000, 1_790_726_400_000), day)
   assert.equal(urls[0], 'http://host/api/trace?hex=4691c4&from=1790640000000&to=1790726400000')
   assert.ok(inits[0]?.signal instanceof AbortSignal, 'a timeout signal')
+  assert.deepEqual(timeouts, [30_000], 'a day file of a few MB, perhaps fetched from adsb.lol first: 30 s, not the poll’s 10')
   assert.equal(await api.traceDay('~abc123', 1_790_640_000_000.4, 1_790_726_400_000.6), null)
   assert.equal(urls[1], 'http://host/api/trace?hex=~abc123&from=1790640000000&to=1790726400001', 'whole numbers')
   await assert.rejects(api.traceDay('4691c4', 1, 2), { message: 'HTTP 500' })

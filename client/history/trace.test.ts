@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { TraceReply } from '../../shared/api.ts'
+import { legEndMs } from './aircraftDay.ts'
 import { traceInfo, tracePath, traceSamples } from './trace.ts'
 
 const TR: TraceReply = {
@@ -37,4 +38,13 @@ test('the path points carry the time, the altitude for the colour and the height
 
 test('its identity as the card shows it', () => {
   assert.deepEqual(traceInfo(TR), { hex: '4691c4', callsign: 'AEE4266', reg: 'SX-DND', typeCode: 'A320', category: null, squawk: null, emergency: null, military: false, route: null })
+})
+
+test('the samples’ and path points’ times are the leg’s whole ms (legMs): the last is the leg’s end, a change lands on its point', () => {
+  const x: TraceReply = { ...TR, callsign: 'C', t: [0, 16.1, 32.2], calls: [[0, 'A'], [16.1, 'B'], [32.2, 'C']] } // 32.2 × 1000 is not whole
+  assert.deepEqual(traceSamples(x).map((p) => p.tMs - x.t0Ms), [0, 16_100, 32_200])
+  assert.deepEqual(tracePath(x).map((p) => p.tMs - x.t0Ms), [0, 16_100, 32_200])
+  assert.equal(traceSamples(x).at(-1)!.tMs, legEndMs(x))
+  assert.equal(tracePath(x).at(-1)!.tMs, legEndMs(x))
+  assert.deepEqual(traceSamples(x).map((p) => p.callsign), ['A', 'B', 'C'])
 })

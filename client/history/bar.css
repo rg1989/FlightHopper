@@ -302,9 +302,10 @@
 }
 
 /* Between phones and wide screens the row has no room for ‹ › as well: at 641 px the scrubber would shrink to a few dozen
-   pixels. They are off there; Go to has the date. ponytail: off, not moved. Upgrade: the phone's second row for them, if
+   pixels. They are off there; Go to has the date. Over 640 px, not from 641: a zoomed page can be 640.5 px wide, which the
+   phone layout (≤ 640 px) does not take either. ponytail: off, not moved. Upgrade: the phone's second row for them, if
    tablets in portrait ask for the day arrows. */
-@media (min-width: 641px) and (max-width: 768px) {
+@media (width > 640px) and (width <= 768px) {
   .fh-playbar-history .fh-history-day {
     display: none;
   }

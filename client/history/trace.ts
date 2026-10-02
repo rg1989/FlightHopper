@@ -5,7 +5,7 @@
 import type { TraceReply } from '../../shared/api.ts'
 import type { AircraftInfo } from '../../shared/info.ts'
 import type { Sample } from '../../shared/types.ts'
-import { callsignAt } from './aircraftDay.ts'
+import { callsignAt, legMs } from './aircraftDay.ts'
 
 const FT = 0.3048
 
@@ -31,7 +31,7 @@ export function heightM(alt: number | 'g' | null, nM: number): number {
  */
 export function traceSamples(tr: TraceReply): Sample[] {
   return tr.t.map((t, i) => {
-    const tMs = Math.round(tr.t0Ms + t * 1000)
+    const tMs = legMs(tr.t0Ms, t)
     return {
       hex: tr.hex, tMs, rxMs: tMs, lat: tr.lat[i], lon: tr.lon[i], onGround: tr.alt[i] === 'g',
       altBaroFt: altOf(tr.alt[i]), altGeomFt: null, gsKt: tr.gs[i], trackDeg: tr.trk[i], trueHeadingDeg: null,
@@ -44,7 +44,7 @@ export function traceSamples(tr: TraceReply): Sample[] {
 /** The flown path's points, in time order. */
 export function tracePath(tr: TraceReply): TracePoint[] {
   return tr.t.map((t, i) => ({
-    tMs: Math.round(tr.t0Ms + t * 1000), lat: tr.lat[i], lon: tr.lon[i], hM: heightM(tr.alt[i], tr.nM[i]),
+    tMs: legMs(tr.t0Ms, t), lat: tr.lat[i], lon: tr.lon[i], hM: heightM(tr.alt[i], tr.nM[i]),
     altFt: altOf(tr.alt[i]), onGround: tr.alt[i] === 'g',
   }))
 }

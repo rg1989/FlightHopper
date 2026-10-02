@@ -451,7 +451,7 @@
 /* Loading (setBusy): a ring turns round the thumb, in the accent colour (the spinner's look), the clock dims, and the
    bar is aria-busy. The ring stands on the rail at the thumb's centre (--fh-p, as the dots do). With reduced motion it
    holds still and pulses instead: theme.css stills every animation then, with !important, so the rule for it below is
-   as specific as it must be to win that back. */
+   as specific as it must be to win that back. It turns by theme.css's fh-rot, as the spinner does. */
 .fh-playbar-busy {
   --fh-busy-d: calc(var(--fh-thumb) + 14px);
   position: absolute;
@@ -464,7 +464,7 @@
   border: 2px solid rgba(90, 169, 255, 0.2);
   border-top-color: var(--fh-accent);
   border-radius: 50%;
-  animation: fh-playbar-spin 0.8s linear infinite;
+  animation: fh-rot 0.8s linear infinite;
 }
 
 .fh-playbar[aria-busy='true'] .fh-playbar-busy {
@@ -473,10 +473,6 @@
 
 .fh-playbar[aria-busy='true'] .fh-playbar-clock {
   opacity: 0.55;
-}
-
-@keyframes fh-playbar-spin {
-  to { transform: rotate(360deg); }
 }
 
 @keyframes fh-playbar-pulse {
