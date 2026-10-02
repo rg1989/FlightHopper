@@ -5,8 +5,9 @@
 // onExit, sound.onGain; the app answers through update(), which is cheap to call every frame (it writes only what
 // changed, and leaves the thumb alone under a dragging finger).
 // The history time bar (history/bar.ts) is this bar with options: labels under the rail (scale), spans on it
-// (setSegments), a limit past which it is hatched and cannot be reached (setLimit), extra controls (tools), Live as a
-// text pill (exitText) and a note after the title (setNote). Without them it is the scenario bar exactly.
+// (setSegments), a floor before and a limit past which it is hatched and cannot be reached (setFloor, setLimit), a ring
+// round the thumb while the time under it loads (setBusy), extra controls (tools), Live as a text pill (exitText) and a
+// note after the title (setNote). Without them it is the scenario bar exactly.
 // Keys on the focused scrubber: ←/→ ±10 s (Shift ±60 s), PgUp/PgDn ±60 s, Home/End, Space play/pause. Every other key,
 // and all keys on the bar's buttons except Space (which presses them), belong to the app's own handler. A mouse or finger
 // press leaves no focus on speed or a tick, so a later Space reaches the app (play/pause) instead of pressing them again.
@@ -50,18 +51,20 @@ export interface PlaybarOpts {
   timeLabel?: string // the scrubber's name (default 'Scenario time')
 }
 
-/** A span on the rail, under the thumb: ready (bright), loading (striped, moving), missing (red hatch). */
+/** A span on the rail, under the thumb: a leg (amber: a flight of the aircraft being followed) or missing (red hatch). */
 export interface PlaybarSegment {
   from: number
   to: number
-  state: 'ready' | 'loading' | 'missing'
+  state: 'leg' | 'missing'
 }
 
 export interface PlaybarHandle {
   update(v: PlaybarView): void
   toggleMute(): void // M: nothing without sound
   setSegments(segs: readonly PlaybarSegment[]): void // replaces the spans; unchanged ones write nothing
+  setFloor(minT: number | null): void // before minT the rail is hatched, and a drag, key or mark before it seeks to minT
   setLimit(maxT: number | null): void // past maxT the rail is hatched, and a drag, key or mark past it seeks to maxT
+  setBusy(on: boolean): void // loading: a ring turns round the thumb, the clock dims, the bar is aria-busy
   setTitle(title: string): void
   setNote(text: string | null): void // a short note right after the title ('No data for this time'); null hides it
   destroy(): void
@@ -182,9 +185,11 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   const stop = Math.max(opts.end, opts.stop)
   const span = Math.max(stop - start, 1e-9)
   const pct = (t: number): number => Math.min(1, Math.max(0, (t - start) / span)) * 100
-  // How far a drag, a key or a mark reaches: stop, or the limit when one is set (setLimit: start ≤ limit < stop).
+  // How far a drag, a key or a mark reaches: the whole timeline, or from the floor (setFloor: start < floor ≤ stop) to the
+  // limit (setLimit: start ≤ limit < stop) when they are set.
+  let floor: number | null = null
   let limit: number | null = null
-  const reach = (t: number): number => Math.min(limit ?? stop, Math.max(start, t))
+  const reach = (t: number): number => Math.min(limit ?? stop, Math.max(floor ?? start, t))
 
   const bar = h('div', 'fh-playbar fh-glass')
   for (const c of (opts.className ?? '').split(/\s+/)) if (c !== '') bar.classList.add(c)
@@ -282,10 +287,13 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
   let shownSegs = ''
   let shownTitle = opts.title
   let dragging = false
-  // The spans and the limit's hatch, in the rail under the played part and the dots: made on first use, so a bar that
-  // never asks (a scenario's) keeps its DOM as it was.
+  // The spans and the floor's and the limit's hatch, in the rail under the played part and the dots (the busy ring over
+  // them): made on first use, so a bar that never asks (a scenario's) keeps its DOM as it was.
   let segsEl: HTMLElement | null = null
+  let floorEl: HTMLElement | null = null
   let limitEl: HTMLElement | null = null
+  let busyEl: HTMLElement | null = null
+  let shownBusy = false
   let noteEl: HTMLElement | null = null // the note after the title, also made on first use
   let shownNote: string | null = null
 
@@ -307,9 +315,10 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
 
   range.addEventListener('input', () => {
     let at = Number(range.value)
-    if (limit !== null && at > limit) {
-      at = limit
-      range.value = String(at) // the thumb stops at the limit, under the finger or not
+    const held = reach(at)
+    if (held !== at) {
+      at = held
+      range.value = String(at) // the thumb stops at the floor or the limit, under the finger or not
     }
     shownValue = range.value
     fill(at)
@@ -418,6 +427,18 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
       }
       segsEl.replaceChildren(...els)
     },
+    setFloor(minT) {
+      const next = minT !== null && minT > start ? Math.min(stop, minT) : null // NaN: none
+      if (next === floor) return
+      floor = next
+      if (floorEl === null) {
+        floorEl = h('div', 'fh-playbar-floor')
+        rail.prepend(floorEl)
+      }
+      floorEl.hidden = floor === null
+      rail.classList.toggle('fh-has-floor', floor !== null)
+      if (floor !== null) rail.style.setProperty('--fh-floor', `${pct(floor).toFixed(3)}%`)
+    },
     setLimit(maxT) {
       const next = maxT !== null && maxT < stop ? Math.max(start, maxT) : null // NaN: none
       if (next === limit) return
@@ -429,6 +450,15 @@ export function mountPlaybar(root: HTMLElement, opts: PlaybarOpts): PlaybarHandl
       limitEl.hidden = limit === null
       rail.classList.toggle('fh-has-limit', limit !== null)
       if (limit !== null) rail.style.setProperty('--fh-lim', `${pct(limit).toFixed(3)}%`)
+    },
+    setBusy(on) {
+      if (on === shownBusy) return
+      shownBusy = on
+      if (on && busyEl === null) {
+        busyEl = h('div', 'fh-playbar-busy') // on the thumb's centre (CSS follows --fh-p); shown while the bar is aria-busy
+        rail.append(busyEl)
+      }
+      bar.setAttribute('aria-busy', on ? 'true' : 'false')
     },
     setTitle(text) {
       if (text === shownTitle) return

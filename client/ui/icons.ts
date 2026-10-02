@@ -44,6 +44,8 @@ const P: Record<string, string> = {
   x: 'M6 6l12 12M18 6 6 18',
   chevronDown: 'm6 9 6 6 6-6',
   chevronUp: 'm6 15 6-6 6 6',
+  chevronLeft: 'm15 6-6 6 6 6',
+  chevronRight: 'm9 6 6 6-6 6',
   link: 'M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1-1',
   check: 'm5 12.5 4.5 4.5L19 7.5',
   refresh: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 3.5V8h4.5M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20.5V16h-4.5',

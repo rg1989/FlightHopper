@@ -1,10 +1,11 @@
 /* client/history/bar.css */
 /* The history time bar (bar.ts, on ui/playbar.ts): the play bar's look with the replay's date in amber over the clock,
-   the hours under the scrubber, no played part (the rail shows what is loaded instead), the calendar and Live; 72 px
-   high. On phones (≤ 640 px) a card above the tab bar in two rows: play, date and clock, speed, calendar and Live; the
-   scrubber under them. While it is up, --fh-playbar-h and --fh-playbar-space say how tall it is and where its top edge
-   is, for what stands on it (layout.css: the map key; on phones the flight card). The Go to popover rises above the
-   bar's left end (on phones across the bar's width). */
+   the hours under the scrubber, no played part (its rail shows instead the selected aircraft's flights in that amber, the
+   half hours adsb.lol lacks, and what does not exist hatched), the calendar between ‹ › (the day before and after) and
+   Live; 72 px high. On phones (≤ 640 px) a card above the tab bar in two rows: play, date and clock, speed, calendar and
+   Live; the scrubber under them with ‹ › at its two ends. While it is up, --fh-playbar-h and --fh-playbar-space say how
+   tall it is and where its top edge is, for what stands on it (layout.css: the map key; on phones the flight card). The
+   Go to popover rises above the bar's left end (on phones across the bar's width). */
 :root:has(.fh-playbar-history) {
   --fh-playbar-h: 72px;
 }
@@ -22,13 +23,19 @@
   animation: none;
 }
 
+/* The day arrows ‹ › (the calendar's size, from .fh-ibtn): off at the first and the last day, and then no hover. */
+.fh-history-day:disabled:hover {
+  background: transparent;
+  color: var(--fh-muted);
+}
+
 /* While the popover is open the bar, and the popover with it, stands over the flight card, the panels and the rail
    (z 18-20). */
 .fh-playbar:has(.fh-goto:not([hidden])) {
   z-index: 21;
 }
 
-/* The Go to popover: quick jumps back, a date and a time (the browser's own pickers), a note and Go. */
+/* The Go to popover: quick jumps back, a date and a time (the browser's own pickers) and Go. */
 .fh-goto {
   position: absolute;
   bottom: calc(100% + 1px + 10px); /* from inside the bar's border: 10 px clear of it */
@@ -85,8 +92,15 @@
   transition: background var(--fh-fast) var(--fh-ease);
 }
 
-.fh-goto-chip:hover {
+.fh-goto-chip:not(:disabled):hover {
   background: rgba(255, 255, 255, 0.12);
+}
+
+/* A moment that does not exist (before the oldest, past the newest): its chip, and Go, are off. */
+.fh-goto-chip:disabled,
+.fh-goto-go:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .fh-goto-chip:focus-visible,
@@ -133,16 +147,10 @@
   color-scheme: dark; /* the browser's picker and its icon in the dark */
 }
 
-/* A date outside the last 30 days, or a field left empty: the browser says why when Go is pressed. */
-.fh-goto-input:user-invalid {
+/* A date or time that does not exist (before the oldest moment, past the newest), or a field left empty: red, and Go is
+   off (bar.ts syncFields). :invalid, not :user-invalid: choosing another date can put the time, untouched, out of range. */
+.fh-goto-input:invalid {
   border-color: var(--fh-err);
-}
-
-.fh-goto-note {
-  margin: 0;
-  color: var(--fh-muted);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .fh-goto-go {
@@ -156,7 +164,7 @@
   transition: filter var(--fh-fast) var(--fh-ease);
 }
 
-.fh-goto-go:hover {
+.fh-goto-go:not(:disabled):hover {
   filter: brightness(1.1);
 }
 
@@ -254,10 +262,51 @@
     font-size: 17px;
   }
 
+  /* ‹ › leave the tools (display: contents makes the buttons the bar's own grid items) for the two ends of the
+     scrubber's row: ‹ ——o—— ›. Three buttons beside the clock would leave it no room, so the calendar stays up there.
+     The track keeps clear of them: their 32 px and a 6 px gap. */
+  .fh-playbar-history .fh-playbar-tools {
+    display: contents;
+  }
+
+  .fh-playbar-history .fh-playbar-tools > .fh-history-cal {
+    grid-area: tools;
+  }
+
+  .fh-playbar-history .fh-playbar-tools > .fh-history-day {
+    grid-row: 2;
+    width: 32px;
+    height: 40px;
+  }
+
+  .fh-playbar-history .fh-playbar-tools > .fh-history-prev {
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .fh-playbar-history .fh-playbar-tools > .fh-history-next {
+    grid-column: 5;
+    justify-self: end;
+  }
+
+  .fh-playbar-history .fh-playbar-track {
+    margin-right: 38px;
+    margin-left: 38px;
+  }
+
   .fh-goto {
     right: -1px;
     bottom: calc(100% + 1px + 8px);
     width: auto;
+  }
+}
+
+/* Between phones and wide screens the row has no room for ‹ › as well: at 641 px the scrubber would shrink to a few dozen
+   pixels. They are off there; Go to has the date. ponytail: off, not moved. Upgrade: the phone's second row for them, if
+   tablets in portrait ask for the day arrows. */
+@media (min-width: 641px) and (max-width: 768px) {
+  .fh-playbar-history .fh-history-day {
+    display: none;
   }
 }
 

@@ -411,12 +411,13 @@ function mountDay(over: Partial<Opts> = {}) {
   return { root, bar, calls, range, rail: one(root, 'fh-playbar-rail'), barEl: one(root, 'fh-playbar') }
 }
 
-test('without the options it is the scenario bar: no extra class, the × exit, no tools, scale, spans, hatch or note', () => {
+test('without the options it is the scenario bar: no extra class, the × exit, no tools, scale, spans, hatch, busy ring or note', () => {
   const { root, rail, barEl, range } = mountDay()
   const exit = one(root, 'fh-playbar-exit')
   assert.ok(exit.has('fh-ibtn') && !exit.has('fh-playbar-exit-text'))
   assert.deepEqual([exit.attrs['aria-label'], exit.title, exit.children.length], ['Exit scenario', 'Exit scenario', 1])
-  for (const c of ['fh-playbar-tools', 'fh-playbar-scale', 'fh-playbar-segs', 'fh-playbar-limit', 'fh-playbar-notice', 'fh-has-tools', 'fh-has-scale']) none(root, c)
+  for (const c of ['fh-playbar-tools', 'fh-playbar-scale', 'fh-playbar-segs', 'fh-playbar-floor', 'fh-playbar-limit', 'fh-playbar-busy', 'fh-playbar-notice', 'fh-has-tools', 'fh-has-scale']) none(root, c)
+  assert.equal(barEl.attrs['aria-busy'], undefined, 'not marked busy')
   assert.deepEqual(barEl.children.map((c) => c.className), ['fh-ibtn fh-playbar-play', 'fh-playbar-meta', 'fh-playbar-track', 'fh-playbar-rate fh-num', 'fh-ibtn fh-playbar-exit'])
   assert.deepEqual(rail.children.map((c) => c.className), ['fh-playbar-fill'])
   assert.equal(range.attrs['aria-label'], 'Scenario time')
@@ -466,26 +467,26 @@ test('scale: labels under the rail at their place, hidden from screen readers; o
 test('setSegments: spans first in the rail (under the played part and the dots), placed, sized and clipped; the same ones write nothing', () => {
   const { root, bar, rail } = mountDay()
   const segs = [
-    { from: 61_200, to: 66_600, state: 'ready' as const },
-    { from: 66_600, to: 68_400, state: 'loading' as const },
+    { from: 61_200, to: 66_600, state: 'leg' as const },
+    { from: 66_600, to: 68_400, state: 'leg' as const },
     { from: 70_000, to: 72_000, state: 'missing' as const },
-    { from: -1800, to: 900, state: 'ready' as const }, // clipped at the start
-    { from: 86_000, to: 90_000, state: 'ready' as const }, // clipped at the stop
-    { from: 90_000, to: 91_000, state: 'ready' as const }, // past it: none
-    { from: 500, to: 500, state: 'ready' as const }, // empty: none
+    { from: -1800, to: 900, state: 'leg' as const }, // clipped at the start
+    { from: 86_000, to: 90_000, state: 'missing' as const }, // clipped at the stop
+    { from: 90_000, to: 91_000, state: 'leg' as const }, // past it: none
+    { from: 500, to: 500, state: 'leg' as const }, // empty: none
   ]
   bar.setSegments(segs)
   const box = one(root, 'fh-playbar-segs')
   assert.equal(rail.children[0], box)
   assert.deepEqual(box.children.map((s) => [s.attrs['data-state'], s.style.props.left, s.style.props.width]), [
-    ['ready', '70.833%', '6.250%'], ['loading', '77.083%', '2.083%'], ['missing', '81.019%', '2.315%'],
-    ['ready', '0.000%', '1.042%'], ['ready', '99.537%', '0.463%'],
+    ['leg', '70.833%', '6.250%'], ['leg', '77.083%', '2.083%'], ['missing', '81.019%', '2.315%'],
+    ['leg', '0.000%', '1.042%'], ['missing', '99.537%', '0.463%'],
   ])
   const before = writesIn(root)
   bar.setSegments(segs.map((s) => ({ ...s })))
   assert.equal(writesIn(root), before, 'the same spans: nothing written')
-  bar.setSegments([{ from: 0, to: 1800, state: 'loading' }])
-  assert.deepEqual(one(root, 'fh-playbar-segs').children.map((s) => s.attrs['data-state']), ['loading'])
+  bar.setSegments([{ from: 0, to: 1800, state: 'missing' }])
+  assert.deepEqual(one(root, 'fh-playbar-segs').children.map((s) => s.attrs['data-state']), ['missing'])
   bar.setSegments([])
   assert.equal(one(root, 'fh-playbar-segs').children.length, 0)
 })
@@ -536,6 +537,114 @@ test('setLimit(null) on a bar never given a limit makes no hatch', () => {
   const { bar, root } = mountDay()
   bar.setLimit(null)
   none(root, 'fh-playbar-limit')
+})
+
+test('setFloor: hatched before it; a drag before it holds the thumb there and seeks there', () => {
+  const { bar, range, rail, calls, root } = mountDay()
+  bar.setFloor(23_400)
+  assert.equal(one(root, 'fh-playbar-floor').hidden, false)
+  assert.ok(rail.classList.contains('fh-has-floor'))
+  assert.equal(rail.style.props['--fh-floor'], '27.083%') // 23400 / 86400
+  assert.equal(rail.children[0], one(root, 'fh-playbar-floor'), 'in the rail, under the rest')
+  range.fire('pointerdown')
+  for (const v of ['25000', '20000.5', '0']) {
+    range.value = v
+    range.fire('input')
+  }
+  assert.deepEqual(calls, ['seek 25000', 'seek 23400', 'seek 23400'])
+  assert.equal(range.value, '23400', 'the thumb held at the floor')
+})
+
+test('setFloor: keys and marks before it seek to it; null takes it away; at or before start is none; at or past stop is all hatch', () => {
+  const { bar, range, calls, root } = mountDay({ marks: [{ t: 3600, label: 'Early' }] })
+  bar.setFloor(23_400)
+  bar.update({ t: 23_405, playing: false, rate: 1, clock: '06:30:05', phase: null })
+  for (const key of ['ArrowLeft', 'PageDown', 'Home']) range.fire('keydown', { key })
+  one(root, 'fh-playbar-tick').click()
+  range.fire('keydown', { key: 'End' })
+  assert.deepEqual(calls, ['seek 23400', 'seek 23400', 'seek 23400', 'seek 23400', `seek ${DAY}`])
+  calls.length = 0
+  bar.setFloor(null)
+  assert.equal(one(root, 'fh-playbar-floor').hidden, true)
+  assert.ok(!one(root, 'fh-playbar-rail').classList.contains('fh-has-floor'))
+  range.fire('keydown', { key: 'Home' })
+  one(root, 'fh-playbar-tick').click()
+  assert.deepEqual(calls, ['seek 0', 'seek 3600'])
+  calls.length = 0
+  for (const floor of [0, -50, Number.NaN]) {
+    bar.setFloor(floor)
+    range.fire('keydown', { key: 'Home' })
+  }
+  assert.deepEqual(calls, ['seek 0', 'seek 0', 'seek 0'])
+  calls.length = 0
+  bar.setFloor(DAY + 100)
+  range.fire('keydown', { key: 'Home' })
+  assert.deepEqual(calls, [`seek ${DAY}`])
+  bar.setFloor(40_000)
+  const before = writesIn(root)
+  bar.setFloor(40_000)
+  assert.equal(writesIn(root), before, 'the same floor: nothing written')
+})
+
+test('setFloor(null) on a bar never given a floor makes no hatch', () => {
+  const { bar, root } = mountDay()
+  bar.setFloor(null)
+  none(root, 'fh-playbar-floor')
+})
+
+test('setFloor with setLimit: the thumb stays between them, under a drag, on a key and on a mark', () => {
+  const { bar, range, calls, root, rail } = mountDay({ marks: [{ t: 3600, label: 'Early' }, { t: 80_000, label: 'Late' }] })
+  bar.setFloor(23_400)
+  bar.setLimit(63_000)
+  assert.ok(rail.classList.contains('fh-has-floor') && rail.classList.contains('fh-has-limit'))
+  assert.deepEqual([rail.style.props['--fh-floor'], rail.style.props['--fh-lim']], ['27.083%', '72.917%'])
+  range.fire('pointerdown')
+  for (const v of ['1000', '30000', '80000']) {
+    range.value = v
+    range.fire('input')
+  }
+  assert.deepEqual(calls, ['seek 23400', 'seek 30000', 'seek 63000'])
+  calls.length = 0
+  range.fire('keydown', { key: 'Home' })
+  range.fire('keydown', { key: 'End' })
+  for (const tick of all(root).filter((e) => e.has('fh-playbar-tick'))) tick.click()
+  assert.deepEqual(calls, ['seek 23400', 'seek 63000', 'seek 23400', 'seek 63000'])
+})
+
+test('setBusy: the bar is aria-busy and a ring is made on the rail on first use; off again when false; the same state writes nothing', () => {
+  const { bar, barEl, rail, root } = mountDay()
+  bar.setBusy(false)
+  none(root, 'fh-playbar-busy')
+  assert.equal(barEl.attrs['aria-busy'], undefined, 'never busy: nothing made, nothing marked')
+  bar.setSegments([{ from: 100, to: 200, state: 'leg' }])
+  bar.setFloor(1000)
+  bar.setLimit(80_000)
+  bar.setBusy(true)
+  const ring = one(root, 'fh-playbar-busy')
+  assert.equal(ring.parent, rail, 'on the rail: it stands on the thumb\'s centre')
+  assert.equal(rail.children.at(-1), ring, 'last in it: over the spans and the hatch, not under them')
+  bar.setSegments([{ from: 100, to: 300, state: 'leg' }])
+  assert.equal(rail.children.at(-1), ring, 'and still, when the spans change')
+  assert.equal(barEl.attrs['aria-busy'], 'true')
+  const before = writesIn(root)
+  bar.setBusy(true)
+  assert.equal(writesIn(root), before, 'the same state: nothing written')
+  bar.setBusy(false)
+  assert.equal(barEl.attrs['aria-busy'], 'false')
+  bar.setBusy(true)
+  assert.equal(barEl.attrs['aria-busy'], 'true')
+  assert.equal(one(root, 'fh-playbar-busy'), ring, 'made once: the CSS shows it only while the bar is aria-busy')
+})
+
+test('setBusy leaves the clock, the scrubber and update() alone (the dimming is CSS)', () => {
+  const { bar, root, range } = mountDay()
+  bar.update({ t: 63_000, playing: true, rate: 10, clock: '17:30:00', phase: null })
+  bar.setBusy(true)
+  assert.equal(text(one(root, 'fh-playbar-time')), '17:30:00')
+  assert.equal(range.value, '63000.0')
+  bar.update({ t: 63_010, playing: true, rate: 10, clock: '17:30:10', phase: null })
+  assert.equal(text(one(root, 'fh-playbar-time')), '17:30:10')
+  assert.equal(range.value, '63010.0')
 })
 
 test('setTitle: the title and the bar\'s name; the same title writes nothing', () => {

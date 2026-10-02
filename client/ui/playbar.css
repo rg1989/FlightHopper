@@ -3,7 +3,7 @@
    bar, full width. --fh-playbar-space is how far its top edge sits from the bottom of the screen: the captions (and any
    overlay that must clear the bar) stand on it. While the ending shows, ending.css lifts the bar above its veil.
    Its options (the history bar's, history/bar.css): extra controls (tools), a text exit (Live), a scale under the rail,
-   spans on it and a hatched part past a limit. */
+   spans on it, a hatched part before a floor and past a limit, and a ring round the thumb while it loads. */
 :root {
   --fh-playbar-h: 64px;
   --fh-playbar-space: calc(12px + env(safe-area-inset-bottom, 0px) + var(--fh-playbar-h));
@@ -77,6 +77,7 @@
   font: 600 17px/1.3 var(--fh-font);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  transition: opacity var(--fh-fast) var(--fh-ease);
 }
 
 .fh-playbar-zone {
@@ -381,8 +382,9 @@
   transform: translateX(-50%);
 }
 
-/* Spans on the rail (setSegments), under the played part and the dots: ready bright, loading striped and moving,
-   missing a faint red hatch. Past the limit (setLimit) the rail gives way to a faint hatch: not there yet. */
+/* Spans on the rail (setSegments), under the played part and the dots: a leg amber (the Replay colour: the aircraft
+   being followed, flying), missing a faint red hatch. Before the floor (setFloor) and past the limit (setLimit) the
+   rail gives way to a faint hatch: not there, and out of reach. */
 .fh-playbar-segs {
   position: absolute;
   inset: 0;
@@ -395,34 +397,97 @@
   top: 0;
   bottom: 0;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.42);
 }
 
-.fh-playbar-seg[data-state='loading'] {
-  background: linear-gradient(90deg, rgba(90, 169, 255, 0.55) 6px, rgba(90, 169, 255, 0.2) 6px) 0 0 / 12px 100%;
-  animation: fh-playbar-stripes 1s linear infinite;
+.fh-playbar-seg[data-state='leg'] {
+  min-width: 2px; /* a short hop still shows on a day's rail */
+  background: var(--fh-warn);
+  opacity: 0.75;
 }
 
 .fh-playbar-seg[data-state='missing'] {
   background: repeating-linear-gradient(-45deg, rgba(255, 93, 93, 0.45) 0 2px, transparent 2px 5px);
 }
 
-@keyframes fh-playbar-stripes {
-  to { background-position: 12px 0; }
-}
-
+/* The rail's own track stops where the hatch begins: one rule for each end, and one for both. Each uses only the
+   variables its classes bring (setFloor and setLimit set them), so one cleared later leaves nothing stale. */
 .fh-playbar-rail.fh-has-limit {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.13) var(--fh-lim), transparent var(--fh-lim));
 }
 
+.fh-playbar-rail.fh-has-floor {
+  background: linear-gradient(90deg, transparent var(--fh-floor), rgba(255, 255, 255, 0.13) var(--fh-floor));
+}
+
+.fh-playbar-rail.fh-has-floor.fh-has-limit {
+  background: linear-gradient(
+    90deg,
+    transparent var(--fh-floor),
+    rgba(255, 255, 255, 0.13) var(--fh-floor) var(--fh-lim),
+    transparent var(--fh-lim)
+  );
+}
+
+.fh-playbar-floor,
 .fh-playbar-limit {
   position: absolute;
   top: 0;
-  right: 0;
   bottom: 0;
+  background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.08) 0 2px, transparent 2px 5px);
+}
+
+.fh-playbar-floor {
+  left: 0;
+  width: var(--fh-floor);
+  border-radius: 3px 0 0 3px;
+}
+
+.fh-playbar-limit {
+  right: 0;
   left: var(--fh-lim);
   border-radius: 0 3px 3px 0;
-  background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.08) 0 2px, transparent 2px 5px);
+}
+
+/* Loading (setBusy): a ring turns round the thumb, in the accent colour (the spinner's look), the clock dims, and the
+   bar is aria-busy. The ring stands on the rail at the thumb's centre (--fh-p, as the dots do). With reduced motion it
+   holds still and pulses instead: theme.css stills every animation then, with !important, so the rule for it below is
+   as specific as it must be to win that back. */
+.fh-playbar-busy {
+  --fh-busy-d: calc(var(--fh-thumb) + 14px);
+  position: absolute;
+  top: 50%;
+  left: var(--fh-p, 0%);
+  display: none;
+  width: var(--fh-busy-d);
+  height: var(--fh-busy-d);
+  margin: calc(var(--fh-busy-d) / -2) 0 0 calc(var(--fh-busy-d) / -2);
+  border: 2px solid rgba(90, 169, 255, 0.2);
+  border-top-color: var(--fh-accent);
+  border-radius: 50%;
+  animation: fh-playbar-spin 0.8s linear infinite;
+}
+
+.fh-playbar[aria-busy='true'] .fh-playbar-busy {
+  display: block;
+}
+
+.fh-playbar[aria-busy='true'] .fh-playbar-clock {
+  opacity: 0.55;
+}
+
+@keyframes fh-playbar-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fh-playbar-pulse {
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-playbar[aria-busy='true'] .fh-playbar-busy {
+    border-color: var(--fh-accent);
+    animation: fh-playbar-pulse 1.4s ease-in-out infinite !important;
+  }
 }
 
 /* The voices (with audio only): mute and a small volume slider, and over them, for a reenactment, a note in the title's
