@@ -1,17 +1,17 @@
 // server/historyStore.ts
 // The past, from adsb.lol: one heatmap file per UTC half hour (server/heatmap.ts reads it), published just after the half
-// hour ends. A file is fetched when it is asked for and held in memory, a few at a time (13 MB each decompressed, 12-25 MB
-// on the wire). tick() keeps the newest two published ones, so the minutes just gone are always at hand; a live server
-// calls it every minute. Nothing here runs a timer.
-// ponytail: memory only, so a restart fetches again; a file never changes after it is published, so a disk cache would do
-// (data/, a file per slot) if a restart ever matters. The body is not capped: it comes from adsb.lol over https.
+// hour ends. A file is fetched when it is asked for and held in memory, a few at a time: 12-25 MB on the wire, about 13-28 MB
+// decompressed, so about 140 MB at the server's maxSlots of 5. tick() keeps the newest two published ones, so the minutes
+// just gone are always at hand; a live server calls it every minute. Nothing here runs a timer.
+// Memory only, by the user's choice: they asked not to collect the files. There is no disk cache; a restart fetches again.
+// ponytail: the body is not capped: it comes from adsb.lol over https.
 import { promisify } from 'node:util'
 import { gunzip } from 'node:zlib'
 import type { HistorySlot, HistoryStatus } from '../shared/api.ts'
 import { SLOT_MS, newestSlotMs, stepFor } from '../shared/history.ts'
-import { readSlot } from './heatmap.ts'
+import { hasSliceHeader, readSlot } from './heatmap.ts'
 
-const gunzipAsync = promisify(gunzip) // off the event loop: a file is ~13 MB decompressed
+const gunzipAsync = promisify(gunzip) // off the event loop: a file is 13-28 MB decompressed
 const MISSING_MS = 10 * 60_000 // a file that answered 404 or 410 is not asked for again for this long
 const FETCH_TIMEOUT_MS = 120_000 // a 25 MB file on a slow line; a stuck connection ends here
 
@@ -54,8 +54,9 @@ export class HistoryStore {
    * is published PUBLISH_DELAY_MS after it ends), is not a half hour, or could not be fetched now. Concurrent calls for one
    * slot share one fetch. The array is shared: do not write to it.
    * ponytail: the slot is not range-checked here: any half hour up to the newest costs one request to adsb.lol (a 404 is
-   * remembered 10 min), and a client that alternates between more than maxSlots slots downloads 12-25 MB each time. The route
-   * that takes a slot from a client must keep it to the days adsb.lol holds (about 30).
+   * remembered 10 min). A file being fetched does not count in maxSlots, so many distinct slots asked at once are all in
+   * memory together, up to about 28 MB each (twice that while a body that is still gzip is undone); the client asks for at
+   * most 2 at a time. A client that alternates between more than maxSlots slots downloads 12-25 MB each time.
    */
   async file(slotMs: number): Promise<Uint8Array | null> {
     const now = this.#now()
@@ -104,7 +105,7 @@ export class HistoryStore {
     return { newestSlotMs: newestSlotMs(now), slots }
   }
 
-  /** One fetch, never throws: a failure that is not a 404 or 410 (5xx, 429, network, timeout, broken gzip) is null and not remembered. */
+  /** One fetch, never throws: a failure that is not a 404 or 410 (5xx, 429, network, timeout, broken gzip, not a heatmap) is null and not remembered. */
   async #load(slotMs: number): Promise<Uint8Array | null> {
     try {
       const res = await this.#fetch(heatmapUrl(this.#base, slotMs), {
@@ -122,7 +123,9 @@ export class HistoryStore {
         const plain = await gunzipAsync(file)
         file = new Uint8Array(plain.buffer, plain.byteOffset, plain.byteLength)
       }
-      if (file.length === 0) return null // an empty 200 is no file: held, it would stay for good (the newest two are never dropped)
+      // A 200 that is not a heatmap (an HTML page, an empty body) is no file: held, it would stay for good, because the
+      // newest two are never dropped.
+      if (!hasSliceHeader(file)) return null
       this.#hold(slotMs, file)
       return file
     } catch {

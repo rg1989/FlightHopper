@@ -2,7 +2,7 @@
 // readSlot and encodeHeatmap on files built in memory, and on records copied from a real adsb.lol file. No network.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HEAT_MAGIC, encodeHeatmap, readSlot, type HeatIdentIn, type HeatRecordIn, type HeatSliceIn } from './heatmap.ts'
+import { HEAT_MAGIC, encodeHeatmap, hasSliceHeader, readSlot, type HeatIdentIn, type HeatRecordIn, type HeatSliceIn } from './heatmap.ts'
 import { destination, distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
 
@@ -111,6 +111,34 @@ test('readSlot: a callsign loses its trailing spaces and NULs, none or blanks is
       ['000004', 'AB', '7777'],
       ['000005', null, null],
       ['000006', 'A??B', '1000'], // it is shown as text: a byte that is not printable ASCII becomes ?
+    ],
+  )
+})
+
+test("readSlot: a callsign of only '@' (readsb's empty ident, all zeros) or blank once trimmed is null, as in trace.ts; any other is trimmed", () => {
+  const file = encodeHeatmap([
+    at(
+      0,
+      ident('000001', '@@@@@@@@', '1200'),
+      pos('000001', 32, 34.8, 1000, 100),
+      ident('000002', '@@@@', '1200'), // space padded
+      pos('000002', 32, 34.8, 1000, 100),
+      ident('000003', '  @@@@@@', '1200'), // blanks first, then only @
+      pos('000003', 32, 34.8, 1000, 100),
+      ident('000004', 'AB@@@@@@', '1200'), // an @ among other characters is a character
+      pos('000004', 32, 34.8, 1000, 100),
+      ident('000005', ' ELY1   ', '1200'), // trimmed on both sides
+      pos('000005', 32, 34.8, 1000, 100),
+    ),
+  ])
+  assert.deepEqual(
+    readSlot(file, Q)?.aircraft.map((a) => [a.hex, a.callsign, a.squawk]),
+    [
+      ['000001', null, '1200'],
+      ['000002', null, '1200'],
+      ['000003', null, '1200'],
+      ['000004', 'AB@@@@@@', '1200'],
+      ['000005', 'ELY1', '1200'],
     ],
   )
 })
@@ -292,4 +320,36 @@ test('real records: encodeHeatmap writes the same bytes readsb wrote', () => {
   const real = Buffer.from([REAL.index0, REAL.index1, REAL.head0, REAL.wzz, REAL.mfx0, REAL.bra, REAL.head1, REAL.identWzz, REAL.identMfx, REAL.mfx1].join(''), 'hex')
   real.writeUInt32LE(6, 16)
   assert.equal(Buffer.from(file).toString('hex'), real.toString('hex'))
+})
+
+test('hasSliceHeader: a heatmap has one; an empty body, zeros, an index alone and an HTML page do not', () => {
+  assert.equal(hasSliceHeader(encodeHeatmap([at(0)])), true, 'a slice without aircraft is still a slice')
+  assert.equal(hasSliceHeader(realFile()), true)
+  const padded = new Uint8Array(realFile().length + 5)
+  padded.set(realFile(), 3)
+  assert.equal(hasSliceHeader(padded.subarray(3, 3 + realFile().length)), true, 'at an odd byteOffset')
+  assert.equal(hasSliceHeader(new Uint8Array(0)), false)
+  assert.equal(hasSliceHeader(new Uint8Array(16 * 40)), false)
+  assert.equal(hasSliceHeader(new Uint8Array(Buffer.from(REAL.index0 + REAL.index1, 'hex'))), false, 'the index records alone')
+  assert.equal(hasSliceHeader(new TextEncoder().encode('<html><body>502 Bad Gateway</body></html>')), false)
+  assert.equal(hasSliceHeader(new Uint8Array(Buffer.from(REAL.head0, 'hex').subarray(0, 15))), false, 'half a header')
+})
+
+// More records from the same file, where readsb's empty ident is written: "@@@@@@@@", all zeros read as the character at 0x40
+// (400 of its 128,159 idents; 54 aircraft end the half hour with it). One slice, so the index is one record, the header is record 1.
+const REAL_EMPTY = {
+  index0: '01000000000000000000000000000000',
+  head0: REAL.head0,
+  identCa: '3806c000ae1900404040404040404040', // c00638: squawk 6574, "@@@@@@@@"
+  posCa: '3806c000f9c9b2022ed075fb40063211', // c00638 over Ontario at 40000 ft, 440.2 kt
+  identAu: 'eb6d7c00fb0000404040404040404040', // 7c6deb: squawk 251, "@@@@@@@@"
+  posAu: 'eb6d7c009605fafdf2cb0209f6ffc200', // 7c6deb taxiing at Sydney, -250 ft (baro), 19.4 kt
+}
+
+test("real records: readsb's empty ident @@@@@@@@ is no callsign, and the squawk 251 is 0251", () => {
+  const file = new Uint8Array(Buffer.from(Object.values(REAL_EMPTY).join(''), 'hex'))
+  assert.deepEqual(readSlot(file, { lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft, [
+    { hex: '7c6deb', callsign: null, squawk: '0251', nM: 22.2, t: [0], lat: [-33.94622], lon: [151.17823], alt: [-250], gs: [19.4] },
+    { hex: 'c00638', callsign: null, squawk: '6574', nM: -34.1, t: [0], lat: [45.27155], lon: [-76.16507], alt: [40000], gs: [440.2] },
+  ])
 })

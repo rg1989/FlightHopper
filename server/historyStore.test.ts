@@ -106,14 +106,18 @@ test('file: a 404 or a 410 is remembered for 10 minutes, then asked again', asyn
   assert.equal(calls.length, 4, 'asked again')
 })
 
-test('file: any other failure is null and not remembered: 5xx, 429, a network error, an empty body, a body that is gzip but broken', async () => {
+test('file: any other failure is null, not held and not remembered: 5xx, 429, a network error, a 200 that is not a heatmap, a body that is gzip but broken', async () => {
   const { store, calls, serve } = setup()
+  const html = '<html><body>502 Bad Gateway</body></html>'
   const failures: Reply[] = [
     { status: 500 },
     { status: 429 },
     { status: 403 },
     new Error('ECONNRESET'),
     { status: 200, body: new Uint8Array(0) },
+    { status: 200, body: new TextEncoder().encode(html) }, // no slice header
+    { status: 200, body: new Uint8Array(gzipSync(html)) }, // gzip of one, also checked after gunzip
+    { status: 200, body: new Uint8Array(16 * 40) }, // zeros: records, but no slice header
     { status: 200, body: new Uint8Array([0x1f, 0x8b, 8, 0, 1, 2, 3]) },
   ]
   for (const [i, failure] of failures.entries()) {
@@ -125,6 +129,16 @@ test('file: any other failure is null and not remembered: 5xx, 429, a network er
   serve(NEWEST, ok(NEWEST))
   assert.deepEqual(await store.file(NEWEST), heat(NEWEST))
   assert.equal(calls.length, failures.length + 1)
+})
+
+test('file: a heatmap with a slice header and no aircraft in it is a file', async () => {
+  const { store, calls, serve } = setup()
+  const empty = encodeHeatmap([{ tMs: NEWEST, records: [] }])
+  serve(NEWEST, { status: 200, body: empty })
+  assert.deepEqual(await store.file(NEWEST), empty)
+  assert.deepEqual(store.status().slots, [{ slotMs: NEWEST, state: 'ready' }])
+  assert.deepEqual(await store.query(NEWEST, { lat: 32, lon: 34.8, nm: 30 }), { slotMs: NEWEST, stepS: 10, aircraft: [] })
+  assert.equal(calls.length, 1)
 })
 
 test('file: a slot newer than the newest published, one not on a half hour: null, no request', async () => {

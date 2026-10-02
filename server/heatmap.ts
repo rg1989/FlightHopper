@@ -27,7 +27,7 @@ export interface HeatRecordIn {
 }
 export interface HeatIdentIn {
   hex: string
-  callsign: string | null // up to 8 characters, space padded; null is written as 8 NULs
+  callsign: string | null // up to 8 characters, space padded; null is written as 8 NULs. Read back: null for none, blanks or only '@'
   squawk: string | null // 4 digits; null is written as 0000, which readsb writes for none, and is read back as null
 }
 export interface HeatSliceIn {
@@ -44,7 +44,10 @@ const NO_ALT = -124
 const NO_GS = -1
 const MAX_LAT = 90_000_000 // micro-degrees, as the file has them
 const MAX_LON = 180_000_000
-/** From this radius (a quarter of the way round the earth) a circle is the whole map: every position, no distance test. */
+/**
+ * The History brief's product rule: a circle of this radius or more is "everything". It is hemisphere-sized (5,400 nm is a
+ * quarter of the way round the earth), so every position is kept, with no distance test.
+ */
 const EVERYTHING_NM = 5400
 
 /** The address word of a hex like '738a10' or '~abc123'. */
@@ -85,7 +88,21 @@ export function encodeHeatmap(slices: HeatSliceIn[], intervalMs = 10_000): Uint8
   return out
 }
 
-/** The callsign in the 8 bytes at `o`: no trailing spaces or NULs, null when there is none. */
+/** The offset of the first slice header, -1 when there is none. The index records before it are not positions. */
+function firstHeader(dv: DataView, end: number): number {
+  for (let o = 0; o < end; o += REC) if (dv.getUint32(o, true) === HEAT_MAGIC) return o
+  return -1
+}
+
+/** Whether buf is a heatmap at all: it holds a slice header. An empty body, zeros or an HTML page do not. */
+export function hasSliceHeader(buf: Uint8Array): boolean {
+  return firstHeader(new DataView(buf.buffer, buf.byteOffset, buf.byteLength), buf.byteLength - (buf.byteLength % REC)) >= 0
+}
+
+/**
+ * The callsign in the 8 bytes at `o`, trimmed. null when there is none, it is blank, or it is readsb's empty ident
+ * '@@@@@@@@' (zeros, shown as @): the same rule as server/trace.ts.
+ */
 function callsignAt(buf: Uint8Array, o: number): string | null {
   if (buf[o] === 0) return null
   let n = 8
@@ -95,7 +112,8 @@ function callsignAt(buf: Uint8Array, o: number): string | null {
     const c = buf[o + i]
     s += c >= 0x20 && c <= 0x7e ? String.fromCharCode(c) : '?' // it is shown as text: nothing but printable ASCII
   }
-  return s === '' ? null : s
+  s = s.trim()
+  return /^@*$/.test(s) ? null : s
 }
 
 /**
@@ -113,9 +131,8 @@ export function readSlot(buf: Uint8Array, q: { lat: number; lon: number; nm: num
   const band = (q.nm / 60 + 0.1) * 1e6
   const minLat = q.lat * 1e6 - band
   const maxLat = q.lat * 1e6 + band
-  let o = 0
-  while (o < end && dv.getUint32(o, true) !== HEAT_MAGIC) o += REC // the index records come first: not positions
-  if (o === end) return null
+  let o = firstHeader(dv, end)
+  if (o < 0) return null
   const slotMs = slotOf(dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true))
   const tracks = new Map<number, HistoryTrack>() // by address; hex is set at the end, for the aircraft that are kept
   // ponytail: the newest ident record wins as a whole: with no callsign, or squawk 0 (readsb's "none"), the aircraft gets
