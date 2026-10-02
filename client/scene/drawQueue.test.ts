@@ -48,3 +48,18 @@ test('queueDraw: a frame runs jobs for about 6 ms and at least one: slow jobs go
     g.requestAnimationFrame = saved
   }
 })
+
+test('queueDraw: a job that queues another: both run, and the frame it asked for finds the queue empty without failing', async () => {
+  const saved = g.requestAnimationFrame
+  const frames: (() => void)[] = []
+  g.requestAnimationFrame = (f: () => void) => frames.push(f)
+  try {
+    let inner: Promise<number> | null = null
+    const outer = queueDraw(() => ((inner = queueDraw(() => 2)), 1))
+    while (frames.length > 0) frames.shift()!() // every frame asked for runs, the last with nothing left
+    assert.equal(await outer, 1)
+    assert.equal(await inner!, 2)
+  } finally {
+    g.requestAnimationFrame = saved
+  }
+})

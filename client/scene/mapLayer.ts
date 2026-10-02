@@ -77,7 +77,7 @@ let across = new Float32Array(0) // the most of it in each pixel and its left an
 /**
  * The ink share (0–255) of each pixel of a w × h RGBA tile in the light map's own colours. The halo is the most ink in the
  * 3 × 3 round a pixel, taken as the most of each three along the rows (across), then of three of those down the columns: the
- * whole window's answer for about half the reads.
+ * whole window's answer in six reads a pixel instead of nine.
  * ponytail: a halo stops at its tile's edge, so a name crossing a seam has a pixel's gap in its halo there. Upgrade: read the
  * neighbouring tiles' edge rows.
  */

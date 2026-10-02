@@ -25,8 +25,8 @@ export function queueDraw<T>(draw: () => T, live: () => boolean = () => true): P
 
 function pump(): void {
   const end = performance.now() + DRAW_MS
-  do {
-    queue.shift()!()
-  } while (queue.length > 0 && performance.now() < end)
+  // The first job however long it takes, then more while the frame's time lasts. A job that queued another asked for a
+  // frame of its own: that one may find the queue empty.
+  for (let job = queue.shift(); job !== undefined; job = performance.now() < end ? queue.shift() : undefined) job()
   if (queue.length > 0) requestAnimationFrame(pump)
 }

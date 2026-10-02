@@ -329,6 +329,19 @@ test('RadarProvider: dropped, its tiles still waiting are not drawn, and Cesium 
   })
 })
 
+test('RadarProvider: while its layer is hidden, tiles still waiting are not drawn either (Cesium has freed its imagery)', async () => {
+  await withBrowser(async () => {
+    let shown = true
+    const p = new RadarProvider(stubSource([]), RAIN_PALETTE.dark, () => shown)
+    const request = new Request()
+    const pending = p.requestImage(305, 201, 9, request)
+    shown = false
+    await assert.rejects(pending)
+    assert.equal(request.state, RequestState.CANCELLED)
+    assert.equal(p.dropped, false, 'not retired: shown again, it draws')
+  })
+})
+
 /** A Weather over the fake viewer, with a fake document and fetch (RainViewer's index holds one frame, all else is empty). */
 async function withWeather(fake: ReturnType<typeof fakeViewer>, opts: WeatherOptions, run: (w: Weather, seen: { asked: string[]; lines: (string | null)[] }) => Promise<void>): Promise<void> {
   const v = Object.assign(fake.viewer, {
@@ -395,4 +408,24 @@ test('Weather: radarIndex puts the radar, every frame and palette, under the lay
     assert.deepEqual(at(frame, light, over), [1, 2, 3])
   })
   assert.deepEqual(radar(), [])
+})
+
+test('Weather: shown again, markers and labels are re-worded only when the frame\u2019s units changed meanwhile', async () => {
+  const fake = fakeViewer()
+  let units: Units = { ...DEFAULT_UNITS }
+  await withWeather(fake, { units: () => units }, async (w) => {
+    const stations = (w as unknown as { stations: { removeAll(): void } }).stations
+    let redrawn = 0
+    const removeAll = stations.removeAll.bind(stations)
+    stations.removeAll = () => (redrawn++, removeAll())
+    w.show = true
+    const first = redrawn
+    w.show = false
+    w.show = true
+    assert.equal(redrawn, first, 'same units: nothing redrawn')
+    w.show = false
+    units = { ...units, speed: 'kmh' }
+    w.show = true
+    assert.equal(redrawn, first + 1, 'the speed unit changed: the markers again')
+  })
 })

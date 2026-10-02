@@ -163,6 +163,9 @@ function marker(look: Look): HTMLCanvasElement {
   return c
 }
 
+/** The units a marker's or label's words depend on, as a key. */
+const wordedIn = (u: Units): string => `${u.speed}|${u.alt}`
+
 export interface WeatherOptions {
   units?: () => Units // what speeds and heights are worded in (the flight-data frame's); default knots and feet
   radarIndex?: () => number // where in the imagery stack each radar layer goes, asked as it is added; default, or below 0: on top
@@ -182,12 +185,17 @@ export class RadarProvider extends UrlTemplateImageryProvider {
   readonly source: RadarSource
   readonly palette: Palette
   private gone = false
+  private readonly shown: () => boolean
 
-  constructor(source: RadarSource, palette: Palette) {
+  /** shown: whether its layer is shown (a hidden layer's imagery is freed: its tiles waiting to be drawn are not). */
+  constructor(source: RadarSource, palette: Palette, shown: () => boolean = () => true) {
     super({ url: source.url, maximumLevel: RADAR_MAX_LEVEL })
     this.source = source
     this.palette = palette
+    this.shown = shown
   }
+
+  private readonly live = (): boolean => !this.gone && this.shown()
 
   /** Its layer is gone: tiles still waiting to be drawn are not. */
   drop(): void {
@@ -207,11 +215,11 @@ export class RadarProvider extends UrlTemplateImageryProvider {
       return queueDraw(() => {
         const px = renderTile(level, x, y, (sx, sy) => at.get(`${sx}/${sy}`) ?? null, this.palette)
         return px === null ? blank() : new ImageData(px, 256, 256)
-      }, () => !this.gone)
+      }, this.live)
     })
     return image.catch((e: unknown) => {
       // Cesium takes a cancelled request as "ask again later" and logs nothing; any other failure it logs, tile by tile.
-      if (this.gone && request !== undefined) (request as { state: RequestState }).state = RequestState.CANCELLED
+      if (!this.live() && request !== undefined) (request as { state: RequestState }).state = RequestState.CANCELLED
       throw e
     }) as unknown as Promise<ImageryTypes>
   }
@@ -219,7 +227,7 @@ export class RadarProvider extends UrlTemplateImageryProvider {
 
 /**
  * The rain radar's imagery layer: a RainViewer frame (one RadarSource, so a palette change fetches nothing again) drawn
- * in a palette, on top of all imagery, or from index() up when one is given (not negative). A new frame or palette loads
+ * in a palette, on top of all imagery, or at index() (under what was there) when one is given (not negative). A new frame or palette loads
  * unseen on top (a shown layer loads its tiles; at alpha 0 Cesium draws none of it) and takes over once they are in: drawn,
  * and the old layer gone, in the same frame. So the rain never blinks out and two frames are never drawn at once. While
  * hidden it takes over at once.
@@ -280,7 +288,7 @@ export class RadarLayer {
     const drawn = this.layer === null ? null : (this.layer.imageryProvider as RadarProvider)
     if (drawn !== null && drawn.source === this.source && drawn.palette === this.pal) return // back to what is drawn
     const swap = this.shown && this.layer !== null
-    const layer = new ImageryLayer(new RadarProvider(this.source, this.pal), { show: this.shown, alpha: swap ? 0 : 1 })
+    const layer: ImageryLayer = new ImageryLayer(new RadarProvider(this.source, this.pal, () => layer.show), { show: this.shown, alpha: swap ? 0 : 1 })
     const at = this.index?.() ?? -1 // the map's liftIndex is -1 once it is destroyed: on top then, as add(layer, -1) throws
     this.viewer.imageryLayers.add(layer, at < 0 ? undefined : at)
     if (!swap) {
@@ -327,6 +335,8 @@ export class Weather {
   private radarTime = ''
   private readonly stations = new BillboardCollection()
   private metars: Metar[] = []
+  private worded = '' // the units its markers and labels were last worded in (wordedIn)
+  private destroyed = false
   // ponytail: a look is kept for the session (a 96 px canvas, and its place in the billboards' atlas): a few dozen in a view, a few
   // hundred over a long Europe-wide session. Upgrade: round the speed to 5 kt, or evict the looks no marker shows.
   private readonly looks = new Map<string, HTMLCanvasElement>()
@@ -383,8 +393,10 @@ export class Weather {
       this.timer = null
       return
     }
-    this.setMetars(this.metars) // the frame's units change in the chase, where this is hidden: re-word what was drawn (looks are cached)
-    this.drawAreas()
+    if (wordedIn(this.units()) !== this.worded) { // the frame's units change in the chase, where this is hidden: re-word (looks are cached)
+      this.setMetars(this.metars)
+      this.drawAreas()
+    }
     this.tick()
     this.status()
     this.timer = setInterval(() => this.tick(), VIEW_CHECK_MS)
@@ -446,7 +458,7 @@ export class Weather {
 
   private async loadSigmets(): Promise<void> {
     const list = await this.get<Sigmet[]>(`${this.apiBase}/wx/sigmet`)
-    if (list === null) return this.status()
+    if (this.destroyed || list === null) return this.status()
     this.sigmets = list
     this.tipKey = ''
     this.drawAreas()
@@ -456,6 +468,7 @@ export class Weather {
   /** The hazard areas as outlines on a faint fill, each with its label, worded in the frame's units. */
   private drawAreas(): void {
     const u = this.units()
+    this.worded = wordedIn(u)
     const ents = this.areas.entities
     ents.suspendEvents()
     ents.removeAll()
@@ -483,7 +496,7 @@ export class Weather {
 
   private async loadMetars(box: string): Promise<void> {
     const list = await this.get<Metar[]>(`${this.apiBase}/wx/metar?bbox=${box}`)
-    if (list === null || box !== this.box) return this.status() // the view moved on while it loaded
+    if (this.destroyed || list === null || box !== this.box) return this.status() // gone, or the view moved on while it loaded
     this.note = ''
     this.setMetars(list)
     this.status()
@@ -493,6 +506,7 @@ export class Weather {
     this.metars = list
     this.tipKey = ''
     const u = this.units()
+    this.worded = wordedIn(u)
     this.stations.removeAll()
     for (const m of list) {
       const b: Billboard = this.stations.add({
@@ -565,6 +579,7 @@ export class Weather {
   }
 
   destroy(): void {
+    this.destroyed = true
     this.show = false
     cancelAnimationFrame(this.hoverRaf)
     const c = this.viewer.canvas
