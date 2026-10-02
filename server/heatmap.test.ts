@@ -29,8 +29,8 @@ test('readSlot: the aircraft in the circle, one entry per slice, sorted by hex; 
     slotMs: SLOT,
     stepS: 10,
     aircraft: [
-      { hex: '738a10', callsign: 'ELY397', squawk: '7500', nM: geoid(32.0114, 34.8867), t: [0, 10], lat: [32.0114, 32.0121], lon: [34.8867, 34.8869], alt: ['g', 1500], gs: [12.3, 150.4] },
-      { hex: '~abc123', callsign: null, squawk: null, nM: geoid(32.2, 34.9), t: [0, 10], lat: [32.2, 32.2012], lon: [34.9, 34.9006], alt: [null, null], gs: [null, null] },
+      { hex: '738a10', callsign: 'ELY397', squawk: '7500', type: null, nM: geoid(32.0114, 34.8867), t: [0, 10], lat: [32.0114, 32.0121], lon: [34.8867, 34.8869], alt: ['g', 1500], gs: [12.3, 150.4] },
+      { hex: '~abc123', callsign: null, squawk: null, type: null, nM: geoid(32.2, 34.9), t: [0, 10], lat: [32.2, 32.2012], lon: [34.9, 34.9006], alt: [null, null], gs: [null, null] },
     ],
   })
 })
@@ -339,8 +339,8 @@ test('real records: readSlot decodes what readsb wrote', () => {
     slotMs: SLOT,
     stepS: 10,
     aircraft: [
-      { hex: '471d6e', callsign: 'WZZ27WH', squawk: '5251', nM: 19.6, t: [0], lat: [32.00782], lon: [34.87487], alt: ['g'], gs: [11.2] },
-      { hex: '507caa', callsign: 'MFX373', squawk: '5362', nM: 18.3, t: [0, 10], lat: [32.23201, 32.224], lon: [34.67379, 34.68373], alt: [7100, 6825], gs: [253.2, 255.4] },
+      { hex: '471d6e', callsign: 'WZZ27WH', squawk: '5251', type: null, nM: 19.6, t: [0], lat: [32.00782], lon: [34.87487], alt: ['g'], gs: [11.2] },
+      { hex: '507caa', callsign: 'MFX373', squawk: '5362', type: null, nM: 18.3, t: [0, 10], lat: [32.23201, 32.224], lon: [34.67379, 34.68373], alt: [7100, 6825], gs: [253.2, 255.4] },
     ],
   })
   assert.deepEqual(
@@ -348,9 +348,9 @@ test('real records: readSlot decodes what readsb wrote', () => {
     ['471d6e', '507caa', 'a3973f', '~2b960c'],
   )
   const seattle = readSlot(realFile(), { slotMs: SLOT, lat: 47.6, lon: -122.3, nm: 100, stepS: 10 })?.aircraft
-  assert.deepEqual(seattle, [{ hex: '~2b960c', callsign: null, squawk: null, nM: -21.3, t: [0], lat: [48.39533], lon: [-122.39657], alt: [2900], gs: [193.7] }])
+  assert.deepEqual(seattle, [{ hex: '~2b960c', callsign: null, squawk: null, type: null, nM: -21.3, t: [0], lat: [48.39533], lon: [-122.39657], alt: [2900], gs: [193.7] }])
   const brazil = readSlot(realFile(), { slotMs: SLOT, lat: -25, lon: -49, nm: 100, stepS: 10 })?.aircraft
-  assert.deepEqual(brazil, [{ hex: 'a3973f', callsign: null, squawk: null, nM: 2.7, t: [0], lat: [-25.15315], lon: [-49.15527], alt: [41000], gs: [478.5] }])
+  assert.deepEqual(brazil, [{ hex: 'a3973f', callsign: null, squawk: null, type: null, nM: 2.7, t: [0], lat: [-25.15315], lon: [-49.15527], alt: [41000], gs: [478.5] }])
 })
 
 test('real records: encodeHeatmap writes the same bytes readsb wrote', () => {
@@ -391,7 +391,7 @@ const REAL_EMPTY = {
 test("real records: readsb's empty ident @@@@@@@@ is no callsign, and the squawk 251 is 0251", () => {
   const file = new Uint8Array(Buffer.from(Object.values(REAL_EMPTY).join(''), 'hex'))
   assert.deepEqual(readSlot(file, { slotMs: SLOT, lat: 0, lon: 0, nm: 5400, stepS: 10 })?.aircraft, [
-    { hex: '7c6deb', callsign: null, squawk: '0251', nM: 22.2, t: [0], lat: [-33.94622], lon: [151.17823], alt: [-250], gs: [19.4] },
-    { hex: 'c00638', callsign: null, squawk: '6574', nM: -34.1, t: [0], lat: [45.27155], lon: [-76.16507], alt: [40000], gs: [440.2] },
+    { hex: '7c6deb', callsign: null, squawk: '0251', type: null, nM: 22.2, t: [0], lat: [-33.94622], lon: [151.17823], alt: [-250], gs: [19.4] },
+    { hex: 'c00638', callsign: null, squawk: '6574', type: null, nM: -34.1, t: [0], lat: [45.27155], lon: [-76.16507], alt: [40000], gs: [440.2] },
   ])
 })
