@@ -54,10 +54,13 @@ test('panelView, live: trouble says what is wrong and drops the frozen loading c
 })
 
 test('panelView, History: Replay from adsb.lol, linked with its licence, no refresh period, the replay\'s amber dot', () => {
-  assert.deepEqual(panelView(st({}), 0, { loading: false }), {
+  const v = panelView(st({}), 0, { loading: false })
+  // The tooltip's wording may grow (more credits); it must keep naming the source and the ODbL 1.0 it is owed under.
+  assert.match(v.source?.title ?? '', /adsb\.lol.*ODbL 1\.0/)
+  assert.deepEqual(v, {
     dot: 'replay',
     mode: 'Replay',
-    source: { name: 'adsb.lol', href: 'https://adsb.lol', title: 'History from adsb.lol, ODbL 1.0' },
+    source: { name: 'adsb.lol', href: 'https://adsb.lol', title: v.source?.title ?? '' },
     refresh: '—',
     coverage: { text: '—', loading: false },
   })

@@ -61,6 +61,8 @@ export interface PanelView {
 }
 
 const DASH = '—'
+// The History source's tooltip: where the past comes from, and the licence its credit is owed under.
+const HISTORY_TITLE = 'History from adsb.lol, ODbL 1.0'
 
 /**
  * The panel for a status (null before the first one). history: History is open, and the panel describes the replay,
@@ -73,7 +75,7 @@ export function panelView(status: StatusBrief | null, serverNowMs: number | null
     return {
       dot: 'replay',
       mode: 'Replay',
-      source: { name: src.name, href: src.href, title: 'History from adsb.lol, ODbL 1.0' },
+      source: { name: src.name, href: src.href, title: HISTORY_TITLE },
       refresh: DASH,
       coverage: history.loading ? { text: 'Loading', loading: true } : { text: DASH, loading: false },
     }
