@@ -1733,14 +1733,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     airfield?.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
     // The weather round the chased aircraft, before the names that carry its labels. Shown in a live chase with the switch on
-    // only (applyLayers): nothing of it runs otherwise.
+    // only (applyLayers): nothing of it runs otherwise. Its sky follows the relief drawn and the Sun's night (as the buildings').
     if (weather3d.show) {
       if (chased !== null) {
         wxAircraft.lat = chased.lat
         wxAircraft.lon = chased.lon
         wxAircraft.altM = chased.hM
       }
-      weather3d.update(chased !== null ? wxAircraft : null, now)
+      weather3d.setNight(prefs.light && st !== null ? st.night : 0)
+      weather3d.update(chased !== null ? wxAircraft : null, now, tf)
     }
     // The names over the 3-D view, after the camera moved; none over the flight-data frame (its cards, the chased aircraft).
     placeLabels.update(tf, now, chasing && placeLabels.active ? flightFrame.occupied() : NO_RECTS)

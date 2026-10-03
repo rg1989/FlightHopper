@@ -3,10 +3,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Cartesian3, Cartographic, Color, JulianDate, Math as CesiumMath } from 'cesium'
 import type { ColorMaterialProperty, CustomDataSource, Entity, Viewer } from 'cesium'
-import type { Metar, Sigmet } from '../../shared/wx.ts'
+import { distanceNm } from '../../shared/geo.ts'
+import { geoidN } from '../../shared/geoid.ts'
+import type { Cloud, Metar, Sigmet } from '../../shared/wx.ts'
+import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
+import { nearestClouds, observedClouds, type CloudSpec } from './cloudField.ts'
+import { fogNear, type Fog } from './groundFog.ts'
 import type { LayerLabel } from './placeLabels.ts'
-import { RadarSource } from './radar.ts'
+import { radarPixel, windOf, type Fall } from './precip.ts'
+import { RadarSource, type SourceTile } from './radar.ts'
 import { HAZARD_KM, Weather3D, parseWxAt, statusText3d } from './weather3d.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
@@ -48,9 +54,10 @@ const northOf = (km: number, height = 1): Ring => box(AC.lat + km / KM_PER_DEG, 
 
 const HOST = 'https://tilecache.rainviewer.com'
 const INDEX = { host: HOST, radar: { past: [{ time: 1759420200, path: '/v2/radar/old' }, { time: 1759420800, path: '/v2/radar/new' }] } }
-const metar = (id: string, lat: number, lon: number): Metar => ({
+/** A report of a clear sky (CAVOK) unless o says otherwise. */
+const metar = (id: string, lat: number, lon: number, o: Partial<Metar> = {}): Metar => ({
   id, name: id, lat, lon, elevM: 30, obsMs: null, cat: 'VFR', wdir: null, wspd: 0, wgst: null, visKm: null, visPlus: true, tempC: null, dewC: null,
-  qnhHpa: null, wx: null, clouds: [], vertVisFt: null, raw: '',
+  qnhHpa: null, wx: null, clouds: [], vertVisFt: null, raw: `METAR ${id} 031200Z 27010KT CAVOK 25/12 Q1015`, ...o,
 })
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const MIN = 60_000
@@ -58,7 +65,33 @@ const MIN = 60_000
 type Kind = 'metar' | 'sigmet' | 'radar'
 interface LabelCall { key: string; rank: number; labels: LayerLabel[] }
 
-/** A Weather3D over a fake viewer, names overlay and network: what was asked, answered from `answers` (or failed, or held until release()). */
+/** What a fake sky was told: every draw, frame and set. */
+function fakeSky() {
+  return {
+    clouds: {
+      show: false, draws: [] as CloudSpec[][], frames: [] as [TerrainFrame, number][], destroyed: false,
+      draw(specs: readonly CloudSpec[]) { this.draws.push([...specs]) },
+      frame(tf: TerrainFrame, night: number) { this.frames.push([{ ...tf }, night]) },
+      destroy() { this.destroyed = true },
+    },
+    fog: {
+      sets: [] as (Fog | null)[], frames: [] as [TerrainFrame, number][], destroyed: false,
+      set(f: Fog | null) { this.sets.push(f) },
+      frame(tf: TerrainFrame, night: number) { this.frames.push([{ ...tf }, night]) },
+      destroy() { this.destroyed = true },
+    },
+    precip: {
+      sets: [] as (Fall | null)[], destroyed: false,
+      set(f: Fall | null) { this.sets.push(f) },
+      destroy() { this.destroyed = true },
+    },
+  }
+}
+
+/**
+ * A Weather3D over a fake viewer (its camera at the aircraft until moved), names overlay, sky, radar tiles and network: what
+ * was asked, answered from `answers` (or failed, or held until release()).
+ */
 function rig(o: { at?: { lat: number; lon: number } } = {}) {
   const asked: string[] = []
   const answers: Record<Kind, unknown> = { metar: [], sigmet: [], radar: INDEX }
@@ -75,17 +108,30 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
   }
   const sources: CustomDataSource[] = []
   const removed: [CustomDataSource, boolean | undefined][] = []
+  const camera = { positionCartographic: Cartographic.fromDegrees(AC.lon, AC.lat, AC.altM) }
+  let ground: number | undefined
   const viewer = {
     dataSources: { add: async (ds: CustomDataSource) => void sources.push(ds), remove: async (ds: CustomDataSource, destroy?: boolean) => void removed.push([ds, destroy]) },
     isDestroyed: () => false,
+    camera,
+    scene: { globe: { getHeight: (): number | undefined => ground } },
   } as unknown as Viewer
   const labelCalls: LabelCall[] = []
   const labels = { setLayer: (key: string, rank: number, ls: readonly LayerLabel[]) => void labelCalls.push({ key, rank, labels: [...ls] }) }
   const lines: (string | null)[] = []
   let units: Units = DEFAULT_UNITS
-  const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at })
+  const sky = fakeSky()
+  const tiles = new Map<string, SourceTile>() // z/x/y
+  const tileAsks: string[] = []
+  const tile = async (_r: RadarSource, z: number, x: number, y: number): Promise<SourceTile | null> => {
+    tileAsks.push(`${z}/${x}/${y}`)
+    return tiles.get(`${z}/${x}/${y}`) ?? null
+  }
+  const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile })
   return {
-    w, asked, answers, failing, hold, sources, removed, labelCalls, lines,
+    w, asked, answers, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks,
+    setCamera: (lat: number, lon: number, hM: number): void => void Cartographic.fromDegrees(lon, lat, hM, camera.positionCartographic),
+    setGround: (hM: number | undefined): void => void (ground = hM),
     release: () => held.splice(0).forEach((f) => f()),
     volumes: (): Entity[] => [...sources[0].entities.values], // a copy: the collection's own array changes as it does
     shown: (): LayerLabel[] => labelCalls.at(-1)?.labels ?? [], // the labels the overlay holds for the layer now
@@ -634,4 +680,158 @@ test('Weather3D: destroy hides it, takes its labels and its data source away, en
   assert.deepEqual(late.w.metars, [])
   assert.deepEqual(late.w.sigmets, [])
   assert.deepEqual(late.shown(), [])
+})
+
+// ---- the sky: clouds, fog, rain and snow --------------------------------------------------------------------------------
+
+const KM_PER_NM = 1.852
+const kmFrom = (c: { lat: number; lon: number }, a: { lat: number; lon: number }): number => distanceNm(c.lat, c.lon, a.lat, a.lon) * KM_PER_NM
+const layer = (cover: string, baseFt: number, type: 'CB' | 'TCU' | null = null): Cloud => ({ cover, baseFt, type })
+const north = (km: number): typeof AC => ({ ...AC, lat: AC.lat + km / KM_PER_DEG })
+const TRUE = { fSampled: 1, fNow: 1, relHM: 0 }
+
+test('Weather3D: clouds from the reports round the aircraft, built when they come and drawn the frame after; the line counts the airports they come from', async () => {
+  const r = rig()
+  r.answers.metar = [
+    metar('LLBG', 32.01, 34.89, { clouds: [layer('SCT', 3000)] }),
+    metar('LLHA', 32.81, 35.04, { clouds: [layer('BKN', 2500, 'CB')] }),
+    metar('LLER', 29.94, 35.0), // CAVOK, 240 km south: out of reach
+    metar('SILENT', 32.3, 34.9, { raw: 'METAR SILENT 031200Z AUTO 27010KT 9999 25/12 Q1015' }), // says nothing of the sky
+  ]
+  await open(r)
+  assert.equal(r.sky.clouds.draws.length, 0, 'built at the look, not drawn in it')
+  assert.equal(r.sky.clouds.show, true)
+  r.w.update(AC, 16)
+  assert.equal(r.sky.clouds.draws.length, 1)
+  const drawn = r.sky.clouds.draws[0]
+  assert.deepEqual(drawn, nearestClouds([observedClouds(r.w.metars, AC.lat, AC.lon).specs], AC.lat, AC.lon))
+  assert.ok(drawn.length > 0 && drawn.every((c) => kmFrom(c, AC) <= 150))
+  assert.equal(r.lines.at(-1), 'Clouds from 2 airports · 0 hazard areas', 'LLBG and LLHA; LLER is too far, SILENT says nothing of the sky')
+  r.w.update(AC, 32)
+  assert.equal(r.sky.clouds.draws.length, 1, 'drawn once')
+})
+
+test('Weather3D: the clouds are built again for a new list of reports, or once the aircraft has moved 30 km; not before', async () => {
+  const r = rig()
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('FEW', 3000)] })]
+  await open(r)
+  r.w.update(AC, 16)
+  const draws = (): number => r.sky.clouds.draws.length
+  assert.equal(draws(), 1)
+  r.w.update(north(29), 1000) // a look
+  r.w.update(north(29), 1016)
+  assert.equal(draws(), 1, '29 km: not yet')
+  r.w.update(north(30.5), 2000)
+  r.w.update(north(30.5), 2016)
+  assert.equal(draws(), 2, '30 km from where they were built')
+  r.w.update(north(30.5), 5 * MIN) // the METARs again: a new list, the same words
+  await flush()
+  r.w.update(north(30.5), 5 * MIN + 16)
+  assert.equal(draws(), 3)
+  assert.deepEqual(r.sky.clouds.draws[2], r.sky.clouds.draws[1], 'the same reports draw the same sky')
+})
+
+test('Weather3D: every frame the clouds and the fog follow the relief drawn and the Sun\'s night, with or without an aircraft; hidden, nothing', async () => {
+  const r = rig()
+  await open(r)
+  const flat = { fSampled: 0, fNow: 0, relHM: 120 }
+  r.w.setNight(0.6)
+  r.w.update(AC, 10, flat)
+  assert.deepEqual(r.sky.clouds.frames.at(-1), [flat, 0.6])
+  assert.deepEqual(r.sky.fog.frames.at(-1), [flat, 0.6])
+  r.w.update(null, 20, TRUE)
+  assert.deepEqual(r.sky.clouds.frames.at(-1), [TRUE, 0.6])
+  r.w.setNight(Number.NaN)
+  r.w.update(AC, 30)
+  assert.deepEqual(r.sky.clouds.frames.at(-1), [TRUE, 0], 'no relief given: the true one; no night known: day')
+  r.w.show = false
+  const n = r.sky.clouds.frames.length
+  r.w.update(AC, 40, flat)
+  assert.equal(r.sky.clouds.frames.length, n)
+  assert.equal(r.sky.clouds.show, false)
+})
+
+test('Weather3D: fog round a foggy station near the aircraft, none away from it; hidden, none', async () => {
+  const r = rig()
+  r.answers.metar = [metar('FOGGY', 32.12, 34.95, { wx: 'FG', visKm: 0.2, visPlus: false })]
+  await open(r)
+  const f = r.sky.fog.sets.at(-1)
+  assert.ok(f !== null && f !== undefined)
+  assert.deepEqual(f, fogNear(r.w.metars, AC.lat, AC.lon))
+  r.w.update(north(60), 1000)
+  assert.equal(r.sky.fog.sets.at(-1), null, '60 km off')
+  r.w.update(AC, 2000)
+  assert.ok(r.sky.fog.sets.at(-1) !== null)
+  r.w.show = false
+  assert.equal(r.sky.fog.sets.at(-1), null)
+})
+
+test('Weather3D: rain from the nearest station\'s weather, only below its cloud base + 300 m; drifting with its wind', async () => {
+  const r = rig()
+  const wet = metar('WET', 32.12, 34.95, { wx: '+RA', wdir: 270, wspd: 12, clouds: [layer('BKN', 3000)] })
+  r.answers.metar = [wet]
+  await open(r) // the camera at the aircraft's 10 km
+  assert.equal(r.sky.precip.sets.at(-1), null, 'above the cloud')
+  const top = 30 + 3000 * FT + geoidN(wet.lat, wet.lon) + 300
+  r.setCamera(AC.lat, AC.lon, top - 1)
+  r.w.setNight(0.25)
+  r.w.update(AC, 1000)
+  assert.deepEqual(r.sky.precip.sets.at(-1), { kind: 'rain', intensity: 1, wind: windOf(wet), night: 0.25 })
+  r.setCamera(AC.lat, AC.lon, top + 1)
+  r.w.update(AC, 2000)
+  assert.equal(r.sky.precip.sets.at(-1), null)
+  r.setCamera(AC.lat, AC.lon, top - 1)
+  r.w.update(AC, 3000, { fSampled: 0, fNow: 0, relHM: 0 }) // flattened: the station's ground drawn at 0
+  r.w.update(AC, 4000, { fSampled: 0, fNow: 0, relHM: 0 })
+  assert.equal(r.sky.precip.sets.at(-1), null, 'the base came down with its ground')
+  r.setCamera(AC.lat + 0.4, AC.lon, 500) // 33 km from the station
+  r.w.update(AC, 5000, TRUE)
+  assert.equal(r.sky.precip.sets.at(-1), null, 'no station within 30 km of the camera')
+})
+
+test('Weather3D: rain or snow from the radar under the camera, its place less the ?wxat shift; 3 km over the ground where no base is known', async () => {
+  const zurich = { lat: 47.4, lon: 8.5 }
+  const r = rig({ at: zurich })
+  r.setGround(400)
+  r.setCamera(AC.lat, AC.lon, 3300)
+  const { x, y, px, py } = radarPixel(zurich.lat, zurich.lon) // the camera, at the aircraft, is at Zurich in the radar's own sky
+  const t: SourceTile = { dbz: new Int8Array(256 * 256).fill(-128), snow: new Uint8Array(256 * 256) }
+  t.dbz[py * 256 + px] = 30
+  r.tiles.set(`7/${x}/${y}`, t)
+  await open(r) // the tile is asked for at the first look with a radar frame, and lands after it
+  assert.deepEqual(r.tileAsks, [`7/${x}/${y}`])
+  r.w.update(AC, 1000)
+  assert.deepEqual(r.sky.precip.sets.at(-1), { kind: 'rain', intensity: 0.5, wind: { east: 0, north: 0 }, night: 0 }, 'no station: no wind')
+  t.snow[py * 256 + px] = 1
+  r.w.update(AC, 2000)
+  assert.equal(r.sky.precip.sets.at(-1)?.kind, 'snow')
+  assert.deepEqual(r.tileAsks.length, 1, 'the tile asked once')
+  r.setCamera(AC.lat, AC.lon, 3500) // 3 km over the 400 m ground is 3,400 m
+  r.w.update(AC, 4000)
+  assert.equal(r.sky.precip.sets.at(-1), null)
+  r.setCamera(AC.lat, AC.lon, 3300)
+  r.w.update(AC, 5000)
+  assert.ok(r.sky.precip.sets.at(-1) !== null)
+  r.w.show = false
+  assert.equal(r.sky.precip.sets.at(-1), null, 'hidden: nothing falls')
+})
+
+test('Weather3D: rebuildSky builds the clouds again at once (a check aid for the look constants), drawn the frame after', async () => {
+  const r = rig()
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('FEW', 3000)] })]
+  await open(r)
+  r.w.update(AC, 16)
+  assert.equal(r.sky.clouds.draws.length, 1)
+  r.w.rebuildSky()
+  r.w.update(AC, 32)
+  assert.equal(r.sky.clouds.draws.length, 2)
+  assert.deepEqual(r.sky.clouds.draws[1], r.sky.clouds.draws[0])
+  assert.equal(r.w.sky, r.sky, 'the sky\'s parts, for the console')
+})
+
+test('Weather3D: destroy destroys the sky\'s parts', async () => {
+  const r = rig()
+  await open(r)
+  r.w.destroy()
+  assert.deepEqual([r.sky.clouds.destroyed, r.sky.fog.destroyed, r.sky.precip.destroyed], [true, true, true])
 })
