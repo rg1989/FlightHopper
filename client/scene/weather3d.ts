@@ -12,11 +12,16 @@
 // - clouds from the airports' reports (cloudField.ts) within 150 km, built when new reports come or the aircraft has moved
 //   30 km, and drawn the frame after (the work spread over two frames) by the one cloud layer (cloudLayer.ts). Clouds of
 //   other sources join the same list after the observed ones (#buildClouds);
+// - rain clouds and rain shafts from the radar's newest frame within 100 km of the aircraft: towers where it rains hard, flat
+//   decks where it rains lightly (cloudField.ts radarClouds), shafts of rain under the heaviest (rainShafts.ts). Built from
+//   the frame's zoom-7 tiles (radarCells.ts) at the same time as the observed clouds, and again when a tile or a newer frame
+//   comes; until a newer frame's tile has come the last frame's stands in for it. They stand on the nearest station's ceiling
+//   (cloudField.ts radarBases), and RADAR_LOOK.reserve of the 700 clouds are kept for them;
 // - ground fog round a station near the aircraft that sees little (groundFog.ts);
 // - rain or snow round the camera, from the radar under it or the nearest station's weather, below the cloud: a light
 //   screen overlay (precip.ts), leaned with the wind across the camera's view a few times a second.
-// Every frame the clouds and the fog follow the relief drawn and the Sun's night (setNight); the rest is looked at once a
-// second, when the clouds are also faded by their distance from the aircraft.
+// Every frame the clouds, the shafts and the fog follow the relief drawn and the Sun's night (setNight); the rest is looked at
+// once a second, when the clouds and the shafts are also faded by their distance from the aircraft.
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
 // draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
@@ -29,13 +34,15 @@ import { geoidN } from '../../shared/geoid.ts'
 import type { Metar, Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { REBUILD_KM, nearestClouds, observedClouds, overcastShade, type CloudSpec } from './cloudField.ts'
+import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
 import { CloudLayer } from './cloudLayer.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
 import type { LayerLabel, PlaceLabels } from './placeLabels.ts'
 import { Precipitation, cloudBaseM, nearestStation, precipFromDbz, precipFromWx, radarPixel, radarSample, windOf, type Fall } from './precip.ts'
 import { RADAR_INDEX, RADAR_SRC_MAX, RadarSource, type RadarIndex, type SourceTile } from './radar.ts'
+import { radarCells } from './radarCells.ts'
+import { RainShafts, pickShafts, type RainShaft } from './rainShafts.ts'
 import { hazardsNear, ringCentre, shiftMetars, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
@@ -56,6 +63,7 @@ const PRECIP_OVER_BASE_M = 300 // rain or snow shows round a camera up to this f
 const PRECIP_OVER_GROUND_M = 3000 // or this far over the ground when no base is known
 const TRUE_RELIEF: TerrainFrame = { fSampled: 1, fNow: 1, relHM: 0 }
 const AIM_MS = 250 // the rain or snow overlay is leaned for the camera's heading at most this often
+const TILES_HELD = 16 // decoded radar tiles kept (128 KB each): the ones round the aircraft, and the last frame's until the newer one's comes
 // Under a broken or overcast layer the sky greys (Cesium's sky atmosphere): its colour and light drop by these at full
 // shade (cloudField.ts overcastShade), easing over SHADE_EASE_S: an estimate, by eye.
 const SKY_DESATURATE = 0.75
@@ -94,13 +102,19 @@ type Feed = 'metar' | 'sigmet' | 'radar'
 /** What draws the sky round the aircraft: Cesium's parts in the app (cesiumSky), fakes in tests. */
 export interface Sky {
   clouds: Pick<CloudLayer, 'show' | 'draw' | 'frame' | 'fade' | 'destroy'>
+  shafts: Pick<RainShafts, 'show' | 'draw' | 'frame' | 'fade' | 'destroy'>
   fog: Pick<GroundFog, 'set' | 'frame' | 'destroy'>
   precip: Pick<Precipitation, 'set' | 'aim' | 'destroy'>
 }
 
-/** The sky's parts in the viewer: the clouds and the fog in its scene, the rain or snow overlay in its element (the globe's). */
+/**
+ * The sky's parts in the viewer: the shafts, the clouds and the fog in its scene, the rain or snow overlay in its element (the
+ * globe's). The shafts are added before the clouds, so that where translucent primitives are drawn in the order they were added
+ * the clouds, which hide a shaft's top, are drawn over the shafts (unchecked: Cesium may blend them without order).
+ */
 const cesiumSky = (viewer: Viewer): Sky => ({
-  clouds: new CloudLayer(viewer.scene.primitives), fog: new GroundFog(viewer.scene), precip: new Precipitation(viewer.container as HTMLElement),
+  shafts: new RainShafts(viewer.scene.primitives), clouds: new CloudLayer(viewer.scene.primitives), fog: new GroundFog(viewer.scene),
+  precip: new Precipitation(viewer.container as HTMLElement),
 })
 
 export interface Weather3DOptions {
@@ -174,7 +188,9 @@ export class Weather3D {
   #builtLat = Number.NaN // where the aircraft was when the clouds were built
   #builtLon = Number.NaN
   #stations = 0 // the stations the clouds were built from
-  #pending: CloudSpec[] | null = null // built at a look, drawn at the next frame
+  #pending: { clouds: CloudSpec[]; shafts: RainShaft[] } | null = null // built at a look, drawn at the next frame
+  #radarGen = 0 // the radar data held (its newest frame, its tiles): the radar's clouds are built again from it when it changes
+  #builtRadar = -1
   #made = new WeakMap<Metar, CloudSpec[]>() // each report's clouds (observedClouds' cache)
   #fNow = 1 // the relief drawn, as the last frame gave it (its object is reused: copied)
   #relHM = 0
@@ -185,9 +201,9 @@ export class Weather3D {
   #written = 0 // the grey last written to the sky
   #falling = false // the overlay shows rain or snow
   #aimedMs = -Infinity
-  #tileFrom: RadarSource | null = null // the radar tile under the camera: its frame, its z7 x/y, the tile once it has come
-  #tileKey = ''
-  #tileGot: SourceTile | null = null
+  readonly #tiles = new Map<string, { radar: RadarSource; tile: SourceTile | null }>() // decoded zoom-7 tiles by 'x/y', the first to come first, each with the frame it is of
+  readonly #asked = new Set<string>() // the tiles asked for from #askedFrom
+  #askedFrom: RadarSource | null = null
 
   constructor(viewer: Viewer, opts: Weather3DOptions) {
     this.#viewer = viewer
@@ -212,6 +228,7 @@ export class Weather3D {
     this.#show = on
     this.#volumes.show = on
     this.#sky.clouds.show = on
+    this.#sky.shafts.show = on
     if (on) {
       this.#refresh() // its labels, its sky and the line again, from what it holds
       this.#status()
@@ -266,7 +283,7 @@ export class Weather3D {
     this.#night = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0
   }
 
-  /** The sky built again from what it holds, every report's clouds worked out anew (a check aid: after changing a look constant in the console). */
+  /** The sky built again from what it holds, every report's clouds and the radar's worked out anew (a check aid: after changing a look constant, LOOKS or RADAR_LOOK, in the console). */
   rebuildSky(): void {
     this.#made = new WeakMap()
     this.#builtGen = -1
@@ -282,10 +299,12 @@ export class Weather3D {
     this.#fNow = tf.fNow
     this.#relHM = tf.relHM
     if (this.#pending !== null) {
-      this.#sky.clouds.draw(this.#pending)
+      this.#sky.clouds.draw(this.#pending.clouds)
+      this.#sky.shafts.draw(this.#pending.shafts)
       this.#pending = null
     }
     this.#sky.clouds.frame(tf, this.#night)
+    this.#sky.shafts.frame(tf, this.#night)
     this.#sky.fog.frame(tf, this.#night)
     this.#easeShade(nowMs)
     if (this.#falling && nowMs - this.#aimedMs >= AIM_MS) {
@@ -320,6 +339,7 @@ export class Weather3D {
     if (!alive) return
     void this.#viewer.dataSources.remove(this.#volumes, true)
     this.#sky.clouds.destroy()
+    this.#sky.shafts.destroy()
     this.#sky.fog.destroy()
   }
 
@@ -392,7 +412,10 @@ export class Weather3D {
       if (frame === null) this.#radarDue = Math.min(this.#radarDue, askedMs + RETRY_MS)
       else {
         const source = new RadarSource(frame.host, frame.path)
-        if (this.#radar?.url !== source.url) this.#radar = source // the frame held keeps its decoded tiles
+        if (this.#radar?.url !== source.url) {
+          this.#radar = source // the frame held keeps its decoded tiles
+          this.#radarGen++
+        }
       }
       this.#status()
     })
@@ -422,8 +445,10 @@ export class Weather3D {
       this.#labelKey = labels
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, this.#hazards.map((h) => this.#label(h, u)))
     }
-    if (this.#builtGen !== this.#metarGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
-    this.#sky.clouds.fade(Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC))
+    if (this.#builtGen !== this.#metarGen || this.#builtRadar !== this.#radarGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
+    const from = Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC)
+    this.#sky.clouds.fade(from)
+    this.#sky.shafts.fade(from)
     this.#sky.fog.set(fogNear(this.#metars, a.lat, a.lon))
     const fall = this.#fall()
     this.#sky.precip.set(fall)
@@ -433,15 +458,37 @@ export class Weather3D {
     this.#status()
   }
 
-  /** The clouds round the aircraft, to be drawn at the next frame: the observed, then (as more sources come) the others, within one cap. */
+  /**
+   * The clouds and rain shafts round the aircraft, to be drawn at the next frame: the observed clouds, then the radar's, within one
+   * cap; the radar's keep RADAR_LOOK.reserve of it when it has so many, the observed ones giving way, the farthest first.
+   */
   #buildClouds(): void {
     const a = this.#here
     const observed = observedClouds(this.#metars, a.lat, a.lon, { cache: this.#made })
     this.#stations = observed.stations
-    this.#pending = nearestClouds([observed.specs], a.lat, a.lon)
+    const radar = this.#radarSky()
+    const clouds = radar.clouds.length === 0
+      ? nearestClouds([observed.specs], a.lat, a.lon)
+      : nearestClouds([nearestClouds([observed.specs], a.lat, a.lon, MAX_CLOUDS - Math.min(radar.clouds.length, RADAR_LOOK.reserve)), radar.clouds], a.lat, a.lon)
+    this.#pending = { clouds, shafts: radar.shafts }
     this.#builtGen = this.#metarGen
+    this.#builtRadar = this.#radarGen
     this.#builtLat = a.lat
     this.#builtLon = a.lon
+  }
+
+  /**
+   * The radar's clouds and rain shafts within RADAR_LOOK.radiusKm of the aircraft, from the frame's tiles that have come (a tile
+   * not come is asked for, and the clouds are built again when it has), on the bases the nearest stations' reports give. The
+   * radar is read at the aircraft's place less the ?wxat shift, and the cells come out at their place plus it.
+   */
+  #radarSky(): { clouds: CloudSpec[]; shafts: RainShaft[] } {
+    const a = this.#here
+    const { dLat, dLon } = this.#shift
+    const cells = radarCells((x, y) => this.#tileAt(x, y), a.lat - dLat, wrapLon(a.lon - dLon), this.#shift, RADAR_LOOK.radiusKm)
+    if (cells.length === 0) return { clouds: [], shafts: [] }
+    const base = radarBases(this.#metars)
+    return { clouds: radarClouds(cells, base), shafts: pickShafts(cells, base) }
   }
 
   /** The overcast's grey over the camera: the nearest station's (within its 30 km) broken or overcast layer above it. */
@@ -500,19 +547,41 @@ export class Weather3D {
 
   /** The radar's strongest echo round a place (RainViewer's own), from its decoded zoom-7 tile; null until the tile has come, or no echo. */
   #echo(lat: number, lon: number): { dbz: number; snow: boolean } | null {
+    const { x, y, px, py } = radarPixel(lat, lon)
+    const tile = this.#tileAt(x, y)
+    return tile === null ? null : radarSample(tile, px, py)
+  }
+
+  /**
+   * The decoded zoom-7 tile x, y of the radar's newest frame, asked for once: null until it has come, or when it has no echo. Until
+   * the newest frame's tile has come, the last frame's stands in for it, so a swap of frames leaves no gap. When a tile comes that
+   * reads differently the radar's clouds are built again (#radarGen). The rain overlay (#echo) and the radar's clouds read their
+   * tiles here. At most TILES_HELD are kept, the first to have come going first (and asked for again if wanted: the source has it).
+   */
+  #tileAt(x: number, y: number): SourceTile | null {
     const radar = this.#radar
     if (radar === null) return null
-    const { x, y, px, py } = radarPixel(lat, lon)
+    if (radar !== this.#askedFrom) {
+      this.#askedFrom = radar
+      this.#asked.clear()
+    }
     const key = `${x}/${y}`
-    if (radar !== this.#tileFrom || key !== this.#tileKey) {
-      this.#tileFrom = radar
-      this.#tileKey = key
-      this.#tileGot = null
-      void this.#tile(radar, RADAR_SRC_MAX, x, y).then((t) => {
-        if (radar === this.#tileFrom && key === this.#tileKey) this.#tileGot = t
+    if (!this.#asked.has(key)) {
+      this.#asked.add(key)
+      void this.#tile(radar, RADAR_SRC_MAX, x, y).then((tile) => {
+        if (radar !== this.#askedFrom && this.#tiles.get(key)?.radar === this.#askedFrom) return // a frame gone by does not replace the newest's tile
+        const before = this.#tiles.get(key)?.tile ?? null
+        this.#tiles.delete(key)
+        this.#tiles.set(key, { radar, tile })
+        if (this.#tiles.size > TILES_HELD) {
+          const oldest = this.#tiles.keys().next().value!
+          this.#tiles.delete(oldest)
+          this.#asked.delete(oldest)
+        }
+        if (tile !== before) this.#radarGen++ // an empty tile where there was none changes nothing
       })
     }
-    return this.#tileGot === null ? null : radarSample(this.#tileGot, px, py)
+    return this.#tiles.get(key)?.tile ?? null
   }
 
   #drawVolumes(): void {

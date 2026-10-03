@@ -16,12 +16,24 @@
 // a clear report keeps its side clear. Caps: 120 clouds a station (a layer thinned to its share is drawn with larger
 // clouds, so it covers as much) and 700 in all, the nearest first, none beyond 150 km. A cloud fades out where it looks
 // small (fadeAlpha): small cumulus by 60 to 80 km, decks and towers out to 150 km. Clouds from other sources (the radar's,
-// a model's) join after the observed ones: nearestClouds takes its groups in order.
+// a model's) join after the observed ones: nearestClouds takes its groups in order (Weather3D keeps RADAR_LOOK.reserve of the 700
+// for the radar's).
+// From the radar (radarClouds): each block of the newest radar frame within 100 km (radarCells.ts) with 30 dBZ or more of rain
+// is a tower, the same columns of puffs as a CB's (tower below), as tall as the echo says and darker the heavier; each block of 15
+// to 30 dBZ (or of snow) a flat grey puff of a deck, at the base. The base is the ceiling of the nearest station that reports one
+// within 60 km, else 1,200 m over the ground; both, and the tops by intensity, are estimates (RADAR_LOOK): the radar says where it
+// rains and how hard, no more. Heavy rain is often one region of hundreds of blocks, so the towers (at most 40) and the deck puffs
+// (at most 80) stand farther apart and wider until they fit. They fade out by 100 km, so none pops at the edge of what is read.
+// ponytail: the base under an echo comes from the nearest station and the ground under it from the nearest station's height (a
+// mountain valley's reports say nothing of the ridge), and a tower's top from its dBZ alone. Upgrade: the globe's terrain height
+// for the ground; a source of echo tops.
 // ponytail: where stations are dense and the sky overcast, the 700 nearest end 40 to 60 km off. Upgrade: fewer, larger
 // clouds the farther a station is, so the cap reaches 150 km.
 import { distanceNm } from '../../shared/geo.ts'
 import type { Cloud, Metar } from '../../shared/wx.ts'
 import { smoothstep } from './exaggeration.ts'
+import { FIRST_DBZ } from './radar.ts'
+import { thin, type RadarCell } from './radarCells.ts'
 import { wrapLon } from './wxGeo.ts'
 
 const FT = 0.3048
@@ -136,12 +148,13 @@ export function sequence(seed: number): () => number {
   }
 }
 
-const between = (r: () => number, [lo, hi]: Range): number => lo + (hi - lo) * r()
+export const between = (r: () => number, [lo, hi]: Range): number => lo + (hi - lo) * r()
 const shapeOf = (r: () => number, [x, y, z]: readonly [Range, Range, Range]): [number, number, number] => [between(r, x), between(r, y), between(r, z)]
-const farKmOf = (sizeM: number): number => Math.min(CLOUD_KM, sizeM / 1000 / FADE_ANGLE)
+/** Where a cloud of this size (its larger side, metres) has faded out: where it looks FADE_ANGLE across, at most CLOUD_KM. */
+export const farKmOf = (sizeM: number): number => Math.min(CLOUD_KM, sizeM / 1000 / FADE_ANGLE)
 
-/** How much of a cloud shows at km from the aircraft: all of it until the last 30 % before its farKm, none from there. */
-export function fadeAlpha(c: CloudSpec, km: number): number {
+/** How much of a cloud (or a rain shaft) shows at km from the aircraft: all of it until the last 30 % before its farKm, none from there. */
+export function fadeAlpha(c: Pick<CloudSpec, 'farKm'>, km: number): number {
   return 1 - smoothstep((km - (1 - FADE_BAND) * c.farKm) / (FADE_BAND * c.farKm))
 }
 
@@ -226,55 +239,76 @@ export function metarClouds(m: Metar, seed = 0, cap = STATION_CAP): CloudSpec[] 
   return out
 }
 
+/** One tower to stand, a CB's or the radar's: where, the base it stands on and the ground under it (metres above sea level), its height from the base, its column's width, its anvil's width (0: none) and its lowest puffs' grey. */
+interface Tower {
+  lat: number
+  lon: number
+  baseM: number
+  groundM: number
+  heightM: number
+  widthM: number
+  anvilM: number
+  baseTint: number
+  id: number
+  fadeKm?: number // fades out by this far at most (default: CLOUD_KM)
+}
+
 /**
- * A CB or TCU layer's towers (numbered from first; returns the next number). Each is a column from the base to its top:
- * levels of puffs that overlap into one cloud, three side by side round the axis at the base down to one at the top,
- * dark grey at the base and white from half its height up; a CB's crowned by an anvil, wide flat puffs along the way it
- * spreads. A tower fades out as one, by its height or its anvil.
+ * A CB or TCU layer's towers (numbered from first; returns the next number): each at a place in the disc, as tall and as wide as
+ * its look says (TOWERS), a CB's with an anvil.
  */
 function towers(out: CloudSpec[], m: Metar, ground: number, c: Layer, r: () => number, first: number): number {
   const look = TOWERS[c.type!]
   const base = ground + c.baseFt * FT
   const n = look.count[0] + Math.floor(r() * (look.count[1] - look.count[0] + 1))
   for (let t = 0; t < n; t++) {
-    const tower = first + t
-    const [lon0, lat0] = inDisc(r, m.lat, m.lon, DISC_KM * TOWER_DISC)
+    const [lon, lat] = inDisc(r, m.lat, m.lon, DISC_KM * TOWER_DISC)
     const H = between(r, look.h)
     const W = between(r, look.w)
-    const anvilW = look.anvil === null ? 0 : W * between(r, look.anvil)
-    const farKm = farKmOf(Math.max(H, W, anvilW))
-    const levels = Math.max(2, Math.round(H / (W * LEVEL_ASPECT)))
-    const hp = (PUFF_STACK * H) / levels
-    const low = base + (PUFF_FILL * hp) / 2 // the lowest level's middle: its puffs' base on the layer's
-    const high = base + H - (PUFF_FILL * hp) / 2 // the top level's: their tops at the tower's
-    for (let i = 0; i < levels; i++) {
-      const up = i / (levels - 1)
-      const k = Math.max(1, Math.round(LEVEL_PUFFS - (LEVEL_PUFFS - 1) * up))
-      const turn = 2 * Math.PI * r()
-      const ring = k === 1 ? 0 : (PUFF_RING * W) / 1000
-      const tint = look.baseTint * Math.max(0, 1 - 2 * up)
-      for (let j = 0; j < k; j++) {
-        const a = turn + (2 * Math.PI * j) / k
-        const [lon, lat] = at(lat0, lon0, ring * Math.sin(a), ring * Math.cos(a))
-        out.push({
-          lon, lat, heightM: low + (high - low) * up, groundM: ground, scale: [PUFF_W * W * (1 - 0.2 * up), hp], maxSize: shapeOf(r, TOWER_SHAPE),
-          slice: between(r, TOWER_SLICE), brightness: between(r, TOWER_BRIGHTNESS), tint, farKm, tower,
-        })
-      }
-    }
-    if (look.anvil === null) continue
-    const ah = between(r, ANVIL_H)
-    const way = 2 * Math.PI * r()
-    for (let j = 0; j < ANVIL_PUFFS; j++) {
-      const d = ((j - (ANVIL_PUFFS - 1) / 2) * anvilW) / ANVIL_PUFFS / 1000
-      const [lon, lat] = at(lat0, lon0, d * Math.sin(way), d * Math.cos(way))
+    const anvilM = look.anvil === null ? 0 : W * between(r, look.anvil)
+    tower(out, { lat, lon, baseM: base, groundM: ground, heightM: H, widthM: W, anvilM, baseTint: look.baseTint, id: first + t }, r)
+  }
+  return first + n
+}
+
+/**
+ * A tower: a column from its base to its top, levels of puffs that overlap into one cloud, three side by side round the axis at
+ * the base down to one at the top, dark grey at the base and white from half its height up; an anvil, wide flat puffs along the
+ * way it spreads, crowns one that has it. A tower fades out as one, by its height, its width or its anvil.
+ */
+function tower(out: CloudSpec[], t: Tower, r: () => number): void {
+  const { baseM: base, groundM: ground, heightM: H, widthM: W, anvilM: anvilW } = t
+  const farKm = Math.min(t.fadeKm ?? CLOUD_KM, farKmOf(Math.max(H, W, anvilW)))
+  const levels = Math.max(2, Math.round(H / (W * LEVEL_ASPECT)))
+  const hp = (PUFF_STACK * H) / levels
+  const low = base + (PUFF_FILL * hp) / 2 // the lowest level's middle: its puffs' base on the layer's
+  const high = base + H - (PUFF_FILL * hp) / 2 // the top level's: their tops at the tower's
+  for (let i = 0; i < levels; i++) {
+    const up = i / (levels - 1)
+    const k = Math.max(1, Math.round(LEVEL_PUFFS - (LEVEL_PUFFS - 1) * up))
+    const turn = 2 * Math.PI * r()
+    const ring = k === 1 ? 0 : (PUFF_RING * W) / 1000
+    const tint = t.baseTint * Math.max(0, 1 - 2 * up)
+    for (let j = 0; j < k; j++) {
+      const a = turn + (2 * Math.PI * j) / k
+      const [lon, lat] = at(t.lat, t.lon, ring * Math.sin(a), ring * Math.cos(a))
       out.push({
-        lon, lat, heightM: base + H - (PUFF_FILL * ah) / 2, groundM: ground, scale: [anvilW / 2, ah], maxSize: shapeOf(r, ANVIL_SHAPE),
-        slice: between(r, ANVIL_SLICE), brightness: between(r, TOWER_BRIGHTNESS), tint: 0, farKm, tower,
+        lon, lat, heightM: low + (high - low) * up, groundM: ground, scale: [PUFF_W * W * (1 - 0.2 * up), hp], maxSize: shapeOf(r, TOWER_SHAPE),
+        slice: between(r, TOWER_SLICE), brightness: between(r, TOWER_BRIGHTNESS), tint, farKm, tower: t.id,
       })
     }
   }
-  return first + n
+  if (anvilW === 0) return
+  const ah = between(r, ANVIL_H)
+  const way = 2 * Math.PI * r()
+  for (let j = 0; j < ANVIL_PUFFS; j++) {
+    const d = ((j - (ANVIL_PUFFS - 1) / 2) * anvilW) / ANVIL_PUFFS / 1000
+    const [lon, lat] = at(t.lat, t.lon, d * Math.sin(way), d * Math.cos(way))
+    out.push({
+      lon, lat, heightM: base + H - (PUFF_FILL * ah) / 2, groundM: ground, scale: [anvilW / 2, ah], maxSize: shapeOf(r, ANVIL_SHAPE),
+      slice: between(r, ANVIL_SLICE), brightness: between(r, TOWER_BRIGHTNESS), tint: 0, farKm, tower: t.id,
+    })
+  }
 }
 
 /** Squared km between two places, on the plane round them (fine within a few hundred km). */
@@ -374,4 +408,178 @@ export function nearestClouds(groups: readonly (readonly CloudSpec[])[], lat: nu
 export function sunBrightness(night: number): number {
   const n = Number.isFinite(night) ? Math.min(1, Math.max(0, night)) : 0
   return 1 - (1 - NIGHT_BRIGHTNESS) * n
+}
+
+// ---- the radar's clouds ----------------------------------------------------------------------------------------------------
+
+/**
+ * Where the radar's clouds and rain shafts stand: a place's base, metres above sea level, and the ground under it (an estimate
+ * where no station is near: radarBases).
+ */
+export interface RadarBase {
+  baseM: number
+  groundM: number
+}
+export type BaseOf = (lat: number, lon: number) => RadarBase
+
+interface RadarLook {
+  radiusKm: number // the radar is read this far from the aircraft; its clouds and shafts have faded out by here
+  stationKm: number // a rain block's base is the ceiling of the nearest station within this
+  defaultBaseM: number // else it is this far over the ground (an estimate: neither the radar nor the reports say)
+  deckDbz: number // an echo of this and more is cloud: a deck
+  rainDbz: number // a rain echo of this and more is a tower
+  fullDbz: number // as heavy as the looks tell apart
+  tops: readonly (readonly [number, number])[] // a tower's height from its base by the echo, dBZ and metres, in proportion between (estimates)
+  width: Range // a tower's column, m: at rainDbz to at fullDbz (estimate)
+  widthJitter: number // a column's width varies by this much of that span
+  tint: Range // its lowest puffs' grey: at rainDbz to at fullDbz
+  anvilM: number // a tower this tall has an anvil
+  anvil: Range // as wide as this many columns
+  anvilMaxM: number // and no wider than this (a CB's own anvil reaches 28 km)
+  spacing: number // two towers stand at least this share of a column's width apart
+  towers: number // at most, the nearest
+  grow: number // spacing and width grow by this much at most, to fit them
+  reserve: number // of the 700 clouds this many are kept for the radar's, when it has so many (the observed clouds give way, the farthest first)
+  deck: {
+    w: Range // m
+    h: Range
+    shape: readonly [Range, Range, Range]
+    slice: Range
+    brightness: Range
+    tint: Range // at deckDbz to at rainDbz
+    spacingKm: number // one puff to this much of the area
+    max: number // puffs, at most, the nearest
+  }
+  shaft: {
+    dbz: number // under rain blocks of this and more (rainShafts.ts)
+    max: number // at most, the nearest
+    width: Range // m: at dbz to at fullDbz
+    alpha: Range // opacity at the same
+    overlapM: number // a shaft reaches this far up into its cloud
+    spacing: number // as the towers'
+  }
+}
+
+/** The look of the radar's clouds and shafts: the plan's numbers, and estimates (named, to be tuned by eye). Read as the clouds are made. */
+export const RADAR_LOOK: RadarLook = {
+  radiusKm: 100,
+  stationKm: 60,
+  defaultBaseM: 1200,
+  deckDbz: FIRST_DBZ,
+  rainDbz: 30,
+  fullDbz: 55,
+  tops: [[30, 3000], [45, 7000], [55, 10000]],
+  width: [3000, 6000],
+  widthJitter: 0.3,
+  tint: [0.4, 0.9],
+  anvilM: 6000,
+  anvil: [2.5, 3.5],
+  anvilMaxM: 28_000,
+  spacing: 0.75,
+  towers: 40,
+  grow: 4,
+  reserve: 240,
+  deck: { w: [7000, 11000], h: [900, 1500], shape: LOOKS.OVC.shape, slice: LOOKS.OVC.slice, brightness: [0.55, 0.75], tint: [0.3, 0.5], spacingKm: 5, max: 80 },
+  shaft: { dbz: 35, max: 40, width: [2000, 4000], alpha: [0.3, 0.85], overlapM: 150, spacing: 0.75 },
+}
+
+const clamp01 = (v: number): number => (v > 0 ? (v < 1 ? v : 1) : 0)
+/** The value t of the way from a to b of a range (0 … 1). */
+export const lerp = ([a, b]: Range, t: number): number => a + (b - a) * t
+
+/** 0 at lo and under … 1 at hi and over: an echo's share of the way from lo to hi dBZ. */
+export function ramp(dbz: number, lo: number, hi: number): number {
+  return clamp01((dbz - lo) / (hi - lo))
+}
+
+/** The value at x of the line through points (x rising): the first's before the first, the last's after the last. */
+function through(points: readonly (readonly [number, number])[], x: number): number {
+  if (x <= points[0][0]) return points[0][1]
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1]
+    const [x1, y1] = points[i]
+    if (x <= x1) return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0)
+  }
+  return points[points.length - 1][1]
+}
+
+const CEILING_COVERS = new Set(['BKN', 'OVC', 'VV', 'OVX'])
+
+/** A report's ceiling, metres above sea level: the base of its lowest broken or overcast layer, or the sky hidden (vertical visibility). Null: none, or the station's height unknown. */
+export function ceilingM(m: Metar): number | null {
+  if (m.elevM === null) return null
+  const ft = m.clouds.filter((c) => CEILING_COVERS.has(c.cover) && c.baseFt !== null).map((c) => c.baseFt!)
+  if (m.vertVisFt !== null) ft.push(m.vertVisFt)
+  return ft.length === 0 ? null : m.elevM + Math.min(...ft) * FT
+}
+
+interface Known {
+  lat: number
+  lon: number
+  elevM: number
+  ceilingM: number | null
+}
+
+/**
+ * Where rain falls from: the ceiling of the nearest station that has one within RADAR_LOOK.stationKm, with that station's height
+ * as the ground; else RADAR_LOOK.defaultBaseM over the ground, which is the nearest station's height, or sea level with none.
+ * Estimates: the radar has no cloud base and no height of the ground.
+ */
+export function radarBases(metars: readonly Metar[]): BaseOf {
+  const known: Known[] = metars.filter((m) => m.elevM !== null).map((m) => ({ lat: m.lat, lon: m.lon, elevM: m.elevM!, ceilingM: ceilingM(m) }))
+  const ceilings = known.filter((s) => s.ceilingM !== null)
+  return (lat, lon) => {
+    const kx = KM_PER_DEG * Math.cos(lat * RAD)
+    const nearest = (list: readonly Known[]): { s: Known; km: number } | null => {
+      let best: Known | null = null
+      let bestKm2 = Infinity
+      for (const s of list) {
+        const d2 = (wrapLon(s.lon - lon) * kx) ** 2 + ((s.lat - lat) * KM_PER_DEG) ** 2
+        if (d2 < bestKm2) [best, bestKm2] = [s, d2]
+      }
+      return best === null ? null : { s: best, km: Math.sqrt(bestKm2) }
+    }
+    const c = nearest(ceilings)
+    if (c !== null && c.km <= RADAR_LOOK.stationKm) return { baseM: c.s.ceilingM!, groundM: c.s.elevM }
+    const ground = nearest(known)?.s.elevM ?? 0
+    return { baseM: ground + RADAR_LOOK.defaultBaseM, groundM: ground }
+  }
+}
+
+/**
+ * The clouds of the radar's cells (radarCells.ts): a tower for each rain block of RADAR_LOOK.rainDbz and more (the strongest
+ * kept apart, so a core is not a hundred towers: at most RADAR_LOOK.towers, the nearest), as tall as its echo says, a column
+ * 3 to 6 km wide (more where they were thinned), its base dark grey, darker the heavier, white above, an anvil when it is tall;
+ * and for each light block (RADAR_LOOK.deckDbz up to the rain's, or any snow) a flat grey puff of a deck at the base, thinned
+ * the same way (at most RADAR_LOOK.deck.max). Both stand on the base of their place (base). What a cell draws comes from its
+ * own seed, so a refresh reshuffles nothing.
+ */
+export function radarClouds(cells: readonly RadarCell[], base: BaseOf): CloudSpec[] {
+  const L = RADAR_LOOK
+  const out: CloudSpec[] = []
+  const rain = cells.filter((c) => !c.snow && c.dbz >= L.rainDbz)
+  const columns = thin(rain, (c) => (L.spacing * lerp(L.width, ramp(c.dbz, L.rainDbz, L.fullDbz))) / 1000, L.towers, L.grow)
+  columns.kept.forEach((c, id) => {
+    const r = sequence(c.seed)
+    const b = base(c.lat, c.lon)
+    const heavy = ramp(c.dbz, L.rainDbz, L.fullDbz)
+    const W = lerp(L.width, clamp01(heavy + (r() - 0.5) * L.widthJitter)) * columns.m
+    const H = through(L.tops, c.dbz)
+    const anvilM = H >= L.anvilM ? Math.min(W * between(r, L.anvil), L.anvilMaxM) : 0
+    tower(out, { lat: c.lat, lon: c.lon, baseM: b.baseM, groundM: b.groundM, heightM: H, widthM: W, anvilM, baseTint: lerp(L.tint, heavy), id, fadeKm: L.radiusKm }, r)
+  })
+  const light = cells.filter((c) => c.dbz >= L.deckDbz && (c.snow || c.dbz < L.rainDbz))
+  const deck = L.deck
+  const lying = thin(light, () => deck.spacingKm, deck.max, L.grow)
+  for (const c of lying.kept) {
+    const r = sequence(c.seed)
+    const b = base(c.lat, c.lon)
+    const w = between(r, deck.w) * lying.m
+    const h = between(r, deck.h) * lying.m
+    out.push({
+      lon: c.lon, lat: c.lat, heightM: b.baseM + (PUFF_FILL * h) / 2, groundM: b.groundM, scale: [w, h], maxSize: shapeOf(r, deck.shape), slice: between(r, deck.slice),
+      brightness: between(r, deck.brightness), tint: clamp01(lerp(deck.tint, ramp(c.dbz, L.deckDbz, L.rainDbz)) + (r() - 0.5) * 0.1), farKm: Math.min(L.radiusKm, farKmOf(Math.max(w, h))),
+    })
+  }
+  return out
 }
