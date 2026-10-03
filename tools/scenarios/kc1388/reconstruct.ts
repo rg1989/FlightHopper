@@ -1,12 +1,12 @@
 // tools/scenarios/kc1388/reconstruct.ts
 // Builds public/scenarios/kc1388/track.csv for Air Astana 1388 (11 Nov 2018, ERJ-190LR P4-KCJ), a reconstruction:
-//   - 13:34:07–15:04:14 UTC: Flightradar24's multilateration fixes (positions ~every 9 s, to ~250 m, on their own time
+//   - 13:34:07–15:04:14 UTC: the multilateration fixes (positions ~every 9 s, to ~250 m, on their own time
 //     stamps, the recorder's clock; the aircraft's own Mode S pressure altitude), from its blog post's CSV (reference
 //     data: not in this repository), with Figure 13's own altitude between them;
 //   - before that, the take-off from Alverca runway 04 at the report's times (take-off 13:30:21, airborne 13:31:35) and the
-//     smoothest climb-out to FR24's first fix that keeps the known velocities, altitudes from the report's Figure 13; after 15:04:14 (FR24 had no positions, only
+//     smoothest climb-out to the first multilateration fix that keeps the known velocities, altitudes from the report's Figure 13; after 15:04:14 (no multilateration positions, only
 //     altitudes), the three approaches at Beja traced from the report's Figure 3 (a perspective view: to within a few km),
-//     timed and height-profiled by FR24's altitude-only record (go-arounds at 15:08:00 and 15:18:40, touchdown ≈ 15:26:50
+//     timed and height-profiled by the altitude-only record (go-arounds at 15:08:00 and 15:18:40, touchdown ≈ 15:26:50
 //     on 19L, the report's "15:27").
 // All of it goes through the scenario builders' physics (tools/scenarios/fuse.ts, on the app's own smoother): every
 // source with its own error and its time stamp's; the height tied to the airspeed by energy; over the ground the
@@ -16,7 +16,7 @@
 // path can show. Calibrated airspeed and vertical load come from the report's Figure 13, digitised by digitize_fig13.py
 // (≈10 s averages). Every row is q=R; client/scenario/physics.test.ts checks the result flies like an airliner.
 //
-//   node tools/scenarios/kc1388/reconstruct.ts <fr24 positions csv> <fr24 altitude-only csv> <fig13.csv>
+//   node tools/scenarios/kc1388/reconstruct.ts <positions csv> <altitude-only csv> <fig13.csv>
 import { readFileSync, writeFileSync } from 'node:fs'
 import { AttitudeFilter, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
 import type { Obs } from '../../../client/track/smoother.ts'
@@ -29,8 +29,8 @@ const DEG = 180 / Math.PI
 const QNH_HPA = 1010 // LPAR 13:00Z and LPBJ 15:00Z/15:20Z METARs (report §1.7): 1010 hPa
 const PA_TO_MSL_FT = 27.3 * (QNH_HPA - 1013.25) // pressure altitude → altitude above MSL (no temperature correction)
 const OUT_STEP_S = 2
-const ALT_SD_FT = 25 // a Mode S altitude (FR24's fixes, the altitude-only record)
-const FR24_SD_T = 2 // s: a multilateration fix's time stamp (its altitudes match Figure 13 to ~2 s)
+const ALT_SD_FT = 25 // a Mode S altitude (the multilateration fixes, the altitude-only record)
+const MLAT_SD_T = 2 // s: a multilateration fix's time stamp (its altitudes match Figure 13 to ~2 s)
 const FIG_ALT_SD_FT = 250 // Figure 13's altitude: 181 ft a pixel, the line ~3 px thick
 const FIG_SD_T = 6 // s: each column a ~10-s average, and the raster blurred over its neighbours
 const START = hms('13:29:30')
@@ -56,13 +56,13 @@ const dir = (deg: number): [number, number] => [Math.sin(deg / DEG), Math.cos(de
 
 // ---- inputs --------------------------------------------------------------------------------------------------------
 const [posCsv, altCsv, figCsv] = process.argv.slice(2)
-if (!posCsv || !altCsv || !figCsv) throw new Error('usage: reconstruct.ts <fr24 positions csv> <fr24 altitude-only csv> <fig13.csv>')
+if (!posCsv || !altCsv || !figCsv) throw new Error('usage: reconstruct.ts <positions csv> <altitude-only csv> <fig13.csv>')
 const lines = (f: string): string[] => readFileSync(f, 'utf8').replace(/\r\n?/g, '\n').trim().split('\n')
 
 interface Fix { t: number; e: number; n: number; paFt: number; gsKt: number | null; trkDeg: number | null }
 const fixes: Fix[] = lines(posCsv).slice(1).map((l) => {
   const m = /^(\d+),([^,]+),([^,]*),"([-\d.]+),([-\d.]+)",(\d+),(\d+),(\d+)$/.exec(l)
-  if (m === null) throw new Error(`FR24 line: ${l}`)
+  if (m === null) throw new Error(`positions line: ${l}`)
   const d = new Date(Number(m[1]) * 1000)
   const [e, n] = toEn(Number(m[4]), Number(m[5]))
   const gs = Number(m[7])
@@ -113,16 +113,16 @@ const vObs: HeightObs[] = []
 const rObs: RateObs[] = []
 const ground: Array<[number, number]> = [] // on the ground: [from, to]
 
-// FR24's fixes on their own time stamps: that clock is the recorder's. Their Mode S altitudes follow the DVDR's
+// the multilateration fixes on their own time stamps: that clock is the recorder's. Their Mode S altitudes follow the DVDR's
 // (Figure 13) to within ~2 s over the whole flight (RMS ~380 ft, most of it the figure's 10-s columns). The spread of
 // the speeds consecutive fixes imply (108–381 kt, p5–p95, ~9 s apart, where the aircraft flew at ~250) is the
 // multilateration's position noise, ~250 m, not a wandering clock: re-timing the fixes by the distance between them
-// moved the dives up to 25 s against Figure 13's airspeed, so the aircraft fell while it slowed down. FR24's own speed
+// moved the dives up to 25 s against Figure 13's airspeed, so the aircraft fell while it slowed down. the fixes' own speed
 // and direction are left out (they often repeat a stale value: 220 kt, 239° for the last 3 min).
 const MLAT_SD_M = 250
 for (const f of fixes) {
   hObs.push({ t: f.t, e: f.e, n: f.n, sd: MLAT_SD_M })
-  vObs.push({ t: f.t, hFt: f.paFt + PA_TO_MSL_FT, sdFt: ALT_SD_FT, sdT: FR24_SD_T })
+  vObs.push({ t: f.t, hFt: f.paFt + PA_TO_MSL_FT, sdFt: ALT_SD_FT, sdT: MLAT_SD_T })
 }
 // Between the fixes (9 s apart, but up to 100 s, some across a dive), the DVDR's own pressure altitude: Figure 13's
 // ~10-s columns, to a few hundred feet.
@@ -147,9 +147,9 @@ for (let t = START; t <= LIFT_T; t += 2) {
   vObs.push({ t, hFt: LPAR_FT, sdFt: 3, sdT: 0 })
 }
 ground.push([START, LIFT_T])
-// The climb-out to FR24's first fix: no positions are known. The smoother (below) joins the lift-off to the fix with the
+// The climb-out to the first multilateration fix: no positions are known. The smoother (below) joins the lift-off to the fix with the
 // smoothest path that keeps the known velocities: runway heading at lift-off and still at 13:32:48 ("on initial climb
-// heading", report p.20) at Figure 13's ~150 kt, then FR24's fix and velocity. Heights from Figure 13.
+// heading", report p.20) at Figure 13's ~150 kt, then the multilateration fix and velocity. Heights from Figure 13.
 {
   const at = hms('13:32:48')
   const v = 150 * KT
@@ -173,7 +173,7 @@ const GA2 = hms('15:18:40')
 const TD = hms('15:26:50')
 const STOP = hms('15:27:25')
 const legs: Array<{ wp: Array<[number, number]>; t0: number; t1: number }> = [
-  // 1st approach: from FR24's last fix (south-west bound), onto the 19R centreline, low point ~1 km before the threshold.
+  // 1st approach: from the last multilateration fix (south-west bound), onto the 19R centreline, low point ~1 km before the threshold.
   { wp: [[lastFix.e, lastFix.n], km(4, 14), km(1.2, 8), onCl(5), onCl(2.5), onCl(1)], t0: lastFix.t, t1: GA1 },
   // go-around 1 and the second approach's loop: south over the runway, east ~17 km, back west ~9 km north, final 19R.
   {
@@ -204,7 +204,7 @@ for (const leg of legs) {
   }
   ground.push([TD, END])
 }
-// Heights at Beja: FR24's altitude-only record (to 15:26:15), then the runway.
+// Heights at Beja: the altitude-only record (to 15:26:15), then the runway.
 for (const a of altOnly) if (a.t > lastFix.t && a.t < TD) vObs.push({ t: a.t, hFt: a.paFt + PA_TO_MSL_FT, sdFt: ALT_SD_FT, sdT: 0.5 }) // (one more reply after the landing)
 // The flare: from the record's last airborne height (15:26:15, ~80 ft up) to the touchdown the sink rate eases to nothing,
 // so the smoother does not carry the descent below the runway first.
@@ -236,7 +236,7 @@ const casAt = (t: number): number | null => {
   return cas !== null && cas > 60 ? cas : null
 }
 const kv = fuseHeight(vObs, rObs, { q: Q_V, lim: LIM_V, casAt, energyFrom: LIFT_T + 10, energyTo: TD - 10 })
-// Over the ground: FR24's positions, moving at Figure 13's airspeed plus the wind (fitted to them), where airborne. Not
+// Over the ground: the multilateration positions, moving at Figure 13's airspeed plus the wind (fitted to them), where airborne. Not
 // at Beja: its approaches are traced from a figure and timed, so they tell nothing of the wind.
 const airAt = (t: number): { air: number; hM: number } | null => {
   const cas = casAt(t)
@@ -288,7 +288,7 @@ for (let t = START; t <= END + 1e-9; t += SUB) {
   const [lat, lon] = toLl(e.p, n.p)
   const hFt = gnd ? (t < TD ? LPAR_FT : LPBJ_FT - 10) : h.p / FT
   const g = figAt(t, 'g')
-  const src = t < fixes[0].t ? 'GPIAAF:p.19-20' : t <= lastFix.t ? 'FR24' : 'GPIAAF:p.23'
+  const src = t < fixes[0].t ? 'GPIAAF:p.19-20' : t <= lastFix.t ? '' : 'GPIAAF:p.23'
   const hdg = (Math.round((((att.headingDeg % 360) + 360) % 360) * 10) / 10) % 360
   rows.push([
     clock(t), lat.toFixed(6), lon.toFixed(6), hFt.toFixed(0), hdg.toFixed(1),

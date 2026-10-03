@@ -77,7 +77,7 @@ checked with stubs; three or four real Escape presses in browse mode freeze *hea
 
 | What | Where |
 |---|---|
-| **Air Astana 1388** (11 Nov 2018, ERJ-190LR P4-KCJ, Alverca → Beja, 13:29:30–15:28 UTC), the second scenario. Track (every row q=R): FR24's MLAT fixes 13:34–15:04 on their own time stamps (the recorder's clock; the first build re-timed them and made the aircraft dive while slowing, fixed 2026-09-29), fused with Figure 13's altitude and airspeed by `tools/scenarios/fuse.ts` (energy, wind triangle, nine spirals re-flown); the take-off at the report's times; the three Beja approaches traced from the report's Figure 3 and timed by FR24's altitude record (go-arounds 15:08:00, 15:18:40; touchdown 15:26:50 on 19L), with a flare; attitude from the app's flight-mechanics model; IAS and g digitised from the report's DVDR plot (Figure 13). No transcript is published: 20 story messages quote the report (checked line by line against its pages). Closing card; crew by role (the report names nobody). | `public/scenarios/kc1388/`, build scripts and README `tools/scenarios/kc1388/`; inputs (report PDF, FR24 CSVs, OSM/SRTM JSON) in the main checkout's git-excluded `.work/kc1388/sources/` |
+| **Air Astana 1388** (11 Nov 2018, ERJ-190LR P4-KCJ, Alverca → Beja, 13:29:30–15:28 UTC), the second scenario. Track (every row q=R): the multilateration fixes 13:34–15:04 on their own time stamps (the recorder's clock; the first build re-timed them and made the aircraft dive while slowing, fixed 2026-09-29), fused with Figure 13's altitude and airspeed by `tools/scenarios/fuse.ts` (energy, wind triangle, nine spirals re-flown); the take-off at the report's times; the three Beja approaches traced from the report's Figure 3 and timed by the altitude-only record (go-arounds 15:08:00, 15:18:40; touchdown 15:26:50 on 19L), with a flare; attitude from the app's flight-mechanics model; IAS and g digitised from the report's DVDR plot (Figure 13). No transcript is published: 20 story messages quote the report (checked line by line against its pages). Closing card; crew by role (the report names nobody). | `public/scenarios/kc1388/`, build scripts and README `tools/scenarios/kc1388/`; inputs (report PDF, multilateration CSVs, OSM/SRTM JSON) in the main checkout's git-excluded `.work/kc1388/sources/` |
 | E175 gear on Embraer's APM-2259 (wheelbase 11.40 m, track 5.20 m, H38x13-18 mains; it had the E190's 5.94 m track). | `tools/models/gear-glb.ts`, `public/models/e75l-gear.glb` |
 | A package's `airport.json` may list several airfields (KC1388: Alverca and Beja, runway ends from OpenStreetMap, SRTM elevations); documented in `docs/scenarios.md` §1.11a. | `client/app.ts` |
 | **E190 model** (built by a helper agent with the documented livetaiwan pipeline; the same commands rebuild `e75l.glb` byte for byte): manifest `e190` (E19*, E29* move off `e75l`), paint map, lights, gear from Embraer's APM-1901 (wheelbase 13.83 m, track 5.94 m; fitted 0.38 m forward like e75l's). Renders: `.planning/reports/e190-model/`. | `public/models/e190{,-gear}.glb`, `tools/models/gear-glb.ts`, `third_party/aircraft-models/` |
@@ -122,7 +122,7 @@ same photos).
 1. **Air Astana 1388 (`public/scenarios/kc1388/`, 2026-09-29):** done; see "What 2026-09-29 added". Known limits, all
    said in the package: the attitude is what the path requires (the real aircraft rolled far more; the recorded
    attitude is not published); the Beja approaches are traced from a perspective figure (to within a few km); the
-   take-off path before FR24's first fix is the smoothest one that keeps the report's times. Better data would come
+   take-off path before the first multilateration fix is the smoothest one that keeps the report's times. Better data would come
    only from GPIAAF or Embraer (the DVDR values). Crew names are not in the report and are left out.
 2. **Optional:** runway and approach lights at night (the painted runways are unlit; real ones glow); the Air Astana title
    decal only if a public-domain wordmark turns up.
@@ -156,7 +156,7 @@ profile that once had `?topo=0` stays flat.
 
 ## Gotchas learned 2026-09-28
 
-- FR24's MLAT CSVs: keep their own time stamps (the altitudes match the flight recorder's to ~2 s). The spread of the
+- The multilateration CSVs: keep their own time stamps (the altitudes match the flight recorder's to ~2 s). The spread of the
   speeds consecutive fixes imply (108–381 kt around a flown ~250) is ~250 m of MLAT position noise, not clock error:
   re-timing by distance at the airspeed (the first KC1388 build) moved the dives 25 s against the airspeed, so the
   aircraft fell while slowing (fixed 2026-09-29, `tools/scenarios/fuse.ts`). The speed/direction columns repeat stale

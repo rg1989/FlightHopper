@@ -43,7 +43,7 @@
         "The aileron control cables of both wings had been installed reversed during heavy maintenance, and the checks after it did not find it. For almost two hours the crew flew an aircraft that answered their roll inputs the wrong way.",
         "They landed at Beja at 15:27. Of the six people aboard, one passenger was injured. The flight loads damaged the airframe: skin panels, the wing leading edges and the wing dihedral.",
         "The investigation found the most probable cause in the improper aileron cable installation and the inadequate independent inspection after it, with contributing factors at the maintenance organisation, the manufacturer, the operator, the supervising authorities and in the crew's pre-flight checks.",
-        "Reconstruction from the final report of Portugal's GPIAAF (08/ACCID/2018, 2020) and Flightradar24's multilateration data."
+        "Reconstruction from the final report of Portugal's GPIAAF (08/ACCID/2018, 2020) and published multilateration data."
       ]
     }
   },
@@ -53,12 +53,6 @@
       "title": "GPIAAF (Portugal), final report 08/ACCID/2018: Embraer 190-100LR P4-KCJ, loss of control in flight, 11 November 2018 (June 2020), Portuguese and English",
       "url": "https://asn.flightsafety.org/reports/2018/20181111_E190_P4-KCJ.pdf",
       "note": "A copy of the GPIAAF publication on the Aviation Safety Network (gpiaaf.gov.pt refuses automated downloads). Page numbers are the report's printed ones, the same as the PDF's. History of the flight pp. 17–23; injuries and damage pp. 23–25; crew pp. 26–27; weather p. 40; aerodromes p. 42; DVDR data (Figure 13) p. 44, digitised by tools/scenarios/kc1388/digitize_fig13.py for the airspeed and load columns; the Beja approaches (Figure 3) p. 23; causes pp. 103–105."
-    },
-    {
-      "id": "FR24",
-      "title": "Flightradar24, “Flightradar24 data for Air Astana KC1388 E190 loss-of-control incident” (2018): the flight's multilateration data and altitude-only data",
-      "url": "https://www.flightradar24.com/blog/flightradar24-data-regarding-air-astana-kc1388-e190-loss-of-control-incident-near-lisbon/",
-      "note": "Positions 13:34:07–15:04:14 UTC (multilateration, about every 14 s) and the aircraft's own Mode S pressure altitudes to 15:26:15. track.csv smooths them with the app's own smoother (tools/scenarios/kc1388/reconstruct.ts); the files themselves are not in this repository. The take-off before the first position and the Beja approaches after the last one are reconstructed from the report."
     },
     {
       "id": "OSM",

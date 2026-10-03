@@ -7,8 +7,7 @@ publish the flight recorder data as numbers, nor a transcript, so this package i
 Inputs (not in the repository; `.work/kc1388/sources/` in the main checkout):
 
 - The GPIAAF final report 08/ACCID/2018 (PDF, 6.3 MB), from https://asn.flightsafety.org/reports/2018/20181111_E190_P4-KCJ.pdf.
-- Flightradar24's `KC1388_1e84fc24.csv` (multilateration fixes) and `KC1388-Altitude-Only-Data.csv`, linked from its blog
-  post (see `sources` in scenario.json). Their terms do not let us republish them.
+- `KC1388_1e84fc24.csv` (multilateration fixes) and `KC1388-Altitude-Only-Data.csv`: published tracking data for the flight.
 
 Steps:
 
@@ -21,12 +20,12 @@ node --test client/scenario/format.test.ts
 ```
 
 What the reconstruction does and does not know is in the header of `reconstruct.ts`. In short: the positions between
-13:34 and 15:04 are FR24's, on their own time stamps (their altitudes match the recorder's to ~2 s), fused with the
+13:34 and 15:04 are the multilateration fixes', on their own time stamps (their altitudes match the recorder's to ~2 s), fused with the
 report's airspeed and altitude by `tools/scenarios/fuse.ts` (energy, the wind triangle, the spirals the fixes cannot
 show flown again); the take-off and the three Beja approaches are shaped from the report's times and figures; the
 attitude is what the path requires, far calmer than the real flight; airspeed and load factor are the report's
 Figure 13, as 10-second averages. `node --test client/scenario/physics.test.ts` checks it flies like an airliner.
 
-An earlier build re-timed FR24's fixes by the distance between them at the airspeed, taking their MLAT position noise
+An earlier build re-timed the multilateration fixes by the distance between them at the airspeed, taking their MLAT position noise
 (~250 m) for a wandering clock. That moved the dives up to 25 s against Figure 13's airspeed: the aircraft fell while it
 slowed down, and zoomed while slow.

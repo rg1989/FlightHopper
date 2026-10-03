@@ -31,11 +31,11 @@ time,type,value,label,src
 15:04:20,phase,,"First approach, runway 19R",GPIAAF:p.22
 15:04:20,gear,1,"Gear down (not recorded; estimated)",GPIAAF:p.22
 15:04:25,story,12,"A direct approach to runway 19R at Beja. With the control difficulties the approach is not stabilised and has to be discontinued.",GPIAAF:p.23
-15:08:00,mark,,Go-around (lowest point of the first approach),FR24
+15:08:00,mark,,Go-around (lowest point of the first approach),
 15:08:00,phase,,Go-around,GPIAAF:p.23
 15:09:00,story,14,"The co-pilot flying as pilot monitoring is exhausted and unwell. The captain has the co-pilot from the jump seat take his place.",GPIAAF:p.23
 15:12:00,phase,,Second approach,GPIAAF:p.23
-15:18:40,mark,,Go-around (lowest point of the second approach),FR24
+15:18:40,mark,,Go-around (lowest point of the second approach),
 15:18:40,phase,,Go-around,GPIAAF:p.23
 15:19:30,phase,,Third approach,GPIAAF:p.23
 15:19:35,story,12,A second non-stabilised approach ends in another go-around. The crew flies one more circuit.,GPIAAF:p.23

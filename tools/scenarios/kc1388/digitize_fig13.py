@@ -10,12 +10,12 @@ Each pixel column is ~9.93 s. For each column and trace, the median row of the t
 average (single-sample spikes shrink). The vertical-speed trace is left out: its grey matches the grid lines (the
 reconstruction derives the vertical speed from the altitude). Axes, calibrated on the figure's own tick labels:
   time      50 ticks, 13:25:21 at x = 64.5 ... 15:27:51 at x = 804.5 (the yellow take-off line at 13:30:21 falls at 94.7)
-  pressure altitude  0 ft at y 159.7 (the zero line, row 160; a fit to FR24's 387 Mode S altitudes gives 159.73 and
+  pressure altitude  0 ft at y 159.7 (the zero line, row 160; a fit to the 387 Mode S altitudes gives 159.73 and
             181.6 ft/px), 5,000 ft per 27.6 px
   calibrated airspeed 0 kt at y 475.5, 50 kt per 23.33 px
   vertical acceleration 1 g at y 562.5 (the level-cruise trace sits at 562.0), 32 px per g
 The "maximum" marker lines drawn across each band, and the traces' own name labels over the right end of each band,
-are masked out (the altitude's marker, at ~19,300 ft, hides the top of the climb at 14:45–14:50: FR24 has fixes there).
+are masked out (the altitude's marker, at ~19,300 ft, hides the top of the climb at 14:45–14:50: the multilateration fixes cover it).
 pa_lo_ft and pa_hi_ft are the altitude trace's extent in the column (its lowest and highest point).
 """
 import sys
