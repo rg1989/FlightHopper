@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ongoing, type AlertEvent } from '../shared/alerts.ts'
+import { ongoing, type AlertDrop, type AlertEvent } from '../shared/alerts.ts'
 import { SLOT_MS } from '../shared/history.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { Alerts, ntfyPush } from './alerts.ts'
@@ -18,6 +18,8 @@ const at = (min: number, sec = 0): number => SLOT + (min * 60 + sec) * 1000 // 0
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'fh-alerts-'))
 
 type TypeOf = (hex: string) => { type: string | null; category: string | null; military?: boolean }
+const LINER: TypeOf = () => ({ type: 'B738', category: 'A3' })
+const NO_TYPE: TypeOf = () => ({ type: null, category: null }) // no airliner: D1_OTHER (20,000 ft) and D2_OTHER
 
 function setup(o: {
   dir?: string
@@ -34,7 +36,8 @@ function setup(o: {
     pushed.push(structuredClone(e))
     o.push?.(e)
   }
-  const a = new Alerts({ dir, nowMs: () => clock.t, sweep: true, push, codes: o.codes, typeOf: o.typeOf, append: o.append })
+  // An airliner unless a test says otherwise: its rules (descent.ts D1, D2, D3) are the ones most tests here are about.
+  const a = new Alerts({ dir, nowMs: () => clock.t, sweep: true, push, codes: o.codes, typeOf: o.typeOf ?? LINER, append: o.append })
   if (o.on ?? true) a.setOn(true)
   return { a, clock, pushed, dir }
 }
@@ -86,6 +89,7 @@ function heat(planes: Plane[], slot = SLOT): Uint8Array {
 
 /** Level at `top`, then from atS 180 ft/s (10,800 fpm) until fallFt is lost: a fall that any retune of the rules still takes. */
 const plunge = (top: number, atS: number, fallFt = 18_000) => (s: number): number => Math.max(top - fallFt, s < atS ? top : top - 180 * (s - atS))
+
 
 /** Level, then 4,700 ft lost in the last 30 s (9,400 fpm) and no position after it: a dive then lost. */
 const dive = (s: number): number | null => (s > 1300 ? null : s < 1270 ? 34_700 : 34_700 - ((s - 1270) / 30) * 4700)
@@ -752,7 +756,7 @@ const FAST_JETS = (
 test('sample: no descent event for a fighter or trainer type (F5, T38 and the others listed), however it falls; an airliner\'s same fall is one', () => {
   const run = (typeCode: string | null): number => {
     const { a } = setup()
-    feed(a, samples(plunge(36_000, 50), 200, { typeCode }))
+    feed(a, samples(plunge(36_000, 50, 24_000), 200, { typeCode })) // 21,600 ft in 120 s and still falling: a fall by D1_OTHER too
     return a.reply().events.length
   }
   assert.equal(FAST_JETS.length, 58)
@@ -805,12 +809,14 @@ test('sample: the type table is asked last: not for a military dbFlags or a fast
   assert.ok(asked.length > 0, 'an airliner is asked')
 })
 
-/** Three aircraft in one half hour: a descent, a dive then lost, and a descent after 7700 sent twice. */
+/** Level, then 5,400 ft lost in the last 30 s (10,800 fpm) and no position after it: a dive then lost by D2_OTHER too. */
+const steepDive = (s: number): number | null => (s > 1300 ? null : s < 1270 ? 34_700 : 34_700 - 180 * (s - 1270))
+/** Three aircraft in one half hour: a descent, a dive then lost, and a descent after 7700 sent twice. Falls that the rules of both kinds take. */
 const fallers = (): Uint8Array =>
   heat([
-    { hex: 'a00001', alt: plunge(36_000, 1000) },
-    { hex: 'a00002', lat: 41, alt: dive },
-    { hex: 'a00003', lat: 42, alt: plunge(36_000, 1000), idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }] },
+    { hex: 'a00001', alt: plunge(36_000, 1000, 22_000) },
+    { hex: 'a00002', lat: 41, alt: steepDive },
+    { hex: 'a00003', lat: 42, alt: plunge(36_000, 1000, 22_000), idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }] },
   ])
 /** What a late scan finds with this type table: [hex, kind, has a fall]. */
 function found(typeOf: TypeOf): [string, string, boolean][] {
@@ -894,17 +900,41 @@ test('scanSlot: a late fall of an aircraft with a quiet event (a Dash 8 that sen
   assert.equal(pushed.length, 1)
 })
 
-test('scanSlot: the late check reaches the limits of D2: a dive of exactly 3,000 ft from exactly 15,000 ft is found, 25 ft less of either is not', () => {
-  // A file's altitudes are in 25 ft steps. Level, then 10 s points down in 30 s, then no position: the file's last slice is far after it.
-  const dive3000 = (top: number, fall: number) => (s: number): number | null => (s > 1300 ? null : s < 1270 ? top : top - ((s - 1270) / 30) * fall)
-  const kinds = (top: number, fall: number): (string | undefined)[] => {
-    const { a } = setup()
-    a.scanSlot(heat([{ hex: 'a00001', alt: dive3000(top, fall) }, { hex: 'a00002', lat: 41 }]), SLOT) // a00002 cruises to the last slice
+test('scanSlot: the late check reaches the limits of D2: an airliner\'s dive of exactly 2,000 ft at 6,000 fpm is found at any level; another aircraft\'s of 3,000 ft from exactly 15,000 ft at 10,000 fpm; 25 ft less is not', () => {
+  // A file's altitudes are in 25 ft steps. Level, then 10 s points down over `s` seconds, then no position: the file's last slice is far after it.
+  const dive = (top: number, fall: number, over: number) => (s: number): number | null => (s > 1300 ? null : s < 1300 - over ? top : top - ((s - (1300 - over)) / over) * fall)
+  const kinds = (top: number, fall: number, over: number, typeOf: TypeOf = LINER): (string | undefined)[] => {
+    const { a } = setup({ typeOf })
+    a.scanSlot(heat([{ hex: 'a00001', alt: dive(top, fall, over) }, { hex: 'a00002', lat: 41 }]), SLOT) // a00002 cruises to the last slice
     return a.reply().events.map((e) => e.kind)
   }
-  assert.deepEqual(kinds(15_000, 3_000), ['dive'])
-  assert.deepEqual(kinds(14_975, 3_000), [], 'a top 25 ft under FL150')
-  assert.deepEqual(kinds(15_000, 2_975), [], 'a fall 25 ft short')
+  assert.deepEqual(kinds(15_000, 2_000, 20), ['dive'])
+  assert.deepEqual(kinds(6_000, 2_000, 20), ['dive'], 'an airliner: from 6,000 ft too')
+  assert.deepEqual(kinds(15_000, 1_950, 20), [], '50 ft short, and so 5,850 fpm')
+  assert.deepEqual(kinds(15_000, 2_950, 30), [], '5,900 fpm')
+  assert.deepEqual(kinds(15_000, 5_000, 30, NO_TYPE), ['dive'], 'no airliner: 10,000 fpm from FL150')
+  assert.deepEqual(kinds(14_975, 5_000, 30, NO_TYPE), [], 'a top 25 ft under FL150')
+  assert.deepEqual(kinds(15_000, 4_950, 30, NO_TYPE), [], '9,900 fpm')
+  assert.deepEqual(kinds(15_000, 4_950, 30, () => ({ type: 'GALX', category: 'A3' })), [], 'a business jet is no airliner')
+})
+
+test('an airliner\'s plunge (D3), 8,000 ft in 60 s at any level, is a descent event, live and late; no event for the same fall of another aircraft', () => {
+  // Sriwijaya 182's kind, from a level below FL150: 11,000 ft lost at 9,000 fpm; then level, so it is no dive then lost.
+  const fall = (s: number): number => (s < 1000 ? 12_900 : Math.max(1900, 12_900 - 150 * (s - 1000)))
+  const late = (typeOf: TypeOf): (AlertDrop | null)[] => {
+    const { a } = setup({ typeOf })
+    a.scanSlot(heat([{ hex: 'a00001', alt: fall }]), SLOT)
+    return a.reply().events.map((e) => e.drop)
+  }
+  assert.deepEqual(late(LINER), [{ fromFt: 12_900, toFt: 1900, overS: 80, lost: false }])
+  assert.deepEqual(late(NO_TYPE), [])
+  assert.deepEqual(late(() => ({ type: 'C208', category: 'A1' })), [], 'a jump plane dives like that every load')
+  const live = (typeCode: string | null): number => {
+    const { a } = setup()
+    feed(a, samples((t) => fall(t + 950), 200, { typeCode }))
+    return a.reply().events.length
+  }
+  assert.deepEqual([live('B735'), live('AT76'), live('C208'), live('GLF6'), live(null)], [1, 1, 0, 0, 0])
 })
 
 // Coverage
@@ -1110,7 +1140,7 @@ test('late, across a boundary: a dive in the last 50 s of a half hour, the aircr
 test('late, across a boundary: a 20,000 ft descent split by it is found once the next half hour is read; each half hour carries its own end', () => {
   const first = { hex: 'a00001', alt: descentAt(1740) } // 05:29:00 to 05:31:00
   const second = { hex: 'a00002', lat: 41, alt: descentAt(3540) } // 05:59:00 to 06:01:00
-  const { a, pushed } = setup()
+  const { a, pushed } = setup({ typeOf: NO_TYPE }) // D1_OTHER: an airliner's D3 would find the fall's start in its own half hour
   a.scanSlot(half(0, [first, second]), SLOT)
   assert.deepEqual(falls(a), [])
   a.scanSlot(half(1, [first, second]), NEXT)
@@ -1134,10 +1164,10 @@ test('late, across a boundary: a fall found in a half hour is not found twice, n
 
 test('late, across a boundary: nothing is carried into a half hour read without the one before it (the first read, after a gap)', () => {
   const plane = { hex: 'a00001', alt: descentAt(1740) } // split by the 05:30 boundary, as above
-  const alone = setup()
+  const alone = setup({ typeOf: NO_TYPE })
   alone.a.scanSlot(half(1, [plane]), NEXT)
   assert.equal(alone.a.reply().events.length, 0, 'the first read')
-  const gap = setup()
+  const gap = setup({ typeOf: NO_TYPE })
   gap.a.scanSlot(half(0, [plane]), SLOT)
   gap.a.scanSlot(half(1, [plane], 2), SLOT + 2 * SLOT_MS) // what 05:30 held, as the 06:00 half hour: 05:00's end is not before it
   assert.equal(gap.a.reply().events.length, 0, 'after a gap')
@@ -1145,7 +1175,7 @@ test('late, across a boundary: nothing is carried into a half hour read without 
 
 test('late, across a boundary: an older half hour read after a newer one (its download failed once) does not take the newer one\'s end', () => {
   const plane = { hex: 'a00001', alt: descentAt(3540) } // 05:59:00 to 06:01:00: split by the 06:00 boundary, between half hours 1 and 2
-  const { a, pushed } = setup()
+  const { a, pushed } = setup({ typeOf: NO_TYPE })
   a.scanSlot(half(1, [plane]), NEXT)
   a.scanSlot(half(0, [plane]), SLOT) // half hour 0 only now: out of order
   assert.deepEqual(falls(a), [], 'neither of the two holds the fall')

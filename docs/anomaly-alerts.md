@@ -92,13 +92,60 @@ C-130 on 7700: real emergencies, so squawks and statuses are not left out for mi
 The rules use `alt_baro`. Points are an aircraft's reports, or the 10 s heatmap points.
 
 - **Clean first.** Drop points above 50,000 ft and repeated times. Drop an outlier: an inner point whose steps to its two neighbours go in opposite directions and that is more than 1,000 ft off the line between them (a GNSS altitude among baro ones, or a bad decode), or whose two steps are both faster than 30,000 fpm. Judge a point only when both its steps are at most 60 s, so a point across a coverage hole stays. Drop it only if it is at least as far off its line as each of the two points next to it is off theirs: the good point beside an outlier is off the line to it too, and stays. The first and last points are never judged. The steps of a fall go down, or up by 300 ft at most, at 30,000 fpm or less, with at most 60 s between points.
-- **D1, emergency descent.** From FL200 or above, 15,000 ft or more lost within 120 s (7,500 fpm), over 4 or more falling points. The fall is then followed to its bottom: on while each step is a fall, until 60 s pass with no new low. Noise in the 8 measured half hours, worldwide, with the exclusion below: 2 (FA20, C25M).
-- **D2, dive then lost.** The fall into the last point. Its top is within the last 60 s, at FL150 or above, with every step from it a fall, over 3 or more points. The fall is 3,000 ft or more, at 5,000 fpm or more on average. Then no position for 60 s. Of the tops that fit, the biggest fall is taken. FZ1073 fits (section 7.5). In the 8 measured half hours, worldwide, D2 raised FZ1073 and one civil false alarm: a Gulfstream G200 (JPL5), 15,650 to 11,425 ft in 50 s, then 17 min of silence. The exclusion below removed 3 military or fast-jet ones.
-- **No D1 or D2 event.** Military aircraft (the Mictronics flag, and live `dbFlags & 1`) and fighter and trainer types (a list of type designators in `server/alerts.ts`: F-5, T-38, Texan II, L-39, Su-27 and others). They dive as routine. Their squawks and statuses still count.
-- **D3, steep descent** (polled aircraft, log only). `baro_rate` at −6,000 fpm or lower, with `alt_baro` falling at 4,000 fpm or more since a report 5 to 120 s earlier. In the recordings, 2 aircraft passed: a jump plane and a military jet.
+- **D1, emergency descent.** From FL200 or above, 15,000 ft or more lost within 120 s (7,500 fpm), over 4 or more falling points. The fall is then followed to its bottom: on while each step is a fall, until 60 s pass with no new low. For an aircraft that is not an airliner the fall is 20,000 ft (section 3.3).
+- **D2, dive then lost.** The fall into the last point. Its top is within the last 60 s, with every step from it a fall, over 3 or more points. The fall is 3,000 ft or more, at 5,000 fpm or more on average. Then no position for 60 s. Of the tops that fit, the biggest fall is taken. FZ1073 fits (section 7.5). For an aircraft that is not an airliner the top is at FL150 or above and the average is 10,000 fpm or more (section 3.3).
+- **D3, plunge (airliners only).** 8,000 ft or more lost within 60 s, over 3 or more points, at any level (section 3.3).
+- **A fall has two steps.** Each step is at most 45,000 fpm, and two or more steps go down by 200 ft or more. One jump between two level stretches is an altitude encoder's stuck bit (section 3.3).
+- **No fall event.** Military aircraft (the Mictronics flag, and live `dbFlags & 1`) and fighter and trainer types (a list of type designators in `server/alerts.ts`: F-5, T-38, Texan II, L-39, Su-27 and others). They dive as routine. Their squawks and statuses still count.
+- **Not built: a rate rule on polled aircraft** (log only). `baro_rate` at −6,000 fpm or lower, with `alt_baro` falling at 4,000 fpm or more since a report 5 to 120 s earlier. In the recordings, 2 aircraft passed: a jump plane and a military jet.
 - **Urgent.** A 7x00 code or an emergency status at the same time, or `nav_altitude_mcp` 5,000 ft or more above `alt_baro` (not commanded).
 - **Log, no push.** Category A1 or B. A C208, DHC6, PC6T or P750 below FL150 (jump planes).
 - **GNSS.** Use `geom_rate` only when `alt_baro` agrees. Never alert on GNSS altitude alone.
+
+### 3.3 Known emergencies and real traffic: rules by the kind of aircraft (2026-10-03, second round)
+
+Question: do the alerts find known emergencies, and can they find more without false alarms?
+
+**Method.**
+- 33 known emergencies, each with its published squawk times and barometric altitudes (accident reports, the Flightradar24 blog, The
+  Aviation Herald). The figures and their sources are in `server/alerts.cases.ts`.
+- `server/alerts.cases.test.ts` replays each one through the real `Poller` and `Alerts`. The upstream is a model: adsb.fi's squawk
+  answers at the poller's pace, and adsb.lol's half-hour files with a position every 10 s while the altitude changes. The model
+  assumes that a receiver of the open networks hears the aircraft.
+- False alarms: the real `Alerts.scanSlot` on 18 real half-hour files (2026-09-28 to 2026-10-03, about 290,000 aircraft-half-hours,
+  164,362 of them airliners), with the real type table.
+
+**What ordinary traffic does** (the 18 files):
+
+| Aircraft | Ordinary flight | So |
+|---|---|---|
+| Airliners | At most 5,875 ft in 60 s and 10,725 ft in 120 s. 16,500 ft in 240 s is common. | D3 at 8,000 ft in 60 s and D1 at 15,000 ft in 120 s are clear of it. A slower emergency descent is not. |
+| Airliners lost while descending | At most 4,975 fpm over the last minute. Up to 3,960 fpm below 10,000 ft. | D2 at 6,000 fpm is clear of it. A descent like Germanwings 9525 (3,500 fpm) is not. |
+| Jump planes (C208, PC-6, SC-7, P-750) | 10,000 to 12,400 ft in 120 s from FL130, each load. | No low-level rule for aircraft that are not airliners. |
+| Business jets | 15,850 ft (C25M, a drill) and 17,925 ft (FA20, a contractor's target aircraft) in 120 s. One G200 at 5,070 fpm into the edge of coverage. | D1_OTHER at 20,000 ft and D2_OTHER at 10,000 fpm. |
+| A PA-28 with a faulty altitude encoder | 6,600 ft and 38,900 ft in turn, twice in a row once. | A fall needs two steps down. |
+
+**Result on the 18 real files.** The first rules gave 4 fall events: FZ1073 (real) and 3 false ones (the FA20, the C25M and the G200).
+The rules of section 3.2 give 1: FZ1073. Both give the same 8 squawk events, which are real codes.
+
+**Result on the 33 known emergencies.**
+
+| Kind | Cases | Found | How |
+|---|---|---|---|
+| The crew set 7700 or 7600 | 7 | 7 | The sweep, 50 to 59 s after the code was set. Also late from the file. |
+| Dive or spin, no code | 6 | 6 | From the half-hour file, 9 to 30 min later; 4 of them within about a minute when the aircraft is on the map. |
+| Emergency descent or upset, no code reported | 8 | 0 | The steepest was 5,228 fpm (Southwest 1380): inside ordinary flight. |
+| Slow descent into terrain or sea, no code | 2 | 0 | Germanwings 9525 and OE-FGR: inside ordinary flight. |
+| Transponder stopped, or no receiver heard the fall | 3 | 0 | MH17, MS804, QZ8501: no data to read. |
+| Accident at take-off or on approach | 7 | 0 | Below any rule, and over in seconds. |
+
+The first rules found 10 of the 33. The rules of section 3.2 find 13: Metrojet 9268, Sriwijaya 182 and Lion Air 610 are new, and
+Voepass 2283 is now found live on the map.
+
+**Not built, and why.**
+- A rule for a slower emergency descent. Ordinary airliners descend as fast.
+- A rule for an aircraft that is lost at cruise level with no fall. Aircraft leave the receivers' reach all the time.
+- A rule for a descent to low level away from an airport. It needs terrain and the route of each flight.
 
 ## 4. False alarms
 
@@ -122,7 +169,7 @@ The rules use `alt_baro`. Points are an aircraft's reports, or the 10 s heatmap 
 | Emergency status without a 7x00 code | No | Polled aircraft only: view, chase, recordings, sweep answers, military list |
 | Military aircraft | Yes | adsb.fi `/v2/mil` every 2 to 5 min, 13 KB gzip at night |
 | Interesting or rare aircraft | Partly | Plane Alert DB (17,259 aircraft by hex, CSV, ODbL [30]) against what the app sees. adsb.lol `/v2/type/{types}` for rare types, when adsb.lol has budget |
-| Steep descent, steep climb | Late, 1 to 31 min | D1 to D3 in real time on polled aircraft, worldwide 1 to 31 min late from the heatmap. Spoofing makes false climbs [22] |
+| Steep descent, steep climb | Late, 1 to 31 min | D1 and D3 in real time on polled aircraft, D1 to D3 worldwide 1 to 31 min late from the heatmap. Spoofing makes false climbs [22] |
 | Lost at altitude | Late, 1 to 31 min | D2 on the heatmap. Gaps at the edge of coverage are common |
 | Go-around, holding, circling | Late, 1 to 31 min | From heatmap positions (no track field), or live on polled aircraft |
 | Diversion | No | Needs the route of every flight (adsb.lol routes, adsbdb) |
@@ -175,7 +222,7 @@ it works (section 1). The watch batch can use it.
 
 1. Turn it on with `ALERTS=1` in `.env.local`, or from the Settings toggle through `POST /api/alerts?on=1|0` (kept in `data/events/state.json`). It runs with or without a browser.
 2. Add the sweep as a fourth request kind in `Poller.tick`, after a due chase and before the watch. Its answers go through `#ingest`, so the store, the InfoStore and the recordings get them.
-3. Apply section 3.1 and D3 in a hook next to `InfoStore.update`. Run D1 and D2 on each aircraft's samples in the SampleStore.
+3. Apply section 3.1 and the rate rule of section 3.2 (not built) in a hook next to `InfoStore.update`. Run D1 and D2 on each aircraft's samples in the SampleStore.
 4. When HistoryStore holds a new newest half hour, run `scanHeatmap(file)` (new, in `server/heatmap.ts`). It applies section 3.1 to the ident records and D1 and D2 to the positions. It adds the events that are not in the log, marked late.
 5. Optional: `ALERT_HOME=lat,lon,nm` polls one circle every 30 s while no client asks, so D1 to D3 run there while you are away.
 

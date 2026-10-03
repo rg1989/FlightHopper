@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { clean, diveThenLost, steepDescent, type AltSeries } from './descent.ts'
+import { D1, D1_OTHER, D2_OTHER, D3, clean, diveThenLost, steepDescent, type AltSeries } from './descent.ts'
 
 /** A series from [s, ft] pairs. */
 const series = (pts: [number, number][]): AltSeries => ({ t: pts.map((p) => p[0]), ft: pts.map((p) => p[1]) })
@@ -205,7 +205,7 @@ test('steepDescent (D1): a top of exactly 20,000 ft is one; 19,999 ft is not', (
   assert.equal(steepDescent(series([[0, 19_999], [40, 13_999], [80, 7_999], [120, 4_999]])), null)
 })
 
-test('steepDescent (D1): the limits of a step, shared with D2: a hole of 60 s, a rise of 300 ft and 30,000 fpm are in a fall; 61 s, 301 ft and 30,001 fpm are not', () => {
+test('steepDescent (D1): the limits of a step, shared with D2: a hole of 60 s, a rise of 300 ft and 45,000 fpm are in a fall; 61 s, 301 ft and 45,001 fpm are not', () => {
   const hole = (s: number) => steepDescent(series([[0, 35_000], [70 - s, 33_000], [70, 25_000], [120, 19_000]])) // 15,000 ft or more in 120 s, one step s seconds long
   assert.deepEqual(hole(60), { startS: 0, endS: 120, fromFt: 35_000, toFt: 19_000 })
   assert.equal(hole(61), null)
@@ -213,11 +213,11 @@ test('steepDescent (D1): the limits of a step, shared with D2: a hole of 60 s, a
   assert.deepEqual(rise(300), { startS: 0, endS: 120, fromFt: 35_000, toFt: 20_000 })
   assert.equal(rise(301), null)
   const fast = (ft: number) => steepDescent(series([[0, 35_000], [10, 35_000 - ft], [60, 25_000], [120, 19_000]])) // the first step ft in 10 s, at 6 × ft fpm
-  assert.deepEqual(fast(5_000), { startS: 0, endS: 120, fromFt: 35_000, toFt: 19_000 }, '30,000 fpm')
-  assert.equal(fast(5_001), null, '30,006 fpm')
-  const slow = (ft: number) => steepDescent(series([[0, 49_000], [60, 49_000 - ft], [90, 18_500], [120, 18_000]])) // the first step ft in 60 s: ft fpm
-  assert.deepEqual(slow(30_000), { startS: 0, endS: 120, fromFt: 49_000, toFt: 18_000 }, '30,000 fpm')
-  assert.equal(slow(30_001), null, '30,001 fpm')
+  assert.deepEqual(fast(7_500), { startS: 0, endS: 120, fromFt: 35_000, toFt: 19_000 }, '45,000 fpm')
+  assert.equal(fast(7_501), null, '45,006 fpm')
+  const slow = (ft: number) => steepDescent(series([[0, 49_000], [40, 49_000 - ft], [90, 18_500], [120, 18_000]])) // the first step ft in 40 s: 1.5 × ft fpm
+  assert.deepEqual(slow(30_000), { startS: 0, endS: 120, fromFt: 49_000, toFt: 18_000 }, '45,000 fpm')
+  assert.equal(slow(30_001), null, '45,001.5 fpm')
 })
 
 // The real points of FZ1073 (aircraft 8965d1, A6-FKF, a B38M) in adsb.lol's 2026-09-30 05:00 half-hour file, globe_history/2026/09/30/
@@ -267,8 +267,8 @@ test('diveThenLost (D2): FZ1073 as the open networks heard it', () => {
 })
 
 test('diveThenLost (D2): a slow or low fall, or one that goes on, is none', () => {
-  assert.equal(diveThenLost(series(line(0, 30, 10, (t) => 35_000 - 50 * t)), 200), null) // 1,500 ft
-  assert.equal(diveThenLost(series(line(0, 30, 10, (t) => 14_000 - 120 * t)), 200), null) // below FL150
+  assert.equal(diveThenLost(series(line(0, 30, 10, (t) => 35_000 - 50 * t)), 200), null) // 1,500 ft, at 3,000 fpm
+  assert.equal(diveThenLost(series(line(0, 30, 10, (t) => 14_000 - 200 * t)), 200, D2_OTHER), null) // below FL150, and no airliner
   assert.equal(diveThenLost(series([[0, 35_000], [30, 31_000]]), 200), null) // 2 points
   assert.equal(diveThenLost(series([[0, 35_000], [30, 33_000], [60, 31_000]]), 200), null) // 4,000 ft in 60 s: 4,000 fpm
 })
@@ -277,24 +277,57 @@ test('diveThenLost (D2): 35,000 ft down to 31,000 in 30 s, then no position for 
   assert.deepEqual(diveThenLost(series(dive()), 30 + 120), { startS: 0, endS: 30, fromFt: 35_000, toFt: 31_000 })
 })
 
-test('diveThenLost (D2): exactly 3,000 ft over 3 points, then exactly 60 s lost, is one; 2,999 ft, 2 points or 59 s is not', () => {
-  const edge = series([[0, 35_000], [15, 33_500], [30, 32_000]]) // 6,000 fpm
-  assert.deepEqual(diveThenLost(edge, 90), { startS: 0, endS: 30, fromFt: 35_000, toFt: 32_000 })
-  assert.equal(diveThenLost(series([[0, 35_000], [15, 33_500], [30, 32_001]]), 90), null, '2,999 ft')
-  assert.equal(diveThenLost(series([[0, 35_000], [30, 32_000]]), 90), null, '2 points')
-  assert.equal(diveThenLost(edge, 89), null, 'lost for 59 s')
+test('diveThenLost (D2): exactly 2,000 ft over 3 points, then exactly 60 s lost, is one; 1,999 ft, 2 points or 59 s is not', () => {
+  const edge = series([[0, 35_000], [10, 34_000], [20, 33_000]]) // 6,000 fpm
+  assert.deepEqual(diveThenLost(edge, 80), { startS: 0, endS: 20, fromFt: 35_000, toFt: 33_000 })
+  assert.equal(diveThenLost(series([[0, 35_000], [10, 34_000], [19, 33_001]]), 80), null, '1,999 ft, at 6,313 fpm')
+  assert.equal(diveThenLost(series([[0, 35_000], [20, 33_000]]), 80), null, '2 points')
+  assert.equal(diveThenLost(edge, 79), null, 'lost for 59 s')
+  // Another aircraft's (D2_OTHER) is 3,000 ft or more.
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [9, 33_500], [18, 32_000]]), 80, D2_OTHER), { startS: 0, endS: 18, fromFt: 35_000, toFt: 32_000 })
+  assert.equal(diveThenLost(series([[0, 35_000], [9, 33_500], [17, 32_001]]), 80, D2_OTHER), null, '2,999 ft, at 10,585 fpm')
 })
 
-test('diveThenLost (D2): a top of exactly 15,000 ft is one; 14,999 ft is not', () => {
-  assert.deepEqual(diveThenLost(series([[0, 15_000], [15, 13_500], [30, 12_000]]), 90), { startS: 0, endS: 30, fromFt: 15_000, toFt: 12_000 })
-  assert.equal(diveThenLost(series([[0, 14_999], [15, 13_499], [30, 11_999]]), 90), null)
+test('diveThenLost: an airliner\'s (D2) is one at any level; another aircraft\'s (D2_OTHER) from exactly 15,000 ft, not from 14,999 ft', () => {
+  const at = (top: number): ReturnType<typeof series> => series([[0, top], [15, top - 2500], [30, top - 5000]]) // 10,000 fpm
+  assert.deepEqual(diveThenLost(at(15_000), 90, D2_OTHER), { startS: 0, endS: 30, fromFt: 15_000, toFt: 10_000 })
+  assert.equal(diveThenLost(at(14_999), 90, D2_OTHER), null)
+  assert.deepEqual(diveThenLost(at(14_999), 90), { startS: 0, endS: 30, fromFt: 14_999, toFt: 9_999 })
+  assert.deepEqual(diveThenLost(series([[0, 6000], [15, 4500], [30, 3000]]), 90), { startS: 0, endS: 30, fromFt: 6000, toFt: 3000 }, 'from 6,000 ft')
 })
 
-test('diveThenLost (D2): an average of exactly 5,000 fpm is one; 4,999 fpm is not', () => {
-  assert.deepEqual(diveThenLost(series([[0, 35_000], [30, 32_500], [60, 30_000]]), 120), { startS: 0, endS: 60, fromFt: 35_000, toFt: 30_000 }, '5,000 ft in 60 s')
-  assert.equal(diveThenLost(series([[0, 35_000], [30, 32_500], [60, 30_001]]), 120), null, '4,999 ft in 60 s')
-  assert.deepEqual(diveThenLost(series([[0, 35_000], [18, 33_500], [36, 32_000]]), 100), { startS: 0, endS: 36, fromFt: 35_000, toFt: 32_000 }, '3,000 ft in 36 s')
-  assert.equal(diveThenLost(series([[0, 35_000], [19, 33_500], [37, 32_000]]), 100), null, '3,000 ft in 37 s: 4,865 fpm')
+test('diveThenLost (D2_OTHER): exactly 10,000 fpm is one; 5,000 ft in 31 s is not (a business jet at 5,070 fpm into the edge of coverage was none)', () => {
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [15, 32_500], [30, 30_000]]), 90, D2_OTHER), { startS: 0, endS: 30, fromFt: 35_000, toFt: 30_000 })
+  assert.equal(diveThenLost(series([[0, 35_000], [15, 32_500], [31, 30_000]]), 91, D2_OTHER), null)
+  assert.equal(diveThenLost(series([[0, 22_300], [10, 21_500], [20, 20_600], [30, 19_800], [40, 18_900], [50, 18_075]]), 200, D2_OTHER), null, 'JPL5, a G200, 2026-10-02: 5,070 fpm')
+})
+
+test('steepDescent (D3, an airliner\'s plunge): 8,000 ft in 60 s over 3 points is one, at any level; 7,999 ft is not, nor the steepest ordinary descent', () => {
+  const fall = (top: number, ft: number): ReturnType<typeof series> => series([[0, top], [30, top - ft / 2], [60, top - ft], [90, top - ft]])
+  assert.deepEqual(steepDescent(fall(10_900, 8000), D3), { startS: 0, endS: 60, fromFt: 10_900, toFt: 2900 })
+  assert.equal(steepDescent(fall(10_900, 7999), D3), null)
+  assert.equal(steepDescent(fall(10_900, 8000)), null, 'D1: below FL200, and not 15,000 ft')
+  // The steepest minute of 85,531 real airliner half hours (ASA961, an A321neo, 2026-10-02): 5,825 ft.
+  assert.equal(steepDescent(series(line(0, 60, 10, (t) => 30_975 - (5825 / 60) * t)), D3), null)
+  assert.equal(steepDescent(series([[0, 30_000], [60, 22_000]]), D3), null, '2 points')
+})
+
+test('steepDescent (D1_OTHER, no airliner): 20,000 ft in 120 s is one; 19,999 ft is not, nor a business jet\'s drill', () => {
+  const fall = (ft: number): ReturnType<typeof series> => series(line(0, 120, 10, (t) => 41_000 - (ft / 120) * t))
+  assert.deepEqual(steepDescent(fall(20_000), D1_OTHER), { startS: 0, endS: 120, fromFt: 41_000, toFt: 21_000 })
+  assert.equal(steepDescent(fall(19_999), D1_OTHER), null)
+  assert.ok(steepDescent(fall(19_999)) !== null, 'D1 takes it: an airliner never does that')
+  // ZODIAC05, a Falcon 20, 2026-10-01: 17,925 ft in 120 s. FSE1F, a Citation M2, 2026-10-02: 15,850 ft.
+  assert.equal(steepDescent(fall(17_925), D1_OTHER), null)
+})
+
+test('diveThenLost (D2): an average of exactly 6,000 fpm is one; 5,999 fpm is not, nor the steepest ordinary fall into silence', () => {
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [30, 32_000], [60, 29_000]]), 120), { startS: 0, endS: 60, fromFt: 35_000, toFt: 29_000 }, '6,000 ft in 60 s')
+  assert.equal(diveThenLost(series([[0, 35_000], [30, 32_000], [60, 29_001]]), 120), null, '5,999 ft in 60 s')
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [15, 33_500], [30, 32_000]]), 100), { startS: 0, endS: 30, fromFt: 35_000, toFt: 32_000 }, '3,000 ft in 30 s')
+  assert.equal(diveThenLost(series([[0, 35_000], [15, 33_500], [31, 32_000]]), 100), null, '3,000 ft in 31 s: 5,806 fpm')
+  // TRA74T, a B738, 2026-09-29: 4,975 fpm over its last minute, then out of the receivers' reach. The steepest of 164,362 airliner half hours.
+  assert.equal(diveThenLost(series(line(0, 60, 10, (t) => 15_725 - (4975 / 60) * t)), 400), null)
 })
 
 test('diveThenLost (D2): the top is within the last 60 s: exactly 60 s is in, 61 s is out', () => {
@@ -313,9 +346,28 @@ test('diveThenLost (D2): of tops with an equal fall, the later is taken: a fall 
   assert.deepEqual(diveThenLost(series([[0, 35_000], [10, 35_000], [20, 33_000], [30, 31_000]]), 100), { startS: 10, endS: 30, fromFt: 35_000, toFt: 31_000 })
 })
 
-test('diveThenLost (D2): the limits of a step: the last step at exactly 30,000 fpm is in the fall, 30,001 fpm is not', () => {
-  assert.deepEqual(diveThenLost(series([[0, 35_000], [20, 33_000], [30, 28_000]]), 100), { startS: 0, endS: 30, fromFt: 35_000, toFt: 28_000 }, '5,000 ft in 10 s')
-  assert.equal(diveThenLost(series([[0, 35_000], [20, 33_000], [30, 27_999]]), 100), null, '5,001 ft in 10 s')
+test('diveThenLost (D2): the limits of a step: the last step at exactly 45,000 fpm is in the fall, 45,006 fpm is not', () => {
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [20, 33_000], [30, 25_500]]), 100), { startS: 0, endS: 30, fromFt: 35_000, toFt: 25_500 }, '7,500 ft in 10 s')
+  assert.equal(diveThenLost(series([[0, 35_000], [20, 33_000], [30, 25_499]]), 100), null, '7,501 ft in 10 s')
+})
+
+// N6262W (a82f3a), a PA-28 level at 6,600 ft, in adsb.lol's 2026-10-03 15:00 half-hour file: its altitude encoder sent 38,900 ft
+// every few messages. These are its points from 500 s to 650 s as the file has them.
+const N6262W: [number, number][] = [
+  [500, 6600], [520, 6600], [530, 38_900], [540, 38_900], [550, 6600], [560, 38_900], [580, 6600], [600, 6600], [610, 6600], [630, 6600], [650, 6600],
+]
+
+test('one jump between two level stretches is no fall, by any rule: a stuck altitude bit (N6262W, real), however many level points follow', () => {
+  const s = clean(series(N6262W))
+  assert.deepEqual([s.ft[s.t.indexOf(530)], s.ft[s.t.indexOf(540)], s.t.includes(560)], [38_900, 38_900, false], 'clean takes the single wrong point, not the two in a row')
+  for (const rule of [D1, D1_OTHER, D3]) assert.equal(steepDescent(s, rule), null)
+  // The same jump over 44 s is 44,045 fpm, under the 45,000 fpm limit: only the two steps keep it out.
+  assert.equal(diveThenLost(series([[0, 38_900], [10, 38_900], [54, 6600]]), 200), null, 'then lost: still one jump')
+  assert.equal(steepDescent(series([[0, 38_900], [10, 38_900], [54, 6600], [64, 6600], [74, 6600]])), null)
+  // Two steps down by 200 ft or more make a fall; 199 ft and the jump do not.
+  const two = (ft: number): ReturnType<typeof series> => series([[0, 38_900], [10, 38_900 - ft], [54, 6600]])
+  assert.deepEqual(diveThenLost(two(200), 200), { startS: 0, endS: 54, fromFt: 38_900, toFt: 6600 })
+  assert.equal(diveThenLost(two(199), 200), null)
 })
 
 test('diveThenLost (D2): a last row repeated does not hide the dive', () => {

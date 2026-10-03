@@ -21,11 +21,16 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
   answers go into the stores like any other answer, so these aircraft are on the map and can be chased.
 - **ADS-B emergency status** (general, minfuel, nordo, unlawful, downed) is read from every answer the server gets: the
   view, the chase, recorded flights and the sweep. No endpoint filters on it, so outside these it is not seen.
-- **Steep descents.** Two rules on the barometric altitude (`server/descent.ts`):
-  - *Descent (D1):* from FL200 or above, 15,000 ft or more lost within 120 s, over 4 or more points. The fall is followed to
-    its bottom, also past a repeated or slightly higher sample, until 60 s pass with no new low.
-  - *Dive (D2):* the fall into the last point heard: its top is within the last 60 s, at FL150 or above, and the fall is
-    3,000 ft or more, at 5,000 fpm or more on average, over 3 or more points. Then no position for 60 s or more. FZ1073 fits:
+- **Steep descents.** Three rules on the barometric altitude (`server/descent.ts`), by the kind of aircraft (2026-10-03,
+  second round: `docs/anomaly-alerts.md` §3.3). An airliner is a type in `AIRLINERS` (`server/alerts.ts`); it never dives in
+  ordinary flight, so it has the sensitive values. Any other civil aircraft has the strict ones.
+  - *Descent (D1):* from FL200 or above, 15,000 ft or more lost within 120 s, over 4 or more points (not an airliner:
+    20,000 ft). The fall is followed to its bottom, also past a repeated or slightly higher sample, until 60 s pass with no
+    new low.
+  - *Plunge (D3), airliners only:* 8,000 ft or more lost within 60 s, over 3 or more points, at any level.
+  - *Dive (D2):* the fall into the last point heard: its top is within the last 60 s, and the fall is 3,000 ft or more, at
+    5,000 fpm or more on average, over 3 or more points (not an airliner: from FL150 or above, at 10,000 fpm or more). Then
+    no position for 60 s or more. FZ1073 fits:
     in adsb.lol's 05:00 file its last points are 33,950 ft at 05:21:10 and 27,950 ft at 05:22:10, and nothing follows to the
     file's last slice at 05:29:50.
   - The points are cleaned first: none above 50,000 ft, and no outlier: a point whose steps to both neighbours go opposite
@@ -34,12 +39,14 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     stays, and it goes only where it is at least as far off as the points next to it, so the good point beside a spike stays.
   - Tuned on 8 real half hours (2026-10-03, `docs/anomaly-alerts.md` §3.2): D1 first took 10,000 ft and gave 21 events, mostly
     military and fighter aircraft, and the first D2 missed FZ1073.
-  - Live, D1 runs on the samples of every aircraft the server takes: the view, the chase, recorded flights, and the sweep's
+  - A fall's steps are 45,000 fpm at most, and two or more of them go down by 200 ft or more: one jump between two level
+    stretches is an altitude encoder's stuck bit.
+  - Live, D1 and D3 run on the samples of every aircraft the server takes: the view, the chase, recorded flights, and the sweep's
     answers. It runs only on a sample whose `baro_rate` is −3,000 fpm or lower, so most samples cost nothing.
-  - Worldwide, D1 and D2 run on each new adsb.lol half-hour file that the server already downloads for History. This
+  - Worldwide, D1, D3 and D2 run on each new adsb.lol half-hour file that the server already downloads for History. This
     costs no request. The result comes 1 to 31 minutes after the event and is marked *late*.
   - A fall across the boundary of two half hours is found too. The server reads the half hours in time order, and when one
-    follows the one read before it, each aircraft's points in the last 150 s of that one (if it was at FL150 or above there)
+    follows the one read before it, each aircraft's points in the last 150 s of that one
     go before its points in this one. An aircraft heard at the end of a half hour and not in the next was lost at the
     boundary: its end is judged alone, so D2 (and D1) can fire. A fall that both half hours hold stays one event, pushed once.
     Nothing is carried across a gap in the reads (the server down over a half hour), so a fall at that boundary is still lost.

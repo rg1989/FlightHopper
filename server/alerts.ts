@@ -13,7 +13,7 @@ import { EMERGENCY_SQUAWKS, EMERGENCY_STATUSES, pushBody, pushTitle, type AlertD
 import { SLOT_MS } from '../shared/history.ts'
 import { callsignOf } from '../shared/readsb.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
-import { D2, clean, diveThenLost, steepDescent, type AltSeries, type Drop } from './descent.ts'
+import { D1_OTHER, D2, D2_OTHER, D3, clean, diveThenLost, steepDescent, type AltSeries, type Drop } from './descent.ts'
 import { scanSlot, type ScanAircraft, type SlotScan } from './heatmap.ts'
 
 const DAY_MS = 86_400_000
@@ -49,6 +49,19 @@ const FAST_JETS = new Set([
   'A4', 'A10', 'AJET', 'AMX', 'AV8B', 'BT7', 'EUFI', 'F1', 'F4', 'F5', 'F14', 'F15', 'F16', 'F18', 'F18H', 'F18S', 'F22', 'F35', 'F104', 'F117',
   'GRIF', 'HAWK', 'HUNT', 'J8', 'JF17', 'K8', 'KFIR', 'L39', 'L59', 'L159', 'LCA', 'M339', 'M345', 'M346', 'MG29', 'MG31', 'MIR2', 'MRF1', 'RFAL',
   'S211', 'SU24', 'SU25', 'SU27', 'SU30', 'SU34', 'SU35', 'SU57', 'T2', 'T38', 'T4', 'T45', 'T50', 'TEX2', 'TOR', 'PC7', 'PC9', 'PC21', 'TUCA',
+])
+// ICAO type designators of airliners and freighters: aircraft that never dive in ordinary flight, so a smaller fall is an event
+// for them (descent.ts D1, D2, D3); any other civil type needs D1_OTHER's 20,000 ft, or D2_OTHER's 10,000 fpm from FL150 (jump
+// planes, business jets and their drills dive as routine: descent.ts has the measured values).
+// ponytail: a list by hand, as FAST_JETS is; a type not here is only less watched. Add a new airliner when one enters service.
+const AIRLINERS = new Set([
+  'A19N', 'A20N', 'A21N', 'A318', 'A319', 'A320', 'A321', 'A306', 'A30B', 'A310', 'A332', 'A333', 'A337', 'A338', 'A339', 'A342', 'A343', 'A345',
+  'A346', 'A359', 'A35K', 'A388', 'A3ST', 'BCS1', 'BCS3', 'B37M', 'B38M', 'B39M', 'B3XM', 'B461', 'B462', 'B463', 'B712', 'B721', 'B722', 'B732',
+  'B733', 'B734', 'B735', 'B736', 'B737', 'B738', 'B739', 'B741', 'B742', 'B743', 'B744', 'B748', 'B74R', 'B74S', 'B752', 'B753', 'B762', 'B763',
+  'B764', 'B772', 'B773', 'B778', 'B779', 'B77L', 'B77W', 'B788', 'B789', 'B78X', 'BLCF', 'CRJ1', 'CRJ2', 'CRJ7', 'CRJ9', 'CRJX', 'E135', 'E145',
+  'E45X', 'E170', 'E75L', 'E75S', 'E190', 'E195', 'E290', 'E295', 'F70', 'F100', 'RJ1H', 'RJ70', 'RJ85', 'SU95', 'AJ27', 'C919', 'MD11', 'MD81',
+  'MD82', 'MD83', 'MD87', 'MD88', 'MD90', 'DC10', 'IL62', 'IL76', 'IL96', 'T204', 'T214', 'A124', 'A148', 'A158', 'YK42', 'AT43', 'AT45', 'AT46',
+  'AT72', 'AT73', 'AT75', 'AT76', 'DH8A', 'DH8B', 'DH8C', 'DH8D', 'SF34', 'SB20', 'E120', 'F50', 'JS41', 'D328',
 ])
 const NO_TYPE = Object.freeze({ type: null, category: null })
 
@@ -172,7 +185,8 @@ export class Alerts {
 
   /**
    * A new stored sample of a polled aircraft (Poller opts.onSample). At a baro_rate of −3,000 fpm or steeper, its recent
-   * track (asked for only then) is checked for an emergency descent (descent.ts D1). Not for military aircraft (dbFlags, or the
+   * track (asked for only then) is checked for a fall (descent.ts: D1, then D3, for an airliner by its broadcast type code;
+   * D1_OTHER for any other). Not for military aircraft (dbFlags, or the
    * type table's flag), fighter and trainer types (FAST_JETS, by the broadcast type code), light aircraft or gliders, surface
    * vehicles, addresses that are not ICAO, 000000 and 000001.
    */
@@ -186,16 +200,16 @@ export class Alerts {
       series.t.push(x.tMs / 1000)
       series.ft.push(x.altBaroFt)
     }
-    const d = steepDescent(clean(series))
+    const d = descentIn(clean(series), AIRLINERS.has(s.typeCode ?? ''))
     if (d === null) return
     this.#fell(s.hex, 'descent', d, 0, { callsign: s.callsign, reg: s.reg, type: s.typeCode, lat: s.lat, lon: s.lon, altFt: s.altBaroFt }, false)
   }
 
   /**
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
-   * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
-   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. When this half hour follows
-   * the newest one read, each aircraft's points in that one's last 150 s go before its points here, so a fall across the boundary
+   * records carrying an emergency squawk while airborne, and each descent (D1, D3 or D1_OTHER, by its type: descentIn) or dive
+   * then lost (D2 or D2_OTHER) in its altitudes, opens a late event, or joins the aircraft's event that its span is within
+   * 30 min of. When this half hour follows the newest one read, each aircraft's points in that one's last 150 s go before its points here, so a fall across the boundary
    * is found; an aircraft heard there and not here was lost at the boundary, and its end is judged alone, up to this half
    * hour's last slice. A fall that both half hours hold joins one event (no second push). Not read: addresses that are not
    * ICAO, 000000 and 000001 (the type table is not asked for them), and surface vehicles (the type table's C1 to C3). No fall
@@ -228,20 +242,20 @@ export class Alerts {
   }
 
   /**
-   * One aircraft of the late check of the half hour at slotMs: its emergency idents there, and a fall (D1, else D2 up to endS)
-   * in its altitudes, with `before`, its end of the half hour before (t in this one's), put first. `at` is its newest.
+   * One aircraft of the late check of the half hour at slotMs: its emergency idents there, and a fall (a descent by the rules
+   * of its kind, else a dive then lost up to endS) in its altitudes, with `before`, its end of the half hour before (t in this one's), put first. `at` is its newest.
    */
   #late(hex: string, squawks: ScanAircraft['squawks'], at: Heard, before: AltSeries | undefined, slotMs: number, endS: number): void {
     const idents = squawks.length >= 2
-    const mayDrop = mayFall(before, at.alt)
-    if (!idents && !mayDrop) return // the cheap test first: most aircraft are neither
+    const [hi, lo] = extent(before, at.alt)
+    if (!idents && hi - lo < D2.fallFt) return // the cheap test first: level, it holds no fall
     if (badAddress(hex)) return // before the type table is asked: nothing is read of it
     const typed = this.#typed(hex)
     if (ignored(hex, typed.category)) return // the full test, a surface vehicle by the table's category
     // ponytail: the type table's category makes a late 7600 quiet on a light type, but it gives every piston, turboprop and
     // electric type A1, so the ATR 72 and the Dash 8 are quiet too: accepted, radio failures are the least urgent cause (live
-    // sightings use the broadcast category). It is not used to skip a fall: that needs a top at or above FL200 (D1) or FL150
-    // (D2), which leaves light aircraft out in practice, and the Dash 8 is found.
+    // sightings use the broadcast category). It is not used to skip a fall: one that is no airliner's needs a top at or above
+    // FL200 (D1_OTHER) or FL150 (D2_OTHER), which leaves light aircraft out in practice, and the Dash 8, an airliner, is found.
     // ponytail: a late event's place and level are the aircraft's newest of the half hour, not where its cause was.
     const who: Who = { callsign: at.callsign, reg: null, type: typed.type, lat: at.lat, lon: at.lon, altFt: at.alt.ft.at(-1) ?? null }
     if (idents) {
@@ -257,10 +271,12 @@ export class Alerts {
         })
       }
     }
-    if (!mayDrop || this.#noFalls(hex, typed.type, 0, typed)) return
+    // No fall is 3,000 ft (D2, the loosest rule) from top to bottom; one that is no airliner's has its top at FL150 or above.
+    const liner = AIRLINERS.has(typed.type ?? '')
+    if (hi - lo < D2.fallFt || (!liner && hi < D2_OTHER.topFt) || this.#noFalls(hex, typed.type, 0, typed)) return
     const s = clean(before === undefined ? at.alt : { t: before.t.concat(at.alt.t), ft: before.ft.concat(at.alt.ft) })
-    const d1 = steepDescent(s)
-    const d = d1 ?? diveThenLost(s, endS)
+    const d1 = descentIn(s, liner)
+    const d = d1 ?? diveThenLost(s, endS, liner ? D2 : D2_OTHER)
     if (d !== null) this.#fell(hex, d1 !== null ? 'descent' : 'dive', d, slotMs, who, true)
   }
 
@@ -521,11 +537,8 @@ function quietFor(category: string | null, squawk: string | null, emergency: str
   return LIGHT.has(category ?? '') && (squawk === null || MINOR.has(squawk)) && (emergency === null || MINOR.has(emergency))
 }
 
-/**
- * Whether an aircraft's altitudes (its end of the half hour before, then this one's) could hold a fall at all: D2 is the loosest
- * rule, FL150 and 3,000 ft between the highest and lowest.
- */
-function mayFall(...parts: (AltSeries | undefined)[]): boolean {
+/** The highest and lowest of an aircraft's altitudes (its end of the half hour before, then this one's): [-Infinity, Infinity] for none. */
+function extent(...parts: (AltSeries | undefined)[]): [number, number] {
   let hi = -Infinity
   let lo = Infinity
   for (const s of parts) {
@@ -534,13 +547,18 @@ function mayFall(...parts: (AltSeries | undefined)[]): boolean {
       if (ft < lo) lo = ft
     }
   }
-  return hi >= D2.topFt && hi - lo >= D2.fallFt
+  return [hi, lo]
+}
+
+/** The descent in a clean series by the rules of its kind of aircraft: an airliner's D1, else its D3; any other's D1_OTHER. */
+function descentIn(s: AltSeries, liner: boolean): Drop | null {
+  return liner ? (steepDescent(s) ?? steepDescent(s, D3)) : steepDescent(s, D1_OTHER)
 }
 
 /**
- * The ends of a half hour, for the late check of the next (scanSlot): each aircraft with a point at FL150 or above in its last
- * 150 s (lower, none can be the top of a fall: D2's is FL150, D1's FL200), with its points of those 150 s, their times moved
- * into the next half hour (t − 1800 s, so negative), and its newest place and callsign.
+ * The ends of a half hour, for the late check of the next (scanSlot): each aircraft with a point in its last 150 s (an airliner's
+ * fall has its top at any level), with its points of those 150 s, their times moved into the next half hour (t − 1800 s, so
+ * negative), and its newest place and callsign.
  */
 function tailsOf(scan: SlotScan): Tails {
   const out = new Map<string, Heard>()
@@ -548,9 +566,8 @@ function tailsOf(scan: SlotScan): Tails {
   for (const [hex, a] of scan.aircraft) {
     const { t, ft } = a.alt
     let i = t.length
-    let high = false
-    for (; i > 0 && t[i - 1] >= from; i--) if (ft[i - 1] >= D2.topFt) high = true
-    if (!high) continue
+    while (i > 0 && t[i - 1] >= from) i--
+    if (i === t.length) continue
     out.set(hex, { alt: { t: t.slice(i).map((x) => x - SLOT_S), ft: ft.slice(i) }, lat: a.lat, lon: a.lon, callsign: a.callsign })
   }
   return out
