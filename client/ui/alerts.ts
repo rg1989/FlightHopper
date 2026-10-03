@@ -10,10 +10,11 @@
 // automatically on, the app is asked to follow the newest that is followed (onAuto). The rail's bell counts the events
 // since the panel was last opened (opened after it, or come in after it: found late); while it is open they count as seen.
 // The asks for the events are made here (eventsFeed): when the app says the server's events changed (refresh), when the
-// panel opens, and every 30 s while the tab is hidden with notifications on (the app's polls stop then). The app owns the
-// rail and what following and replaying do.
-// ponytail: in History and in a scenario the app polls nothing, so the events are asked for only when the panel opens (and
-// in a hidden tab with notifications on). Upgrade: a slow timer of the panel's own in those modes.
+// panel opens, and every 30 s while the app polls nothing live: in History and in a scenario (setLivePolling), and in a tab
+// in the background with notifications on. None on that timer while the server has no alerts. The app owns the rail and
+// what following and replaying do.
+// ponytail: a browser that freezes or discards a background tab runs no timer there, so no notification comes; ntfy is the
+// path then.
 import { ongoing, what, who, type AlertEvent, type EventsReply } from '../../shared/alerts.ts'
 import { PUBLISH_DELAY_MS, SLOT_MS, slotOf } from '../../shared/history.ts'
 import { icon, type IconName } from './icons.ts'
@@ -35,6 +36,9 @@ export interface AlertsHandle {
   refresh(): void // ask for the events (the server says they changed); one ask at a time
   update(reply: EventsReply | null): void // a reply of GET or POST /api/events; null: no alerts on this server
   opened(): void // the panel was opened: what it lists counts as seen, the badge clears, and the events are asked for afresh
+  // Whether the app polls live data now (false in History and in a scenario): while it does not, no status says that the
+  // events changed, so the panel asks for them every 30 s itself.
+  setLivePolling(on: boolean): void
   destroy(): void
 }
 
@@ -52,10 +56,7 @@ const DAY_MS = 86_400_000
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const RETRY_MS = 10_000 // a failed ask for the events is asked again once, this long after
-const HIDDEN_EVERY_MS = 30_000 // a hidden tab with notifications on asks for the events this often (browsers make it ~1 min)
-// An answer whose count is lower than the one shown and that comes within this of it is an older answer come late; later
-// than any request may take (ApiClient's 10 s timeout), it is a restarted server's, which counts afresh.
-const STALE_MS = 15_000
+const ASK_EVERY_MS = 30_000 // with no live polls, the events are asked for this often (in a hidden tab browsers make it ~1 min)
 const AUTO_MAP_QUIET_MS = 60_000 // Follow automatically waits this long after the person last moved the map…
 const AUTO_PICK_QUIET_MS = 2 * 60_000 // …and this long after they last picked an aircraft by hand
 const NOTIFY_LABEL = 'Notifications' // a phone's too: not "desktop" ones
@@ -148,7 +149,7 @@ export function watchText(reply: EventsReply | null): string {
   if (reply === null) return 'This server has no alerts: run it with make live'
   if (!reply.on) return 'Off'
   return reply.sweep
-    ? 'Watching: squawks every 30 s, descents from each half hour of adsb.lol'
+    ? 'Watching: emergency squawks worldwide, and falls in each half hour of adsb.lol'
     : 'Watching what this app polls, and each half hour of adsb.lol'
 }
 
@@ -374,7 +375,6 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
   const { store } = opts
   const notifications = notificationApi()
   let reply: EventsReply | null | undefined // undefined until the first answer; null: no alerts on this server
-  let appliedMs = -Infinity // when the last answer was taken (Date.now): see STALE_MS
   let switching = false // the switch's request is under way
   let failed = false // the last switch failed: the line says so until the next answer
   let primed = false // the first answer came: what it held was not new
@@ -428,16 +428,19 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
   })
   followRow.sw.setAttribute('aria-checked', String(autoFollow))
 
-  // A tab in the background: the app's polls stop (nothing on screen needs them), so with notifications on the events are
-  // asked for here, on a timer of their own, until the tab shows again.
-  let hiddenTimer: ReturnType<typeof setInterval> | null = null
-  const background = (): void => {
-    const want = document.hidden && notifyOn()
-    if (want === (hiddenTimer !== null)) return
-    if (hiddenTimer !== null) clearInterval(hiddenTimer)
-    hiddenTimer = want ? setInterval(() => feed.refresh(), HIDDEN_EVERY_MS) : null
+  // The app's polls carry the server's word that the events changed (refresh). While none run, the events are asked for here,
+  // on a timer of their own: in History and in a scenario (setLivePolling), and in a tab in the background (the app polls
+  // nothing there) with notifications on, as only a notification could tell the person. Not while the server has no alerts:
+  // each ask would be a 404. Before the first answer it may have them.
+  let polled = true // the app polls live data
+  let askTimer: ReturnType<typeof setInterval> | null = null
+  const ownAsks = (): void => {
+    const want = reply !== null && (document.hidden ? notifyOn() : !polled)
+    if (want === (askTimer !== null)) return
+    if (askTimer !== null) clearInterval(askTimer)
+    askTimer = want ? setInterval(() => feed.refresh(), ASK_EVERY_MS) : null
   }
-  document.addEventListener('visibilitychange', background)
+  document.addEventListener('visibilitychange', ownAsks)
 
   // On only with the browser's permission; turning it on asks for it in the click (a browser asks only then).
   const notifyOn = (): boolean => notifications !== null && notify && notifications.permission === 'granted'
@@ -459,7 +462,7 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
   const showNotify = (): void => {
     setAttr(notifyRow.sw, 'aria-checked', String(notifyOn()))
     setText(notifyRow.hint, notifications?.permission === 'denied' ? BLOCKED_HINT : NOTIFY_HINT)
-    background()
+    ownAsks()
   }
   showNotify()
 
@@ -742,15 +745,14 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     refresh: () => feed.refresh(),
     update(next) {
       if (dead) return
-      const nowLocal = Date.now()
-      if (next !== null && reply != null && next.rev < reply.rev && nowLocal - appliedMs < STALE_MS) return // older, come late
-      // ponytail: a server restarted within STALE_MS of the last answer is taken at its next change, not at once.
-      appliedMs = nowLocal
+      // A lower rev is an older answer come late: a restarted server's is higher, as its rev starts at its clock.
+      if (next !== null && reply != null && next.rev < reply.rev) return
       failed = false
       reply = next
       if (next === null) {
         showWatch()
         paintList()
+        ownAsks()
         return opts.onBadge(null)
       }
       const now = opts.nowMs()
@@ -777,6 +779,7 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
       showWatch()
       paintList()
       badge()
+      ownAsks()
     },
     opened() {
       if (dead) return
@@ -784,15 +787,20 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
       opts.onBadge(null)
       showNotify() // the browser's permission may have changed meanwhile
       paintList()
-      feed.refresh() // History and a scenario poll nothing that would say the events changed
+      feed.refresh() // History and a scenario poll nothing that would say the events changed: at once, not in 30 s
+    },
+    setLivePolling(on) {
+      if (dead || on === polled) return
+      polled = on
+      ownAsks()
     },
     destroy() {
       dead = true
       feed.destroy()
       clearInterval(tick)
-      if (hiddenTimer !== null) clearInterval(hiddenTimer)
-      hiddenTimer = null
-      document.removeEventListener('visibilitychange', background)
+      if (askTimer !== null) clearInterval(askTimer)
+      askTimer = null
+      document.removeEventListener('visibilitychange', ownAsks)
       for (const t of [...toasts]) closeToast(t, false)
       rows.clear()
       root.remove()

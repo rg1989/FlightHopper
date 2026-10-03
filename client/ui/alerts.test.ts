@@ -135,8 +135,8 @@ test('tagOf: the squawk, else EMG for a status, else an arrow for a fall; red fo
   assert.deepEqual(tagOf(ev('a', { squawk: '2000' })), { text: '2000', tone: 'warn' }, 'a code swept for a test (ALERT_SQUAWKS)')
 })
 
-test('watchText: what the server watches, from its switch and its source', () => {
-  assert.equal(watchText({ on: true, sweep: true, rev: 1, events: [] }), 'Watching: squawks every 30 s, descents from each half hour of adsb.lol')
+test('watchText: what the server watches, from its switch and its source (no sweep period: it is longer at a low rate)', () => {
+  assert.equal(watchText({ on: true, sweep: true, rev: 1, events: [] }), 'Watching: emergency squawks worldwide, and falls in each half hour of adsb.lol')
   assert.equal(watchText({ on: true, sweep: false, rev: 1, events: [] }), 'Watching what this app polls, and each half hour of adsb.lol')
   assert.equal(watchText({ on: false, sweep: true, rev: 1, events: [] }), 'Off')
   assert.equal(watchText(null), 'This server has no alerts: run it with make live')
@@ -540,7 +540,7 @@ test('mountAlerts: the first answer toasts nothing (the bell counts the week); a
   assert.equal(m.calls.badge.at(-1), '2', 'never opened: the whole week counts, quiet events not')
   assert.equal(sw(m.body, 'watch').disabled, false)
   assert.equal(sw(m.body, 'watch').getAttribute('aria-checked'), 'true')
-  assert.equal(one(m.body, 'fh-alerts-line').textContent, 'Watching: squawks every 30 s, descents from each half hour of adsb.lol')
+  assert.equal(one(m.body, 'fh-alerts-line').textContent, 'Watching: emergency squawks worldwide, and falls in each half hour of adsb.lol')
   assert.equal(find(m.body, 'fh-alerts-item').length, 3)
   assert.equal(rowOf(m.body, 'cccccc-3').has('fh-alerts-quiet'), true, 'quiet: dimmed')
 
@@ -664,7 +664,7 @@ test('mountAlerts: a hidden page with notifications on asks for the events every
   doc.hidden = false
 })
 
-test('mountAlerts: an answer older than the one shown is dropped (a GET sent before a POST); a lower count later is a restarted server', async (t) => {
+test('mountAlerts: an answer with a lower rev than the one shown is dropped, however late it comes; a restarted server\'s rev is higher', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   let answer!: (r: EventsReply) => void
   const m = mount(t, { onSwitch: () => new Promise((res) => (answer = res)) })
@@ -679,14 +679,69 @@ test('mountAlerts: an answer older than the one shown is dropped (a GET sent bef
   assert.equal(shown(one(m.body, 'fh-alerts-spin')), false)
   m.handle.update(reply(6, [], false)) // a GET sent before the POST, come late
   assert.equal(s.getAttribute('aria-checked'), 'true', 'not rolled back')
-  m.handle.update(reply(7, [live('aaaaaa-1')], true)) // the same count again: taken
+  m.handle.update(reply(7, [live('aaaaaa-1')], true)) // the same rev again: taken
   assert.equal(find(m.body, 'fh-alerts-item').length, 1)
   t.mock.timers.tick(20_000)
-  m.handle.update(reply(1, [], false)) // longer than any request takes: the server restarted and counts afresh
+  m.handle.update(reply(6, [], false)) // later than any request takes, and still older
+  assert.equal(s.getAttribute('aria-checked'), 'true')
+  assert.equal(find(m.body, 'fh-alerts-item').length, 1)
+  m.handle.update(reply(T, [], false)) // a restarted server: its rev starts at its clock, above any it gave before
   assert.equal(s.getAttribute('aria-checked'), 'false')
   assert.equal(find(m.body, 'fh-alerts-item').length, 0)
-  m.handle.update(reply(2, [], true))
-  assert.equal(s.getAttribute('aria-checked'), 'true')
+})
+
+test('mountAlerts: a server without alerts is not asked on the timer; once it has them, it is again', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  FakeNotification.permission = 'granted'
+  const step = async (ms: number): Promise<void> => {
+    t.mock.timers.tick(ms)
+    await settle()
+  }
+  const m = mount(t, { store: storage({ 'fh.alerts.notify': '1' }), get: async () => null })
+  hide(t, true) // in the background with notifications on: the timer's turn
+  await step(30_000)
+  assert.equal(m.calls.get, 1, 'not known yet: asked')
+  await step(120_000)
+  assert.equal(m.calls.get, 1, 'no alerts on this server (a 404 each time): not asked again')
+  m.handle.update(reply(1)) // a server with them now (its next answer to the app)
+  await step(30_000)
+  assert.equal(m.calls.get, 2)
+})
+
+test('mountAlerts: in History or a scenario (no live polls) the panel asks every 30 s itself and toasts what is new; hidden, only with notifications on', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const step = async (ms: number): Promise<void> => {
+    t.mock.timers.tick(ms)
+    await settle()
+  }
+  let answer = reply(1)
+  const m = mount(t, { store: storage({ 'fh.alerts.follow': '1' }), get: async () => answer })
+  m.handle.update(reply(1))
+  await step(60_000)
+  assert.equal(m.calls.get, 0, 'live: the polls say when')
+  m.handle.setLivePolling(false) // History, or a scenario
+  answer = reply(2, [live('aaaaaa-1')])
+  await step(29_999)
+  assert.equal(m.calls.get, 0)
+  await step(1)
+  assert.equal(m.calls.get, 1)
+  assert.deepEqual(m.toasts().map((x) => x.dataset.id), ['aaaaaa-1'], 'its toast shows there too')
+  assert.deepEqual(m.calls.auto, ['aaaaaa-1'], 'the app is asked, and decides (mayAutoFollow: never in History or a scenario)')
+  await step(30_000)
+  assert.equal(m.calls.get, 2)
+  m.handle.setLivePolling(true) // live again
+  await step(120_000)
+  assert.equal(m.calls.get, 2)
+  m.handle.setLivePolling(false)
+  hide(t, true) // and in the background, notifications off: nothing could reach the person
+  await step(120_000)
+  assert.equal(m.calls.get, 2)
+  hide(t, false)
+  await step(30_000)
+  assert.equal(m.calls.get, 3, 'shown again, still in History')
+  m.handle.update(null) // a server without alerts: not even in History
+  await step(120_000)
+  assert.equal(m.calls.get, 3)
 })
 
 test('mountAlerts: at most 3 toasts, the newest on top; each closes after 30 s, by ×, or by its button, which acts', (t) => {

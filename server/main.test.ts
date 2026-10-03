@@ -554,6 +554,27 @@ test('alerts: the status of a view or chase answer has alertsRev, which changes 
   assert.equal((await get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}&since=0`)).body.status.alertsRev, r2, 'the chase answer carries it too')
 })
 
+test('a POST from a page on another site is refused (403) and changes nothing; same-origin, none and no Sec-Fetch-Site (curl) are allowed', async (t) => {
+  const { base, eventsDir } = await liveServer(t, { env: { FLIGHTS_DIR: join(tmp(), 'flights') } })
+  const post = (path: string, site?: string): Promise<Response> =>
+    fetch(`${base}${path}`, { method: 'POST', headers: site === undefined ? {} : { 'sec-fetch-site': site } })
+  for (const site of ['cross-site', 'same-site']) {
+    const r = await post('/api/events?on=1', site)
+    assert.equal(r.status, 403, site)
+    assert.equal(typeof ((await r.json()) as { error: unknown }).error, 'string')
+    assert.equal((await post('/api/record?hex=738a10&on=1', site)).status, 403, site)
+    assert.equal((await post('/api/recordings/delete?file=x.jsonl', site)).status, 403, site)
+  }
+  assert.equal((await getEvents(base)).on, false, 'the watch was not switched')
+  assert.equal(existsSync(join(eventsDir, 'state.json')), false)
+  assert.deepEqual((await get<RecordResponse>(`${base}/api/record`)).body.active, [], 'nothing is recorded')
+  assert.equal((await post('/api/events?on=1', 'same-origin')).status, 200, 'the app, or the Vite proxy forwarding it')
+  assert.equal((await getEvents(base)).on, true)
+  assert.equal((await post('/api/events?on=0', 'none')).status, 200)
+  assert.equal((await post('/api/events?on=1')).status, 200, 'curl and scripts send none')
+  assert.equal((await getEvents(base)).on, true)
+})
+
 test('alerts: without EVENTS_DIR there are none: /api/events is 404 for GET and POST, and the status has no alertsRev', async (t) => {
   const clock = { t: T0 }
   const cfg = { ...readServerConfig({ REPLAY_FILES: FILE }), staticDir: join(tmp(), 'dist') }

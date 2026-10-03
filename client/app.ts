@@ -1895,7 +1895,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
 
   /**
    * A poll's status: the events again when the server says they changed (its alertsRev), or its alerts came or went. The
-   * panel asks (one request at a time) and asks by itself as it opens and in a hidden tab (ui/alerts.ts).
+   * panel asks (one request at a time) and asks by itself as it opens, in History, in a scenario and in a hidden tab
+   * (ui/alerts.ts).
    */
   function noteAlertsRev(): void {
     if (status.alertsRev === alertsRev) return
@@ -2016,6 +2017,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   void (async () => {
     while (!stopped) {
       const t0 = performance.now()
+      // No live polls in History or a scenario, so no status says the events changed: the Events panel asks for them itself.
+      alertsUi.setLivePolling(hist === null && run === null && loadingScenario === null)
       // A hidden tab asks for nothing: the server's interest in its view lapses 15 s later and it stops polling upstream.
       // A scenario (playing or loading) needs no live data either.
       if (document.hidden || run !== null || loadingScenario !== null) {

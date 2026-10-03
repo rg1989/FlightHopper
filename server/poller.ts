@@ -328,13 +328,15 @@ export class Poller {
     // In the order they will be asked: the one in flight first (the map shows a spinner in it).
     const order = (c: CellState): number => (c === this.#asking ? Infinity : this.#priority(c, now, chaseInView))
     const boxes = waiting.sort((a, b) => order(b) - order(a)).map((c) => cellBox(c.cell))
+    // While the sweep runs it takes up to SWEEP_SHARE of the tokens (11 % at adsb.fi's 0.9 req/s): the areas have the rest.
+    const areaTokenMs = this.#sweeping() ? tokenMs / (1 - SWEEP_SHARE) : tokenMs
     const b: StatusBrief = {
       source: this.#source.caps.kind,
       degraded: this.#bucket.degraded,
       cellPeriodP95S: p95S(cellIntervals),
       chasePeriodP95S: p95S(this.#chaseOk.intervals),
       // What to expect next, for the client's delay and staleness: the budget stretches both when it cannot keep up.
-      viewEveryS: (full ? Math.max(this.#opts.fullSnapshotPeriodMs, tokenMs) : Math.max(this.#viewPeriodMs, busy * tokenMs)) / 1000,
+      viewEveryS: (full ? Math.max(this.#opts.fullSnapshotPeriodMs, tokenMs) : Math.max(this.#viewPeriodMs, busy * areaTokenMs)) / 1000,
       chaseEveryS: Math.max(full ? this.#opts.fullSnapshotPeriodMs : this.#opts.chasePeriodMs, tokenMs) / 1000,
       pendingAreas: pending,
     }
@@ -463,6 +465,11 @@ export class Poller {
     if (codes.length === 0 || this.#source.squawk === undefined) return null
     const gapMs = Math.max(SWEEP_PERIOD_MS / codes.length, 1000 / (this.#bucket.state().rps * SWEEP_SHARE))
     return now - this.#lastSweepMs < gapMs ? null : codes[this.#sweepNext % codes.length]
+  }
+
+  /** Whether the sweep runs: squawks are asked for, and the source can sweep them. */
+  #sweeping(): boolean {
+    return (this.#opts.squawks?.() ?? []).length > 0 && this.#source.squawk !== undefined
   }
 
   /**

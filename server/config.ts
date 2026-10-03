@@ -94,9 +94,14 @@ export function readServerConfig(env: Env): ServerConfig {
   if (kind === 'replay' && replayFiles.length === 0) throw new Error(`REPLAY_FILES matched no files: ${patterns}`)
 
   const ntfyUrl = str(env, 'NTFY_URL') || null
-  // The error does not show the value: its path is the ntfy topic, which is a secret, and the message goes to the console.
+  // The errors do not show the value: its path is the ntfy topic, which is a secret, and the message goes to the console.
   if (ntfyUrl !== null && (!/^https?:\/\//.test(ntfyUrl) || !URL.canParse(ntfyUrl))) {
     throw new Error('NTFY_URL must be an http(s) URL with a host, like https://ntfy.sh/<topic> (the value is not shown: the topic is a secret)')
+  }
+  // fetch refuses a URL with credentials, and its message, logged at each push, holds the whole URL.
+  const ntfy = ntfyUrl === null ? null : new URL(ntfyUrl)
+  if (ntfy !== null && (ntfy.username !== '' || ntfy.password !== '')) {
+    throw new Error('NTFY_URL must not hold a username or password: fetch refuses such a URL. Use a long random topic (the value is not shown: it holds a secret)')
   }
   const squawks = str(env, 'ALERT_SQUAWKS')
   const listed = squawks === '' ? [...EMERGENCY_SQUAWKS] : squawks.split(',').map((c) => c.trim())

@@ -10,6 +10,7 @@
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/events                     the alerts' switch and the last 7 days of events (EVENTS_DIR set, live source; else 404)
 //   POST /api/events?on=1|0             switch the worldwide watch on or off (kept across restarts) → EventsReply
+//                                       (every POST from a page on another site is refused: 403, by its Sec-Fetch-Site header)
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
 //                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
@@ -513,6 +514,13 @@ export function createServer(
     if (req.method !== 'GET' && !post) {
       if (isApi) return sendJson(req, res, 405, { error: `only GET (and POST ${[...POSTS].join(', ')})` })
       return sendText(res, 405, 'only GET\n')
+    }
+    // A page on another site may not write here (switch the watch, record, rename or delete a recording). A browser says where
+    // a request comes from in Sec-Fetch-Site: the app's own POSTs are same-origin, through the Vite dev proxy too (it forwards the
+    // header). curl and scripts send none.
+    const site = req.headers['sec-fetch-site']
+    if (post && site !== undefined && site !== 'same-origin' && site !== 'none') {
+      return sendJson(req, res, 403, { error: 'a POST from a page on another site is refused' })
     }
     if (!isApi) return serveStatic(root, url.pathname, req.headers.range, res)
     let status = 200

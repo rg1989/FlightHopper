@@ -155,6 +155,20 @@ test('NTFY_URL: a refused value is never in the error (the topic is a secret: th
   }
 })
 
+test('NTFY_URL: one with a username or password is refused (fetch refuses it at each push, its message holding the URL); the error does not show it', () => {
+  for (const bad of ['https://user:s3cret-pass@ntfy.sh/s3cret-topic', 'https://s3cret-user@ntfy.sh/s3cret-topic', 'https://:s3cret-pass@ntfy.sh/s3cret-topic']) {
+    assert.throws(
+      () => readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: bad }),
+      (e: Error) => {
+        assert.match(e.message, /^NTFY_URL must not hold a username or password/, bad)
+        assert.ok(!e.message.includes('s3cret'), `the error echoes the value: ${e.message}`)
+        return true
+      },
+      bad,
+    )
+  }
+})
+
 test('ALERT_SQUAWKS: comma-separated four-digit octal codes, 7700, 7600 and 7500 unless set; anything else throws naming it', () => {
   assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE }).alertSquawks, ['7700', '7600', '7500'])
   assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: ' ' }).alertSquawks, ['7700', '7600', '7500'])

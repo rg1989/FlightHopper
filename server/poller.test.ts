@@ -9,7 +9,7 @@ import { normalizeAdsblol, normalizeReadsb } from '../shared/readsb.ts'
 import { TokenBucket } from './budget.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { cellsForView } from './cells.ts'
-import { Poller, viewPeriodMs, type PollerOpts } from './poller.ts'
+import { Poller, SWEEP_SHARE, viewPeriodMs, type PollerOpts } from './poller.ts'
 import { Recorder } from './recorder.ts'
 import { readRecording } from './recording.ts'
 import { SampleStore } from './store.ts'
@@ -684,6 +684,18 @@ test('the sweep: with no token when it is due, its code and its time stay put; t
   await runUntil(s, 40_000)
   assert.deepEqual(rel(s.calls, 'squawk'), [5500, 15_500, 25_500, 35_500], 'and from there one every 10 s')
   assert.deepEqual(sweepCodes(s.calls), ['7700', '7600', '7500', '7700'])
+})
+
+test('brief: while the sweep runs, the view\'s token-limited period counts the sweep\'s share of the tokens', () => {
+  // One circle, at 0.1 req/s: a token every 10 s, longer than its own 5 s period.
+  const sweeping = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.1, burst: 1 })
+  const none = sweepSetup([], {}, { maxRps: 0.1, burst: 1 }) // the switch off: no codes
+  const cannot = setup({ maxRps: 0.1, burst: 1, opts: { squawks: () => ['7700'] } }) // codes, but a source without squawk()
+  for (const s of [sweeping, none, cannot]) s.poller.touchView(KSFO[0], KSFO[1], 40)
+  assert.equal(none.poller.brief().viewEveryS, 10)
+  assert.equal(cannot.poller.brief().viewEveryS, 10)
+  const got = sweeping.poller.brief().viewEveryS ?? NaN
+  assert.ok(Math.abs(got - 10 / (1 - SWEEP_SHARE)) < 1e-9, `${got} s: the view gets 7 tokens in 8`)
 })
 
 test('the sweep: a failed answer (503) is not asked again; the next code goes out after the gap, and the bucket has seen the status', async () => {

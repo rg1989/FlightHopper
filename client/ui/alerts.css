@@ -531,8 +531,9 @@
     min-height: 60px;
   }
 
+  /* Live or Replay: a finger's target, 44 px tall like every touch control (theme.css). */
   .fh-alerts-alt {
-    min-height: 30px;
+    min-height: 44px;
     padding: 4px 10px;
   }
 
@@ -541,6 +542,18 @@
   .fh-alerts-alt {
     touch-action: manipulation; /* no double-tap zoom delay */
     -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Touch screens beside the side rail (tablets): the time over the 44 px button, each line as tall as it needs and no margin
+   round the button, so the row stays 60 px (with two lines of equal height it would grow to 88 px or more). */
+@media (pointer: coarse) and (min-width: 641px) {
+  .fh-alerts-item {
+    grid-template-rows: auto auto;
+  }
+
+  .fh-alerts-alt {
+    margin: 0 6px 0 0;
   }
 }
 
