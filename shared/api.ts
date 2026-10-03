@@ -13,6 +13,7 @@ export interface StatusBrief {
   chaseEveryS?: number           // expected refresh of the chased aircraft, s
   pendingAreas?: number          // areas of the view not loaded yet: no good answer so far (a wide view fills centre-out)
   recording?: { hex: string; callsign: string | null }[] // flights being recorded (server/flightLog.ts); absent when none
+  alertsRev?: number // changes with the alerts' switch and events: GET /api/events again (server/alerts.ts); absent: no alerts here
   pendingBoxes?: [number, number, number, number][] // those of them that are grid cells, [south, north, west, east] °, in the order they will be asked (the first is loading now); absent when none: the map veils them
 }
 

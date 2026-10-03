@@ -9,7 +9,7 @@ import { readServerConfig } from './config.ts'
 
 const FILE = fileURLToPath(new URL('../data/fixtures/golden/recording-sample.jsonl', import.meta.url))
 
-test('defaults: replay at 1 req/s on port 8787, no recording, PIA/LADD hidden, client from dist/', () => {
+test('defaults: replay at 1 req/s on port 8787, no recording, no alerts, PIA/LADD hidden, client from dist/', () => {
   assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE }), {
     source: 'replay',
     contact: null,
@@ -20,6 +20,9 @@ test('defaults: replay at 1 req/s on port 8787, no recording, PIA/LADD hidden, c
     replaySpeed: 1,
     recordDir: null,
     flightsDir: null,
+    eventsDir: null,
+    ntfyUrl: null,
+    alertSquawks: ['7700', '7600', '7500'],
     port: 8787,
     showPiaLadd: false,
     routes: false,
@@ -111,6 +114,40 @@ test('ROUTES: 1 turns route lookups on, 0 or unset leaves them off', () => {
   assert.equal(readServerConfig({ REPLAY_FILES: FILE, ROUTES: '0' }).routes, false)
   assert.equal(readServerConfig({ REPLAY_FILES: FILE, ROUTES: ' ' }).routes, false)
   assert.equal(readServerConfig({ ADSB_SOURCE: 'adsblol', CONTACT: 'me@example.invalid', ROUTES: '1' }).routes, true)
+})
+
+test('EVENTS_DIR: where the alerts keep their switch and log; unset or blank = no alerts', () => {
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE }).eventsDir, null)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, EVENTS_DIR: '' }).eventsDir, null)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, EVENTS_DIR: '  ' }).eventsDir, null)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, EVENTS_DIR: ' data/events ' }).eventsDir, 'data/events')
+})
+
+test('NTFY_URL: an http(s) URL is kept as given; unset = none; anything else throws naming it', () => {
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE }).ntfyUrl, null)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: ' ' }).ntfyUrl, null)
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: 'https://ntfy.sh/x' }).ntfyUrl, 'https://ntfy.sh/x')
+  assert.equal(readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: 'http://127.0.0.1:2586/topic' }).ntfyUrl, 'http://127.0.0.1:2586/topic')
+  for (const bad of ['ftp://x', 'nonsense', 'ntfy.sh/x', 'https://']) {
+    assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: bad }), { message: `NTFY_URL must be an http(s) URL, got "${bad}"` }, bad)
+  }
+})
+
+test('ALERT_SQUAWKS: comma-separated four-digit octal codes, 7700, 7600 and 7500 unless set; anything else throws naming it', () => {
+  assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE }).alertSquawks, ['7700', '7600', '7500'])
+  assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: ' ' }).alertSquawks, ['7700', '7600', '7500'])
+  assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: '7700, 2000' }).alertSquawks, ['7700', '2000'])
+  assert.deepEqual(readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: '7000' }).alertSquawks, ['7000'])
+  for (const bad of ['77a0', '7800', '770', '77000', '7700,', '7700,,7600', '7700;7600']) {
+    assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: bad }), { message: `ALERT_SQUAWKS must be 4-digit octal codes, comma-separated, got "${bad}"` }, bad)
+  }
+})
+
+test('the alerts settings are read whatever the source is', () => {
+  const live = { ADSB_SOURCE: 'adsbfi', EVENTS_DIR: 'data/events', NTFY_URL: 'https://ntfy.sh/x', ALERT_SQUAWKS: '7000' }
+  const cfg = readServerConfig(live)
+  assert.deepEqual([cfg.source, cfg.eventsDir, cfg.ntfyUrl, cfg.alertSquawks], ['adsbfi', 'data/events', 'https://ntfy.sh/x', ['7000']])
+  assert.equal(readServerConfig({ ...live, REPLAY_FILES: FILE, ADSB_SOURCE: 'replay' }).eventsDir, 'data/events', 'a replay reads it too: the server decides there are no alerts')
 })
 
 test('invalid values throw a message that names the variable', () => {

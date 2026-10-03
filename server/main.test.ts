@@ -1,23 +1,31 @@
 // server/main.test.ts
-// End-to-end: the real server on port 0 against a recording. No network beyond 127.0.0.1.
+// End-to-end: the real server on port 0 against a recording. No network beyond 127.0.0.1. The alerts' wiring (the end of the
+// file) runs it on a stub live source and a fake adsb.lol, since a replay has no alerts.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import type { ChaseResponse, StatusReport, ViewResponse } from '../shared/api.ts'
+import type { ChaseResponse, RecordResponse, StatusReport, ViewResponse } from '../shared/api.ts'
+import { pushBody, pushTitle, type EventsReply } from '../shared/alerts.ts'
 import { distanceNm } from '../shared/geo.ts'
-import type { SourceKind } from '../shared/types.ts'
+import { SLOT_MS, newestSlotMs } from '../shared/history.ts'
+import type { ReadsbAircraft, SourceKind } from '../shared/types.ts'
 import { startFakeReadsb } from '../tools/fake-readsb.ts'
+import { Alerts } from './alerts.ts'
 import { readServerConfig } from './config.ts'
+import { encodeHeatmap } from './heatmap.ts'
+import { HistoryStore, heatmapUrl } from './historyStore.ts'
 import { createServer } from './main.ts'
 import { readRecording } from './recording.ts'
 import { makeReplay } from './sources/replay.ts'
+import type { FetchResult, Source } from './sources/types.ts'
+import { TypeDb, buildTypeTable } from './typeDb.ts'
 
 const FILE = fileURLToPath(new URL('../data/fixtures/golden/recording-sample.jsonl', import.meta.url))
 const MAIN = fileURLToPath(new URL('./main.ts', import.meta.url))
@@ -434,4 +442,299 @@ test('POST /api/recordings/rename and /delete: name one, delete one; unknown fil
   assert.equal((await get<{ active: unknown[] }>(`${base}/api/record`)).body.active.length, 0, 'it stopped recording')
   assert.equal((await post(`/api/recordings/delete?file=${f}`)).status, 404)
   assert.equal((await post(`/api/recordings/rename?file=..%2Fx&name=a`)).status, 404)
+})
+
+// ---- the alerts (server/alerts.ts): the server's wiring of them ----
+
+/**
+ * A live source on the injected clock that records what it is asked and answers each request with the aircraft it holds:
+ * `heard` for the area, hex and full-snapshot requests, `onSquawk[code]` for that code's sweep. Kind adsbfi is an area source with
+ * squawk() (a server on it sweeps); readsb is a full snapshot without it. Both are live: only a replay has no alerts.
+ */
+function liveStub(clock: { t: number }, kind: 'adsbfi' | 'readsb' = 'adsbfi') {
+  const world = { heard: [] as ReadsbAircraft[], onSquawk: {} as Record<string, ReadsbAircraft[]>, asked: [] as string[] }
+  const answer = (what: string, aircraft: ReadsbAircraft[]): Promise<FetchResult> => {
+    world.asked.push(what)
+    return Promise.resolve({ url: `fake:${kind}`, status: 200, tSendMs: clock.t, tRecvMs: clock.t, bytes: 100, body: '', retryAfterS: null, snapshot: { nowMs: clock.t, aircraft } })
+  }
+  const area = kind === 'adsbfi'
+  const source: Source = {
+    caps: { kind, fullSnapshot: !area, maxRps: 5, coverage: null, attribution: 'test' },
+    circle: () => (area ? answer('circle', world.heard) : Promise.reject(new Error('unsupported'))),
+    hexes: () => (area ? answer('hexes', world.heard) : Promise.reject(new Error('unsupported'))),
+    all: () => (area ? Promise.reject(new Error('unsupported')) : answer('all', world.heard)),
+  }
+  if (area) source.squawk = (code) => answer(`squawk ${code}`, world.onSquawk[code] ?? [])
+  return { source, world }
+}
+
+/** An airborne aircraft at 32 N 35 E as an upstream sends it: its position and the position's age make a sample. */
+const plane = (hex: string, o: Partial<ReadsbAircraft> = {}): ReadsbAircraft => ({
+  hex, type: 'adsb_icao', flight: 'ELY1    ', r: '4X-EKA', t: 'B738', category: 'A3', alt_baro: 36_000, lat: 32, lon: 35, gs: 450, track: 90, seen_pos: 0.4, version: 2, ...o,
+})
+
+/**
+ * A server on a live stub (alerts need a live source) with EVENTS_DIR in a fresh temp directory, on the injected clock.
+ * `on` leaves the switch on in state.json, as an earlier run would have. `env` and `deps` add to the settings and to createServer's
+ * deps. It is closed when the test ends.
+ */
+async function liveServer(
+  t: { after: (fn: () => Promise<void>) => void },
+  o: { kind?: 'adsbfi' | 'readsb'; on?: boolean; env?: Record<string, string>; deps?: Parameters<typeof createServer>[1] } = {},
+) {
+  const clock = { t: T0 }
+  const stub = liveStub(clock, o.kind)
+  const eventsDir = join(tmp(), 'events')
+  if (o.on === true) {
+    mkdirSync(eventsDir, { recursive: true })
+    writeFileSync(join(eventsDir, 'state.json'), '{"on":true}\n')
+  }
+  // cfg.source stays the default (replay): the alerts follow the source passed in, which is live.
+  const cfg = { ...readServerConfig({ REPLAY_FILES: FILE, EVENTS_DIR: eventsDir, ...o.env }), staticDir: join(tmp(), 'dist') }
+  const app = createServer(cfg, { source: stub.source, nowMs: () => clock.t, ...o.deps })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+  return { app, base, clock, eventsDir, ...stub }
+}
+
+const postEvents = (base: string, q: string): Promise<Response> => fetch(`${base}/api/events?${q}`, { method: 'POST' })
+
+async function getEvents(base: string): Promise<EventsReply> {
+  const r = await get<EventsReply>(`${base}/api/events`)
+  assert.equal(r.status, 200)
+  return r.body
+}
+
+/** Moves the injected clock on and waits for the poller to take the next answer (its ingest runs in one go, so it is done by then). */
+async function nextAnswer(s: { app: ReturnType<typeof createServer>; clock: { t: number } }, ms: number): Promise<void> {
+  const before = s.app.poller.report().requestsTotal
+  s.clock.t += ms
+  await waitFor('the next answer', async () => s.app.poller.report().requestsTotal, (n) => n > before)
+}
+
+test('alerts: GET /api/events starts off and empty; POST ?on=1|0 switches the watch and keeps it in state.json; a GET or a bad value does not switch', async (t) => {
+  const { base, eventsDir } = await liveServer(t)
+  const state = (): unknown => JSON.parse(readFileSync(join(eventsDir, 'state.json'), 'utf8'))
+
+  const first = await get<EventsReply>(`${base}/api/events`)
+  assert.equal(first.status, 200)
+  assert.equal(first.type, 'application/json')
+  assert.deepEqual(first.body, { on: false, sweep: true, rev: 0, events: [] })
+
+  const on = await postEvents(base, 'on=1')
+  assert.equal(on.status, 200)
+  const reply = (await on.json()) as EventsReply
+  assert.deepEqual([reply.on, reply.sweep, reply.events], [true, true, []])
+  assert.ok(reply.rev > 0)
+  assert.deepEqual(state(), { on: true })
+  assert.deepEqual(await getEvents(base), reply)
+
+  assert.equal((await get<EventsReply>(`${base}/api/events?on=0`)).body.on, true, 'a GET does not switch')
+  for (const bad of ['on=2', 'on=', 'on=true', '']) assert.equal((await postEvents(base, bad)).status, 400, bad)
+  assert.deepEqual(await (await postEvents(base, 'on=2')).json(), { error: 'on must be 1 or 0' })
+  assert.deepEqual(await getEvents(base), reply, 'a refused request changed nothing')
+
+  const off = (await (await postEvents(base, 'on=0')).json()) as EventsReply
+  assert.equal(off.on, false)
+  assert.ok(off.rev > reply.rev)
+  assert.deepEqual(state(), { on: false })
+})
+
+test('alerts: the status of a view or chase answer has alertsRev, which changes with the switch', async (t) => {
+  const { base } = await liveServer(t)
+  const rev = async (): Promise<number | undefined> => (await get<ViewResponse>(viewUrl(base, 0))).body.status.alertsRev
+  const r0 = await rev()
+  assert.equal(typeof r0, 'number')
+  await postEvents(base, 'on=1')
+  const r1 = await rev()
+  assert.ok(r1! > r0!, 'on')
+  await postEvents(base, 'on=0')
+  const r2 = await rev()
+  assert.ok(r2! > r1!, 'off')
+  assert.equal((await get<ChaseResponse>(`${base}/api/chase?hex=${CHASED}&since=0`)).body.status.alertsRev, r2, 'the chase answer carries it too')
+})
+
+test('alerts: without EVENTS_DIR there are none: /api/events is 404 for GET and POST, and the status has no alertsRev', async (t) => {
+  const clock = { t: T0 }
+  const cfg = { ...readServerConfig({ REPLAY_FILES: FILE }), staticDir: join(tmp(), 'dist') }
+  const app = createServer(cfg, { source: liveStub(clock).source, nowMs: () => clock.t })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+  const none = await get<{ error: string }>(`${base}/api/events`)
+  assert.equal(none.status, 404)
+  assert.equal(none.type, 'application/json')
+  assert.match(none.body.error, /EVENTS_DIR/)
+  assert.equal((await postEvents(base, 'on=1')).status, 404)
+  const v = await get<ViewResponse>(viewUrl(base, 0))
+  assert.equal(v.status, 200)
+  assert.equal('alertsRev' in v.body.status, false)
+})
+
+test('alerts: a replay never has them, whatever EVENTS_DIR says: 404, no alertsRev, and the directory is not made', async (t) => {
+  const clock = { t: T0 }
+  const nowMs = (): number => clock.t
+  const eventsDir = join(tmp(), 'events')
+  const cfg = { ...readServerConfig({ REPLAY_FILES: FILE, EVENTS_DIR: eventsDir }), staticDir: join(tmp(), 'dist') }
+  assert.equal(cfg.eventsDir, eventsDir)
+  const app = createServer(cfg, { source: makeReplay({ files: cfg.replayFiles, nowMs }), nowMs })
+  const base = await app.listen(0)
+  t.after(() => app.close())
+  assert.equal((await get(`${base}/api/events`)).status, 404)
+  assert.equal((await postEvents(base, 'on=1')).status, 404)
+  const v = await get<ViewResponse>(viewUrl(base, 0))
+  assert.equal(v.status, 200)
+  assert.equal('alertsRev' in v.body.status, false)
+  assert.equal(existsSync(eventsDir), false)
+})
+
+test('alerts: a source that cannot sweep (readsb) is live and has them, with sweep false', async (t) => {
+  const { base, world } = await liveServer(t, { kind: 'readsb' })
+  assert.deepEqual(await getEvents(base), { on: false, sweep: false, rev: 0, events: [] })
+  assert.equal((await (await postEvents(base, 'on=1')).json() as EventsReply).on, true)
+  await sleep(350) // a few poller ticks
+  assert.ok(world.asked.every((a) => a === 'all'), `only snapshots are asked: ${world.asked.join(', ')}`)
+})
+
+test('alerts: the poller sweeps the codes in ALERT_SQUAWKS while the switch is on; a squawk seen again 25 s later opens an event, logged and pushed to NTFY_URL', async (t) => {
+  const pushed: { url: string; init: RequestInit }[] = []
+  const pushFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    pushed.push({ url: String(url), init: init ?? {} })
+    return new Response('ok')
+  }) as typeof fetch
+  // 7000 and 2000, not the default 7700, 7600 and 7500: the codes asked are the setting's.
+  const s = await liveServer(t, { env: { NTFY_URL: 'https://ntfy.example/secret-topic', ALERT_SQUAWKS: '7000,2000' }, deps: { pushFetch } })
+  s.world.onSquawk['7000'] = [plane('89645a', { flight: 'FDB1073 ', r: 'A6-FNC', t: 'B38M', squawk: '7000', alt_baro: 30_000 })]
+  const sweeps = (): string[] => s.world.asked.filter((a) => a.startsWith('squawk '))
+
+  await sleep(350) // a few poller ticks
+  assert.deepEqual(sweeps(), [], 'switched off: nothing is swept')
+
+  assert.equal((await postEvents(s.base, 'on=1')).status, 200)
+  await waitFor('the first sweep', async () => sweeps(), (a) => a.length === 1)
+  s.clock.t += 15_000 // two codes: one request every 15 s
+  await waitFor('the second sweep', async () => sweeps(), (a) => a.length === 2)
+  s.clock.t += 15_000
+  await waitFor('the third sweep', async () => sweeps(), (a) => a.length === 3)
+  assert.deepEqual(sweeps(), ['squawk 7000', 'squawk 2000', 'squawk 7000'], 'each code in turn')
+
+  const reply = await waitFor('the event', () => getEvents(s.base), (r) => r.events.length === 1)
+  const [e] = reply.events
+  assert.deepEqual([e.hex, e.kind, e.squawk, e.callsign, e.reg, e.type, e.openedMs, e.lastMs, e.late], ['89645a', 'squawk', '7000', 'FDB1073', 'A6-FNC', 'B38M', T0, T0 + 30_000, false])
+  assert.equal((await get<ViewResponse>(viewUrl(s.base, 0))).body.status.alertsRev, reply.rev, 'the clients are told to ask again')
+  const day = new Date(T0).toISOString().slice(0, 10)
+  const log = readFileSync(join(s.eventsDir, `${day}.jsonl`), 'utf8').trim().split('\n')
+  assert.deepEqual(log.map((l) => (JSON.parse(l) as { id: string }).id), [e.id], 'logged in the day of the injected clock')
+  assert.equal(pushed.length, 1)
+  assert.equal(pushed[0].url, 'https://ntfy.example/secret-topic')
+  assert.equal(pushed[0].init.method, 'POST')
+  assert.equal(pushed[0].init.body, pushBody(e))
+  assert.deepEqual(pushed[0].init.headers, { Title: pushTitle(e), Priority: 'high', Tags: 'airplane' })
+
+  await postEvents(s.base, 'on=0')
+  s.clock.t += 30_000
+  await sleep(350)
+  assert.equal(sweeps().length, 3, 'switched off again: no more sweeps')
+})
+
+test('alerts: a polled aircraft\'s emergency descent opens an event; a military one\'s (dbFlags from the info store) does not', async (t) => {
+  const s = await liveServer(t, { kind: 'readsb' })
+  assert.equal((await postEvents(s.base, 'on=1')).status, 200)
+  // 36,000 ft, then 250 ft/s (15,000 fpm) from the 20th second down to 18,000 ft; a sample every 10 s, each with its baro_rate.
+  const alt = (sec: number): number => (sec < 20 ? 36_000 : Math.max(18_000, 36_000 - 250 * (sec - 20)))
+  for (let sec = 0; sec <= 100; sec += 10) {
+    const rate = (alt(sec + 10) - alt(sec)) * 6
+    s.world.heard = [plane('738a10', { alt_baro: alt(sec), baro_rate: rate }), plane('43c001', { alt_baro: alt(sec), baro_rate: rate, dbFlags: 1 })]
+    await nextAnswer(s, 10_000)
+  }
+  const { events } = await getEvents(s.base)
+  assert.deepEqual(events.map((e) => [e.hex, e.kind, e.drop?.fromFt, e.drop?.lost, e.late, e.type]), [['738a10', 'descent', 36_000, false, false, 'B738']])
+})
+
+test('alerts: a recorded aircraft\'s flight log still gets each new sample, with the alerts there or not', async (t) => {
+  for (const alerts of [true, false]) {
+    const env: Record<string, string> = { FLIGHTS_DIR: join(tmp(), 'flights') }
+    if (!alerts) env.EVENTS_DIR = '' // blank is unset: no alerts
+    const s = await liveServer(t, { kind: 'readsb', env })
+    assert.equal((await get(`${s.base}/api/events`)).status, alerts ? 200 : 404)
+    const hear = async (lon: number): Promise<void> => {
+      s.world.heard = [plane('738a10', { lon })]
+      await nextAnswer(s, 10_000)
+    }
+    await hear(35)
+    const started = ((await (await fetch(`${s.base}/api/record?hex=738a10&on=1`, { method: 'POST' })).json()) as RecordResponse).rec!
+    await hear(35.01)
+    await hear(35.02)
+    const [rec] = (await get<RecordResponse>(`${s.base}/api/record`)).body.active
+    assert.equal(rec.samples, started.samples + 2, alerts ? 'with the alerts' : 'without them')
+  }
+})
+
+// ---- the late scan: each new half hour held by the past's rolling fetch ----
+
+/** A half-hour file of aircraft at 31,000 ft: each hex sends 7700 at the seconds given. */
+function heatWith(slotMs: number, sent: Record<string, number[]>): Uint8Array {
+  const slices: Parameters<typeof encodeHeatmap>[0] = []
+  for (let s = 0; s < 1800; s += 10) {
+    const records: Parameters<typeof encodeHeatmap>[0][number]['records'] = []
+    for (const [hex, at] of Object.entries(sent)) {
+      records.push({ hex, lat: 40, lon: -70, alt: 31_000, gs: 450 })
+      if (at.includes(s)) records.push({ hex, callsign: 'AAL1', squawk: '7700' })
+    }
+    slices.push({ tMs: slotMs + s * 1000, records })
+  }
+  return encodeHeatmap(slices)
+}
+
+/** adsb.lol's heatmap files as a fake fetch: these half hours, anything else 404. */
+const heatFetch = (files: Map<number, Uint8Array>): typeof fetch =>
+  (async (input: string | URL | Request) => {
+    for (const [slotMs, file] of files) if (String(input) === heatmapUrl('https://adsb.lol', slotMs)) return new Response(file.buffer as ArrayBuffer)
+    return new Response('not found', { status: 404 })
+  }) as typeof fetch
+
+test('alerts: each half hour the rolling fetch holds is read for late events, the older first, with the type table\'s types; the switch kept in state.json is on at start', async (t) => {
+  const newest = newestSlotMs(T0)
+  const older = newest - SLOT_MS
+  // The A320 of the type table sends 7700 at minutes 25 and 26 of the older half hour and at 1 and 2 of the newest: one episode,
+  // which opens at the older's minute 25 only if the older half hour is read first. a00001 sends it at minutes 10 and 11 of the older.
+  const files = new Map([
+    [older, heatWith(older, { '4691c4': [1500, 1560], a00001: [600, 660] })],
+    [newest, heatWith(newest, { '4691c4': [60, 120] })],
+  ])
+  const types = new TypeDb({ userAgent: 'test', table: buildTypeTable({ '4691C4': { t: 'A320' } }, { A320: { desc: 'L2J', wtc: 'M' } }) })
+  const pushed: string[] = []
+  const pushFetch = (async (url: string | URL | Request) => (pushed.push(String(url)), new Response('ok'))) as typeof fetch
+  const s = await liveServer(t, { on: true, deps: { rollHistory: true, historyFetch: heatFetch(files), types, pushFetch } })
+
+  const { events } = await waitFor('the late events', () => getEvents(s.base), (r) => r.events.length === 2)
+  assert.deepEqual(events.map((e) => [e.hex, e.kind, e.squawk, e.late, e.type, e.openedMs, e.lastMs]), [
+    ['4691c4', 'squawk', '7700', true, 'A320', older + 1_500_000, newest + 120_000],
+    ['a00001', 'squawk', '7700', true, null, older + 600_000, older + 660_000],
+  ])
+  assert.deepEqual(pushed, [], 'no NTFY_URL: nothing is pushed')
+})
+
+test('the late scan: a failure of the scan is logged as the late check\'s, not as the history tick\'s', async (t) => {
+  const logged: string[] = []
+  t.mock.method(console, 'error', (...args: unknown[]) => void logged.push(String(args[0])))
+  t.mock.method(Alerts.prototype, 'scanSlot', () => {
+    throw new Error('boom')
+  })
+  const newest = newestSlotMs(T0)
+  const files = new Map([[newest - SLOT_MS, heatWith(newest - SLOT_MS, {})], [newest, heatWith(newest, {})]])
+  await liveServer(t, { on: true, deps: { rollHistory: true, historyFetch: heatFetch(files) } })
+  await waitFor('the scan to fail', async () => logged, (l) => l.includes('alerts: late check failed:'), 3000)
+  assert.ok(!logged.includes('history: tick failed:'), logged.join(' | '))
+})
+
+test('the late scan: a history tick that fails is logged as the tick\'s, and nothing is scanned', async (t) => {
+  const logged: string[] = []
+  t.mock.method(console, 'error', (...args: unknown[]) => void logged.push(String(args[0])))
+  const scan = t.mock.method(Alerts.prototype, 'scanSlot', () => {})
+  t.mock.method(HistoryStore.prototype, 'tick', () => Promise.reject(new Error('down')))
+  await liveServer(t, { on: true, deps: { rollHistory: true, historyFetch: heatFetch(new Map()) } })
+  await waitFor('the tick to fail', async () => logged, (l) => l.includes('history: tick failed:'), 3000)
+  await sleep(50)
+  assert.equal(scan.mock.callCount(), 0)
+  assert.ok(!logged.includes('alerts: late check failed:'), logged.join(' | '))
 })

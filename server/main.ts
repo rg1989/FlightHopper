@@ -8,6 +8,8 @@
 //   POST /api/record?hex&on=1|0         start or stop recording one aircraft → RecordResponse
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
+//   GET /api/events                     the alerts' switch and the last 7 days of events (EVENTS_DIR set, live source; else 404)
+//   POST /api/events?on=1|0             switch the worldwide watch on or off (kept across restarts) → EventsReply
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
 //   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
 //                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
@@ -22,6 +24,8 @@
 // The command line also keeps the newest hour of the past in memory for a live source (two heatmap files, refreshed each
 // half hour: rollHistory), and for any source loads the past's aircraft types and finds the oldest day adsb.lol keeps
 // (historyMeta). A server made in code, a test's included, fetches the past only when it is asked.
+// A live source with EVENTS_DIR set also has the alerts (alerts.ts): the poller feeds them every aircraft it takes and sweeps the
+// emergency squawks worldwide where the source can (adsb.fi), and each new half hour of the rolling past is read for late events.
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -30,12 +34,13 @@ import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
 import type { ChaseResponse, RecordingInfo, RecordResponse, StatusBrief, ViewResponse } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
-import { EVERYTHING_NM, SLOT_MS } from '../shared/history.ts'
+import { EVERYTHING_NM, SLOT_MS, newestSlotMs } from '../shared/history.ts'
 import type { AircraftInfo } from '../shared/info.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { TokenBucket } from './budget.ts'
 import { readServerConfig, type ServerConfig } from './config.ts'
 import { AdsbdbRoutes } from './adsbdb.ts'
+import { Alerts, ntfyPush } from './alerts.ts'
 import { FlightLog } from './flightLog.ts'
 import { HistoryStore } from './historyStore.ts'
 import { InfoStore } from './infoStore.ts'
@@ -74,7 +79,7 @@ const TYPES_WAIT_MS = 5000 // the first ask for the past waits this long for the
 const META_TICK_MS = 60_000 // the type table and the oldest day are checked this often; each loads when it is due
 const SPAN_MAX_MS = 48 * 3_600_000 // the longest span of one aircraft's legs: the client asks for a day and the 12 h before it
 const gzipAsync = promisify(gzip)
-const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete']) // the only writes
+const POSTS = new Set(['/api/record', '/api/recordings/rename', '/api/recordings/delete', '/api/events']) // the only writes
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -221,6 +226,7 @@ async function serveStatic(root: string, pathname: string, range: string | undef
  * deps.nowMs is the server clock for the poller and the budget; it must be the clock the source stamps tRecvMs with
  * (Date.now for live sources, the same injected clock for a replay built with it).
  * deps.routesFetch replaces fetch for the route lookups (tests); routes run only with ADSB_SOURCE=adsblol and ROUTES=1.
+ * deps.pushFetch replaces fetch for the alerts' ntfy push (tests). A live source with cfg.eventsDir has the alerts; a replay never does.
  * deps.historyFetch replaces fetch for the past (adsb.lol's heatmap and trace files, the type table; tests). deps.rollHistory
  * (default false) keeps the newest two half hours of the past fetched while the server listens: the command line sets it for
  * a live source. deps.historyMeta (default false) loads the type table for the past's aircraft (typeDb.ts) and finds the
@@ -236,6 +242,7 @@ export function createServer(
     nowMs?: () => number
     routesFetch?: typeof fetch
     wxFetch?: typeof fetch
+    pushFetch?: typeof fetch
     historyFetch?: typeof fetch
     rollHistory?: boolean
     historyMeta?: boolean
@@ -251,6 +258,19 @@ export function createServer(
   const bucket = new TokenBucket(rps, nowMs, Math.random, source.caps.burst)
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
   const flights = cfg.flightsDir === null ? null : new FlightLog({ dir: cfg.flightsDir, source: source.caps.kind, nowMs })
+  // The alerts (server/alerts.ts): a live source with EVENTS_DIR set; a replay's world is not now.
+  // typeOf reads `types`, made below: safe, as it runs only from a late scan, after createServer has returned.
+  const alerts =
+    cfg.eventsDir === null || source.caps.kind === 'replay'
+      ? null
+      : new Alerts({
+          dir: cfg.eventsDir,
+          nowMs,
+          codes: cfg.alertSquawks,
+          sweep: source.squawk !== undefined,
+          push: cfg.ntfyUrl === null ? undefined : ntfyPush(cfg.ntfyUrl, deps.pushFetch),
+          typeOf: (hex) => types?.lookup(hex) ?? { type: null, category: null },
+        })
   // The poller prunes the sample store (180 s of track, 35 min for each newest sample) on every 100 ms tick and the info store on every good answer,
   // so no separate prune timer is needed.
   const poller = new Poller(source, store, bucket, {
@@ -260,8 +280,17 @@ export function createServer(
     hideFlagged: !cfg.showPiaLadd,
     nowMs,
     info,
-    onSample: flights === null ? undefined : (s) => flights.add(s),
+    onSample:
+      flights === null && alerts === null
+        ? undefined
+        : (s) => {
+            flights?.add(s)
+            // The last 150 s of its track (asked only for a steep sample): a 120 s emergency descent and the point before it.
+            alerts?.sample(s, () => store.track(s.hex, s.rxMs - 150_000), info.raw(s.hex)?.dbFlags ?? 0)
+          },
     watched: flights === null ? undefined : () => flights.hexes(),
+    squawks: alerts === null ? undefined : () => alerts.squawks(),
+    onAircraft: alerts === null ? undefined : (ac, rxMs) => alerts.observe(ac, rxMs),
   })
   // All routes (adsb.lol, sharing its bucket), or only the selected and recorded aircraft's (own slow bucket).
   const allRoutes = cfg.routes && cfg.source === 'adsblol'
@@ -334,11 +363,12 @@ export function createServer(
     return { ...raw, seen: age(raw.seen), seen_pos: age(raw.seen_pos) }
   }
 
-  /** The poller's brief, with the flights being recorded. */
+  /** The poller's brief, with the flights being recorded and the alerts' revision. */
   function brief(): StatusBrief {
     const b = poller.brief()
     const rec = flights?.active() ?? []
     if (rec.length > 0) b.recording = rec.map((r) => ({ hex: r.hex, callsign: r.callsign }))
+    if (alerts !== null) b.alertsRev = alerts.rev
     return b
   }
 
@@ -463,6 +493,17 @@ export function createServer(
     return { rec, active: flights.active() }
   }
 
+  /** The alerts' switch (POST on=1|0) and the last 7 days of events: [200, EventsReply]; [404, …] when there are no alerts here. */
+  function events(q: URLSearchParams, post: boolean): [number, unknown] {
+    if (alerts === null) return [404, { error: 'no alerts on this server: set EVENTS_DIR with a live source (make live does)' }]
+    if (post) {
+      const on = q.get('on')
+      check(on === '1' || on === '0', 'on must be 1 or 0')
+      alerts.setOn(on === '1')
+    }
+    return [200, alerts.reply()]
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const isApi = url.pathname === '/api' || url.pathname.startsWith('/api/')
@@ -492,6 +533,7 @@ export function createServer(
         const r = flights.read(url.searchParams.get('file') ?? '')
         ;[status, body] = r === null ? [404, { error: 'no such recording' }] : [200, r]
       }
+      else if (url.pathname === '/api/events') [status, body] = events(url.searchParams, post)
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
       if (e instanceof WxError) [status, body] = [e.status, { error: e.message }]
@@ -527,9 +569,21 @@ export function createServer(
             routeTimer.unref()
           }
           // Asked to roll (the command line does, for a live source): the newest hour of the past stays ready, so History
-          // opens on it without a wait. Otherwise the past is fetched only when a client asks.
+          // opens on it without a wait. Otherwise the past is fetched only when a client asks. After each tick the alerts read the
+          // newest two half hours held (oldest first; one already read costs nothing, nor does any while the switch is off).
           if (deps.rollHistory === true && historyTimer === null) {
-            const roll = (): void => void history.tick().catch((e: unknown) => console.error('history: tick failed:', e))
+            const scan = (): void => {
+              const newest = newestSlotMs(nowMs())
+              for (const slot of [newest - SLOT_MS, newest]) {
+                const f = history.held(slot)
+                if (f !== null) alerts?.scanSlot(f, slot)
+              }
+            }
+            const roll = (): void =>
+              void history
+                .tick()
+                .then(scan, (e: unknown) => console.error('history: tick failed:', e))
+                .catch((e: unknown) => console.error('alerts: late check failed:', e))
             roll()
             historyTimer = setInterval(roll, HISTORY_TICK_MS)
             historyTimer.unref()

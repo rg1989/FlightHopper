@@ -1,6 +1,7 @@
 // server/config.ts
 // Server settings from environment variables. `npm run server` loads .env.local; .env.example lists them all.
 import { globSync } from 'node:fs'
+import { EMERGENCY_SQUAWKS } from '../shared/alerts.ts'
 import type { SourceKind } from '../shared/types.ts'
 
 export interface ServerConfig {
@@ -13,6 +14,9 @@ export interface ServerConfig {
   replaySpeed: number // REPLAY_SPEED, default 1
   recordDir: string | null // RECORD_DIR; unset or empty = no recording (replay is never recorded)
   flightsDir: string | null // FLIGHTS_DIR: where chosen flights are recorded, one file each (server/flightLog.ts); unset = off
+  eventsDir: string | null // EVENTS_DIR: the alerts' switch and log (server/alerts.ts); unset = no alerts (make live sets data/events)
+  ntfyUrl: string | null // NTFY_URL: each new alert is POSTed to this ntfy topic too, e.g. https://ntfy.sh/<random topic>; unset = none
+  alertSquawks: string[] // ALERT_SQUAWKS: comma-separated 4-digit octal codes swept and read as emergencies; default 7700,7600,7500
   port: number // PORT, default 8787
   showPiaLadd: boolean // SHOW_PIA_LADD=1 serves PIA/LADD-flagged aircraft
   routes: boolean // ROUTES=1 looks up flight routes on adsb.lol (only used with ADSB_SOURCE=adsblol); default off
@@ -89,6 +93,12 @@ export function readServerConfig(env: Env): ServerConfig {
   const replayFiles = kind === 'replay' ? expand(patterns) : []
   if (kind === 'replay' && replayFiles.length === 0) throw new Error(`REPLAY_FILES matched no files: ${patterns}`)
 
+  const ntfyUrl = str(env, 'NTFY_URL') || null
+  if (ntfyUrl !== null && (!/^https?:\/\//.test(ntfyUrl) || !URL.canParse(ntfyUrl))) throw new Error(`NTFY_URL must be an http(s) URL, got "${ntfyUrl}"`)
+  const squawks = str(env, 'ALERT_SQUAWKS')
+  const alertSquawks = squawks === '' ? [...EMERGENCY_SQUAWKS] : squawks.split(',').map((c) => c.trim())
+  if (alertSquawks.some((c) => !/^[0-7]{4}$/.test(c))) throw new Error(`ALERT_SQUAWKS must be 4-digit octal codes, comma-separated, got "${squawks}"`)
+
   return {
     source: kind,
     contact,
@@ -99,6 +109,9 @@ export function readServerConfig(env: Env): ServerConfig {
     replaySpeed: num(env, 'REPLAY_SPEED', 1, (v) => v > 0, 'a number > 0'),
     recordDir: str(env, 'RECORD_DIR') || null,
     flightsDir: str(env, 'FLIGHTS_DIR') || null,
+    eventsDir: str(env, 'EVENTS_DIR') || null,
+    ntfyUrl,
+    alertSquawks,
     port: num(env, 'PORT', 8787, (v) => Number.isInteger(v) && v >= 0 && v <= 65535, 'an integer 0..65535'),
     showPiaLadd: flag(env, 'SHOW_PIA_LADD'),
     routes: flag(env, 'ROUTES'),
