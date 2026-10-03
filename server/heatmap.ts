@@ -12,6 +12,7 @@
 // non-ICAO one. An altitude is in 25 ft steps (-123 on the ground, -124 unknown), a speed in 0.1 kt (-1 unknown). An ident
 // comes once a minute per aircraft, and when its callsign or squawk changes.
 import type { HistorySlot, HistoryTrack } from '../shared/api.ts'
+import type { AltSeries } from './descent.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
 import { EVERYTHING_NM, SLOT_MS } from '../shared/history.ts'
@@ -193,4 +194,83 @@ export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon:
       return trk
     })
   return { slotMs: q.slotMs, stepS: q.stepS, aircraft }
+}
+
+/** One aircraft of a half-hour file as the alerts read it (scanSlot). */
+export interface ScanAircraft {
+  alt: AltSeries // its airborne altitudes (ft, 25 ft steps; baro, or GNSS where readsb had no baro): t in s into the slot
+  lat: number // its newest position
+  lon: number
+  tS: number // when, in s into the slot
+  callsign: string | null // from its newest ident record
+  squawks: { tS: number; squawk: string }[] // its ident records carrying one of the codes asked for while airborne
+}
+
+export interface SlotScan {
+  endS: number // the second of the last slice read, into the slot
+  aircraft: Map<string, ScanAircraft> // by hex
+}
+
+/**
+ * One pass over a decompressed half-hour file for the alerts (server/alerts.ts): each aircraft's airborne altitudes, its
+ * newest position and callsign, and its ident records that carry one of `codes` while it is airborne (its newest position
+ * before the record was not on the ground). Slices stamped outside the half hour are skipped, as readSlot does. null: no
+ * slice header. ponytail: every aircraft's altitudes are held at once, about 2 million numbers for a busy half hour.
+ */
+export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<string>): SlotScan | null {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const end = buf.byteLength - (buf.byteLength % REC)
+  let o = firstHeader(dv, end)
+  if (o < 0) return null
+  const byKey = new Map<number, ScanAircraft & { airborne: boolean | null }>()
+  const get = (key: number): ScanAircraft & { airborne: boolean | null } => {
+    let a = byKey.get(key)
+    if (a === undefined) {
+      a = { alt: { t: [], ft: [] }, lat: Number.NaN, lon: Number.NaN, tS: -1, callsign: null, squawks: [], airborne: null }
+      byKey.set(key, a)
+    }
+    return a
+  }
+  let keep = false
+  let sec = 0
+  let endS = 0
+  for (; o < end; o += REC) {
+    const w0 = dv.getUint32(o, true)
+    if (w0 === HEAT_MAGIC) {
+      const at = Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - slotMs) / 1000) + 0
+      keep = at >= 0 && at < SLOT_MS / 1000
+      if (keep) endS = Math.max(endS, (sec = at))
+      continue
+    }
+    if (!keep) continue
+    const key = w0 & KEY_MASK
+    const w1 = dv.getInt32(o + 4, true)
+    if (w1 >= IDENT) {
+      const a = get(key)
+      a.callsign = callsignAt(buf, o + 8)
+      const digits = w1 & 0xffff
+      const squawk = digits === 0 ? null : digits.toString(10).padStart(4, '0')
+      if (squawk !== null && codes.has(squawk) && a.airborne === true) a.squawks.push({ tS: sec, squawk })
+      continue
+    }
+    const w2 = dv.getInt32(o + 8, true)
+    if (w1 > MAX_LAT || w1 < -MAX_LAT || w2 > MAX_LON || w2 < -MAX_LON) continue
+    const a = get(key)
+    a.lat = Math.round(w1 / 10) / 1e5
+    a.lon = Math.round(w2 / 10) / 1e5
+    a.tS = sec
+    const alt = dv.getInt16(o + 12, true)
+    if (alt === GROUND) a.airborne = false
+    else if (alt !== NO_ALT) {
+      a.airborne = true
+      a.alt.t.push(sec)
+      a.alt.ft.push(alt * 25)
+    }
+  }
+  const aircraft = new Map<string, ScanAircraft>()
+  for (const [key, { airborne, ...a }] of byKey) {
+    if (a.tS < 0) continue // ident records only: no place to show
+    aircraft.set((key & NON_ICAO ? '~' : '') + (key & 0xffffff).toString(16).padStart(6, '0'), a)
+  }
+  return { endS, aircraft }
 }

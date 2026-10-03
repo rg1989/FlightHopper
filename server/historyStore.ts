@@ -119,6 +119,11 @@ export class HistoryStore {
     return readSlot(file, { ...q, slotMs, stepS: stepFor(q.nm) }) ?? 'unavailable' // a held file has a slice header: never null
   }
 
+  /** The file of the half hour at slotMs if it is held, else null: never a fetch, and its place in the use order stays. */
+  held(slotMs: number): Uint8Array | null {
+    return this.#files.get(slotMs) ?? null
+  }
+
   /** The rolling fetch: the newest two published slots are held afterwards, if the upstream has them. Call it every minute. */
   async tick(): Promise<void> {
     const newest = newestSlotMs(this.#now())

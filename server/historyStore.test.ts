@@ -494,3 +494,13 @@ test('query: readSlot of the file for the circle, the step from its radius; miss
   assert.equal(await store.query(NEWEST + SLOT_MS, circle), 'unavailable', 'too new')
   assert.equal(calls.length, 2, 'one fetch of the newest, one of the missing')
 })
+
+test('held: a held slot is answered without a fetch; one not held is null, and asking for it fetches nothing', async () => {
+  const { store, calls, serve } = setup()
+  serve(NEWEST, ok(NEWEST))
+  assert.equal(store.held(NEWEST), null)
+  assert.equal(calls.length, 0)
+  const f = await store.file(NEWEST)
+  assert.equal(store.held(NEWEST), f)
+  assert.equal(calls.length, 1)
+})
