@@ -50,6 +50,8 @@ import { sequence, sunBrightness, type CloudSpec } from './cloudField.ts'
 import { BANDS, FALL, FALL_MAX_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, RISE, RISE_MAX_M, buildField, fieldAtlas, type WxField } from './wxField.ts'
 
 export type CloudLook = 'natural' | 'severity' | 'blocks'
+/** How a hazard area's edge is drawn: a curtain hung from its top, a fence (lines and posts), or the box of today (a faint fill and its edges). */
+export type HazardStyle = 'curtain' | 'fence' | 'box'
 const LOOK: Record<CloudLook, number> = { natural: 0, severity: 1, blocks: 2 } // u_look
 const R_KM = 6371 // the sphere the heights curve over
 const KM_PER_DEG = 111.195 // of latitude on it: the field's map

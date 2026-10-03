@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PUFF_FILL, sequence, tower, type CloudSpec } from './cloudField.ts'
-import { BANDS, BAND_TOP_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, TOWER_BAND, buildField, fieldAtlas, profile, sampleField } from './wxField.ts'
+import { BANDS, BAND_TOP_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, TOWER_BAND, buildField, coverAt, fieldAtlas, profile, sampleField } from './wxField.ts'
 
 const KM_PER_DEG = 111.195
 const TEXEL_KM = FIELD_KM / FIELD_N
@@ -410,4 +410,29 @@ test('sampleField: the highest cover of five bands: a storm over low cumulus giv
   assert.ok(low.cover > 0.9 && low.sev === 0, 'the cumulus, severity 0')
   const core = sampleField(f, at(0, 0).lat, at(0, 0).lon, 5000)
   assert.ok(core.cover > 0.5 && near(core.sev, 3, 1e-5))
+})
+
+test('coverAt: the answer sampleField gives, written into the caller\'s object (which is returned) at every place and height of a mixed sky, and every stale value cleared where there is no cover', () => {
+  const { specs } = storm()
+  const f = buildField([...specs, puff(1200, 1800, { wide: 5000, eastKm: 8 }), puff(5000, 7000, { wide: 9000, eastKm: -20, northKm: 15, sev: 1 })], LAT, LON)
+  const out = { cover: 0.5, sev: 2 }
+  let hits = 0
+  for (const [e, n] of [[0, 0], [8, 0], [-20, 15], [2.7, -1.9], [-9.3, 6.1], [60, 60], [-159.9, 0], [0, 159.9], [170, 0], [0, -170]]) {
+    for (const alt of [0, 700, 1450, 3000, 5000, 6500, 9000, 10500, 20000]) {
+      const p = at(e, n)
+      const want = sampleField(f, p.lat, p.lon, alt)
+      out.cover = 0.7 // stale
+      out.sev = 3
+      assert.equal(coverAt(f, p.lat, p.lon, alt, out), out, 'the caller\'s own object')
+      assert.deepEqual(out, want, `${e}, ${n} at ${alt} m`)
+      if (want.cover > 0) hits++
+    }
+  }
+  assert.ok(hits > 10, `the sweep reaches cloud: ${hits} hits`)
+  const stale = (): { cover: number; sev: number } => ({ cover: 0.7, sev: 3 })
+  assert.deepEqual(coverAt(null, LAT, LON, 1000, stale()), { cover: 0, sev: 0 }, 'no field')
+  assert.deepEqual(coverAt(buildField([], LAT, LON), LAT, LON, 1000, stale()), { cover: 0, sev: 0 }, 'an empty one')
+  assert.deepEqual(coverAt(f, LAT + 3, LON, 1450, stale()), { cover: 0, sev: 0 }, 'outside the square')
+  assert.deepEqual(coverAt(f, LAT, LON, 20000, stale()), { cover: 0, sev: 0 }, 'a height no band reaches')
+  assert.notEqual(sampleField(f, LAT, LON, 5000), sampleField(f, LAT, LON, 5000), 'sampleField still gives an object of its own each time')
 })

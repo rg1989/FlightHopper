@@ -38,6 +38,8 @@
 //   screen overlay (precip.ts), leaned with the wind across the camera's view a few times a second.
 // Every frame the clouds and the fog are given the relief drawn and the Sun's night (setNight); the rest is looked at
 // once a second, when the clouds' reach is also centred on the aircraft.
+// It also holds, for the cloud pass to draw from, how the hazard areas' edges are drawn (hazardStyle) and the way ahead of the chased
+// aircraft (wxAhead.ts aheadPath, given every frame by app.ts: setAhead) with which of its two aids show, the track line and the level slice.
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
 // draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
@@ -53,7 +55,7 @@ import { MODEL_CELL_DEG, type Metar, type ModelGrid, type Sigmet } from '../../s
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
-import { CloudVolume, type CloudLook } from './cloudVolume.ts'
+import { CloudVolume, type CloudLook, type HazardStyle } from './cloudVolume.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
 import { inInnerHalf, modelWindAt, type ModelWind } from './modelWind.ts'
@@ -62,6 +64,7 @@ import { Precipitation, cloudBaseM, nearestStation, precipFromDbz, precipFromWx,
 import { RADAR_INDEX, RADAR_SRC_MAX, RadarSource, type RadarIndex, type SourceTile } from './radar.ts'
 import { radarCells, tilesAcross } from './radarCells.ts'
 import { hazardsNear, ringCentre, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
+import type { AheadPath } from './wxAhead.ts'
 import { demoSky } from './wxDemo.ts'
 import type { WxField } from './wxField.ts'
 import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
@@ -241,6 +244,9 @@ export class Weather3D {
   readonly #demo: number | null
   #demoSpecs: CloudSpec[] | null = null // the demo sky's clouds, once it is laid out
   #look: CloudLook
+  #hazardStyle: HazardStyle = 'box'
+  #ahead: AheadPath | null = null
+  readonly #aheadShow = { track: false, slice: false }
   readonly #volumes = new CustomDataSource('hazard-volumes')
   readonly #here: Aircraft = { lat: 0, lon: 0, altM: 0 }
   readonly #hereWC = new Cartesian3()
@@ -389,6 +395,36 @@ export class Weather3D {
   set look(l: CloudLook) {
     this.#look = l
     this.#sky.clouds.look = l
+  }
+
+  /** How the hazard areas' edges are drawn: curtain, fence or box (cloudVolume.ts); the box, as drawn today, until set. Changed on the fly. */
+  get hazardStyle(): HazardStyle {
+    return this.#hazardStyle
+  }
+
+  set hazardStyle(s: HazardStyle) {
+    this.#hazardStyle = s
+  }
+
+  /**
+   * The way ahead of the chased aircraft (wxAhead.ts aheadPath: heights above mean sea level) and which of the two aids drawn from it show:
+   * the track line along it, and the level slice at its height. Every frame, from the app; null: no way ahead (the aircraft is slow).
+   * Held for the cloud pass to draw from; hidden, nothing draws it.
+   */
+  setAhead(path: AheadPath | null, show: { track: boolean; slice: boolean }): void {
+    this.#ahead = path
+    this.#aheadShow.track = show.track
+    this.#aheadShow.slice = show.slice
+  }
+
+  /** The way ahead as last given to setAhead; null before the first, or when there is none. */
+  get ahead(): AheadPath | null {
+    return this.#ahead
+  }
+
+  /** Which aids setAhead asked for: the track line, the level slice. Nothing until told. */
+  get aheadShow(): Readonly<{ track: boolean; slice: boolean }> {
+    return this.#aheadShow
   }
 
   /** The weather field the clouds are drawn from (wxField.ts): built round the aircraft at the last draw; null before the first. */

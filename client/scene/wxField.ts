@@ -171,33 +171,58 @@ export function profile(altM: number, base: number, top: number): number {
   return smoothstep((altM - base) / rise) * (1 - smoothstep((altM - (top - fall)) / fall))
 }
 
+/** What the field holds at a place and height: how much cloud (0 … 1), and how severe (0 … 3). */
+export interface Cover {
+  cover: number
+  sev: number
+}
+
+// coverAt's scratch: the four texels round a place and their weights. Reused, so a call allocates nothing (the HUD asks thousands a frame).
+const cell = new Int32Array(4)
+const share = new Float64Array(4)
+const mix = (a: Float32Array): number => share[0] * a[cell[0]] + share[1] * a[cell[1]] + share[2] * a[cell[2]] + share[3] * a[cell[3]]
+
 /**
  * How much cloud there is at lat, lon, altM (metres above sea level), and how severe: for each band whose heights reach altM, the
  * four texels round the place mixed plainly (cover, base, top and severity each on its own, as a shader's texture() mixes the image),
  * the cover times the profile at altM; the highest wins and brings its band's severity. Nothing for no field, outside its square, or
- * at a height no band reaches.
+ * at a height no band reaches. The answer is written into `out` (both numbers, always), which is returned: no allocation.
  */
-export function sampleField(f: WxField | null, lat: number, lon: number, altM: number): { cover: number; sev: number } {
+export function coverAt(f: WxField | null, lat: number, lon: number, altM: number, out: Cover): Cover {
   const N = FIELD_N
-  if (f === null || f.empty) return { cover: 0, sev: 0 }
+  out.cover = 0
+  out.sev = 0
+  if (f === null || f.empty) return out
   const u = (wrapLon(lon - f.lon) * kmPerLon(f.lat) + HALF_KM) / TEXEL_KM - 0.5
   const v = ((lat - f.lat) * KM_PER_DEG + HALF_KM) / TEXEL_KM - 0.5
-  if (!(u >= -0.5 && u <= N - 0.5 && v >= -0.5 && v <= N - 0.5)) return { cover: 0, sev: 0 }
+  if (!(u >= -0.5 && u <= N - 0.5 && v >= -0.5 && v <= N - 0.5)) return out
   const [x, y] = [Math.min(N - 1, Math.max(0, u)), Math.min(N - 1, Math.max(0, v))] // beyond the outer texels' middles: their value
   const [i, j] = [Math.min(N - 2, Math.floor(x)), Math.min(N - 2, Math.floor(y))]
   const [fx, fy] = [x - i, y - j]
-  const at = [j * N + i, j * N + i + 1, (j + 1) * N + i, (j + 1) * N + i + 1]
-  const w = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy]
-  const mix = (a: Float32Array): number => w[0] * a[at[0]] + w[1] * a[at[1]] + w[2] * a[at[2]] + w[3] * a[at[3]]
-  let best = { cover: 0, sev: 0 }
+  cell[0] = j * N + i
+  cell[1] = j * N + i + 1
+  cell[2] = (j + 1) * N + i
+  cell[3] = (j + 1) * N + i + 1
+  share[0] = (1 - fx) * (1 - fy)
+  share[1] = fx * (1 - fy)
+  share[2] = (1 - fx) * fy
+  share[3] = fx * fy
   for (let b = 0; b < BANDS; b++) {
     if (altM < f.lo[b] || altM > f.hi[b]) continue // (nothing is lost: wherever a band has cover, the mixed base and top lie inside its lo … hi)
     const cover = mix(f.cov[b])
     if (cover <= 0) continue
     const c = cover * profile(altM, mix(f.base[b]), mix(f.top[b]))
-    if (c > best.cover) best = { cover: c, sev: mix(f.sev[b]) }
+    if (c > out.cover) {
+      out.cover = c
+      out.sev = mix(f.sev[b])
+    }
   }
-  return best
+  return out
+}
+
+/** coverAt, as an object of its own: for a place or two. A loop over many places gives coverAt one object to write into. */
+export function sampleField(f: WxField | null, lat: number, lon: number, altM: number): Cover {
+  return coverAt(f, lat, lon, altM, { cover: 0, sev: 0 })
 }
 
 /**

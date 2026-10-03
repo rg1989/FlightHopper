@@ -140,6 +140,13 @@ function distanceKm(s: Shape, p: Vec, lat: number, lon: number): number {
   return best * EARTH_KM
 }
 
+/** Whether the point is inside the ring (a ring across the antimeridian is the one ring it is): ringDistanceKm's 0, without the work of a distance. */
+export function ringContains(ring: Ring, lat: number, lon: number): boolean {
+  if (ring.length < 3) return false
+  const s = shapeOf(ring)
+  return inRing(s.flat, s.mid + wrapLon(lon - s.mid), lat)
+}
+
 /** Km from a point to a ring: 0 inside it, else to its nearest edge (a great circle) or corner. */
 export function ringDistanceKm(ring: Ring, lat: number, lon: number): number {
   return ring.length < 3 ? Infinity : distanceKm(shapeOf(ring), toVec(lat, lon), lat, lon)

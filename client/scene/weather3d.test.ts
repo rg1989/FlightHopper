@@ -18,8 +18,9 @@ import { radarPixel, windOf, type Fall } from './precip.ts'
 import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { modelWindAt } from './modelWind.ts'
-import type { CloudLook } from './cloudVolume.ts'
+import type { CloudLook, HazardStyle } from './cloudVolume.ts'
 import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, parseWxDemo, statusText3d } from './weather3d.ts'
+import { aheadPath } from './wxAhead.ts'
 import { demoSky } from './wxDemo.ts'
 import { buildField, type WxField } from './wxField.ts'
 import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
@@ -2036,4 +2037,27 @@ test('Weather3D: the look is the cloud volume\'s, set on the fly and kept; the w
   const f = buildField([], AC.lat, AC.lon)
   r.sky.clouds.field = f
   assert.equal(r.w.field, f)
+})
+
+test('Weather3D: the hazard areas\' style (the box, as drawn today, until set) and the way ahead with its two aids are kept as given, for the pass to draw from; the flags are copied', () => {
+  const r = rig()
+  assert.equal(r.w.hazardStyle, 'box')
+  for (const style of ['curtain', 'fence', 'box'] as HazardStyle[]) {
+    r.w.hazardStyle = style
+    assert.equal(r.w.hazardStyle, style)
+  }
+  assert.equal(r.w.ahead, null)
+  assert.deepEqual(r.w.aheadShow, { track: false, slice: false }, 'nothing is asked for until told')
+  const path = aheadPath(AC, 90, 400, 0)!
+  r.w.setAhead(path, { track: true, slice: false })
+  assert.equal(r.w.ahead, path)
+  assert.deepEqual(r.w.aheadShow, { track: true, slice: false })
+  r.w.setAhead(null, { track: false, slice: true })
+  assert.equal(r.w.ahead, null)
+  assert.deepEqual(r.w.aheadShow, { track: false, slice: true })
+  const flags = { track: true, slice: true }
+  r.w.setAhead(path, flags)
+  flags.track = false
+  assert.deepEqual(r.w.aheadShow, { track: true, slice: true }, 'the caller\'s object is not kept')
+  assert.equal(r.labelCalls.some((c) => c.key === 'ahead'), false, 'the minute labels are the app\'s, not Weather3D\'s')
 })
