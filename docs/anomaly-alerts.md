@@ -142,6 +142,8 @@ The rules use `alt_baro`. Points are an aircraft's reports, or the 10 s heatmap 
 
 ## 7. Design for FlightHopper
 
+This section is the proposal from before the design. Where they differ, [the design](superpowers/specs/2026-10-03-alerts-design.md) is what was built.
+
 ### 7.1 What the app has
 
 - One upstream Source behind one TokenBucket: adsb.fi at 0.9 req/s, burst 1 (`server/config.ts`, `server/budget.ts`). A 429 halves the rate for good.

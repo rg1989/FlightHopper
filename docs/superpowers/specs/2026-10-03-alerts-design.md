@@ -10,12 +10,15 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
 - **One switch, on the server.** The Events panel (a bell on the rail) holds the switch "Watch the world". When it is on, the
   server watches by itself, with or without a browser open. The state is kept in `EVENTS_DIR/state.json`, so it survives a
   restart. `make live` sets `EVENTS_DIR=data/events`. Without `EVENTS_DIR`, or with a replay source, there are no alerts.
-- **Emergencies anywhere, within a minute.** The poller asks adsb.fi for every aircraft on 7700, 7600 and 7500, worldwide:
-  `/api/v2/sqk/{code}`, one code every 10 s, so each code every 30 s. That is 0.1 req/s of the 0.9 the app has (11 %),
-  and nothing when the switch is off. The sweep keeps to an eighth of the request budget, so the map keeps seven tokens in
-  eight: below 0.8 req/s the gap between sweep requests grows (8 ÷ rate seconds) and each code is asked less often than
-  every 30 s. After one 429 has halved the rate to 0.45 req/s, each code is asked every 53 s. The answers go into the stores
-  like any other answer, so these aircraft are on the map and can be chased.
+  A page on another site cannot use the switch: the server refuses every POST whose `Sec-Fetch-Site` header is there and is
+  not `same-origin` or `none` (403). Such a page could otherwise switch the watch or delete a recording on `127.0.0.1:8787`.
+  The app's own POSTs are same-origin (also through the Vite dev proxy, which forwards the header), and curl sends no header.
+- **Emergencies anywhere, within a minute at the full rate.** The poller asks adsb.fi for every aircraft on 7700, 7600
+  and 7500, worldwide: `/api/v2/sqk/{code}`, one code every 10 s, so each code every 30 s. That is 0.1 req/s of the 0.9
+  the app has (11 %), and nothing when the switch is off. The sweep keeps to an eighth of the request budget, so the map
+  keeps seven tokens in eight: below 0.8 req/s the gap between sweep requests grows (8 ÷ rate seconds) and each code is
+  asked less often than every 30 s. After one 429 has halved the rate to 0.45 req/s, each code is asked every 53 s. The
+  answers go into the stores like any other answer, so these aircraft are on the map and can be chased.
 - **ADS-B emergency status** (general, minfuel, nordo, unlawful, downed) is read from every answer the server gets: the
   view, the chase, recorded flights and the sweep. No endpoint filters on it, so outside these it is not seen.
 - **Steep descents.** Two rules on the barometric altitude (`server/descent.ts`):
@@ -31,15 +34,24 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     stays, and it goes only where it is at least as far off as the points next to it, so the good point beside a spike stays.
   - Tuned on 8 real half hours (2026-10-03, `docs/anomaly-alerts.md` §3.2): D1 first took 10,000 ft and gave 21 events, mostly
     military and fighter aircraft, and the first D2 missed FZ1073.
-  - Live, D1 runs on the samples of the aircraft the server polls (the view, the chase). It runs only on a sample whose
-    `baro_rate` is −3,000 fpm or lower, so most samples cost nothing.
+  - Live, D1 runs on the samples of every aircraft the server takes: the view, the chase, recorded flights, and the sweep's
+    answers. It runs only on a sample whose `baro_rate` is −3,000 fpm or lower, so most samples cost nothing.
   - Worldwide, D1 and D2 run on each new adsb.lol half-hour file that the server already downloads for History. This
     costs no request. The result comes 1 to 31 minutes after the event and is marked *late*.
+  - A fall across the boundary of two half hours is found too. The server reads the half hours in time order, and when one
+    follows the one read before it, each aircraft's points in the last 150 s of that one (if it was at FL150 or above there)
+    go before its points in this one. An aircraft heard at the end of a half hour and not in the next was lost at the
+    boundary: its end is judged alone, so D2 (and D1) can fire. A fall that both half hours hold stays one event, pushed once.
+    Nothing is carried across a gap in the reads (the server down over a half hour), so a fall at that boundary is still lost.
 - **The late check also reads emergency squawks.** An aircraft with two or more 7500, 7600 or 7700 ident records in a
   half-hour file is an event. This catches codes that adsb.fi did not hear.
 - **False alarms.** These rules are from section 4 of the research:
   - Confirmation: a squawk or status counts only when it is seen again 25 s or more after it was first seen. One-off
-    glitches are common (OpenSky counted over 8,000 brief 7500s in 4 months).
+    glitches are common (OpenSky counted over 8,000 brief 7500s in 4 months). The times are those of the messages (the
+    answer's receipt minus `seen`), not of the answers: readsb serves a squawk for 60 s after its last message, so two sweeps
+    30 s apart can hold one message. A first sighting waits 10 min for its second, then it is forgotten. That is two rounds
+    of the sweep (a failed answer skips its code for one round) down to 0.08 req/s; after three 429s (0.1125 req/s) each
+    code is asked every 213 s.
   - Ignored: aircraft on the ground, surface vehicles (C1 to C3), addresses that are not ICAO, `000000`, `000001`,
     `lifeguard` (a medical flight's priority, not an emergency) and `reserved`.
   - No descent or dive events for military aircraft (live: `dbFlags & 1` or the type table's flag from the Mictronics
@@ -57,7 +69,8 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
   seen live again is no longer late.
 - **The log.** `EVENTS_DIR/YYYY-MM-DD.jsonl` (UTC day of the write) holds one JSON line per open or change, and the
   newest line of an id wins. A position-only update is written at most every 5 min. At start the server reads the last
-  8 days. `data/events/` is git-ignored.
+  8 days. Older files are kept as an archive (tens of KB a day); delete them to clear them. After a write that failed, the
+  next line starts on a new line, so a line cut short cannot join it. `data/events/` is git-ignored.
 - **Phone push.** When `NTFY_URL` is set (for example `https://ntfy.sh/<random topic>`), each new alerting event, and
   each new cause on one, is a POST there. ntfy.sh needs no account. The topic is the password.
 - **In the app** (Events panel, `client/ui/alerts.ts`):
@@ -65,12 +78,21 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     whether it is ongoing or late.
   - **Opening an event.** A click on an ongoing, live event follows the aircraft. A click on any other event opens
     History at the event, with the aircraft selected. History replays any aircraft that adsb.lol heard, for 42 days.
-  - **New events.** After the page has loaded, each new alerting event shows a toast (Follow, ×). It also shows a desktop
-    notification when that option is on; the permission is asked for in the switch's click. While the panel is closed,
-    the rail's bell shows the number of events since the panel was last opened.
-  - **Follow automatically** (an option kept in the browser) selects the new event's aircraft. It does this only for a
-    live event, not a late one, and not in History or a scenario. If the map is in the chase, the chase moves to the new
-    aircraft. Otherwise the map flies to it.
+    History has an event only once its half hour is published, 20 s after the half hour ends. Until then the row follows
+    the aircraft if it was seen within the hour, and it says "Replay at hh:mm". A small button beside a row does the other
+    action: Replay beside a followed row, Live beside a replayed one (only within the hour).
+  - **New events.** After the page has loaded, each new alerting event shows a toast (Follow or Replay, ×). With that
+    option on, it also shows a notification, but only while the page is hidden or not focused (a visible, focused page has
+    the toast); the permission is asked for in the switch's click. While the panel is closed, the rail's bell shows the
+    number of events since the panel was last opened.
+  - **How the events come in.** The panel asks for them when a poll's status says they changed, and when it opens. Where
+    the app polls nothing live (History, a scenario, a hidden tab with notifications on), the panel asks every 30 s
+    itself, so toasts show there too. A browser that freezes or discards a background tab runs no timer there, so no
+    notification comes; ntfy is the path then.
+  - **Follow automatically** (an option kept in the browser) selects the new event's aircraft and flies the map to it. It
+    does this only for a live event, not a late one, and not in History or a scenario. It never takes the screen from the
+    person: not during a chase, not within 60 s of the map being moved, not within 2 min of an aircraft picked by hand, and
+    not while another tool's sheet is open on a phone. The toast shows all the same.
 
 ## Decisions taken for the user
 
@@ -95,7 +117,7 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
 | `server/alerts.ts` `Alerts` | switch, confirmation, episodes, the log, push, `observe(ac)`, `sample(s, track)`, `scanSlot(buf, slotMs)`, `reply()` | the above, `fs`, `fetch` |
 | `server/sources/adsbfi.ts` `squawk(code)` | `/v2/sqk/{code}`; a code that is not 4 octal digits is not asked | `fetchSnapshot` |
 | `server/poller.ts` | the sweep, after a due chase and before the watch; `onAircraft` for every aircraft it takes | `opts.squawks()` |
-| `server/main.ts` | wiring; `GET /api/events`, `POST /api/events?on=1\|0`; `StatusBrief.alertsRev`; the late scan after each history tick | all |
+| `server/main.ts` | wiring; `GET /api/events`, `POST /api/events?on=1\|0`; `StatusBrief.alertsRev`; the late scan after each history tick, the older half hour first; a cross-site POST refused | all |
 | `client/ui/alerts.ts` | the panel, the toast, notifications, the badge count, pure `freshEvents()` | `shared/alerts.ts` |
 | `client/app.ts` | the rail item, `followEvent(e)`, `replayEvent(e)`, refetch when `status.alertsRev` changes | the above |
 
@@ -117,4 +139,5 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     changed if they are noisy. Done on 8 half hours: D1 went from 10,000 to 15,000 ft, D2 became the fall into the last
     point, and military and fighter aircraft were left out of the falls.
   - The panel, toast, follow and replay checked in the browser. For that check, `ALERT_SQUAWKS` sweeps a common squawk
-    instead, so that events come quickly.
+    instead, so that events come quickly, into a log of its own (`make live EVENTS_DIR=/tmp/fh-events ALERT_SQUAWKS=7000`):
+    one late check of a real half hour opened 822 events, which would fill the real week's list.
