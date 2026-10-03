@@ -3,24 +3,33 @@
 // for every ray it marches, and the HUD asks the same map "is the aircraft in cloud?". Pure (no Cesium, no DOM), so Node tests cover it.
 // The map is FIELD_KM square, FIELD_N texels a side, centred on the place it was built for, a flat local map (east–west by the
 // longitude difference times cos(lat) of that place: accurate to a few metres over 160 km). Texel (i, j) is i texels east of the west
-// edge and j north of the south edge, in the array at j × FIELD_N + i; its middle stands (i + ½) texels in. A cloud is told apart by
-// the height of its base into BANDS bands, so that a low cumulus and a deck over it are two clouds in one place, not one muddle:
-// per band, per texel, the cover (0 … 1), the base and the top (metres above sea level) and the severity (0 … 3, cloudField.ts SEV).
-// Each spec is a soft disc in its band: whole inside SOLID of its radius, falling smoothly to nothing at the rim. Where discs overlap
-// the cover joins as 1 − Π(1 − w), and the base, top and severity are the discs' averages, by weight.
-// profile() shapes a band's cloud upward: nothing at its base, full from 14 % of the way up, rounded over the top 45 %.
-// ponytail: a texel's base and top are its discs' averages and each band is shaped on its own, so the puffs of a tower in one band pull
-// each other's heights together (an anvil lifts the base under it) and a tower that crosses from one band into the next dips where they
-// meet: over the axis of a 45 dBZ radar tower (within 3 km of it) there is no cover at all from 5.0 to 6.0 km, and a 0.10 at 6 km over a
-// 55 dBZ one. Upgrade: the lowest base and highest top of the discs that weigh 0.25 or more, and one profile for bands whose heights overlap.
+// edge and j north of the south edge, in the array at j × FIELD_N + i; its middle stands (i + ½) texels in.
+// There are BANDS bands. Four are layers, by the height of a cloud's base (BAND_TOP_M): so that a low cumulus and a deck over it are two
+// clouds in one place, not one muddle. The fifth (TOWER_BAND) is the towers' (a spec with a tower number: a CB's or TCU's, the radar's,
+// and their anvils), whatever their bases: a tower is many puffs stacked, which have to be one body. Per band, per texel: the cover
+// (0 … 1), the base and the top (metres above sea level) and the severity (0 … 3, cloudField.ts SEV).
+// Each spec is a soft disc in its band: whole inside SOLID of its radius, falling smoothly to nothing at the rim. Where discs overlap the
+// cover joins as 1 − Π(1 − w) and the severity is the discs' average, by weight; in a layer band the base and top are their averages
+// too, in the towers' band the lowest base and the highest top of the discs that reach the texel.
+// The GPU filters the four channels of the image (fieldAtlas) on its own, and cannot weight them by cover. So that its plain bilinear
+// mix is right at the edge of a cloud, a disc also writes its base, top and severity to every texel within EDGE_TEXELS (a cell's
+// diagonal) beyond its rim, with no cover: wherever a mix has some cover, all four texels hold the cloud's heights. In a layer band that
+// write weighs EDGE_WEIGHT, so a texel the disc covers is unchanged to within rounding; in the towers' band the lowest and the highest
+// simply reach there. sampleField is exactly such a mix, times profile().
+// profile() shapes a band's cloud upward: nothing at its base, full from 14 % of the way up, rounded over the top 45 %, but the base
+// rises over 300 m at most and the top is rounded over 900 m at most, so that a tall body is full between.
+// ponytail: in the towers' band a tower is a prism: at every height its cover is the join of all its puffs' footprints, so it is as wide
+// at 3 km as under its anvil and its flank is steeper than one puff's (a 10 km storm falls from 0.8 to nothing in under 2 km). Upgrade:
+// the towers' band in a few height slices, or a 3-D image.
 import { PUFF_FILL, type CloudSpec } from './cloudField.ts'
 import { smoothstep } from './exaggeration.ts'
 import { wrapLon } from './wxGeo.ts'
 
 export const FIELD_N = 512 // texels a side
 export const FIELD_KM = 320 // the square covered, centred where the field was built
-export const BANDS = 4 // by a cloud's base: under 2,000 m, to 4,500 m, to 8,000 m, above
-export const BAND_TOP_M: readonly number[] = [2000, 4500, 8000] // the first three bands' upper edges
+export const BANDS = 5 // the four layer bands, by a cloud's base: under 2,000 m, to 4,500 m, to 8,000 m, above; and the towers' band
+export const TOWER_BAND = 4 // every spec with a tower number, whatever its base
+export const BAND_TOP_M: readonly number[] = [2000, 4500, 8000] // the first three layer bands' upper edges
 export const HEIGHT_MAX_M = 16000 // heights are packed over 0 … this
 const TEXEL_KM = FIELD_KM / FIELD_N
 const HALF_KM = FIELD_KM / 2
@@ -29,11 +38,16 @@ const RAD = Math.PI / 180
 const RADIUS = 0.36 // a disc's radius, of its spec's billboard width (a puff fills about PUFF_FILL of the billboard)
 const SOLID = 0.55 // inside this share of the radius a disc weighs 1
 const RISE = 0.14 // profile: full from this share of the way up from the base …
-const FALL = 0.55 // … to this, then rounded off to nothing at the top
+const FALL = 0.55 // … to this, then rounded off to nothing at the top …
+const RISE_MAX_M = 300 // … but the base rises over no more than this …
+const FALL_MAX_M = 900 // … and the top is rounded over no more than this (a thin cloud's own shares are shorter)
+const EDGE_TEXELS = Math.SQRT2 // a disc writes its heights this far past its rim: the diagonal of a cell reaches from any corner to any other
+const EDGE_WEIGHT = 1e-4 // in a layer band that write weighs this, against 1 inside the disc
 
 /**
- * The map. cov, base, top and sev are one array of FIELD_N² per band (cloud-free texels are 0 in all four); lo and hi are each band's
- * lowest base and highest top (lo > hi: the band is empty); empty: no band holds any cloud.
+ * The map. cov, base, top and sev are one array of FIELD_N² per band, BANDS of them (a texel with no cloud and none near is 0 in all four;
+ * one just outside a cloud has its heights and severity, with no cover); lo and hi are each band's lowest base and highest top (lo > hi:
+ * the band is empty); empty: no band holds any cloud.
  */
 export interface WxField {
   lat: number // its centre, degrees
@@ -47,9 +61,8 @@ export interface WxField {
   empty: boolean
 }
 
-/** A spec as a disc on the map: its band, heights and severity, its middle and radius in texels. */
+/** A spec as a disc on the map: its heights and severity, its middle and radius in texels. */
 interface Disc {
-  band: number
   base: number
   top: number
   sev: number
@@ -83,35 +96,50 @@ export function buildField(specs: readonly CloudSpec[], lat: number, lon: number
     if (!(u + r > 0 && u - r < N - 1 && v + r > 0 && v - r < N - 1)) continue
     const half = (PUFF_FILL * s.scale[1]) / 2
     const base = clampH(s.heightM - half)
-    let band = 0
-    while (band < BANDS - 1 && base >= BAND_TOP_M[band]) band++
-    bands[band].push({ band, base, top: clampH(s.heightM + half), sev: s.sev ?? 0, u, v, r })
+    let band = TOWER_BAND
+    if (s.tower === undefined) {
+      band = 0
+      while (band < BAND_TOP_M.length && base >= BAND_TOP_M[band]) band++
+    }
+    bands[band].push({ base, top: clampH(s.heightM + half), sev: s.sev ?? 0, u, v, r })
   }
   const weight = new Float32Array(cells) // per band: the discs' weights added up
   for (let b = 0; b < BANDS; b++) {
     if (bands[b].length === 0) continue
     const [cov, base, top, sev] = [f.cov[b], f.base[b], f.top[b], f.sev[b]]
+    const tall = b === TOWER_BAND // lowest base, highest top, not averages
     cov.fill(1) // while the discs are laid: Π(1 − w)
     weight.fill(0)
+    if (tall) base.fill(HEIGHT_MAX_M)
     for (const d of bands[b]) {
       const solid = SOLID * d.r
-      let hit = false
-      for (let j = Math.max(0, Math.ceil(d.v - d.r)); j <= Math.min(N - 1, Math.floor(d.v + d.r)); j++) {
-        for (let i = Math.max(0, Math.ceil(d.u - d.r)); i <= Math.min(N - 1, Math.floor(d.u + d.r)); i++) {
+      const reach = d.r + EDGE_TEXELS
+      let [hit, wrote] = [false, false]
+      for (let j = Math.max(0, Math.ceil(d.v - reach)); j <= Math.min(N - 1, Math.floor(d.v + reach)); j++) {
+        for (let i = Math.max(0, Math.ceil(d.u - reach)); i <= Math.min(N - 1, Math.floor(d.u + reach)); i++) {
           const dist = Math.sqrt((i - d.u) ** 2 + (j - d.v) ** 2)
-          if (dist >= d.r) continue
-          const w = dist <= solid ? 1 : 1 - smoothstep((dist - solid) / (d.r - solid))
+          if (dist >= reach) continue
           const o = j * N + i
-          cov[o] *= 1 - w
+          let w = EDGE_WEIGHT // past the rim: heights, no cover
+          if (dist < d.r) {
+            w = dist <= solid ? 1 : 1 - smoothstep((dist - solid) / (d.r - solid))
+            cov[o] *= 1 - w
+            hit = true
+          }
+          wrote = true
           weight[o] += w
-          base[o] += w * d.base
-          top[o] += w * d.top
           sev[o] += w * d.sev
-          hit = true
+          if (tall) {
+            if (d.base < base[o]) base[o] = d.base
+            if (d.top > top[o]) top[o] = d.top
+          } else {
+            base[o] += w * d.base
+            top[o] += w * d.top
+          }
         }
       }
-      if (!hit) continue
-      f.empty = false
+      if (!wrote) continue
+      if (hit) f.empty = false
       f.lo[b] = Math.min(f.lo[b], d.base)
       f.hi[b] = Math.max(f.hi[b], d.top)
     }
@@ -119,27 +147,34 @@ export function buildField(specs: readonly CloudSpec[], lat: number, lon: number
       const w = weight[o]
       if (w > 0) {
         cov[o] = 1 - cov[o]
-        base[o] /= w
-        top[o] /= w
         sev[o] /= w
-      } else cov[o] = 0
+        if (!tall) {
+          base[o] /= w
+          top[o] /= w
+        }
+      } else cov[o] = base[o] = 0 // (the towers' base was filled with its sentinel)
     }
   }
   return f
 }
 
-/** 0 … 1 across a band's cloud at altM: nothing at its base, full from 14 % of the way up to 55 %, rounded to nothing at its top (the mock's prof()). */
+/**
+ * 0 … 1 across a band's cloud at altM: nothing at its base, full from 14 % of the way up to 55 %, rounded to nothing at its top (the
+ * mock's prof()); but the rise is over 300 m at most and the rounding over 900 m at most, so a body 9 km tall is full from 300 m over
+ * its base to 900 m under its top. The shares are those of a cloud up to about 2 km thick, which no layer's puff is more than.
+ */
 export function profile(altM: number, base: number, top: number): number {
   if (!(top > base)) return 0
-  const h = (altM - base) / (top - base)
-  return smoothstep(h / RISE) * (1 - smoothstep((h - FALL) / (1 - FALL)))
+  const rise = Math.min(RISE * (top - base), RISE_MAX_M)
+  const fall = Math.min((1 - FALL) * (top - base), FALL_MAX_M)
+  return smoothstep((altM - base) / rise) * (1 - smoothstep((altM - (top - fall)) / fall))
 }
 
 /**
  * How much cloud there is at lat, lon, altM (metres above sea level), and how severe: for each band whose heights reach altM, the
- * texels round the place joined bilinearly (the cover as it is; the base, top and severity weighted by the cover, so the edge of a
- * cloud keeps its own heights and does not take the empty texels' 0), the cover times the profile at altM; the highest cover wins and
- * brings its band's severity. Nothing for no field, outside its square, or at a height no band reaches.
+ * four texels round the place mixed plainly (cover, base, top and severity each on its own, as a shader's texture() mixes the image),
+ * the cover times the profile at altM; the highest wins and brings its band's severity. Nothing for no field, outside its square, or
+ * at a height no band reaches.
  */
 export function sampleField(f: WxField | null, lat: number, lon: number, altM: number): { cover: number; sev: number } {
   const N = FIELD_N
@@ -152,47 +187,41 @@ export function sampleField(f: WxField | null, lat: number, lon: number, altM: n
   const [fx, fy] = [x - i, y - j]
   const at = [j * N + i, j * N + i + 1, (j + 1) * N + i, (j + 1) * N + i + 1]
   const w = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy]
+  const mix = (a: Float32Array): number => w[0] * a[at[0]] + w[1] * a[at[1]] + w[2] * a[at[2]] + w[3] * a[at[3]]
   let best = { cover: 0, sev: 0 }
   for (let b = 0; b < BANDS; b++) {
-    if (altM < f.lo[b] || altM > f.hi[b]) continue
-    let [cover, base, top, sev] = [0, 0, 0, 0]
-    for (let n = 0; n < 4; n++) {
-      const c = w[n] * f.cov[b][at[n]]
-      cover += c
-      base += c * f.base[b][at[n]]
-      top += c * f.top[b][at[n]]
-      sev += c * f.sev[b][at[n]]
-    }
+    if (altM < f.lo[b] || altM > f.hi[b]) continue // (nothing is lost: wherever a band has cover, the mixed base and top lie inside its lo … hi)
+    const cover = mix(f.cov[b])
     if (cover <= 0) continue
-    const c = cover * profile(altM, base / cover, top / cover)
-    if (c > best.cover) best = { cover: c, sev: sev / cover }
+    const c = cover * profile(altM, mix(f.base[b]), mix(f.top[b]))
+    if (c > best.cover) best = { cover: c, sev: mix(f.sev[b]) }
   }
   return best
 }
 
 /**
- * The field as one image for the GPU: 2 × 2 tiles of FIELD_N², band b at column b % 2 and row ⌊b / 2⌋ (x = (b % 2) × FIELD_N,
- * y = ⌊b / 2⌋ × FIELD_N), a texel in a tile as in the field (row 0 the south). R the cover, G the base and B the top (each over
- * HEIGHT_MAX_M), A the severity over 3, each 0 … 255. Not premultiplied: upload the bytes as they are, not through a canvas.
+ * The field as one image for the GPU: 3 × 2 tiles of FIELD_N², band b at column b % 3 and row ⌊b / 3⌋ (x = (b % 3) × FIELD_N,
+ * y = ⌊b / 3⌋ × FIELD_N; the sixth tile is empty), a texel in a tile as in the field (row 0 the south). R the cover, G the base and B the
+ * top (each over HEIGHT_MAX_M), A the severity over 3, each 0 … 255. A texel just outside a cloud has no cover and has its heights and
+ * severity (see the header). Not premultiplied: upload the bytes as they are, not through a canvas.
  */
 export function fieldAtlas(f: WxField): { data: Uint8ClampedArray; width: number; height: number } {
-  const size = 2 * FIELD_N
-  const data = new Uint8ClampedArray(size * size * 4)
+  const [width, height] = [3 * FIELD_N, 2 * FIELD_N]
+  const data = new Uint8ClampedArray(width * height * 4)
   for (let b = 0; b < BANDS; b++) {
-    const [x0, y0] = [(b % 2) * FIELD_N, Math.floor(b / 2) * FIELD_N]
+    const [x0, y0] = [(b % 3) * FIELD_N, Math.floor(b / 3) * FIELD_N]
     const [cov, base, top, sev] = [f.cov[b], f.base[b], f.top[b], f.sev[b]]
     for (let j = 0; j < FIELD_N; j++) {
       for (let i = 0; i < FIELD_N; i++) {
-        const c = cov[j * FIELD_N + i]
-        if (!(c > 0)) continue
         const t = j * FIELD_N + i
-        const o = ((y0 + j) * size + x0 + i) * 4
-        data[o] = c * 255
+        if (!(cov[t] > 0 || top[t] > 0)) continue
+        const o = ((y0 + j) * width + x0 + i) * 4
+        data[o] = cov[t] * 255
         data[o + 1] = (base[t] / HEIGHT_MAX_M) * 255
         data[o + 2] = (top[t] / HEIGHT_MAX_M) * 255
         data[o + 3] = (sev[t] / 3) * 255
       }
     }
   }
-  return { data, width: size, height: size }
+  return { data, width, height }
 }

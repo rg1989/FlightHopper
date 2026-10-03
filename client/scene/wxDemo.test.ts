@@ -100,6 +100,18 @@ test('demoSky: a rain layer 7,000 to 8,700 m from 50 to 76 km ahead: severity 1,
   assert.ok(s(mid).cover > 0.8 && near(s(mid).sev, 1, 1e-6), `${s(mid).cover}`)
 })
 
+test('demoSky: the main storm is one body in the field: up its axis from 1,300 to 9,500 m there is cover and severity 2.5 or more, round it too', () => {
+  const f = buildField(demoSky(LAT, LON, 90).specs, LAT, LON)
+  const at = (along: number, right: number): { lat: number; lon: number } => ({ lat: LAT - right / KM_PER_DEG, lon: LON + along / (KM_PER_DEG * Math.cos(LAT * RAD)) }) // heading east: right is south
+  for (const [along, right] of [[100, 0], [97, 2], [103, -2]]) {
+    for (let alt = 1300; alt <= 9500; alt += 250) {
+      const s = sampleField(f, at(along, right).lat, at(along, right).lon, alt)
+      assert.ok(s.cover >= 0.5 && s.sev >= 2.5, `${along},${right} at ${alt} m: cover ${s.cover.toFixed(2)}, sev ${s.sev.toFixed(2)}`)
+    }
+  }
+  assert.equal(sampleField(f, at(100, 0).lat, at(100, 0).lon, 500).cover, 0, 'clear under it')
+})
+
 test('demoSky: one SIGMET, thunderstorms embedded, to 34,000 ft with no base, in a five-corner ring that starts 80 km ahead and holds both storms', () => {
   const { specs, sigmets } = demoSky(LAT, LON, 90)
   assert.equal(sigmets.length, 1)
