@@ -4,11 +4,12 @@
 // - the airports' reports (METARs) of the whole-degree box 2° round it, asked again every 5 min and at once when it leaves the box;
 // - the hazard areas (SIGMETs) and RainViewer's newest radar frame (a RadarSource: its tiles are fetched when something
 //   samples them, as the top-down map's radar does), each every 10 min.
-// It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft: each ring a translucent volume
-// from the area's base (none: the ground) to its top, and the area's name and heights a label at the ring's middle at the top
-// height, placed with the place names (placeLabels.ts keeps them clear of each other and of the flight-data frame).
+// It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft (wxGeo.ts picks them): each
+// ring a translucent volume from the area's base (none: the ground) to its top, and the area's name and heights a label at
+// the ring's middle at the top height, placed with the place names (placeLabels.ts keeps them clear of each other and of the
+// flight-data frame). A list of SIGMETs that brings the same areas draws nothing again.
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
-// draws nothing, and update(), called every frame, returns at once; shown, it looks at its clocks and the aircraft once a second.
+// draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
 // weather is taken from round that place and moved by the one shift that puts the place under the aircraft's first position.
 // From then on the aircraft flies through that sky. Everything it holds is where it is drawn (shifted); the radar's tiles are
@@ -19,7 +20,7 @@ import type { Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import type { LayerLabel, PlaceLabels } from './placeLabels.ts'
 import { RADAR_INDEX, RadarSource, type RadarIndex } from './radar.ts'
-import { inRing, viewBox } from './weather.ts'
+import { hazardsNear, ringCentre, shiftMetars, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 const BOX_DEG = 2 // the METAR box reaches this far from the aircraft each way, rounded out to whole degrees
@@ -34,9 +35,7 @@ const LINE_ALPHA = 0.6
 const LABEL_KEY = 'hazards' // this layer in the names overlay
 const LABEL_RANK = 1.5 // after the seas (1), before every city (2)
 const NOTE = 'some weather unavailable'
-const FT = 0.3048
 const KM_PER_NM = 1.852
-const EARTH_KM = 6371
 
 /** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn. */
 export interface Aircraft {
@@ -64,93 +63,6 @@ export function statusText3d(s: { airports: number; areas: number; note: string 
   return [`Clouds from ${count(s.airports, 'airport')}`, count(s.areas, 'hazard area'), ...(s.note ? [s.note] : [])].join(' · ')
 }
 
-// Spherical geometry on unit vectors (the SIGMET rings are great-circle edges, as Cesium draws a polygon's).
-type Vec = [number, number, number]
-const rad = (d: number): number => (d * Math.PI) / 180
-const deg = (r: number): number => (r * 180) / Math.PI
-const toVec = (lat: number, lon: number): Vec => {
-  const [φ, λ] = [rad(lat), rad(lon)]
-  return [Math.cos(φ) * Math.cos(λ), Math.cos(φ) * Math.sin(λ), Math.sin(φ)]
-}
-const dot = (a: Vec, b: Vec): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-const cross = (a: Vec, b: Vec): Vec => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-const length = (a: Vec): number => Math.hypot(a[0], a[1], a[2])
-const angle = (a: Vec, b: Vec): number => Math.atan2(length(cross(a, b)), dot(a, b))
-
-/** A longitude in −180…180 (one already there is kept as it is). */
-const wrapLon = (lon: number): number => (lon >= -180 && lon <= 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180)
-
-/** The angle (radians) from p to the great-circle arc a → b: to the circle where p's foot falls between a and b, else to the nearer end. */
-function arcAngle(p: Vec, a: Vec, b: Vec): number {
-  const ends = Math.min(angle(p, a), angle(p, b))
-  const n = cross(a, b)
-  const len = length(n)
-  if (len < 1e-12) return ends // a and b are one point
-  const u: Vec = [n[0] / len, n[1] / len, n[2] / len]
-  const off = dot(p, u)
-  const foot: Vec = [p[0] - off * u[0], p[1] - off * u[1], p[2] - off * u[2]]
-  return dot(cross(a, foot), u) >= 0 && dot(cross(foot, b), u) >= 0 ? Math.asin(Math.min(1, Math.abs(off))) : ends
-}
-
-/**
- * Km from a point to a ring: 0 inside it, else to its nearest edge (a great circle) or corner. Longitudes are read relative to
- * the point, so a ring across the antimeridian is the one ring it is.
- */
-export function ringDistanceKm(ring: [number, number][], lat: number, lon: number): number {
-  if (inRing(ring.map(([x, y]) => [wrapLon(x - lon), y]), 0, lat)) return 0
-  const p = toVec(lat, lon)
-  const v = ring.map(([x, y]) => toVec(y, x))
-  let best = Infinity
-  for (let i = 0, j = v.length - 1; i < v.length; j = i++) best = Math.min(best, arcAngle(p, v[j], v[i]))
-  return best * EARTH_KM
-}
-
-/** The middle of a ring's corners, each once (a GeoJSON ring repeats its first at its end). */
-export function ringCentre(ring: [number, number][]): { lat: number; lon: number } {
-  const last = ring[ring.length - 1]
-  const n = ring.length > 1 && ring[0][0] === last[0] && ring[0][1] === last[1] ? ring.length - 1 : ring.length
-  let [x, y, z] = [0, 0, 0]
-  for (let i = 0; i < n; i++) {
-    const v = toVec(ring[i][1], ring[i][0])
-    x += v[0]
-    y += v[1]
-    z += v[2]
-  }
-  return { lat: deg(Math.atan2(z, Math.hypot(x, y))), lon: deg(Math.atan2(y, x)) }
-}
-
-/** A hazard area to draw: its SIGMET, the rings of it within reach (a volume each), the nearest of them (its label's), and its heights in metres. */
-export interface Hazard {
-  sigmet: Sigmet
-  rings: [number, number][][]
-  nearest: [number, number][]
-  baseM: number
-  topM: number
-  key: string // which SIGMET and which of its rings: what changes when what is drawn does
-}
-
-/**
- * The SIGMETs with a top (above their base) that have a ring passing within maxKm of the point: each with the rings that do.
- * ponytail: a flight level is a pressure altitude and the volumes stand at that many metres above the ellipsoid: off by up to a
- * few hundred metres on a day far from the standard atmosphere. Upgrade: correct by the QNH and the air's temperature.
- * ponytail: every corner of every SIGMET in the world is tested (about 3 ms for 150 areas, at most once per 10 km flown).
- * Upgrade: a quick reject by the cap round each ring (its middle and its farthest corner).
- */
-export function hazardsNear(sigmets: readonly Sigmet[], lat: number, lon: number, maxKm = HAZARD_KM): Hazard[] {
-  const out: Hazard[] = []
-  sigmets.forEach((s, i) => {
-    if (s.top === null) return
-    const baseM = Math.max(0, s.base ?? 0) * FT // no base: from the ground
-    const topM = s.top * FT
-    if (!(topM > baseM)) return
-    const near = s.rings.map((ring, r) => ({ ring, r, km: ringDistanceKm(ring, lat, lon) })).filter((x) => x.km <= maxKm)
-    if (near.length === 0) return
-    const nearest = near.reduce((a, b) => (b.km < a.km ? b : a)).ring
-    out.push({ sigmet: s, rings: near.map((x) => x.ring), nearest, baseM, topM, key: `${i}:${near.map((x) => x.r).join(',')}` })
-  })
-  return out
-}
-
 type Box = readonly [south: number, west: number, north: number, east: number]
 type Feed = 'metar' | 'sigmet' | 'radar'
 
@@ -173,6 +85,9 @@ function listOf<T>(json: unknown, usable: (x: T) => boolean): T[] {
   if (!Array.isArray(json)) throw new Error('not a list')
   return (json as T[]).filter(usable)
 }
+
+const metarsOf = (json: unknown): Metar[] => listOf<Metar>(json, (m) => Number.isFinite(m?.lat) && Number.isFinite(m?.lon))
+const sigmetsOf = (json: unknown): Sigmet[] => listOf<Sigmet>(json, (s) => Array.isArray(s?.rings))
 
 function frameOf(json: unknown): { host: string; path: string } {
   const idx = json as Partial<RadarIndex> | null
@@ -201,10 +116,10 @@ export class Weather3D {
   #metarsDue = -Infinity
   #sigmetsDue = -Infinity
   #radarDue = -Infinity
-  #metars: Metar[] = []
-  #sigmets: Sigmet[] = []
+  #metars: readonly Metar[] = []
+  #sigmets: readonly Sigmet[] = []
   #radar: RadarSource | null = null
-  #gen = 0 // the SIGMET list held (the labels and volumes are drawn for one)
+  #gen = 0 // the SIGMET list held: the hazard areas are picked from it again when it changes
   #hazards: Hazard[] = []
   #pickedGen = -1
   #pickedLat = Number.NaN // where the aircraft was when the hazards were last picked
@@ -324,49 +239,52 @@ export class Weather3D {
     }
   }
 
-  /** The answer, or null after one warning (the source is noted down until it answers). */
-  async #get<T>(feed: Feed, url: string, read: (json: unknown) => T): Promise<T | null> {
+  /**
+   * One source's ask: the answer read (a failure is one warning), then, unless it is out of date by now (`current`: the app is
+   * gone, or another ask has taken its place), the source noted down or up and the answer (null: it failed) handed on. An answer
+   * out of date is not heard at all: a late failure cannot put the note up over an ask that has since been answered.
+   */
+  async #fetch<T>(feed: Feed, url: string, read: (json: unknown) => T, current: () => boolean, apply: (got: T | null) => void): Promise<void> {
+    let got: T | null = null
     try {
-      const got = read(await this.#getJson(url))
-      this.#down.delete(feed)
-      return got
+      got = read(await this.#getJson(url))
     } catch (e) {
-      console.warn(`FlightHopper: 3-D weather ${url}:`, e)
-      this.#down.add(feed)
-      return null
+      if (current()) console.warn(`FlightHopper: 3-D weather ${url}:`, e)
     }
+    if (!current()) return
+    if (got === null) this.#down.add(feed)
+    else this.#down.delete(feed)
+    apply(got)
   }
 
-  async #loadMetars(box: Box, askedMs: number): Promise<void> {
-    const list = await this.#get('metar', `${this.#apiBase}/wx/metar?bbox=${box.join(',')}`, (j) =>
-      listOf<Metar>(j, (m) => Number.isFinite(m?.lat) && Number.isFinite(m?.lon)))
-    if (this.#destroyed || box !== this.#box) return // gone, or the aircraft left the box and another was asked for
-    if (list === null) this.#metarsDue = Math.min(this.#metarsDue, askedMs + RETRY_MS)
-    else this.#metars = this.#at === null ? list : list.map((m) => ({ ...m, lat: m.lat + this.#shift.dLat, lon: wrapLon(m.lon + this.#shift.dLon) }))
-    this.#status()
+  #loadMetars(box: Box, askedMs: number): Promise<void> {
+    return this.#fetch('metar', `${this.#apiBase}/wx/metar?bbox=${box.join(',')}`, metarsOf, () => !this.#destroyed && box === this.#box, (list) => {
+      if (list === null) this.#metarsDue = Math.min(this.#metarsDue, askedMs + RETRY_MS)
+      else this.#metars = shiftMetars(list, this.#shift.dLat, this.#shift.dLon)
+      this.#status()
+    })
   }
 
-  async #loadSigmets(askedMs: number): Promise<void> {
-    const list = await this.#get('sigmet', `${this.#apiBase}/wx/sigmet`, (j) => listOf<Sigmet>(j, (s) => Array.isArray(s?.rings)))
-    if (this.#destroyed) return
-    if (list === null) this.#sigmetsDue = Math.min(this.#sigmetsDue, askedMs + RETRY_MS)
-    else {
-      const { dLat, dLon } = this.#shift
-      this.#sigmets = this.#at === null ? list : list.map((s) => ({ ...s, rings: s.rings.map((r) => r.map(([x, y]): [number, number] => [wrapLon(x + dLon), y + dLat])) }))
-      this.#gen++
-    }
-    this.#refresh()
+  #loadSigmets(askedMs: number): Promise<void> {
+    return this.#fetch('sigmet', `${this.#apiBase}/wx/sigmet`, sigmetsOf, () => !this.#destroyed, (list) => {
+      if (list === null) this.#sigmetsDue = Math.min(this.#sigmetsDue, askedMs + RETRY_MS)
+      else {
+        this.#sigmets = shiftSigmets(list, this.#shift.dLat, this.#shift.dLon)
+        this.#gen++
+      }
+      this.#refresh()
+    })
   }
 
-  async #loadRadar(askedMs: number): Promise<void> {
-    const frame = await this.#get('radar', RADAR_INDEX, frameOf)
-    if (this.#destroyed) return
-    if (frame === null) this.#radarDue = Math.min(this.#radarDue, askedMs + RETRY_MS)
-    else {
-      const source = new RadarSource(frame.host, frame.path)
-      if (this.#radar?.url !== source.url) this.#radar = source // the frame held keeps its decoded tiles
-    }
-    this.#status()
+  #loadRadar(askedMs: number): Promise<void> {
+    return this.#fetch('radar', RADAR_INDEX, frameOf, () => !this.#destroyed, (frame) => {
+      if (frame === null) this.#radarDue = Math.min(this.#radarDue, askedMs + RETRY_MS)
+      else {
+        const source = new RadarSource(frame.host, frame.path)
+        if (this.#radar?.url !== source.url) this.#radar = source // the frame held keeps its decoded tiles
+      }
+      this.#status()
+    })
   }
 
   /** The hazard areas picked (again when the SIGMETs changed or the aircraft moved far enough), and what shows them drawn when it changed. */
@@ -374,12 +292,12 @@ export class Weather3D {
     if (!this.#show || !this.#seen) return
     const a = this.#here
     if (this.#pickedGen !== this.#gen || !(distanceNm(a.lat, a.lon, this.#pickedLat, this.#pickedLon) * KM_PER_NM < PICK_KM)) {
-      this.#hazards = hazardsNear(this.#sigmets, a.lat, a.lon)
+      this.#hazards = hazardsNear(this.#sigmets, a.lat, a.lon, HAZARD_KM)
       this.#pickedGen = this.#gen
       this.#pickedLat = a.lat
       this.#pickedLon = a.lon
     }
-    const volumes = this.#hazards.length === 0 ? '' : `${this.#gen}:${this.#hazards.map((h) => h.key).join('|')}` // '': nothing to draw
+    const volumes = this.#hazards.map((h) => h.key).join('|') // '': nothing to draw
     if (volumes !== this.#volumeKey) {
       this.#volumeKey = volumes
       this.#drawVolumes()

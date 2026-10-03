@@ -3,12 +3,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Cartesian3, Cartographic, Color, JulianDate, Math as CesiumMath } from 'cesium'
 import type { ColorMaterialProperty, CustomDataSource, Entity, Viewer } from 'cesium'
-import { distanceNm } from '../../shared/geo.ts'
 import type { Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import type { LayerLabel } from './placeLabels.ts'
 import { RadarSource } from './radar.ts'
-import { HAZARD_KM, Weather3D, hazardsNear, parseWxAt, ringCentre, ringDistanceKm, statusText3d } from './weather3d.ts'
+import { HAZARD_KM, Weather3D, parseWxAt, statusText3d } from './weather3d.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 type Ring = [number, number][]
@@ -40,73 +39,10 @@ test('statusText3d: clouds from the airports held, the hazard areas, a note; sin
 /** The ring a lon/lat box makes, closed as GeoJSON closes it. */
 const box = (south: number, west: number, north: number, east: number): Ring => [[west, south], [east, south], [east, north], [west, north], [west, south]]
 
-test('ringDistanceKm: 0 inside a ring, else the distance to its nearest edge or corner', () => {
-  const r = box(0, 0, 1, 1)
-  assert.equal(ringDistanceKm(r, 0.5, 0.5), 0)
-  assert.ok(near(ringDistanceKm(r, 0.5, 2), KM_PER_DEG, 0.5), 'a degree east of the east edge')
-  assert.ok(near(ringDistanceKm(r, 3, 0.5), 2 * KM_PER_DEG, 1), 'two degrees north of the north edge (the edge bulges north by metres)')
-  assert.ok(near(ringDistanceKm(r, -1, 0.5), KM_PER_DEG, 0.5), 'a degree south of the south edge')
-  const corner = ringDistanceKm(r, 2, 2) // past the north-east corner: the corner is nearest
-  assert.ok(near(corner, distanceNm(2, 2, 1, 1) * 1.852, 1), String(corner))
-  assert.ok(near(ringDistanceKm(r, 2, 1), KM_PER_DEG, 0.5), 'straight north of the corner: a degree')
-})
-
-test('ringDistanceKm: an edge is a great circle, as Cesium draws it: a long one along 60° N bulges to 73.9° N at its middle', () => {
-  const r: Ring = [[-60, 60], [60, 60], [60, 50], [-60, 50], [-60, 60]]
-  const bulge = (Math.atan(Math.tan((60 * Math.PI) / 180) / Math.cos((60 * Math.PI) / 180)) * 180) / Math.PI // 73.898°
-  const d = ringDistanceKm(r, 73, 0)
-  assert.ok(near(d, (bulge - 73) * KM_PER_DEG, 2), `${d} km, where the parallel is ${13 * KM_PER_DEG | 0} km off`)
-})
-
-test('ringDistanceKm: a ring across the antimeridian is the one ring it is', () => {
-  const r: Ring = [[179, -1], [-179, -1], [-179, 1], [179, 1], [179, -1]]
-  assert.equal(ringDistanceKm(r, 0, 180), 0)
-  assert.equal(ringDistanceKm(r, 0, -179.5), 0)
-  assert.ok(near(ringDistanceKm(r, 0, -177), 2 * KM_PER_DEG, 1), 'two degrees east of its east edge')
-  assert.ok(near(ringDistanceKm(r, 0, 177), 2 * KM_PER_DEG, 1), 'and two west of its west one')
-})
-
-test('ringCentre: the middle of a ring\'s corners, the closing corner counted once, across the antimeridian too', () => {
-  const c = ringCentre(box(30, 34, 34, 36))
-  assert.ok(near(c.lat, 32, 0.05) && near(c.lon, 35, 0.01), JSON.stringify(c))
-  const across = ringCentre([[179, -1], [-179, -1], [-179, 1], [179, 1], [179, -1]])
-  assert.ok(near(across.lat, 0, 1e-9) && near(Math.abs(across.lon), 180, 1e-9), JSON.stringify(across))
-  const l = ringCentre([[0, 0], [4, 0], [0, 4], [0, 0]]) // three corners and the first again: the mean of the three
-  assert.ok(near(l.lon, 4 / 3, 0.01) && near(l.lat, 4 / 3, 0.01), JSON.stringify(l))
-})
-
 const sigmet = (o: Partial<Sigmet> & { rings: Ring[] }): Sigmet => ({ hazard: 'TS', qualifier: 'EMBD', base: null, top: 35000, until: '2026-10-03T06:00:00Z', raw: '', ...o })
 const AC = { lat: 32.1, lon: 34.9, altM: 10_000 }
 /** A box whose south edge is km due north of the aircraft, 2° wide round its meridian, height° tall. */
 const northOf = (km: number, height = 1): Ring => box(AC.lat + km / KM_PER_DEG, AC.lon - 1, AC.lat + km / KM_PER_DEG + height, AC.lon + 1)
-
-test('hazardsNear: a SIGMET with a top whose ring passes within 800 km; the aircraft inside a ring counts', () => {
-  assert.equal(HAZARD_KM, 800)
-  const list = [
-    sigmet({ rings: [northOf(790)] }), // in
-    sigmet({ rings: [northOf(810)] }), // out
-    sigmet({ rings: [box(AC.lat - 1, AC.lon - 1, AC.lat + 1, AC.lon + 1)] }), // the aircraft is inside it
-    sigmet({ rings: [northOf(100)], top: null }), // no top: no volume to draw
-    sigmet({ rings: [northOf(100)], top: 0 }),
-    sigmet({ rings: [northOf(100)], base: 20000, top: 20000 }), // a top at its base: no volume
-    sigmet({ rings: [northOf(100)], base: 30000, top: 20000 }), // under it
-  ]
-  assert.deepEqual(hazardsNear(list, AC.lat, AC.lon).map((h) => h.sigmet), [list[0], list[2]])
-  assert.deepEqual(hazardsNear(list, AC.lat, AC.lon, 850).map((h) => h.sigmet), [list[0], list[1], list[2]], 'the reach is an argument')
-  assert.deepEqual(hazardsNear([], AC.lat, AC.lon), [])
-})
-
-test('hazardsNear: from the base (none: the ground, 0) to the top, in metres from the feet the SIGMET gives; the rings within reach, the nearest for the label', () => {
-  const [far, mid, close, east] = [northOf(900), northOf(500), northOf(200), box(AC.lat - 1, AC.lon + 3, AC.lat + 1, AC.lon + 4)] // the last ~280 km east
-  const [a, b] = hazardsNear([sigmet({ rings: [northOf(300)] }), sigmet({ base: 18000, top: 35000, rings: [far, mid, close, east] })], AC.lat, AC.lon)
-  assert.deepEqual([a.baseM, a.topM], [0, 35000 * FT])
-  assert.deepEqual([b.baseM, b.topM], [18000 * FT, 35000 * FT])
-  assert.deepEqual(b.rings, [mid, close, east], 'the ring at 900 km is left out')
-  assert.equal(b.nearest, close)
-  assert.notEqual(a.key, b.key)
-  const key = (rings: Ring[]): string => hazardsNear([sigmet({ rings })], AC.lat, AC.lon)[0].key
-  assert.notEqual(key([northOf(900), northOf(500)]), key([northOf(500), northOf(900)]), 'which rings are drawn is part of the key')
-})
 
 // ---- Weather3D --------------------------------------------------------------------------------------------------------
 
@@ -133,8 +69,8 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     asked.push(url)
     const kind: Kind = url.includes('/wx/metar') ? 'metar' : url.includes('/wx/sigmet') ? 'sigmet' : 'radar'
     const answer = structuredClone(answers[kind]) // as it is when asked
+    if (hold.has(kind)) await new Promise<void>((resolve) => held.push(resolve)) // until release(), when it is answered or fails as `failing` then says
     if (failing.has(kind)) throw new Error(`${kind} down`)
-    if (hold.has(kind)) await new Promise<void>((resolve) => held.push(resolve))
     return answer
   }
   const sources: CustomDataSource[] = []
@@ -325,6 +261,23 @@ test('Weather3D: hazard areas within 800 km are translucent volumes from base to
   assert.equal(r.sources[0].show, true)
 })
 
+test('Weather3D: the reach is 800 km from the aircraft, and a ring across the far meridian is not in it (it was "inside")', async () => {
+  assert.equal(HAZARD_KM, 800)
+  const r = rig()
+  r.answers.sigmet = [sigmet({ rings: [northOf(790)] }), sigmet({ rings: [northOf(810)] }), sigmet({ rings: [box(25, -150, 40, -140)] })] // the last is 150°W to 140°W
+  await open(r) // over Tel Aviv
+  assert.deepEqual([r.w.hazards.length, r.volumes().length, r.shown().length], [1, 1, 1])
+  const across: Ring = [[179, -1], [-179, -1], [-179, 1], [179, 1], [179, -1]]
+  const far = rig()
+  far.answers.sigmet = [sigmet({ rings: [across] })]
+  await open(far, { lat: 0, lon: 0, altM: 0 })
+  assert.deepEqual([far.w.hazards.length, far.volumes().length, far.shown().length], [0, 0, 0])
+  const inside = rig()
+  inside.answers.sigmet = [sigmet({ rings: [across] })]
+  await open(inside, { lat: 0, lon: 179.6, altM: 0 })
+  assert.deepEqual([inside.w.hazards.length, inside.volumes().length, inside.shown().length], [1, 1, 1])
+})
+
 test('Weather3D: each hazard area\'s name and levels is a label at its ring\'s middle, at the top height, through the names overlay (a rank above the cities)', async () => {
   const r = rig()
   const ts = sigmet({ rings: [northOf(300, 2)], base: 18000, top: 35000 })
@@ -362,11 +315,89 @@ test('Weather3D: the volumes and labels are drawn again only when what they show
   assert.equal(r.volumes().length, 1)
   assert.equal(r.shown().length, 1)
   assert.equal(r.labelCalls.length, calls + 1)
-  r.w.update({ ...AC, lat: AC.lat - 0.1 }, 10 * MIN + 1000) // a new list of SIGMETs, the same two: drawn again (their words may have changed)
+  const [volumes, labelCalls] = [r.volumes(), r.labelCalls.length]
+  r.w.update({ ...AC, lat: AC.lat - 0.1 }, 10 * MIN + 1000) // a new list of SIGMETs with the same two areas: nothing drawn again
   await flush()
-  assert.equal(r.volumes().length, 1)
-  assert.equal(r.labelCalls.length, calls + 2)
+  assert.equal(r.asks('sigmet').length, 2)
+  assert.ok(r.volumes().length === 1 && r.volumes()[0] === volumes[0], 'the same entity')
+  assert.equal(r.labelCalls.length, labelCalls)
+  r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)], top: 36000 }), sigmet({ rings: [northOf(797, 2)] })] // the next list: one top has changed
+  r.w.update({ ...AC, lat: AC.lat - 0.1 }, 20 * MIN + 2000)
+  await flush()
+  assert.equal(r.asks('sigmet').length, 3)
+  assert.ok(r.volumes().length === 1 && r.volumes()[0] !== volumes[0], 'drawn again')
+  assert.equal(r.labelCalls.length, labelCalls + 1)
+  assert.match(r.shown()[0].text, /up to 36,000 ft/)
   assert.ok(!first.includes(r.volumes()[0]))
+})
+
+test('Weather3D: a new list that changes a corner, a base, a word or the hazard is drawn again; one that changes what is not drawn is not', async () => {
+  const area = (o: Partial<Sigmet> = {}, ring: Ring = northOf(300, 2)): Sigmet => sigmet({ rings: [ring], ...o })
+  const r = rig()
+  r.answers.sigmet = [area()]
+  await open(r)
+  const first = r.volumes()[0]
+  let t = 0
+  const next = async (list: Sigmet[]): Promise<Entity> => {
+    r.answers.sigmet = list
+    t += 10 * MIN
+    r.w.update(AC, t)
+    await flush()
+    return r.volumes()[0]
+  }
+  assert.equal(await next([area({ raw: 'another text', until: '2026-10-04T00:00:00Z' })]), first, 'what is not drawn')
+  for (const o of [{ base: 5000 }, { qualifier: 'SEV' }, { hazard: 'TURB' }]) {
+    const was = r.volumes()[0]
+    assert.notEqual(await next([area(o)]), was, JSON.stringify(o))
+  }
+  const was = r.volumes()[0]
+  const moved = northOf(300, 2).map(([x, y], i) => (i === 2 ? [x + 0.05, y] : [x, y])) as Ring // a corner that is not the first
+  assert.notEqual(await next([area({ hazard: 'TURB', qualifier: 'SEV', base: 5000 }, moved)]), was, 'a corner moved')
+})
+
+test('Weather3D: a failure that comes late, for a box the aircraft has left, does not put the note up; nor a late answer take it down', async () => {
+  const warn = console.warn
+  const warned: unknown[][] = []
+  console.warn = (...a: unknown[]) => void warned.push(a)
+  try {
+    const r = rig()
+    r.hold.add('metar')
+    r.w.show = true
+    r.w.update(AC, 0) // box 30,32,35,37: its answer is held
+    r.hold.clear()
+    r.answers.metar = [metar('NEW', 36, 35)]
+    r.w.update({ ...AC, lat: 36 }, 1000) // out of it by the north: another box, answered at once
+    await flush()
+    assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas')
+    r.failing.add('metar')
+    r.release() // the held ask for the box it left fails, late
+    await flush()
+    r.w.show = false // the line is written again from what is known: with no note
+    r.w.show = true
+    assert.ok(r.lines.every((line) => !/unavailable/.test(String(line))), 'no note, then or later')
+    assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas')
+    assert.equal(warned.length, 0, 'not even a warning')
+    // and the other way round: the current ask fails, the late one for the box it left is answered
+    const s = rig()
+    s.hold.add('metar')
+    s.w.show = true
+    s.w.update(AC, 0)
+    s.hold.clear()
+    s.failing.add('metar')
+    s.w.update({ ...AC, lat: 36 }, 1000)
+    await flush()
+    assert.match(String(s.lines.at(-1)), /some weather unavailable$/)
+    s.failing.clear()
+    s.answers.metar = [metar('OLD', 32, 35)]
+    s.release()
+    await flush()
+    s.w.show = false
+    s.w.show = true
+    assert.match(String(s.lines.at(-1)), /some weather unavailable$/, 'the note stays')
+    assert.deepEqual(s.w.metars, [], 'and the late answer is not heard')
+  } finally {
+    console.warn = warn
+  }
 })
 
 test('Weather3D: the labels are worded in the frame\'s units, and again when they change', async () => {

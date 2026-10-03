@@ -6,23 +6,10 @@ import type { Metar } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { makeMapLayer } from './mapLayer.ts'
 import { RAIN_PALETTE, RADAR_MAX_LEVEL, RadarSource, type SourceTile } from './radar.ts'
-import { MARKER_PX, RadarLayer, RadarProvider, Weather, inRing, lookKey, lookOf, statusText, viewBox, windArrow, type WeatherOptions } from './weather.ts'
+import { MARKER_PX, RadarLayer, RadarProvider, Weather, lookKey, lookOf, statusText, windArrow, type WeatherOptions } from './weather.ts'
 
 const metric: Units = { alt: 'm', speed: 'kmh', vs: 'ms' }
 const wind = (wdir: number | null, wspd: number, cat: Metar['cat'] = 'VFR'): Pick<Metar, 'cat' | 'wdir' | 'wspd'> => ({ cat, wdir, wspd })
-
-test('viewBox: whole degrees outward; null when wider than 40°, crossing the antimeridian, or no view', () => {
-  assert.equal(viewBox({ west: 34.2, south: 29.5, east: 35.9, north: 33.1 }), '29,34,34,36')
-  assert.equal(viewBox({ west: -10, south: 20, east: 31, north: 30 }), null)
-  assert.equal(viewBox({ west: 170, south: 0, east: -170, north: 10 }), null)
-  assert.equal(viewBox(null), null)
-})
-
-test('point-in-area', () => {
-  const sq: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]]
-  assert.equal(inRing(sq, 5, 5), true)
-  assert.equal(inRing(sq, 15, 5), false)
-})
 
 test('statusText: radar time, airports, hazard areas, a note; singular for one; zoom in when no airports are asked for', () => {
   const s = { radarTime: '18:50', zoomedOut: false, airports: 6, areas: 3, note: '' }

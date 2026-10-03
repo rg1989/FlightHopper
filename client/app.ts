@@ -1732,13 +1732,16 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     runways.update(tf)
     airfield?.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
-    // The weather round the chased aircraft (shown in a live chase only: applyLayers), before the names that carry its labels.
-    if (chased !== null) {
-      wxAircraft.lat = chased.lat
-      wxAircraft.lon = chased.lon
-      wxAircraft.altM = chased.hM
+    // The weather round the chased aircraft, before the names that carry its labels. Shown in a live chase with the switch on
+    // only (applyLayers): nothing of it runs otherwise.
+    if (weather3d.show) {
+      if (chased !== null) {
+        wxAircraft.lat = chased.lat
+        wxAircraft.lon = chased.lon
+        wxAircraft.altM = chased.hM
+      }
+      weather3d.update(chased !== null ? wxAircraft : null, now)
     }
-    weather3d.update(chasing && chased !== null ? wxAircraft : null, now)
     // The names over the 3-D view, after the camera moved; none over the flight-data frame (its cards, the chased aircraft).
     placeLabels.update(tf, now, chasing && placeLabels.active ? flightFrame.occupied() : NO_RECTS)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three

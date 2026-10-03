@@ -38,36 +38,17 @@ import { queueDraw } from './drawQueue.ts'
 import { whenTilesLoaded } from './mapLayer.ts'
 import { RADAR_INDEX, RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, renderTile, sourceTiles, type Palette, type RadarIndex } from './radar.ts'
 import { metarCard, sigmetCards } from './wxCard.ts'
+import { inRing, viewBox } from './wxGeo.ts'
 import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
 const METAR_EVERY_MS = 5 * 60_000
 const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and radar
 const VIEW_CHECK_MS = 2_000
-const MAX_SPAN_DEG = 40 // as server/wx.ts
 const HOVER_PX = 16
 export const MARKER_PX = 48 // an airport's marker as shown; its canvas is drawn at twice that, for sharp edges
 const FONT = '-apple-system, "Segoe UI", sans-serif'
 
 const NO_CATEGORY = '#b8c2cf' // the ring of a report with no flight category
-
-/** Ray casting on [lon, lat] rings (degrees; areas this small need no great-circle edges). */
-export function inRing(ring: [number, number][], lon: number, lat: number): boolean {
-  let inside = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i]
-    const [xj, yj] = ring[j]
-    if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside
-  }
-  return inside
-}
-
-/** The whole-degree box around a view (degrees), or null when it is too wide for airports (or no ground is in view). */
-export function viewBox(r: { west: number; south: number; east: number; north: number } | null): string | null {
-  if (r === null) return null
-  const [s, w, n, e] = [Math.floor(r.south), Math.floor(r.west), Math.ceil(r.north), Math.ceil(r.east)]
-  if (e <= w || n - s > MAX_SPAN_DEG || e - w > MAX_SPAN_DEG) return null // e ≤ w: the view crosses the antimeridian
-  return `${Math.max(-90, s)},${Math.max(-180, w)},${Math.min(90, n)},${Math.min(180, e)}`
-}
 
 /** The panel's one-line summary: "Radar 18:50 · 6 airports · 1 hazard area". */
 export function statusText(s: { radarTime: string; zoomedOut: boolean; airports: number; areas: number; note: string }): string {
