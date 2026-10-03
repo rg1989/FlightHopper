@@ -23,9 +23,10 @@
 // snow) a flat grey puff of a deck, at the base. The base is the ceiling of the nearest station that reports one within 60 km, else
 // 1,200 m over the ground (the nearest station's height if it is within 60 km, else sea level); both, and the tops by intensity, are
 // estimates (RADAR_LOOK): the radar says where it rains and how hard, no more. Heavy rain is often one region of hundreds of blocks,
-// so the towers (at most 40) and the deck puffs (at most 80) stand farther apart and wider until they fit, by steps. They fade out by
-// 100 km. The cells are read REBUILD_KM farther, a ring that stands at alpha 0 and fades in as the aircraft comes, so none pops in
-// at the next build (as for the observed clouds, nearestClouds); the ring is thinned on top of the 40 and the 80 and takes no place
+// so the towers (at most 40) and the deck puffs (at most 80) stand farther apart and wider until they fit, by steps. As puffs they fade
+// out by 100 km. The cells are read farther (Weather3D: to the cloud volume's reach, 150 km, and REBUILD_KM past that), a ring that the
+// volume fades in by its reach as the aircraft comes, so none pops in at the next build (for the puffs: a ring REBUILD_KM wide that
+// stands at alpha 0, as for the observed clouds, nearestClouds); the ring is thinned on top of the 40 and the 80 and takes no place
 // from them.
 // From a weather model's forecast (modelClouds; Open-Meteo's grid of places 0.25° apart, shared/wx.ts ModelGrid), for the sky no report
 // or radar says anything of: at each place and pressure level where the model has 20 % cloud or more, puffs over the place's cell,
@@ -433,14 +434,17 @@ export function observedClouds(metars: readonly Metar[], lat: number, lon: numbe
 
 /**
  * At most max clouds within maxKm of lat, lon: the groups in order (observed first), each nearest first. None more than
- * REBUILD_KM past where it has faded out: it cannot fade in before the next build.
+ * REBUILD_KM past where it has faded out: it cannot fade in before the next build. Where a cloud has faded out is its farKm (its
+ * puff's), unless the caller says (fadedKm): the cloud volume fades every cloud by its one reach.
  */
-export function nearestClouds(groups: readonly (readonly CloudSpec[])[], lat: number, lon: number, max = MAX_CLOUDS, maxKm = CLOUD_KM): CloudSpec[] {
+export function nearestClouds(
+  groups: readonly (readonly CloudSpec[])[], lat: number, lon: number, max = MAX_CLOUDS, maxKm = CLOUD_KM, fadedKm: (c: CloudSpec) => number = (c) => c.farKm,
+): CloudSpec[] {
   const out: CloudSpec[] = []
   const here = { lat, lon }
   for (const g of groups) {
     if (out.length >= max) break
-    const near = g.map((c) => ({ c, d: km2(c, here) })).filter((x) => x.d <= Math.min(maxKm, x.c.farKm + REBUILD_KM) ** 2).sort((a, b) => a.d - b.d)
+    const near = g.map((c) => ({ c, d: km2(c, here) })).filter((x) => x.d <= Math.min(maxKm, fadedKm(x.c) + REBUILD_KM) ** 2).sort((a, b) => a.d - b.d)
     for (const { c } of near.slice(0, max - out.length)) out.push(c)
   }
   return out
@@ -465,7 +469,7 @@ export interface RadarBase {
 export type BaseOf = (lat: number, lon: number) => RadarBase
 
 interface RadarLook {
-  radiusKm: number // its clouds and shafts have faded out by this far from the aircraft; the radar is read REBUILD_KM farther (a ring built at alpha 0)
+  radiusKm: number // its towers and deck puffs are counted to their caps within this far from the aircraft (those read beyond it are kept on top), and its puffs and shafts as cloudLayer.ts and rainShafts.ts draw them have faded out by it. Weather3D reads the radar farther, to the cloud volume's reach and the way to the next build past that, and the volume fades them by that reach
   stationKm: number // a rain block's base is the ceiling of the nearest station within this
   defaultBaseM: number // else it is this far over the ground (an estimate: neither the radar nor the reports say)
   deckDbz: number // an echo of this and more is cloud: a deck

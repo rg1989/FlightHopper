@@ -293,6 +293,10 @@ test('nearestClouds: nothing beyond 150 km, the nearest first past 700, the grou
   assert.deepEqual(nearestClouds([], at.lat, at.lon), [])
   const small = [spec(60, 1, 40), spec(75, 2, 40), spec(69, 3, 40)] // faded out by 40 km
   assert.deepEqual(nearestClouds([small], at.lat, at.lon).map((c) => c.heightM), [1001, 1003], `nor one more than ${REBUILD_KM} km past where it has faded out (it cannot fade in before the next build)`)
+  // where a cloud has faded out is the caller's to say (the cloud volume fades every cloud by its one reach, whatever the puff's own fade)
+  assert.deepEqual(nearestClouds([small], at.lat, at.lon, MAX_CLOUDS, 180, () => 150).map((c) => c.heightM), [1001, 1003, 1002])
+  assert.deepEqual(nearestClouds([[spec(170, 4, 40), spec(185, 5, 40)]], at.lat, at.lon, MAX_CLOUDS, 180, () => 150).map((c) => c.heightM), [1004], 'as far as that + 30 km, and no farther than maxKm')
+  assert.deepEqual(nearestClouds([[spec(170, 4, 40)]], at.lat, at.lon, MAX_CLOUDS, 180, () => 130).map((c) => c.heightM), [])
 })
 
 test('fadeAlpha and farKm: a cloud fades out where it looks small, over the last 30 % of that; small cumulus by 60–80 km, decks and towers to the cap', () => {

@@ -32,7 +32,28 @@
 // was steps of a quarter cell and a bisect back to the face: 96 of those reach 12 to 27 km, and a storm may stand 100 km off.) Under a
 // cloud of light rain or more a thin veil of rain, streaked, falls to the ground. The cover fades to nothing between 130 and 150 km
 // from the aircraft (fade). By night the light is dimmed as cloudField.ts sunBrightness says, and the shadows go.
-// While hidden, while the field is empty and once destroyed there is no stage in the scene, so nothing runs.
+// The same march draws what is see-through and thin, so that it sorts with the cloud (Cesium's own lines and volumes, drawn before the
+// pass, would be painted over by any cloud behind them): the hazard areas' edges (setHazards) and the level slice (setAhead), each
+// the approved mock's. A ray first finds where it meets each of them (at most 8: its events), puts them in order, and lays each
+// over what it has gathered when its walk passes it; what is left is laid at the end, short of what the pixel shows.
+// - A hazard area's edge is a wall over the line between two corners of its ring, from the area's base to its top, in one of three
+//   styles (u_hazard): a curtain (a line at the top and one at the base, between them a veil strongest at the top and gone a quarter
+//   of the way up, in pleats 2 km wide), a fence (the two lines and a post every 4 km) or a box (a faint fill, lines at its edges, and
+//   the area's top face). The edges nearest the aircraft, at most 48, are given as an image of bytes (hazardEdges, packEdges: two
+//   bytes a number, read with texelFetch); an image, like the field's, can only be given to a new pass, so other edges are a new pass.
+// - The level slice is the field's cover at the aircraft's height within 60 km of it, filled in its severity's colour with a brighter
+//   rim, with rings at 10, 20 and 40 km.
+// - These are drawn at the march's half size: a line's widths are the mock's in the march's pixels, each two of the screen's.
+// The track line (setAhead) is the mix's, at full size: the way ahead (wxAhead.ts aheadPath, seven places, given every frame as
+// numbers) as a line two pixels wide, with a wider tick at each minute: white-blue in clear air and, thicker, the severity's colour
+// where the field's cover is over 0.3. It is hidden by what is solid in front of it, and laid over the cloud, not sorted with it. (In
+// the march it was a soft band of six to eight pixels, and the cloud it marks hid its coloured stretch from outside; the march at
+// full size draws it as thin, and on the check machine one frame in twenty then took 40 ms, not 19.) It and the slice read the
+// field's cover as it is (not times GAIN), as the status line does (wxAhead.ts).
+// While hidden, while there is no cloud, no hazard area's edge and no aid to draw, and once destroyed there is no stage in the scene,
+// so nothing runs. With no cloud the march is given blank images and walks no ray.
+// A shader that another graphics card will not compile would stop Cesium's render loop, and with it the whole viewer: a render error
+// while the pass is in the scene takes the pass out for good (failed, onFailed; resumeRendering starts Cesium's loop again).
 // Each draw makes a new pass in place of the last (the plan was to give the running stage the new image). An image given to a stage
 // that already runs is not uploaded until Cesium's next update, and the stage's sampler has nothing for that frame (the render fails);
 // a new stage's image is uploaded before its first run. (Read in Cesium's PostProcessStage.js and createUniform.js; not tried.)
@@ -43,16 +64,26 @@
 // fixed to the Earth.
 // ponytail: a band's shadow is its cover where the light's ray meets the band's lowest base, not the cloud's whole height marched
 // toward the light. Upgrade: a few steps up the ray.
-import { Cartesian2, Cartesian3, Matrix4, PostProcessStage, PostProcessStageComposite, Transforms, type Camera, type PostProcessStageCollection } from 'cesium'
+// ponytail: a hazard area's wall stands along the frame's up, over a straight line between its corners in the frame, not along the
+// Earth's up over a great circle: its top leans by its height times its distance over the Earth's radius (0.3 km for a 12 km top
+// 150 km off, 1.5 km at 800 km). An edge that leaves the 819 km the image holds is cut there (a box then draws a corner's line at the
+// cut), and one with an end more than about 1,900 km off is not drawn at all. Upgrade: the walls on the field's map; long edges cut on
+// their great circle.
+// ponytail: a ray keeps the first 8 events it finds (the aids, then the edges as they are listed, the nearest area first), not the 8
+// nearest to it. Upgrade: a longer list, or the farthest given up for a nearer one.
+import { Cartesian2, Cartesian3, Color, Ellipsoid, Matrix4, PostProcessStage, PostProcessStageComposite, Transforms, type Camera, type PostProcessStageCollection } from 'cesium'
 import { geoidN } from '../../shared/geoid.ts'
 import type { TerrainFrame } from '../types.ts'
 import { sequence, sunBrightness, type CloudSpec } from './cloudField.ts'
+import { AHEAD_MIN, type AheadPath } from './wxAhead.ts'
 import { BANDS, FALL, FALL_MAX_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, RISE, RISE_MAX_M, buildField, fieldAtlas, type WxField } from './wxField.ts'
+import type { Hazard } from './wxGeo.ts'
 
 export type CloudLook = 'natural' | 'severity' | 'blocks'
 /** How a hazard area's edge is drawn: a curtain hung from its top, a fence (lines and posts), or the box of today (a faint fill and its edges). */
 export type HazardStyle = 'curtain' | 'fence' | 'box'
 const LOOK: Record<CloudLook, number> = { natural: 0, severity: 1, blocks: 2 } // u_look
+const HAZARD: Record<HazardStyle, number> = { curtain: 0, fence: 1, box: 2 } // u_hazard
 const R_KM = 6371 // the sphere the heights curve over
 const KM_PER_DEG = 111.195 // of latitude on it: the field's map
 const RAD = Math.PI / 180
@@ -74,7 +105,8 @@ const SEARCH = 0.035 // a search step is this share of the distance from the cam
 const SEARCH_UP_KM = 0.25 // … and climbs or sinks no more than this: the thinnest cloud is 0.45 km
 const STAY_KM = 0.8 // out of a cloud, the ray keeps to small steps this far
 const STEPS = 96 // of the march, at most
-const REACH_KM: readonly [number, number] = [130, 150] // the cover fades to nothing between these, from the aircraft
+/** The cover fades to nothing between these, km from the aircraft: what Weather3D reads its sources by. */
+export const REACH_KM: readonly [number, number] = [130, 150]
 const RIM_KM: readonly [number, number] = [150, 158] // and at the square's rim
 const BOX_KM = 165 // the ray is clipped to this in the frame: the field's 160 km and room for the map's bend
 const GAIN = 1.5 // the field's cover × profile is drawn times this, capped at 1 (the mock's): bodies are solid, their edges crisp
@@ -88,6 +120,20 @@ const SHADOW_LOW = 0.26 // the light's ray is taken no flatter than 15° for the
 // The mix: a march pixel weighs 1 / (1 + (its depth's difference from the pixel's / this)²). Depths are logarithmic: 0.01 is a quarter
 // farther or nearer, so the ground's own slope changes nothing, and an aircraft against the cloud behind it changes everything.
 const DEPTH_SAME = 0.01
+export const MAX_EDGES = 48 // hazard areas' edges given to the march, at most: the nearest to the aircraft
+export const EDGE_TEXELS = 5 // an edge's texels in the image (packEdges)
+export const EDGE_KM = 819.2 // an edge's end is packed over ± this in the frame, in 16 bits: 25 m apart
+const EDGE_Q = (2 * EDGE_KM) / 65536
+const EDGE_CUT_KM = 819 // an edge is cut where it leaves this, just inside what the image holds
+const EDGE_DROP_KM = 300 // an edge with an end this far under the frame's level (the Earth has curved away: about 1,900 km off) is not drawn
+export const EDGE_TOP_KM = 32.768 // a wall's base and top are packed over 0 … this: 0.5 m apart
+const HEIGHT_Q = EDGE_TOP_KM / 65536
+export const POST_KM = 4 // the fence's posts stand this far apart, the curtain's pleats are half of it wide
+const ALONG_Q = POST_KM / 65536
+const EVENTS = 8 // what is see-through and thin on one ray, at most (the mock's)
+const PATH_N = AHEAD_MIN + 1 // the way ahead's places: the aircraft, then each minute
+const NO_TOP_KM = -10 // the highest top given to the march when there is no cloud: under any ground, so no ray is walked
+const BLANK: Bitmap = { data: new Uint8ClampedArray(4), width: 1, height: 1 } // an image for a sampler the shader will not read
 
 const glsl = (n: number): string => (Number.isInteger(n) ? `${n}.0` : String(n))
 
@@ -271,14 +317,157 @@ export function survey(f: WxField): { near: Bitmap; wet: boolean[] } {
 }
 const NEAR_CHANNEL: readonly number[] = [0, 1, 2, 2, 3] // the coarse map's channel for each band (the shader's nearOf)
 
+/** A number as the 16 bits it is packed in: its count of quanta from the least, held to 0 … 65535. */
+const word = (v: number, quantum: number, least = 0): number => Math.min(65535, Math.max(0, Math.round((v - least) / quantum)))
+
+/** A hazard area's edge as the march draws it: a wall over the line between two places of the frame, from the area's base to its top. */
+export interface HazardEdge {
+  ax: number // its two ends, km east and north in the frame
+  ay: number
+  bx: number
+  by: number
+  baseKm: number // the wall's heights over the sea
+  topKm: number
+  rgb: [number, number, number] // the area's colour, 0 … 255
+  alongKm: number // how far its first end is from the corner the edge began at, less whole posts (an edge cut to what the image holds): the posts and pleats count from that corner
+  first: boolean // the first edge listed of its area
+  whole: boolean // every edge of its area is listed, none cut: the area's top face can be found (a ray meets it inside when it would cross an odd number of them)
+}
+
+/**
+ * The hazard areas' edges nearest a place of the frame (the aircraft; none given: the field's middle), at most max, as walls in the
+ * frame (world metres to km round the field's middle at sea level, seaM above the ellipsoid: localFrame): each ring's corners joined in
+ * turn, the last to the first. An area's edges stay together and in their ring's order, the area with the nearest edge first. An area
+ * that lost an edge (left out as too far, cut, or beyond the frame) is not whole. An edge is cut where it leaves ± EDGE_CUT_KM;
+ * one with an end EDGE_DROP_KM under the frame's level is left out (see the header's ponytail). color: an area's CSS colour.
+ */
+export function hazardEdges(
+  hazards: readonly Hazard[], frame: Matrix4, seaM: number, color: (h: Hazard) => string, from: { x: number; y: number } = { x: 0, y: 0 }, max = MAX_EDGES,
+): HazardEdge[] {
+  interface Found { edge: HazardEdge; area: number; km: number }
+  const found: Found[] = []
+  const broken = new Set<number>() // the areas that are not whole
+  const scratch = new Cartesian3()
+  hazards.forEach((h, area) => {
+    const [baseKm, topKm] = [h.baseM / 1000, h.topM / 1000]
+    if (!(word(topKm, HEIGHT_Q) > word(baseKm, HEIGHT_Q))) return // no height in the image: no wall
+    const [r, g, b] = (Color.fromCssColorString(color(h)) ?? Color.WHITE).toBytes()
+    for (const ring of h.rings) {
+      const at = ring.map(([lon, lat]) => Cartesian3.clone(Matrix4.multiplyByPoint(frame, Cartesian3.fromDegrees(lon, lat, seaM, Ellipsoid.WGS84, scratch), scratch)))
+      const n = at.length
+      const closed = n > 1 && ring[0][0] === ring[n - 1][0] && ring[0][1] === ring[n - 1][1]
+      for (let i = 0; i < (closed ? n - 1 : n); i++) {
+        const [p, q] = [at[i], at[(i + 1) % n]]
+        const [dx, dy] = [q.x - p.x, q.y - p.y]
+        const len = Math.hypot(dx, dy)
+        if (len < 1e-6) continue // a corner given twice
+        if (p.z < -EDGE_DROP_KM || q.z < -EDGE_DROP_KM) {
+          broken.add(area)
+          continue
+        }
+        // the part of it inside the square the image holds (Liang and Barsky's cut)
+        let [t0, t1] = [0, 1]
+        for (const [d, lo, hi] of [[dx, -EDGE_CUT_KM - p.x, EDGE_CUT_KM - p.x], [dy, -EDGE_CUT_KM - p.y, EDGE_CUT_KM - p.y]]) {
+          if (d === 0) {
+            if (lo > 0 || hi < 0) t1 = -1
+            continue
+          }
+          t0 = Math.max(t0, Math.min(lo / d, hi / d))
+          t1 = Math.min(t1, Math.max(lo / d, hi / d))
+        }
+        if (t0 > 0 || t1 < 1) broken.add(area)
+        if (!(t0 < t1)) continue
+        const edge: HazardEdge = {
+          ax: p.x + t0 * dx, ay: p.y + t0 * dy, bx: p.x + t1 * dx, by: p.y + t1 * dy, baseKm, topKm, rgb: [r, g, b], alongKm: (t0 * len) % POST_KM, first: false, whole: true,
+        }
+        const [ex, ey] = [edge.bx - edge.ax, edge.by - edge.ay]
+        const t = Math.min(1, Math.max(0, ((from.x - edge.ax) * ex + (from.y - edge.ay) * ey) / (ex * ex + ey * ey)))
+        found.push({ edge, area, km: Math.hypot(edge.ax + t * ex - from.x, edge.ay + t * ey - from.y) })
+      }
+    }
+  })
+  let kept = found
+  if (found.length > max) {
+    const nearest = new Set([...found].sort((a, b) => a.km - b.km).slice(0, max))
+    for (const f of found) if (!nearest.has(f)) broken.add(f.area)
+    kept = found.filter((f) => nearest.has(f))
+  }
+  const nearestOf = new Map<number, number>() // each area's nearest edge, km
+  for (const f of kept) nearestOf.set(f.area, Math.min(nearestOf.get(f.area) ?? Infinity, f.km))
+  const order = [...nearestOf.keys()].sort((a, b) => nearestOf.get(a)! - nearestOf.get(b)! || a - b)
+  return order.flatMap((area) => kept.filter((f) => f.area === area).map((f, i) => ({ ...f.edge, first: i === 0, whole: !broken.has(area) })))
+}
+
+/**
+ * The edges as the image the march reads (u_edges): one row, EDGE_TEXELS texels an edge, MAX_EDGES at most (the first ones), the rest
+ * blank. A number is two bytes, the high one first. An edge's texels: its first end (east in R and G, north in B and A, over ± EDGE_KM);
+ * its second end; its base (R, G) and top (B, A), over 0 … EDGE_TOP_KM; its colour (R, G, B) and in A 1 when it is the first of its
+ * area plus 2 when the area is whole; alongKm (R, G), over 0 … POST_KM. One row, so the texture's flip changes nothing.
+ */
+export function packEdges(edges: readonly HazardEdge[]): Bitmap {
+  const data = new Uint8ClampedArray(MAX_EDGES * EDGE_TEXELS * 4)
+  const put = (o: number, a: number, b: number): void => {
+    data[o] = a >> 8
+    data[o + 1] = a & 255
+    data[o + 2] = b >> 8
+    data[o + 3] = b & 255
+  }
+  edges.slice(0, MAX_EDGES).forEach((e, k) => {
+    const o = k * EDGE_TEXELS * 4
+    put(o, word(e.ax, EDGE_Q, -EDGE_KM), word(e.ay, EDGE_Q, -EDGE_KM))
+    put(o + 4, word(e.bx, EDGE_Q, -EDGE_KM), word(e.by, EDGE_Q, -EDGE_KM))
+    put(o + 8, word(e.baseKm, HEIGHT_Q), word(e.topKm, HEIGHT_Q))
+    data.set([e.rgb[0], e.rgb[1], e.rgb[2], (e.first ? 1 : 0) + (e.whole ? 2 : 0)], o + 12)
+    put(o + 16, word(e.alongKm, ALONG_Q), 0)
+  })
+  return { data, width: MAX_EDGES * EDGE_TEXELS, height: 1 }
+}
+
+/** Edge k of the image, read as the shader's hazards() reads it (in doubles: the shader's floats differ by under a millimetre). */
+export function unpackEdge(image: Bitmap, k: number): HazardEdge {
+  const d = image.data
+  const o = k * EDGE_TEXELS * 4
+  const read = (i: number): number => d[o + i] * 256 + d[o + i + 1]
+  return {
+    ax: read(0) * EDGE_Q - EDGE_KM, ay: read(2) * EDGE_Q - EDGE_KM, bx: read(4) * EDGE_Q - EDGE_KM, by: read(6) * EDGE_Q - EDGE_KM,
+    baseKm: read(8) * HEIGHT_Q, topKm: read(10) * HEIGHT_Q, rgb: [d[o + 12], d[o + 13], d[o + 14]], alongKm: read(16) * ALONG_Q,
+    first: d[o + 15] % 2 === 1, whole: d[o + 15] >= 2,
+  }
+}
+
+/** What of Cesium's viewer resumeRendering touches. */
+export interface RenderLoop {
+  useDefaultRenderLoop: boolean
+  container: Element
+  isDestroyed(): boolean
+}
+
+/**
+ * After a render error, rendering again. On an error in a frame Cesium's scene raises renderError and goes no further with it
+ * (rethrowRenderErrors is off), and its widget, which listens, stops its own render loop (useDefaultRenderLoop off) and lays its
+ * error panel over the view: the viewer is then a still picture. This closes that panel by its own button and starts the loop again,
+ * two frames on: the loop that ran has one more frame asked for, at which it sees that it is stopped; started before that, there
+ * would be two loops. For a caller that has taken what failed out of the scene (CloudVolume); if the frames go on failing, Cesium
+ * stops again, and its panel stays.
+ */
+export function resumeRendering(viewer: RenderLoop, later: (f: () => void) => void = (f) => void requestAnimationFrame(f)): void {
+  const close = (): void => (viewer.container.querySelector('.cesium-widget-errorPanel button') as HTMLElement | null)?.click()
+  close()
+  later(() => later(() => {
+    if (viewer.isDestroyed()) return
+    close() // put up since, if Cesium's widget heard the error after the caller did
+    if (!viewer.useDefaultRenderLoop) viewer.useDefaultRenderLoop = true
+  }))
+}
+
 /** Bytes as an image Cesium uploads as they are (an ImageData: no canvas, so nothing premultiplies them). Node has none: there the bytes stand in, for the tests. */
 function image(b: Bitmap): unknown {
   return typeof ImageData === 'undefined' ? b : new ImageData(b.data as Uint8ClampedArray<ArrayBuffer>, b.width, b.height)
 }
 
 /**
- * What both shaders share: the frame's place on the map, the reach, and a band's texel. Lengths are km. Each shader declares the
- * uniforms these read (u_field, u_map, u_plane).
+ * What both shaders share: the frame's place on the map, the reach, a band's texel, the field's cover at a place, the severity's
+ * colour. Lengths are km. Each shader declares the uniforms these read (u_field, u_map, u_plane, u_lo, u_hi).
  */
 const SHARED = `
 const float INV_R = ${glsl(1 / R_KM)};
@@ -311,6 +500,36 @@ vec4 band(int b, vec2 m) {
   vec2 px = vec2(mod(float(b), 3.0), floor(float(b) / 3.0)) * FIELD_N + c;
   return textureLod(u_field, vec2(px.x / ATLAS.x, 1.0 - px.y / ATLAS.y), 0.0);
 }
+
+// The severity's colour: cloud, light rain, heavy rain, thunderstorm (#f2f5f8, #58a6ff, #ffbe3d, #ff4d3d).
+vec3 sevCol(float s) {
+  vec3 c0 = vec3(0.95, 0.96, 0.97), c1 = vec3(0.345, 0.65, 1.0), c2 = vec3(1.0, 0.745, 0.24), c3 = vec3(1.0, 0.3, 0.24);
+  return s < 1.0 ? mix(c0, c1, s) : s < 2.0 ? mix(c1, c2, s - 1.0) : mix(c2, c3, clamp(s - 2.0, 0.0, 1.0));
+}
+
+// wxField.ts profile(): 0 … 1 across a band's cloud at height h, from base b to top t.
+float prof(float h, float b, float t) {
+  float d = t - b;
+  if (d <= 0.0) return 0.0;
+  float rise = min(${glsl(RISE)} * d, ${glsl(RISE_MAX_M / 1000)});
+  float fall = min(${glsl(1 - FALL)} * d, ${glsl(FALL_MAX_M / 1000)});
+  return smoothstep(0.0, rise, h - b) * (1.0 - smoothstep(t - fall, t, h));
+}
+
+// The field's cover at a place of the map as it is (wxField.ts sampleField: the most cloud any band has there, 0 to 1), and its
+// severity; within the reach.
+float fieldCover(vec3 m, out float sev) {
+  sev = 0.0;
+  if (abs(m.x) > 0.5 * FIELD_KM || abs(m.y) > 0.5 * FIELD_KM) return 0.0;
+  float most = 0.0;
+  for (int b = 0; b < ${BANDS}; b++) {
+    if (u_lo[b] > u_hi[b] || m.z < u_lo[b] || m.z > u_hi[b]) continue;
+    vec4 f = band(b, m.xy);
+    float d = f.r * prof(m.z, f.g * HEIGHT_MAX, f.b * HEIGHT_MAX);
+    if (d > most) { most = d; sev = f.a * 3.0; }
+  }
+  return most * reach(m.xy);
+}
 `
 
 /**
@@ -327,10 +546,15 @@ uniform vec3 u_map; // toMap's scale east and north, and tan(latitude) / R
 uniform float u_lo[${BANDS}]; // each band's lowest base, km
 uniform float u_hi[${BANDS}]; // and highest top
 uniform float u_floor[${BANDS}]; // how low it is read: its lowest base, or the sea when rain falls from it
-uniform float u_top; // the highest top of all
+uniform float u_top; // the highest top of all (with no cloud: under the ground)
 uniform vec2 u_plane; // the aircraft on the map: the reach is round it
 uniform float u_look; // 0 natural, 1 severity colours, 2 blocks
 uniform float u_light; // the Sun's brightness: 1 by day
+uniform sampler2D u_edges; // packEdges: the hazard areas' edges, ${EDGE_TEXELS} texels each, in one row
+uniform float u_edgeCount; // how many of them
+uniform float u_hazard; // how they are drawn: 0 a curtain, 1 a fence, 2 a box
+uniform vec3 u_aircraft; // the aircraft in the frame, km: the level slice is at its height, round it
+uniform vec2 u_aids; // 1 where it shows: x the track line (the mix draws it), y the level slice
 in vec2 v_textureCoordinates;
 ${SHARED}
 const vec3 HAZE = vec3(0.66, 0.76, 0.88); // the air's colour over a long way
@@ -339,24 +563,21 @@ const float CLEAR = ${glsl(CLEAR_KM)};
 const float BOX = ${glsl(BOX_KM)};
 const float PAD = 1.0; // the warp moves a sample's height by 0.9 km at most
 const vec3 CELL = vec3(1.0, 1.0, 0.5); // blocks: a cell's size east, north and up
+const float EDGE_KM = ${glsl(EDGE_KM)}; // packEdges: an edge's end is packed over this far each way,
+const float EDGE_Q = ${glsl(EDGE_Q)}; // this far apart;
+const float HEIGHT_Q = ${glsl(HEIGHT_Q)}; // a height this far apart, from the sea;
+const float ALONG_Q = ${glsl(ALONG_Q)}; // and likewise where a cut edge's posts count from
+const float POST_KM = ${glsl(POST_KM)}; // a fence's posts; a curtain's pleats are half of it wide
 
-// The severity's colour: cloud, light rain, heavy rain, thunderstorm (#f2f5f8, #58a6ff, #ffbe3d, #ff4d3d).
-vec3 sevCol(float s) {
-  vec3 c0 = vec3(0.95, 0.96, 0.97), c1 = vec3(0.345, 0.65, 1.0), c2 = vec3(1.0, 0.745, 0.24), c3 = vec3(1.0, 0.3, 0.24);
-  return s < 1.0 ? mix(c0, c1, s) : s < 2.0 ? mix(c1, c2, s - 1.0) : mix(c2, c3, clamp(s - 2.0, 0.0, 1.0));
-}
+// What is see-through and thin on this ray (a hazard area's wall or top face, the level slice): each a place along the ray and a
+// colour, premultiplied, with how much it covers. gN are held; gI of them are laid over what the ray has gathered.
+float gT[${EVENTS}];
+vec4 gC[${EVENTS}];
+int gN = 0;
+int gI = 0;
 
 // Extinction per km of full cloud: more in heavy rain and storms.
 float sigma(float sev) { return sev > 1.5 ? ${glsl(SIGMA_STORM)} : ${glsl(SIGMA)}; }
-
-// wxField.ts profile(): 0 … 1 across a band's cloud at height h, from base b to top t.
-float prof(float h, float b, float t) {
-  float d = t - b;
-  if (d <= 0.0) return 0.0;
-  float rise = min(${glsl(RISE)} * d, ${glsl(RISE_MAX_M / 1000)});
-  float fall = min(${glsl(1 - FALL)} * d, ${glsl(FALL_MAX_M / 1000)});
-  return smoothstep(0.0, rise, h - b) * (1.0 - smoothstep(t - fall, t, h));
-}
 
 // The coarse map's word for band b (survey): 0 where the band has no weather within 7 km.
 float nearOf(vec4 nr, int b) { return b == 0 ? nr.r : b == 1 ? nr.g : b < 4 ? nr.b : nr.a; }
@@ -468,6 +689,139 @@ float streaks(vec3 p, float t) {
 // the severity's and has to be read from afar.
 float hazed(float t) { return 1.0 - exp(-t / (u_look < 0.5 ? 120.0 : 240.0)); }
 
+// One more event: t km along the ray, the colour c covering a of the pixel. One that covers next to nothing, or lies behind, is none.
+void ev(float t, vec3 c, float a) {
+  if (gN < ${EVENTS} && a > 0.004 && t > 0.0) {
+    gT[gN] = t;
+    gC[gN] = vec4(c * a, a);
+    gN++;
+  }
+}
+
+// The events put in the ray's order, the nearest first.
+void sortEvents() {
+  for (int i = 1; i < ${EVENTS}; i++) {
+    if (i >= gN) break;
+    float t = gT[i];
+    vec4 c = gC[i];
+    int j = i - 1;
+    for (int k = 0; k < ${EVENTS}; k++) {
+      if (j < 0) break;
+      if (gT[j] <= t) break;
+      gT[j + 1] = gT[j];
+      gC[j + 1] = gC[j];
+      j--;
+    }
+    gT[j + 1] = t;
+    gC[j + 1] = c;
+  }
+}
+
+// The events nearer than t that are not laid yet, laid over what the ray has gathered so far: they take what it leaves.
+void lay(float t, inout vec3 col, inout float A) {
+  for (int k = 0; k < ${EVENTS}; k++) {
+    if (gI >= gN) break;
+    if (gT[gI] >= t) break;
+    col += (1.0 - A) * gC[gI].rgb;
+    A += (1.0 - A) * gC[gI].a;
+    gI++;
+  }
+}
+
+// Two bytes of the edges' image as the number they hold, 0 to 65535 (cloudVolume.ts packEdges: the high byte first).
+float word(vec2 b) {
+  vec2 n = floor(b * 255.0 + 0.5);
+  return n.x * 256.0 + n.y;
+}
+
+// The hazard areas' edges (packEdges), each a wall over the line between its two ends, from its area's base to its top, in the style
+// chosen (the mock's). For a box the area's top face is laid too: where the ray meets the top height, if that place is inside the
+// area's rings, which it is when a line from it eastward crosses an odd number of the area's edges (they are listed together, the
+// first of them marked; an area with an edge missing has no top face).
+void hazards(vec3 ro, vec3 rd, float tO, float pix) {
+  bool box = u_hazard > 1.5;
+  bool face = false; // the area being read has a top face this ray can meet
+  bool inside = false; // and meets it inside the area, by the edges read so far
+  float faceT = 0.0;
+  vec2 faceP = vec2(0.0);
+  vec3 faceC = vec3(0.0);
+  for (int k = 0; k < ${MAX_EDGES}; k++) {
+    if (float(k) >= u_edgeCount) break;
+    int x = k * ${EDGE_TEXELS};
+    vec4 ea = texelFetch(u_edges, ivec2(x, 0), 0);
+    vec4 eb = texelFetch(u_edges, ivec2(x + 1, 0), 0);
+    vec2 a = vec2(word(ea.rg), word(ea.ba)) * EDGE_Q - EDGE_KM;
+    vec2 b = vec2(word(eb.rg), word(eb.ba)) * EDGE_Q - EDGE_KM;
+    if (box) {
+      vec4 ec = texelFetch(u_edges, ivec2(x + 3, 0), 0);
+      float flags = floor(ec.a * 255.0 + 0.5);
+      if (mod(flags, 2.0) > 0.5) {
+        // the first edge of an area: the area before it is read, and its top face laid if the ray met it; then this area's
+        if (face && inside) ev(faceT, faceC, 0.1);
+        vec2 hs = atHeight(ro, rd, word(texelFetch(u_edges, ivec2(x + 2, 0), 0).ba) * HEIGHT_Q);
+        faceT = hs.x > 0.0 ? hs.x : hs.y;
+        face = flags > 1.5 && faceT > 0.0 && faceT < tO;
+        inside = false;
+        faceP = ro.xy + rd.xy * faceT;
+        faceC = ec.rgb;
+      }
+      if (face && ((a.y > faceP.y) != (b.y > faceP.y)) && faceP.x < (b.x - a.x) * (faceP.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    vec2 e = b - a;
+    vec2 n = vec2(e.y, -e.x);
+    float den = dot(n, rd.xy);
+    if (abs(den) < 1.0e-6) continue;
+    float t = dot(n, a - ro.xy) / den;
+    if (t <= 0.0 || t > tO) continue;
+    vec3 h = ro + rd * t;
+    float u = dot(h.xy - a, e) / dot(e, e);
+    if (u < 0.0 || u > 1.0) continue;
+    vec4 eh = texelFetch(u_edges, ivec2(x + 2, 0), 0);
+    float base = word(eh.rg) * HEIGHT_Q;
+    float top = word(eh.ba) * HEIGHT_Q;
+    float hz = h.z + dot(h.xy, h.xy) * (0.5 * INV_R); // the place's height over the sea
+    if (hz < base || hz > top) continue;
+    float len = length(e);
+    float s = u * len + word(texelFetch(u_edges, ivec2(x + 4, 0), 0).rg) * ALONG_Q; // km along the edge from the corner it began at
+    float lw = max(0.06, 2.2 * pix * t);
+    float up = 1.0 - smoothstep(lw * 0.5, lw, top - hz);
+    float low = 1.0 - smoothstep(lw * 0.5, lw, hz - base);
+    float al;
+    if (box) {
+      float corner = 1.0 - smoothstep(lw * 0.5, lw, min(u, 1.0 - u) * len);
+      al = max(0.11, 0.34 * max(max(up, low), corner));
+    } else if (u_hazard > 0.5) {
+      float post = 1.0 - smoothstep(lw * 0.4, lw * 0.9, abs(fract(s / POST_KM + 0.5) - 0.5) * POST_KM);
+      al = max(max(up * 0.9, low * 0.6), post * 0.72);
+    } else {
+      float pleat = 0.78 + 0.22 * step(0.5, fract(s / (0.5 * POST_KM)));
+      float v = (hz - base) / max(top - base, 1.0e-3); // the share of the way up
+      al = max(max(up * 0.9, low * 0.6), 0.36 * pow(smoothstep(0.25, 1.0, v), 1.4) * pleat);
+    }
+    ev(t, texelFetch(u_edges, ivec2(x + 3, 0), 0).rgb, al);
+  }
+  if (face && inside) ev(faceT, faceC, 0.1);
+}
+
+// The level slice (the mock's): where the ray meets the aircraft's height within 60 km of it, the field's cover there, filled in its
+// severity's colour with a brighter rim; rings at 10, 20 and 40 km; fading out at the edge.
+void slice(vec3 ro, vec3 rd, float tO, float pix) {
+  vec2 hs = atHeight(ro, rd, u_aircraft.z + dot(u_aircraft.xy, u_aircraft.xy) * (0.5 * INV_R));
+  float t = hs.x > 0.0 ? hs.x : hs.y;
+  if (t <= 0.0 || t >= tO) return;
+  vec3 h = ro + rd * t;
+  float r = length(h.xy - u_aircraft.xy);
+  if (r >= 60.0) return;
+  float sev;
+  float d = fieldCover(toMap(h), sev);
+  float lw = max(0.05, 1.6 * pix * t);
+  float fill = smoothstep(0.22, 0.4, d);
+  float rim = fill * (1.0 - smoothstep(0.4, 0.9, d));
+  float ring = max(max(1.0 - smoothstep(lw * 0.5, lw, abs(r - 10.0)), 1.0 - smoothstep(lw * 0.5, lw, abs(r - 20.0))), 1.0 - smoothstep(lw * 0.5, lw, abs(r - 40.0)));
+  float fade = 1.0 - smoothstep(52.0, 60.0, r);
+  ev(t, mix(vec3(0.8, 0.9, 1.0), sevCol(sev), fill), fade * max(max(0.05, ring * 0.34), max(fill * 0.5, rim * 0.85)));
+}
+
 void main() {
   out_FragColor = vec4(0.0);
   float depth = texture(depthTexture, v_textureCoordinates).r;
@@ -479,6 +833,13 @@ void main() {
   vec3 sun = normalize(mat3(u_eyeToLocal) * czm_lightDirectionEC);
   float pix = 2.0 / (czm_projection[1][1] * czm_viewport.w); // a march pixel, radians
 
+  // What is see-through and thin on this ray, the level slice first (should the list fill, it is in it), in the ray's order.
+  gN = 0;
+  gI = 0;
+  if (u_aids.y > 0.5) slice(ro, rd, tO, pix);
+  if (u_edgeCount > 0.5) hazards(ro, rd, tO, pix);
+  sortEvents();
+
   // The part of the ray worth walking: under the highest top, inside the square, short of what the pixel shows.
   vec2 top = atHeight(ro, rd, u_top + PAD);
   vec2 dir = vec2(abs(rd.x) < 1.0e-6 ? 1.0e-6 : rd.x, abs(rd.y) < 1.0e-6 ? 1.0e-6 : rd.y);
@@ -486,7 +847,7 @@ void main() {
   vec2 tn = min(ta, tb), tf = max(ta, tb);
   float tS = max(max(tn.x, tn.y), max(top.x, 0.0));
   float tEnd = min(min(tf.x, tf.y), min(top.y, tO));
-  if (tS >= tEnd) return;
+  if (tS >= tEnd && gN == 0) return; // no cloud to walk and nothing to lay (with only events, neither walk below takes a step)
 
   // Each march pixel starts a share of a step further on than its neighbour, the four of a 2 × 2 block a quarter apart: the mix
   // lays the four together, so what one pixel's steps pass over the next one's find.
@@ -558,6 +919,7 @@ void main() {
           if (u_look > 0.5) c = mix(c, sevCol(sev) * (0.7 + 0.3 * sh), 0.62 * smoothstep(0.3, 0.7, sev));
           c = mix(c, HAZE, hazed(t)) * u_light;
           float a = 1.0 - exp(-d * sigma(sev) * min(ds, tEnd - t));
+          lay(t, col, A);
           col += (1.0 - A) * a * c;
           A += (1.0 - A) * a;
         }
@@ -570,6 +932,7 @@ void main() {
           float tau = tauR + rain.x * streaks(p, t) * ${glsl(RAIN)} * sigma(rain.y) * min(ds, tEnd - t);
           float a = ${glsl(RAIN_MOST)} * (exp(-tauR) - exp(-tau));
           tauR = tau;
+          lay(t, col, A);
           col += (1.0 - A) * a * mix(rainCol(rain.y), HAZE, hazed(t)) * u_light;
           A += (1.0 - A) * a;
         }
@@ -626,6 +989,7 @@ void main() {
         float tau = tauR + rain.x * ${glsl(RAIN)} * sigma(rain.y) * min(adv, tEnd - t);
         float a = ${glsl(RAIN_MOST)} * (exp(-tauR) - exp(-tau));
         tauR = tau;
+        lay(t, col, A);
         col += (1.0 - A) * a * mix(rainCol(rain.y), HAZE, hazed(t)) * u_light;
         A += (1.0 - A) * a;
       }
@@ -640,10 +1004,12 @@ void main() {
       float shade = face.z > 0.5 ? 1.0 : face.z < -0.5 ? 0.55 : abs(face.x) > 0.5 ? 0.84 : 0.7;
       vec3 bc = sevB < 0.5 ? mix(vec3(0.6, 0.68, 0.8), vec3(0.96, 0.97, 0.98), shade) : sevCol(sevB) * shade;
       bc *= 1.0 - 0.22 * line;
+      lay(tB, col, A);
       col += (1.0 - A) * mix(bc, HAZE, hazed(tB)) * u_light;
       A = 1.0;
     }
   }
+  lay(tO, col, A); // what the walk did not pass, short of what the pixel shows
   // From inside a block's body: its mist over everything, as thick as the cloud it stands for.
   float fogA = 1.0 - exp(-sigma(mistSev) * mist);
   vec3 fogC = (mistSev < 0.5 ? vec3(0.86, 0.89, 0.93) : sevCol(mistSev) * 0.85) * u_light;
@@ -666,16 +1032,62 @@ uniform float u_hi[${BANDS}];
 uniform vec2 u_plane;
 uniform float u_shadow; // how dark full cover's shadow is: none by night
 uniform float u_look; // 2: blocks
+uniform float u_path[${PATH_N * 3}]; // the way ahead in the frame, km: the aircraft, then where it is after each minute (x, y, z of each)
+uniform vec2 u_aids; // 1 where it shows: x the track line, y the level slice (the march draws that)
 in vec2 v_textureCoordinates;
 ${SHARED}
+// The track line (the mock's): the way ahead as a line two pixels wide at any distance, with a wider tick at each minute; white-blue
+// in clear air and, thicker, the severity's colour where the field's cover is over 0.3. Of the stretches between the path's places,
+// the one this ray passes nearest, by the angle between them; the field is read only by a ray near it. Its colour, and how much of
+// the pixel it covers. Hidden by what is solid in front of it (tO: km to what the pixel shows), not by cloud: see the header.
+vec4 track(vec3 ro, vec3 rd, float tO, float pix) {
+  float off = 1.0e9; // the angle from the ray to the nearest stretch
+  float at = 0.0; // how far along the ray that is
+  float mark = 1.0e9; // and how far along the stretch from a minute's place
+  vec3 q = vec3(0.0); // the stretch's place nearest the ray
+  for (int i = 0; i < ${PATH_N - 1}; i++) {
+    vec3 p0 = vec3(u_path[3 * i], u_path[3 * i + 1], u_path[3 * i + 2]);
+    vec3 d = vec3(u_path[3 * i + 3], u_path[3 * i + 4], u_path[3 * i + 5]) - p0;
+    float len = length(d);
+    if (len < 1.0e-4) continue;
+    vec3 f = d / len;
+    float b = dot(rd, f);
+    float den = 1.0 - b * b;
+    if (den <= 1.0e-6) continue;
+    vec3 w = ro - p0;
+    float tc = clamp((dot(f, w) - b * dot(rd, w)) / den, 0.0, len);
+    vec3 c = p0 + f * tc;
+    float sc = dot(c - ro, rd);
+    if (sc <= 0.0 || sc >= tO) continue;
+    float a = length(ro + rd * sc - c) / sc;
+    if (a < off) {
+      off = a;
+      at = sc;
+      q = c;
+      mark = min(i == 0 ? 1.0e9 : tc, len - tc); // no tick at the aircraft itself
+    }
+  }
+  if (off >= 1.0e9) return vec4(0.0);
+  float wide = max(0.0004, 1.4 * pix * at);
+  float dist = off * at;
+  if (dist >= wide * 7.03) return vec4(0.0); // the widest the line gets: in cloud (1.9 times) at a tick (3.7 times)
+  float sev;
+  float inC = smoothstep(0.2, 0.35, fieldCover(toMap(q), sev));
+  float lw = wide * (1.0 + 0.9 * inC);
+  float tick = 1.0 - smoothstep(lw * 1.5, lw * 3.0, mark);
+  float al = 1.0 - smoothstep(lw * 0.5, lw * (1.3 + 2.4 * tick), dist);
+  return vec4(mix(vec3(0.78, 0.92, 1.0), sevCol(sev), inC), al * mix(0.8, 1.0, inC));
+}
+
 void main() {
   vec4 scene = texture(colorTexture, v_textureCoordinates);
   float depth = texture(depthTexture, v_textureCoordinates).r;
+  vec4 eye = czm_windowToEyeCoordinates(v_textureCoordinates * czm_viewport.zw + czm_viewport.xy, depth);
+  vec3 pe = eye.xyz / eye.w;
 
   // The clouds' shadows on what is ground: each band's cover where the light's ray from here meets the band's lowest base.
   if (depth < 1.0 && u_shadow > 0.0) {
-    vec4 eye = czm_windowToEyeCoordinates(v_textureCoordinates * czm_viewport.zw + czm_viewport.xy, depth);
-    vec3 m = toMap((u_eyeToLocal * vec4(eye.xyz / eye.w, 1.0)).xyz);
+    vec3 m = toMap((u_eyeToLocal * vec4(pe, 1.0)).xyz);
     vec3 sun = normalize(mat3(u_eyeToLocal) * czm_lightDirectionEC);
     vec2 slope = sun.xy / max(sun.z, ${glsl(SHADOW_LOW)});
     float sh = 0.0;
@@ -706,15 +1118,31 @@ void main() {
     weights += w;
   }
   vec4 cloud = sum / max(weights, 1.0e-9);
-  out_FragColor = vec4(scene.rgb * (1.0 - cloud.a) + cloud.rgb, scene.a);
+  vec3 col = scene.rgb * (1.0 - cloud.a) + cloud.rgb;
+
+  // The track line, at this stage's own size, over the cloud.
+  if (u_aids.x > 0.5) {
+    vec4 line = track(u_eyeToLocal[3].xyz, normalize(mat3(u_eyeToLocal) * pe), depth >= 1.0 ? 1.0e9 : length(pe) * 0.001, 2.0 / (czm_projection[1][1] * czm_viewport.w));
+    col = mix(col, line.rgb, line.a);
+  }
+  out_FragColor = vec4(col, scene.a);
 }
 `
 
 let passes = 0 // each pass's stages are named by its number: a stage's name is unique in the scene
 
+/** What of Cesium's scene the volume touches: its post-process stages, its camera, and the event it raises when a frame fails. */
+export interface VolumeScene {
+  postProcessStages: PostProcessStageCollection
+  camera: Camera
+  renderError?: { addEventListener(listener: (scene: unknown, error: unknown) => void): () => void }
+}
+
 /**
- * Draws the weather field as volumes. One pass in the scene while it is shown and its field has weather; none otherwise. The shader's
- * numbers are read from this each frame as Cesium draws (its uniforms are functions).
+ * Draws the weather field as volumes, and in the same pass the hazard areas' edges, the level slice and the track line. One pass in
+ * the scene while it is shown and has cloud, an edge or an aid to draw; none otherwise, and none ever again after a render error
+ * while its pass was in the scene (failed). The shader's numbers are read from this each frame as Cesium draws (its uniforms are
+ * functions).
  */
 export class CloudVolume {
   /** The look, read each frame: changing it costs nothing. */
@@ -722,30 +1150,48 @@ export class CloudVolume {
   readonly #stages: PostProcessStageCollection
   readonly #camera: Camera
   readonly #geoid: (lat: number, lon: number) => number
+  readonly #onFailed: () => void
+  readonly #unlisten: (() => void) | null // ends its listening for the scene's render errors
   readonly #frame = new Matrix4() // world metres to the field's frame
   readonly #eyeToLocal = new Matrix4()
   readonly #noiseFrame = new Matrix4()
   readonly #map = new Cartesian3()
   readonly #plane = new Cartesian2() // the aircraft on the field's map; the field's middle until fade() gives it
-  readonly #local = new Cartesian3()
+  readonly #local = new Cartesian3() // and in the frame
+  readonly #aids = new Cartesian2() // u_aids
+  readonly #path: number[] = Array.from({ length: PATH_N * 3 }, () => 0) // u_path
+  readonly #aircraft = new Cartesian3() // u_aircraft: the path's first place
+  readonly #scratch = new Cartesian3()
   #pass: PostProcessStageComposite | null = null
   #field: WxField | null = null
-  #images: { field: unknown; near: unknown } | null = null // the field's, for a pass made when it is shown again
+  #images: { field: unknown; near: unknown } | null = null // the field's, for a pass made when it is shown again; null before the first draw
+  #cloud = false // the field has cloud
+  #seaM = 0 // the frame's level: the geoid at the field's middle
   #scale: MapScale = { sx: 1, sy: 1, t: 0 }
   #lo: number[] = []
   #hi: number[] = []
   #floor: number[] = []
   #top = 0
   #from: Cartesian3 | null = null // the aircraft as fade() gave it
+  #hazards: readonly Hazard[] = []
+  #hazardColor: (h: Hazard) => string = () => '#ffffff'
+  #style: HazardStyle = 'box'
+  #edges: Bitmap = packEdges([]) // the hazard areas' edges in the frame as it stands: a pass's u_edges
+  #edgeCount = 0
+  #ahead: AheadPath | null = null
   #light = 1
   #shadow = SHADOW
   #show = false
+  #failed = false
   #destroyed = false
 
-  constructor(scene: { postProcessStages: PostProcessStageCollection; camera: Camera }, opts: { geoid?: (lat: number, lon: number) => number } = {}) {
+  /** geoid: the sea's height above the ellipsoid at a place, m (default EGM96). onFailed: told once, when a render error has taken the pass out for good. */
+  constructor(scene: VolumeScene, opts: { geoid?: (lat: number, lon: number) => number; onFailed?: () => void } = {}) {
     this.#stages = scene.postProcessStages
     this.#camera = scene.camera
     this.#geoid = opts.geoid ?? geoidN
+    this.#onFailed = opts.onFailed ?? (() => {})
+    this.#unlisten = scene.renderError?.addEventListener((_scene, error) => this.#fail(error)) ?? null
   }
 
   get show(): boolean {
@@ -763,27 +1209,69 @@ export class CloudVolume {
     return this.#field
   }
 
-  /** These clouds in place of those drawn before: the field built round `at` (the aircraft), and a pass for it. */
+  /** Whether a render error has taken the pass out of the scene: for good, until the page is loaded again. The field is still built. */
+  get failed(): boolean {
+    return this.#failed
+  }
+
+  /**
+   * These clouds in place of those drawn before: the field built round `at` (the aircraft) and the frame laid there, the hazard areas'
+   * edges and the way ahead laid in that frame, and a pass for it all. With no cloud the field's images are blank.
+   */
   draw(specs: readonly CloudSpec[], at: { lat: number; lon: number }): void {
     if (this.#destroyed) return
     const f = buildField(specs, at.lat, at.lon)
     this.#field = f
-    this.#images = null
-    if (!f.empty) {
-      const { near, wet } = survey(f)
-      this.#images = { field: image(fieldAtlas(f)), near: image(near) }
-      this.#lo = f.lo.map((m) => m / 1000)
-      this.#hi = f.hi.map((m) => m / 1000)
-      this.#floor = this.#lo.map((km, b) => (wet[b] ? 0 : km))
+    this.#cloud = !f.empty
+    this.#lo = f.lo.map((m) => m / 1000)
+    this.#hi = f.hi.map((m) => m / 1000)
+    let wet: boolean[] = []
+    if (f.empty) {
+      this.#images = { field: image(BLANK), near: image(BLANK) }
+      this.#top = NO_TOP_KM
+    } else {
+      const s = survey(f)
+      wet = s.wet
+      this.#images = { field: image(fieldAtlas(f)), near: image(s.near) }
       this.#top = Math.max(...this.#hi)
-      const seaM = this.#geoid(f.lat, f.lon)
-      localFrame(f.lat, f.lon, seaM, this.#frame)
-      this.#scale = mapScale(f.lat, f.lon, seaM)
-      Cartesian3.fromElements(this.#scale.sx, this.#scale.sy, this.#scale.t, this.#map)
-      this.#anchorNoise(f.lat, f.lon, seaM)
-      this.#place()
     }
+    this.#floor = this.#lo.map((km, b) => (wet[b] ? 0 : km))
+    const seaM = this.#geoid(f.lat, f.lon)
+    this.#seaM = seaM
+    localFrame(f.lat, f.lon, seaM, this.#frame)
+    this.#scale = mapScale(f.lat, f.lon, seaM)
+    Cartesian3.fromElements(this.#scale.sx, this.#scale.sy, this.#scale.t, this.#map)
+    this.#anchorNoise(f.lat, f.lon, seaM)
+    this.#place()
+    this.#layEdges()
+    this.#placeAhead()
     this.#sync(true)
+  }
+
+  /**
+   * The hazard areas whose edges are drawn (the nearest MAX_EDGES of them to the aircraft, picked when they are given and at each
+   * draw), how (curtain, fence or box: changed on the fly), and each area's CSS colour. Other edges are a new pass; the same again,
+   * or another style, are not.
+   */
+  setHazards(hazards: readonly Hazard[], style: HazardStyle, color: (h: Hazard) => string): void {
+    if (this.#destroyed) return
+    this.#hazards = hazards
+    this.#style = style
+    this.#hazardColor = color
+    this.#sync(this.#layEdges())
+  }
+
+  /**
+   * Every frame: the way ahead of the aircraft (wxAhead.ts aheadPath: heights above mean sea level; null: none) and which of the aids
+   * drawn from it show: the track line along it, the level slice at its first place's height.
+   */
+  setAhead(path: AheadPath | null, show: { track: boolean; slice: boolean }): void {
+    if (this.#destroyed) return
+    this.#ahead = path
+    this.#aids.x = path !== null && show.track ? 1 : 0
+    this.#aids.y = path !== null && show.slice ? 1 : 0
+    this.#placeAhead()
+    this.#sync(false)
   }
 
   /** Every frame while the weather shows: the Sun's night. (The relief drawn is not followed: see the header.) */
@@ -805,12 +1293,16 @@ export class CloudVolume {
     this.#destroyed = true
     this.#show = false
     this.#images = null
+    this.#unlisten?.()
     this.#sync(false)
   }
 
-  /** The pass in the scene when it should be, and not otherwise; `fresh`: the field is new, so a pass that stands is replaced. */
+  /**
+   * The pass in the scene when it should be (shown, a frame laid, and cloud, a hazard area's edge or an aid to draw), and not otherwise;
+   * `fresh`: an image is new (the field's, the edges'), so a pass that stands is replaced.
+   */
   #sync(fresh: boolean): void {
-    const wanted = this.#show && !this.#destroyed && this.#images !== null
+    const wanted = this.#show && !this.#destroyed && !this.#failed && this.#images !== null && (this.#cloud || this.#edgeCount > 0 || this.#aids.x > 0 || this.#aids.y > 0)
     if (this.#pass !== null && (!wanted || fresh)) {
       this.#stages.remove(this.#pass) // and destroys it
       this.#pass = null
@@ -818,26 +1310,70 @@ export class CloudVolume {
     if (wanted && this.#pass === null) this.#stages.add((this.#pass = this.#build(this.#images!)))
   }
 
+  /**
+   * A frame failed to render while the pass was in the scene: the pass is taken out, and none is made again. (Its shaders were only
+   * ever compiled on one graphics card; one that will not compile them fails at the pass's first frame, and Cesium then stops
+   * rendering altogether.) An error while no pass is in the scene is another part's.
+   */
+  #fail(error: unknown): void {
+    if (this.#pass === null) return
+    this.#failed = true
+    console.warn('FlightHopper: the cloud pass is taken out of the scene after a render error; the 3-D clouds are off until the page is loaded again:', error)
+    this.#sync(false)
+    this.#onFailed()
+  }
+
+  /** The hazard areas' edges in the frame as it stands (none before the first draw has laid it), packed for a pass; whether they are others than before. */
+  #layEdges(): boolean {
+    if (this.#field === null) return false
+    const edges = hazardEdges(this.#hazards, this.#frame, this.#seaM, this.#hazardColor, this.#from === null ? undefined : this.#local)
+    const packed = packEdges(edges)
+    const was = this.#edges.data
+    const same = packed.data.every((b, i) => b === was[i])
+    this.#edges = packed
+    this.#edgeCount = Math.min(edges.length, MAX_EDGES)
+    return !same
+  }
+
+  /** The way ahead's places in the frame, for the aids that show: each at its height above the sea there. */
+  #placeAhead(): void {
+    const points = this.#ahead?.points
+    if (points === undefined || points.length === 0 || this.#field === null || (this.#aids.x === 0 && this.#aids.y === 0)) return
+    for (let i = 0; i < PATH_N; i++) {
+      const p = points[Math.min(i, points.length - 1)]
+      const l = Matrix4.multiplyByPoint(this.#frame, Cartesian3.fromDegrees(p.lon, p.lat, p.altM + this.#geoid(p.lat, p.lon), Ellipsoid.WGS84, this.#scratch), this.#scratch)
+      this.#path[3 * i] = l.x
+      this.#path[3 * i + 1] = l.y
+      this.#path[3 * i + 2] = l.z
+    }
+    Cartesian3.fromElements(this.#path[0], this.#path[1], this.#path[2], this.#aircraft)
+  }
+
   #build(images: { field: unknown; near: unknown }): PostProcessStageComposite {
     const n = ++passes
     const look = (): number => LOOK[this.look] ?? LOOK.severity
+    const edgeCount = this.#edgeCount // of the image this pass is given
     const shared = {
       u_field: images.field,
       u_eyeToLocal: () => eyeToLocal(this.#camera.inverseViewMatrix, this.#frame, this.#eyeToLocal),
       u_map: () => this.#map,
+      u_lo: () => this.#lo,
       u_hi: () => this.#hi,
       u_plane: () => this.#plane,
+      u_look: look,
+      u_aids: () => this.#aids,
     }
     const march = new PostProcessStage({
       name: `fh_cloud_march_${n}`, fragmentShader: MARCH_SHADER, textureScale: 0.5,
       uniforms: {
-        ...shared, u_noise: image(noiseAtlas()), u_near: images.near, u_noiseFrame: () => this.#noiseFrame, u_lo: () => this.#lo, u_floor: () => this.#floor, u_top: () => this.#top,
-        u_look: look, u_light: () => this.#light,
+        ...shared, u_noise: image(this.#cloud ? noiseAtlas() : BLANK), u_near: images.near, u_noiseFrame: () => this.#noiseFrame, u_floor: () => this.#floor,
+        u_top: () => this.#top, u_light: () => this.#light,
+        u_edges: image(this.#edges), u_edgeCount: () => edgeCount, u_hazard: () => HAZARD[this.#style] ?? HAZARD.box, u_aircraft: () => this.#aircraft,
       },
     })
     const mix = new PostProcessStage({
       name: `fh_cloud_mix_${n}`, fragmentShader: MIX_SHADER,
-      uniforms: { ...shared, u_march: march.name, u_lo: () => this.#lo, u_shadow: () => this.#shadow, u_look: look },
+      uniforms: { ...shared, u_march: march.name, u_shadow: () => this.#shadow, u_path: () => this.#path },
     })
     return new PostProcessStageComposite({ name: `fh_cloud_${n}`, stages: [march, mix], inputPreviousStageTexture: false })
   }
