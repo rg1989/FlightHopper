@@ -12,15 +12,24 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
   restart. `make live` sets `EVENTS_DIR=data/events`. Without `EVENTS_DIR`, or with a replay source, there are no alerts.
 - **Emergencies anywhere, within a minute.** The poller asks adsb.fi for every aircraft on 7700, 7600 and 7500, worldwide:
   `/api/v2/sqk/{code}`, one code every 10 s, so each code every 30 s. That is 0.1 req/s of the 0.9 the app has (11 %),
-  and nothing when the switch is off. The answers go into the stores like any other answer, so these aircraft are on the
-  map and can be chased.
+  and nothing when the switch is off. The sweep keeps to an eighth of the request budget, so the map keeps seven tokens in
+  eight: below 0.8 req/s the gap between sweep requests grows (8 ÷ rate seconds) and each code is asked less often than
+  every 30 s. After one 429 has halved the rate to 0.45 req/s, each code is asked every 53 s. The answers go into the stores
+  like any other answer, so these aircraft are on the map and can be chased.
 - **ADS-B emergency status** (general, minfuel, nordo, unlawful, downed) is read from every answer the server gets: the
   view, the chase, recorded flights and the sweep. No endpoint filters on it, so outside these it is not seen.
 - **Steep descents.** Two rules on the barometric altitude (`server/descent.ts`):
-  - *Descent (D1):* from FL200 or above, 10,000 ft or more lost within 120 s, over 4 or more points.
-  - *Dive (D2):* 3,000 ft or more lost within 30 s above FL150, and then no position for 60 s or more. FZ1073 fits: the open
-    networks heard 34,678 ft at 05:21:43 and 30,045 ft at 05:22:13, then nothing for 9 minutes.
-  - The points are cleaned first: none above 50,000 ft, none more than 30,000 fpm away from both neighbours (a spike).
+  - *Descent (D1):* from FL200 or above, 15,000 ft or more lost within 120 s, over 4 or more points. The fall is followed to
+    its bottom, also past a repeated or slightly higher sample, until 60 s pass with no new low.
+  - *Dive (D2):* the fall into the last point heard: its top is within the last 60 s, at FL150 or above, and the fall is
+    3,000 ft or more, at 5,000 fpm or more on average, over 3 or more points. Then no position for 60 s or more. FZ1073 fits:
+    in adsb.lol's 05:00 file its last points are 33,950 ft at 05:21:10 and 27,950 ft at 05:22:10, and nothing follows to the
+    file's last slice at 05:29:50.
+  - The points are cleaned first: none above 50,000 ft, and no outlier: a point whose steps to both neighbours go opposite
+    ways and that is over 1,000 ft off the line between them (a GNSS altitude among baro ones), or whose steps are both over
+    30,000 fpm (a spike).
+  - Tuned on 8 real half hours (2026-10-03, `docs/anomaly-alerts.md` §3.2): D1 first took 10,000 ft and gave 21 events, mostly
+    military and fighter aircraft, and the first D2 missed FZ1073.
   - Live, D1 runs on the samples of the aircraft the server polls (the view, the chase). It runs only on a sample whose
     `baro_rate` is −3,000 fpm or lower, so most samples cost nothing.
   - Worldwide, D1 and D2 run on each new adsb.lol half-hour file that the server already downloads for History. This
@@ -32,13 +41,19 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     glitches are common (OpenSky counted over 8,000 brief 7500s in 4 months).
   - Ignored: aircraft on the ground, surface vehicles (C1 to C3), addresses that are not ICAO, `000000`, `000001`,
     `lifeguard` (a medical flight's priority, not an emergency) and `reserved`.
-  - No descent events for military aircraft (`dbFlags & 1`, live only) or for light aircraft and gliders (A1, B1 to B7),
-    which covers jump planes.
+  - No descent or dive events for military aircraft (live: `dbFlags & 1` or the type table's flag from the Mictronics
+    database; late: the type table's flag), or for fighter and trainer types (a list of ICAO type designators in
+    `server/alerts.ts`: F-5, T-38, Texan II, L-39, Su-27 and others), which dive as routine. Their squawks and statuses still
+    count: the real files held a KC-135 and a C-130 on 7700.
+  - No live descent events for light aircraft and gliders (A1, B1 to B7), which covers jump planes.
   - *Quiet* events are logged but raise no alert: 7600 and the nordo and minfuel statuses on a light aircraft (79 % of
-    7600s are small private aircraft on approach).
+    7600s are small private aircraft on approach). Late, the type table's category decides, which also quiets a late 7600 of
+    a turboprop airliner: radio failures are the least urgent cause. A worse cause that is older than the event's newest
+    sighting (a late 7700 from before a quiet 7600) still makes the event loud, and it is pushed once.
 - **One event per aircraft per episode.** A new cause on an open event updates it and does not open a new one: for
   example 7700, then unlawful, then 7500. An event stays open until 30 min pass with no sighting of any cause. A late
-  finding for an aircraft that already has an event within 30 min is merged into that event.
+  finding for an aircraft that already has an event within 30 min is merged into that event. A late event whose aircraft is
+  seen live again is no longer late.
 - **The log.** `EVENTS_DIR/YYYY-MM-DD.jsonl` (UTC day of the write) holds one JSON line per open or change, and the
   newest line of an id wins. A position-only update is written at most every 5 min. At start the server reads the last
   8 days. `data/events/` is git-ignored.
@@ -98,6 +113,7 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
 - Real data:
   - One sweep request, to check that the answer reads.
   - The late check run over a few daytime half-hour files, to count false alarms per half hour, with the thresholds
-    changed if they are noisy.
+    changed if they are noisy. Done on 8 half hours: D1 went from 10,000 to 15,000 ft, D2 became the fall into the last
+    point, and military and fighter aircraft were left out of the falls.
   - The panel, toast, follow and replay checked in the browser. For that check, `ALERT_SQUAWKS` sweeps a common squawk
     instead, so that events come quickly.

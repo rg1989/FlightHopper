@@ -4,13 +4,14 @@
 // "Contains information from the Mictronics aircraft database, made available under the ODC Attribution License"; the
 // README credits it), one zip of 4.3 MB, rebuilt weekly, holding
 //   aircrafts.json  { "4A0481": { "r": "YR-ADA", "t": "A320", "f": "00", "d": "…" }, … }  452,000 addresses, upper-case hex
+//                   (f is two flag characters, the first '1' for military: 17,038 of 451,759 entries on 2026-10-03)
 //   types.json      { "A320": { "desc": "L2J", "wtc": "M" }, … }                        2,788 types
 // A type's desc is its ICAO Doc 8643 description: kind (L landplane, S seaplane, A amphibian, H helicopter, G gyrocopter;
 // this table writes R for a tiltrotor, V a surface vehicle, D a drone, B a balloon or airship), engine count, engine kind
 // (P piston, T turboprop, J jet, E electric). wtc is the wake category (L, M, H; J super).
 // Downloaded when the server starts and checked once a day after (a conditional GET: the zip changes weekly), read with
-// Node's own zlib, held in memory only and compact: the addresses sorted in a Uint32Array, a type index per address, a
-// category per type (about 2.6 MB). Never written to disk. Not tar1090-db or ADS-B Exchange's database: their licences
+// Node's own zlib, held in memory only and compact: the addresses sorted in a Uint32Array, a type index and a military flag
+// per address, a category per type (about 3 MB). Never written to disk. Not tar1090-db or ADS-B Exchange's database: their licences
 // are unclear.
 import { promisify } from 'node:util'
 import { crc32, deflateRawSync, inflateRaw } from 'node:zlib'
@@ -167,12 +168,13 @@ export function categoryOf(type: string, desc: string, wtc: string): string {
 }
 
 const CATEGORIES: readonly (string | null)[] = [null, 'A1', 'A3', 'A5', 'A7', 'B1', 'B2', 'B4', 'B6', 'C1', 'C2', 'C3']
-const NOT_TYPED = Object.freeze({ type: null, category: null })
+const NOT_TYPED = Object.freeze({ type: null, category: null, military: false })
 
-/** The addresses that have a type, sorted, each with its type's index; per type, its designator and category. */
+/** The addresses that have a type, sorted, each with its type's index and its military flag; per type, its designator and category. */
 export interface TypeTable {
   addrs: Uint32Array
   typeOf: Uint16Array // index into codes, per address
+  mil: Uint8Array // 1 for a military address (Mictronics' flag: the first character of f is '1'), per address
   codes: string[]
   cats: Uint8Array // index into CATEGORIES, per type (0: none)
 }
@@ -181,7 +183,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /**
  * The table from aircrafts.json and types.json as parsed. An address is kept when it is 6 hex digits with a type
- * designator (not ZZZZ); a type types.json does not describe gets no category. Nothing of the parsed JSON is kept.
+ * designator (not ZZZZ), with its military flag (the first character of its f is '1'); a type types.json does not describe
+ * gets no category. Nothing of the parsed JSON is kept.
  */
 export function buildTypeTable(aircraft: unknown, types: unknown): TypeTable {
   const described = isRecord(types) ? types : {}
@@ -189,7 +192,7 @@ export function buildTypeTable(aircraft: unknown, types: unknown): TypeTable {
   const codes: string[] = []
   const cats: number[] = []
   const keys = isRecord(aircraft) ? Object.keys(aircraft) : []
-  // Address × 65,536 + type index: 40 bits, exact in a double, so one numeric sort orders both columns together.
+  // Address × 131,072 + military × 65,536 + type index: 41 bits, exact in a double, so one numeric sort orders the columns together.
   const packed = new Float64Array(keys.length)
   let n = 0
   for (const key of keys) {
@@ -207,19 +210,24 @@ export function buildTypeTable(aircraft: unknown, types: unknown): TypeTable {
       const wtc = isRecord(d) && typeof d.wtc === 'string' ? d.wtc : ''
       cats.push(desc === null ? 0 : CATEGORIES.indexOf(categoryOf(t, desc, wtc)))
     }
-    packed[n++] = parseInt(key, 16) * 65536 + ix
+    const f = (entry as Record<string, unknown>).f
+    const military = typeof f === 'string' && f.startsWith('1') ? 1 : 0
+    packed[n++] = parseInt(key, 16) * 131072 + military * 65536 + ix
   }
   const sorted = packed.subarray(0, n).sort()
   const addrs = new Uint32Array(n)
   const typeOf = new Uint16Array(n)
+  const mil = new Uint8Array(n)
   let m = 0
   for (const v of sorted) {
-    const addr = Math.floor(v / 65536)
+    const addr = Math.floor(v / 131072)
     if (m > 0 && addrs[m - 1] === addr) continue // the same address twice (in upper and lower case): one is kept
+    const rest = v % 131072
     addrs[m] = addr
-    typeOf[m++] = v % 65536
+    mil[m] = rest >= 65536 ? 1 : 0
+    typeOf[m++] = rest % 65536
   }
-  return { addrs: addrs.slice(0, m), typeOf: typeOf.slice(0, m), codes, cats: Uint8Array.from(cats) }
+  return { addrs: addrs.slice(0, m), typeOf: typeOf.slice(0, m), mil: mil.slice(0, m), codes, cats: Uint8Array.from(cats) }
 }
 
 // ---- the store ----
@@ -259,15 +267,16 @@ export class TypeDb {
   }
 
   /**
-   * An address's ICAO type designator and the emitter category it implies (categoryOf), from one search of the table.
-   * type null: none known, or a '~' address; category null as well, or for a type with no description.
+   * An address's ICAO type designator, the emitter category it implies (categoryOf) and Mictronics' military flag, from one
+   * search of the table. type null: none known, or a '~' address; category null as well, or for a type with no description;
+   * military false when none is known.
    */
-  lookup(hex: string): { type: string | null; category: string | null } {
+  lookup(hex: string): { type: string | null; category: string | null; military: boolean } {
     const i = this.#find(hex)
     if (i < 0) return NOT_TYPED
     const t = this.#table!
     const ix = t.typeOf[i]
-    return { type: t.codes[ix], category: CATEGORIES[t.cats[ix]] ?? null }
+    return { type: t.codes[ix], category: CATEGORIES[t.cats[ix]] ?? null, military: t.mil[i] === 1 }
   }
 
   /**

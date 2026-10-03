@@ -34,7 +34,7 @@ export interface AlertEvent {
   altFt: number | null
   openedMs: number // UTC ms: first seen with a cause, or the top of the fall
   lastMs: number // UTC ms: the newest sighting with a cause
-  late: boolean // found in an adsb.lol half-hour file, 1 to 31 min after the fact
+  late: boolean // found in an adsb.lol half-hour file, 1 to 31 min after the fact; clears when the aircraft is heard live again
   quiet: boolean // listed only: no toast, notification, push or follow (a light aircraft's radio failure)
 }
 
@@ -45,7 +45,10 @@ export interface EventsReply {
   events: AlertEvent[] // the last 7 days, newest first
 }
 
-/** Seen with its cause in the last 2 min and not found after the fact: its aircraft can be followed live. */
+/**
+ * Seen with its cause in the last 2 min and not found after the fact: its aircraft can be followed live. An event found late
+ * stops being late (the server clears `late`) when its aircraft is heard live again, and is ongoing while it is seen.
+ */
 export function ongoing(e: AlertEvent, nowMs: number): boolean {
   return !e.late && nowMs - e.lastMs < ONGOING_MS
 }

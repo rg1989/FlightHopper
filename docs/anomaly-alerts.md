@@ -81,14 +81,23 @@ the profile of jump flights. 0 to 2 lost 10,000 ft or more, none of them from FL
 *Measured*, FZ1073 as the open networks heard it (`public/scenarios/fz1073/track.csv`, rows `q=A`, `src=ADSBLOL`): it lost about 5,900 ft
 in 73 s from 05:21:00. The last 4 s were at about 23,000 fpm. Then the open networks heard nothing for 9 minutes.
 
+*Measured on 8 real half hours (2026-10-03)*, adsb.lol heatmaps (2026-09-30 05:00 UTC, 2026-10-01 13:00 UTC and 2026-10-02 08:00 to 18:00 UTC),
+125,941 aircraft-half-hours. The first rules missed FZ1073. Its points hold a GNSS altitude among the baro ones and miss a slice, so its
+last step was faster than 30,000 fpm and its 30 s window held 2 real points. D1 at 10,000 ft in 120 s gave 21 events: 8 aircraft that
+Mictronics flags military (T-38, M-339, M-345, T-7, Texan II), 7 fighters on civil registrations (F-5 ×3, Mirage F1, a NASA T-38, an S-211
+and one unknown), and 6 business jets and an A321 descending steeply into airports, the largest 12,025 ft (H25B) and 15,850 ft (C25M) in
+120 s. At 15,000 ft in 120 s, with military and fast-jet types left out, 2 remain (an FA20 and a C25M). The same files held a KC-135 and a
+C-130 on 7700: real emergencies, so squawks and statuses are not left out for military aircraft. The rules below use these values.
+
 The rules use `alt_baro`. Points are an aircraft's reports, or the 10 s heatmap points.
 
-- **Clean first.** Drop points above 50,000 ft and points more than 30,000 fpm away from both neighbours. Take the median of 3 points.
-- **D1, emergency descent.** From FL200 or above, 10,000 ft or more lost within 120 s (5,000 fpm), over 4 or more falling points. Noise in the 5 measured half hours, worldwide: 0.
-- **D2, dive then lost.** 3,000 ft or more lost within 30 s above FL150, then no position for 60 s. FZ1073 fits. Noise: not measured.
+- **Clean first.** Drop points above 50,000 ft and repeated times. Drop an outlier: an inner point whose steps to its two neighbours go in opposite directions and that is more than 1,000 ft off the line between them (a GNSS altitude among baro ones, or a bad decode), or whose two steps are both faster than 30,000 fpm. The steps of a fall go down, or up by 300 ft at most, at 30,000 fpm or less, with at most 60 s between points.
+- **D1, emergency descent.** From FL200 or above, 15,000 ft or more lost within 120 s (7,500 fpm), over 4 or more falling points. The fall is then followed to its bottom: on while each step is a fall, until 60 s pass with no new low. Noise in the 8 measured half hours, worldwide, with the exclusion below: 2 (FA20, C25M).
+- **D2, dive then lost.** The fall into the last point. Its top is within the last 60 s, at FL150 or above, with every step from it a fall, over 3 or more points. The fall is 3,000 ft or more, at 5,000 fpm or more on average. Then no position for 60 s. Of the tops that fit, the biggest fall is taken. FZ1073 fits (section 7.5). Noise: not measured.
+- **No D1 or D2 event.** Military aircraft (the Mictronics flag, and live `dbFlags & 1`) and fighter and trainer types (a list of type designators in `server/alerts.ts`: F-5, T-38, Texan II, L-39, Su-27 and others). They dive as routine. Their squawks and statuses still count.
 - **D3, steep descent** (polled aircraft, log only). `baro_rate` at −6,000 fpm or lower, with `alt_baro` falling at 4,000 fpm or more since a report 5 to 120 s earlier. In the recordings, 2 aircraft passed: a jump plane and a military jet.
 - **Urgent.** A 7x00 code or an emergency status at the same time, or `nav_altitude_mcp` 5,000 ft or more above `alt_baro` (not commanded).
-- **Log, no push.** Military (`dbFlags & 1`). Category A1 or B. A C208, DHC6, PC6T or P750 below FL150 (jump planes).
+- **Log, no push.** Category A1 or B. A C208, DHC6, PC6T or P750 below FL150 (jump planes).
 - **GNSS.** Use `geom_rate` only when `alt_baro` agrees. Never alert on GNSS altitude alone.
 
 ## 4. False alarms
@@ -199,8 +208,12 @@ password, so make it random [23]. ntfy.sh allows 250 messages a day. The default
 ### 7.5 Example: FZ1073, 2026-09-30
 
 The dive started at 05:21:09 over northern Saudi Arabia, outside any polled area. With this design, the server reads the 05:00 to 05:30
-file between 05:30:20 and 05:31:20, and D2 fires. The sweep sees 7700 at 05:31:26 and confirms it about 30 s later. The status changes to
-unlawful interference at 05:35:17 (`events.csv`). The first push reaches the phone about 10 minutes after the dive started.
+file between 05:30:20 and 05:31:20, and D2 fires. In that file, aircraft 8965d1 is at 34,000 ft until 05:20:50, then at 33,950 ft at 05:21:10
+and falling to 32,850 ft at 05:21:40. It has a GNSS altitude of 35,550 ft at 05:22:00 among the baro ones, and 27,950 ft at 05:22:10. The slice
+at 05:21:50 is missing, and the file's last slice is at 05:29:50. `clean` drops the GNSS altitude. D2 takes the fall into the last point:
+33,950 ft at 05:21:10 to 27,950 ft at 05:22:10, 6,000 ft in 60 s, then no position for the 460 s to the end of the file. The sweep sees 7700
+at 05:31:26 and confirms it about 30 s later. The status changes to unlawful interference at 05:35:17 (`events.csv`). The first push reaches
+the phone about 10 minutes after the dive started.
 
 ### 7.6 Beyond this design
 

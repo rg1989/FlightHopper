@@ -177,18 +177,18 @@ test('buildTypeTable: the typed addresses sorted, one type index each; per type 
   assert.equal(t.cats.length, t.codes.length)
 })
 
-test('lookup: an address’s type and category from one search; a hit in either case; a miss, a ~ address and what is no address are null', () => {
+test('lookup: an address’s type, category and military flag from one search; a hit in either case; a miss, a ~ address and what is no address are null and not military', () => {
   const db = tableDb()
-  assert.deepEqual(db.lookup('4a0481'), { type: 'A320', category: 'A3' })
-  assert.deepEqual(db.lookup('4A0481'), { type: 'A320', category: 'A3' })
+  assert.deepEqual(db.lookup('4a0481'), { type: 'A320', category: 'A3', military: false })
+  assert.deepEqual(db.lookup('4A0481'), { type: 'A320', category: 'A3', military: false })
   const hexes = ['738063', '00830b', 'a00018', '109866', '106593', '3f232b']
   assert.deepEqual(hexes.map((h) => db.lookup(h).type), ['B738', 'R44', 'C172', 'GND', 'TWR', 'SHIP'])
   assert.deepEqual(hexes.map((h) => db.lookup(h).category), ['A3', 'A7', 'A1', 'C2', 'C3', 'B2'])
-  assert.deepEqual(db.lookup('4b1234'), { type: 'NEW1', category: null }, 'a type with no description: no category')
+  assert.deepEqual(db.lookup('4b1234'), { type: 'NEW1', category: null, military: false }, 'a type with no description: no category')
   for (const hex of ['ffffff', '000000', '142635', '386426', '~4a0481', '~abc123', '4a048', '4a04811', 'xyzxyz', '', ' 4a0481']) {
-    assert.deepEqual(db.lookup(hex), { type: null, category: null }, JSON.stringify(hex))
+    assert.deepEqual(db.lookup(hex), { type: null, category: null, military: false }, JSON.stringify(hex))
   }
-  assert.deepEqual(new TypeDb({ userAgent: 't' }).lookup('4a0481'), { type: null, category: null }, 'no table yet')
+  assert.deepEqual(new TypeDb({ userAgent: 't' }).lookup('4a0481'), { type: null, category: null, military: false }, 'no table yet')
 })
 
 test('buildTypeTable: what is not an address with a designator is left out; one address twice is kept once; junk is an empty table', () => {
@@ -197,6 +197,51 @@ test('buildTypeTable: what is not an address with a designator is left out; one 
   assert.deepEqual(t.codes.length, 2)
   for (const junk of [null, undefined, 'x', 42, [], [{ t: 'A320' }]]) assert.equal(buildTypeTable(junk, TYPES).addrs.length, 0, JSON.stringify(junk))
   assert.equal(buildTypeTable(AIRCRAFT, null).cats.every((c) => c === 0), true, 'no types.json: types, no categories')
+})
+
+// ---- the military flag ----
+
+// Mictronics' "f" is two characters; the first, '1', is military (checked on the real file, 2026-10-03: 17,038 of 451,759 entries,
+// among them T-38s, the KC-135 58-0100 and the C-130 93-1037). The first entry is as the real file has it, under a made-up address.
+const FLAGGED = {
+  AE0001: { r: '166045', t: 'TEX2', f: '10', d: 'Raytheon T-6B Texan II' }, // military
+  '4A0481': { r: 'YR-ADA', t: 'A320', f: '00', d: 'AIRBUS A-320' }, // not
+  B00001: { r: 'N1', t: 'C172', d: 'CESSNA 172' }, // no f: not
+  B00002: { r: 'N2', t: 'C172', f: '01' }, // the second character only: not
+  B00003: { r: 'N3', t: 'C172', f: 10 }, // not text: not
+  B00004: { r: 'N4', t: 'C172', f: '' }, // empty: not
+}
+
+test('lookup: an entry with f "10" is military; "00", no f, a second character only, an empty f and an f that is not text are not', () => {
+  const db = tableDb(FLAGGED, TYPES)
+  assert.deepEqual(Object.keys(FLAGGED).map((hex) => [hex, db.lookup(hex).military]), [['AE0001', true], ['4A0481', false], ['B00001', false], ['B00002', false], ['B00003', false], ['B00004', false]])
+  assert.deepEqual(db.lookup('ae0001'), { type: 'TEX2', category: null, military: true }, 'a type types.json does not describe: no category, and still military')
+  assert.deepEqual(db.lookup('b00001'), { type: 'C172', category: 'A1', military: false })
+})
+
+test('buildTypeTable: the flag is kept per address, parallel to addrs, through the sort', () => {
+  const t = buildTypeTable({ FFFFFF: { t: 'C172', f: '10' }, '000001': { t: 'A320', f: '10' }, '4A0481': { t: 'A320', f: '00' }, '738063': { t: 'B738', f: '10' }, A00018: { t: 'C172', f: '00' } }, TYPES)
+  assert.deepEqual([...t.addrs].map((a) => a.toString(16).padStart(6, '0')), ['000001', '4a0481', '738063', 'a00018', 'ffffff'])
+  assert.deepEqual([...t.mil], [1, 0, 1, 0, 1])
+  assert.deepEqual([...t.typeOf].map((i) => t.codes[i]), ['A320', 'A320', 'B738', 'C172', 'C172'])
+})
+
+test('buildTypeTable: the address, the flag and the type index stay exact in the packed sort, at the top of each range', () => {
+  // 65,536 designators fill the 16-bit type index. The aircraft at the lowest address has index 0 and is military; the next to last
+  // has index 65,535 and is not; the one at the highest address has index 65,535 and is military: the largest packed number there is.
+  const designator = (i: number): string => i.toString(36).toUpperCase().padStart(4, '0')
+  const aircraft: Record<string, unknown> = {}
+  for (let i = 0; i <= 0xffff; i++) aircraft[(0x010000 + i).toString(16).padStart(6, '0')] = { t: designator(i), f: i === 0 ? '10' : '00' }
+  aircraft.FFFFFF = { t: designator(0xffff), f: '10' }
+  aircraft.FFFFFE = { t: designator(0), f: '00' }
+  aircraft.FFFFFD = { t: 'NEW9', f: '10' } // a 65,537th designator: the index is full, so it has no type
+  const db = tableDb(aircraft, {})
+  assert.deepEqual(db.lookup('010000'), { type: designator(0), category: null, military: true })
+  assert.deepEqual(db.lookup('01ffff'), { type: designator(0xffff), category: null, military: false })
+  assert.deepEqual(db.lookup('ffffff'), { type: designator(0xffff), category: null, military: true })
+  assert.deepEqual(db.lookup('fffffe'), { type: designator(0), category: null, military: false })
+  assert.deepEqual(db.lookup('fffffd'), { type: null, category: null, military: false })
+  assert.equal(db.lookup('010001').military, false, 'the neighbour of the first')
 })
 
 // ---- TypeDb: a fake host on a fake clock ----

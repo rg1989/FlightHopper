@@ -15,11 +15,13 @@ const DAY = 86_400_000
 const at = (min: number, sec = 0): number => SLOT + (min * 60 + sec) * 1000 // 05:00 plus min:sec
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'fh-alerts-'))
 
+type TypeOf = (hex: string) => { type: string | null; category: string | null; military?: boolean }
+
 function setup(o: {
   dir?: string
   on?: boolean
   codes?: string[]
-  typeOf?: (hex: string) => { type: string | null; category: string | null }
+  typeOf?: TypeOf
   push?: (e: AlertEvent) => void
 } = {}) {
   const clock = { t: T0 }
@@ -636,14 +638,29 @@ test('late: a live fall of an aircraft with a late event clears late too, and is
   assert.equal(pushed.length, 2, 'the late squawk, then the fall')
 })
 
-// 9. The late path does not trust the type table's category for "light"
+// 9. The late path's quiet uses the type table's category; its fall test does not
 
-test('scanSlot: a late 7600 of a type the table calls light (the ATR 72 is A1 there) is not quiet, and is pushed', () => {
+test('scanSlot: a late 7600 of a type the table calls light (a C172 is A1) is quiet: listed, not pushed; its 7700 is not quiet', () => {
+  const { a, pushed } = setup({ typeOf: () => ({ type: 'C172', category: 'A1' }) })
+  a.scanSlot(heat([
+    { hex: 'a00001', idents: [{ s: 600, squawk: '7600' }, { s: 660, squawk: '7600' }] },
+    { hex: 'a00002', idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }] },
+  ]), SLOT)
+  const by = (hex: string): AlertEvent | undefined => a.reply().events.find((e) => e.hex === hex)
+  assert.deepEqual([by('a00001')?.squawk, by('a00001')?.type, by('a00001')?.quiet], ['7600', 'C172', true])
+  assert.deepEqual([by('a00002')?.squawk, by('a00002')?.quiet], ['7700', false])
+  assert.deepEqual(pushed.map((e) => e.hex), ['a00002'])
+})
+
+test('scanSlot: a late 7600 of an ATR 72 is quiet too (the table gives turboprop airliners A1): the accepted cost, as radio failures are the least urgent cause', () => {
   const { a, pushed } = setup({ typeOf: () => ({ type: 'AT76', category: 'A1' }) })
   a.scanSlot(heat([{ hex: 'a00001', idents: [{ s: 600, squawk: '7600' }, { s: 660, squawk: '7600' }] }]), SLOT)
   const [e] = a.reply().events
-  assert.deepEqual([e.kind, e.squawk, e.type, e.quiet], ['squawk', '7600', 'AT76', false])
-  assert.equal(pushed.length, 1)
+  assert.deepEqual([e.kind, e.squawk, e.type, e.quiet], ['squawk', '7600', 'AT76', true])
+  assert.equal(pushed.length, 0)
+  const loud = setup({ typeOf: () => ({ type: 'A320', category: 'A3' }) })
+  loud.a.scanSlot(heat([{ hex: 'a00001', idents: [{ s: 600, squawk: '7600' }, { s: 660, squawk: '7600' }] }]), SLOT)
+  assert.deepEqual([loud.a.reply().events[0].quiet, loud.pushed.length], [false, 1], 'an A3 type is not light')
 })
 
 test('scanSlot: a late fall of a type the table calls light (the Dash 8 is A1 there) is found', () => {
@@ -673,6 +690,164 @@ test('scanSlot: the type table is asked only for an aircraft with two idents or 
   })
   a.scanSlot(file, SLOT)
   assert.deepEqual(asked.sort(), ['a00003', 'a00004'])
+})
+
+// ---- Task 3b: no falls for military aircraft and fighter and trainer types; an older worse code un-quiets ----
+
+/** A polled aircraft's samples fed one at a time, each with the track so far. */
+function feed(a: Alerts, s: Sample[], dbFlags = 0): void {
+  for (let i = 0; i < s.length; i++) a.sample(s[i], () => s.slice(0, i + 1), dbFlags)
+}
+
+// The fighter and trainer types with no fall events (ICAO type designators), as the brief lists them.
+const FAST_JETS = (
+  'A4 A10 AJET AMX AV8B BT7 EUFI F1 F4 F5 F14 F15 F16 F18 F18H F18S F22 F35 F104 F117 GRIF HAWK HUNT J8 JF17 K8 KFIR L39 L59 L159 LCA ' +
+  'M339 M345 M346 MG29 MG31 MIR2 MRF1 RFAL S211 SU24 SU25 SU27 SU30 SU34 SU35 SU57 T2 T38 T4 T45 T50 TEX2 TOR PC7 PC9 PC21 TUCA'
+).split(' ')
+
+test('sample: no descent event for a fighter or trainer type (F5, T38 and the others listed), however it falls; an airliner\'s same fall is one', () => {
+  const run = (typeCode: string | null): number => {
+    const { a } = setup()
+    feed(a, samples(plunge(36_000, 50), 200, { typeCode }))
+    return a.reply().events.length
+  }
+  assert.equal(FAST_JETS.length, 58)
+  assert.equal(run('B738'), 1)
+  assert.equal(run('F15X'), 1, 'a type that is not listed')
+  assert.equal(run(null), 1, 'no type is no exclusion')
+  for (const type of FAST_JETS) assert.equal(run(type), 0, type)
+})
+
+test('sample: no descent event for an aircraft the type table calls military, whatever dbFlags says; a missing military is false', () => {
+  const run = (typeOf: TypeOf): number => {
+    const { a } = setup({ typeOf })
+    feed(a, samples(plunge(36_000, 50), 200))
+    return a.reply().events.length
+  }
+  assert.equal(run(() => ({ type: 'B738', category: 'A3', military: true })), 0)
+  assert.equal(run(() => ({ type: 'B738', category: 'A3', military: false })), 1)
+  assert.equal(run(() => ({ type: 'B738', category: 'A3' })), 1)
+})
+
+test('sample: the type table is asked only for a sample whose track is checked, and a lookup that throws counts as no type', (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const asked: string[] = []
+  const { a } = setup({
+    typeOf: (hex) => {
+      asked.push(hex)
+      throw new Error('no table')
+    },
+  })
+  const [s] = samples(() => 35_000, 0)
+  a.sample({ ...s, baroRateFpm: -2000 }, () => [s])
+  assert.deepEqual(asked, [], 'not steep enough')
+  feed(a, samples(plunge(36_000, 50), 200))
+  assert.ok(asked.length > 0)
+  assert.equal(a.reply().events.length, 1, 'the fall is found')
+  assert.equal(err.mock.callCount(), 1)
+  assert.equal(err.mock.calls[0].arguments[0], 'alerts: type lookup failed:')
+})
+
+/** Three aircraft in one half hour: a descent, a dive then lost, and a descent after 7700 sent twice. */
+const fallers = (): Uint8Array =>
+  heat([
+    { hex: 'a00001', alt: plunge(36_000, 1000) },
+    { hex: 'a00002', lat: 41, alt: dive },
+    { hex: 'a00003', lat: 42, alt: plunge(36_000, 1000), idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }] },
+  ])
+/** What a late scan finds with this type table: [hex, kind, has a fall]. */
+function found(typeOf: TypeOf): [string, string, boolean][] {
+  const { a } = setup({ typeOf })
+  a.scanSlot(fallers(), SLOT)
+  return a.reply().events.map((e): [string, string, boolean] => [e.hex, e.kind, e.drop !== null]).sort()
+}
+
+test('scanSlot: no descent or dive event for an aircraft the type table calls military; its 7700 is still an event, and no fall is added to it', () => {
+  assert.deepEqual(found(() => ({ type: 'B738', category: 'A3' })), [['a00001', 'descent', true], ['a00002', 'dive', true], ['a00003', 'squawk', true]], 'an airliner: all three')
+  assert.deepEqual(found(() => ({ type: 'B738', category: 'A3', military: true })), [['a00003', 'squawk', false]])
+})
+
+test('scanSlot: no descent or dive event for a fast-jet type: a T38, the others listed; their 7700s are still events', () => {
+  assert.deepEqual(found(() => ({ type: 'T38', category: 'A3' })), [['a00003', 'squawk', false]])
+  for (const type of FAST_JETS) assert.deepEqual(found(() => ({ type, category: 'A3' })), [['a00003', 'squawk', false]], type)
+  assert.deepEqual(found(() => ({ type: null, category: 'A3' })).map((e) => e[0]), ['a00001', 'a00002', 'a00003'], 'no type is no exclusion')
+})
+
+test('a fighter\'s 7700 and a military aircraft\'s ADS-B status are still events, and a live fall is not added to either', () => {
+  // a00001 is a fighter by its type code, a00002 military by the type table: neither has dbFlags.
+  const { a, clock, pushed } = setup({ typeOf: (hex) => ({ type: hex === 'a00002' ? 'B738' : 'F5', category: 'A3', military: hex === 'a00002' }) })
+  for (const t of [T0, T0 + 30_000]) {
+    clock.t = t
+    a.observe(ac({ hex: 'a00001', t: 'F5' }), t) // 7700
+    a.observe(ac({ hex: 'a00002', squawk: '1000', emergency: 'general' }), t)
+  }
+  assert.deepEqual(a.reply().events.map((e) => [e.hex, e.kind]).sort(), [['a00001', 'squawk'], ['a00002', 'status']])
+  assert.equal(pushed.length, 2)
+  feed(a, samples(plunge(36_000, 50), 200, { hex: 'a00001', typeCode: 'F5' }))
+  feed(a, samples(plunge(36_000, 50), 200, { hex: 'a00002', typeCode: 'B738' }))
+  assert.deepEqual(a.reply().events.map((e) => e.drop), [null, null])
+  assert.equal(pushed.length, 2, 'no push for a fall')
+})
+
+// An older sighting of a worse cause on a quiet event
+
+test('an older code that is worse un-quiets a quiet event: pushed once, and its newer squawk is not overwritten', () => {
+  const hex = 'a00001'
+  const { a, clock, pushed, dir } = setup()
+  for (const t of [at(15), at(16)]) {
+    clock.t = t
+    a.observe(ac({ hex, category: 'A1', squawk: '7600' }), t) // a light aircraft's radio failure: quiet, newest at 05:16
+  }
+  assert.deepEqual([a.reply().events[0].quiet, pushed.length], [true, 0])
+  const rev = a.rev
+  a.scanSlot(heat([{ hex, idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }] }]), SLOT) // 7700 at 05:10 and 05:11: older
+  const [e] = a.reply().events
+  assert.equal(a.reply().events.length, 1)
+  assert.deepEqual([e.squawk, e.quiet, e.lastMs], ['7600', false, at(16)], 'the newer 7600 stays; no longer quiet')
+  assert.deepEqual(pushed.map((x) => x.hex), [hex], 'pushed once')
+  assert.ok(a.rev > rev)
+  assert.equal(lines(dir).at(-1)?.quiet, false)
+  a.observe(ac({ hex, category: 'A1', squawk: '7700' }), at(15, 30)) // another older 7700: not quiet any more, nothing new
+  assert.equal(pushed.length, 1)
+})
+
+test('an older status that is worse un-quiets too; an older minor squawk and status change nothing', () => {
+  const hex = 'a00001'
+  const { a, clock, pushed } = setup()
+  const light = (emergency: string): ReadsbAircraft => ac({ hex, category: 'A1', squawk: '7600', emergency })
+  for (const t of [at(15), at(16)]) {
+    clock.t = t
+    a.observe(light('nordo'), t) // quiet: a radio failure, no radio
+  }
+  const rev = a.rev
+  a.observe(light('minfuel'), at(15, 30)) // older, minor
+  assert.deepEqual([a.reply().events[0].quiet, a.reply().events[0].emergency, pushed.length, a.rev], [true, 'nordo', 0, rev])
+  a.observe(light('general'), at(15, 40)) // older, worse
+  const [e] = a.reply().events
+  assert.deepEqual([e.quiet, e.squawk, e.emergency, e.lastMs, pushed.length], [false, '7600', 'nordo', at(16), 1])
+  assert.ok(a.rev > rev)
+})
+
+test('scanSlot: a late fall of an aircraft with a quiet event (a Dash 8 that sent 7600) turns it loud: pushed once', () => {
+  const { a, pushed } = setup({ typeOf: () => ({ type: 'DH8D', category: 'A1' }) })
+  a.scanSlot(heat([{ hex: 'a00001', idents: [{ s: 600, squawk: '7600' }, { s: 660, squawk: '7600' }], alt: plunge(36_000, 1000) }]), SLOT)
+  const [e] = a.reply().events
+  assert.equal(a.reply().events.length, 1)
+  assert.deepEqual([e.kind, e.squawk, e.drop !== null, e.quiet], ['squawk', '7600', true, false])
+  assert.equal(pushed.length, 1)
+})
+
+test('scanSlot: the late check reaches the limits of D2: a dive of exactly 3,000 ft from exactly 15,000 ft is found, 25 ft less of either is not', () => {
+  // A file's altitudes are in 25 ft steps. Level, then 10 s points down in 30 s, then no position: the file's last slice is far after it.
+  const dive3000 = (top: number, fall: number) => (s: number): number | null => (s > 1300 ? null : s < 1270 ? top : top - ((s - 1270) / 30) * fall)
+  const kinds = (top: number, fall: number): (string | undefined)[] => {
+    const { a } = setup()
+    a.scanSlot(heat([{ hex: 'a00001', alt: dive3000(top, fall) }, { hex: 'a00002', lat: 41 }]), SLOT) // a00002 cruises to the last slice
+    return a.reply().events.map((e) => e.kind)
+  }
+  assert.deepEqual(kinds(15_000, 3_000), ['dive'])
+  assert.deepEqual(kinds(14_975, 3_000), [], 'a top 25 ft under FL150')
+  assert.deepEqual(kinds(15_000, 2_975), [], 'a fall 25 ft short')
 })
 
 // Coverage

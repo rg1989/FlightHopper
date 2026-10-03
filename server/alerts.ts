@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { EMERGENCY_SQUAWKS, EMERGENCY_STATUSES, pushBody, pushTitle, type AlertDrop, type AlertEvent, type EventsReply } from '../shared/alerts.ts'
 import { callsignOf } from '../shared/readsb.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
-import { clean, diveThenLost, steepDescent, type AltSeries, type Drop } from './descent.ts'
+import { D2, clean, diveThenLost, steepDescent, type AltSeries, type Drop } from './descent.ts'
 import { scanSlot } from './heatmap.ts'
 
 const DAY_MS = 86_400_000
@@ -33,9 +33,17 @@ const NOT_AIRCRAFT = new Set(['000000', '000001']) // placeholders some transpon
 const SURFACE = new Set(['C1', 'C2', 'C3']) // emergency and service vehicles, obstacles
 const LIGHT = new Set(['A1', 'B1', 'B2', 'B3', 'B4', 'B6', 'B7']) // light aircraft, gliders, balloons, parachutists, ultralights, drones, space
 const MINOR = new Set(['7600', 'nordo', 'minfuel']) // causes that are quiet on a light aircraft (most 7600s are on approach)
+// ICAO type designators of fighters and military trainers: no fall events for them (their squawks and statuses are read).
+// ponytail: fighters and trainers dive as routine; add a type when one shows up as a false alarm
+const FAST_JETS = new Set([
+  'A4', 'A10', 'AJET', 'AMX', 'AV8B', 'BT7', 'EUFI', 'F1', 'F4', 'F5', 'F14', 'F15', 'F16', 'F18', 'F18H', 'F18S', 'F22', 'F35', 'F104', 'F117',
+  'GRIF', 'HAWK', 'HUNT', 'J8', 'JF17', 'K8', 'KFIR', 'L39', 'L59', 'L159', 'LCA', 'M339', 'M345', 'M346', 'MG29', 'MG31', 'MIR2', 'MRF1', 'RFAL',
+  'S211', 'SU24', 'SU25', 'SU27', 'SU30', 'SU34', 'SU35', 'SU57', 'T2', 'T38', 'T4', 'T45', 'T50', 'TEX2', 'TOR', 'PC7', 'PC9', 'PC21', 'TUCA',
+])
 const NO_TYPE = Object.freeze({ type: null, category: null })
 
-type Typed = { type: string | null; category: string | null } // an aircraft's type designator and emitter category (typeDb.ts)
+// An aircraft's type designator, emitter category and military flag (typeDb.ts lookup); a missing military is false.
+type Typed = { type: string | null; category: string | null; military?: boolean }
 type Who = Pick<AlertEvent, 'callsign' | 'reg' | 'type' | 'lat' | 'lon' | 'altFt'>
 type Patch = Who & { squawk?: string | null; emergency?: string | null; drop?: AlertDrop | null }
 
@@ -45,7 +53,7 @@ export interface AlertsOpts {
   codes?: readonly string[] // the squawks swept and read as emergencies (ALERT_SQUAWKS); default 7700, 7600, 7500
   sweep: boolean // the source sweeps them worldwide (adsb.fi)
   push?: (e: AlertEvent) => void // a new event that is not quiet, or a new cause on one (ntfyPush)
-  typeOf?: (hex: string) => Typed // a half-hour file's aircraft (typeDb.ts)
+  typeOf?: (hex: string) => Typed // the type table's lookup (typeDb.ts): a late finding's type, category and military flag; a live fall's military flag
 }
 
 export class Alerts {
@@ -108,13 +116,14 @@ export class Alerts {
   /**
    * One aircraft object of a good answer (Poller opts.onAircraft), rxMs its receipt. An emergency squawk or status counts
    * once it is seen again 25 s or more after it was first seen: its event opens then, or the aircraft's event within 30 min
-   * takes it in. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and 000001.
+   * takes it in. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and 000001. Military
+   * aircraft and fast jets are read: their squawks and statuses are emergencies.
    * ponytail: the 25 s is for opening only; a new cause on an open event counts at once.
    */
   observe(ac: ReadsbAircraft, rxMs: number): void {
     if (!this.#on) return
     const hex = ac.hex.toLowerCase()
-    if (!ICAO.test(hex) || NOT_AIRCRAFT.has(hex) || ac.alt_baro === 'ground' || SURFACE.has(ac.category ?? '')) return
+    if (ignored(hex, ac.category ?? null) || ac.alt_baro === 'ground') return
     const squawk = ac.squawk !== undefined && this.#codes.has(ac.squawk) ? ac.squawk : null
     const emergency = ac.emergency !== undefined && EMERGENCY_STATUSES.includes(ac.emergency) ? ac.emergency : null
     if (squawk === null && emergency === null) return
@@ -139,13 +148,15 @@ export class Alerts {
 
   /**
    * A new stored sample of a polled aircraft (Poller opts.onSample). At a baro_rate of −3,000 fpm or steeper, its recent
-   * track (asked for only then) is checked for an emergency descent (descent.ts D1). Not for military aircraft (dbFlags),
-   * light aircraft or gliders, surface vehicles, addresses that are not ICAO, 000000 and 000001.
+   * track (asked for only then) is checked for an emergency descent (descent.ts D1). Not for military aircraft (dbFlags, or the
+   * type table's flag), fighter and trainer types (FAST_JETS, by the broadcast type code), light aircraft or gliders, surface
+   * vehicles, addresses that are not ICAO, 000000 and 000001.
    */
   sample(s: Sample, track: () => readonly Sample[], dbFlags = 0): void {
     if (!this.#on || s.onGround || s.altBaroFt === null || !((s.baroRateFpm ?? 0) <= LIVE_RATE_FPM)) return
-    const category = s.category ?? ''
-    if ((dbFlags & MILITARY) !== 0 || LIGHT.has(category) || SURFACE.has(category) || !ICAO.test(s.hex) || NOT_AIRCRAFT.has(s.hex)) return
+    const category = s.category ?? null
+    if ((dbFlags & MILITARY) !== 0 || FAST_JETS.has(s.typeCode ?? '') || LIGHT.has(category ?? '') || ignored(s.hex, category)) return
+    if (this.#typed(s.hex).military === true) return
     const series: AltSeries = { t: [], ft: [] }
     for (const x of track()) {
       if (x.onGround || x.altBaroFt === null) continue
@@ -161,7 +172,8 @@ export class Alerts {
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
    * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
    * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. Not read: surface vehicles
-   * (the type table's C1 to C3), 000000 and 000001.
+   * (the type table's C1 to C3), 000000 and 000001. No fall is looked for in an aircraft the type table calls military or whose
+   * type is in FAST_JETS; its squawks are read. A late 7600 on a type the table calls light (A1, B1…) is quiet.
    * ponytail: the half hours must come in time order (the caller scans the older first): a merge never moves an event's
    * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began.
    */
@@ -172,15 +184,15 @@ export class Alerts {
     const scan = scanSlot(buf, slotMs, this.#codes)
     if (scan === null) return
     for (const [hex, a] of scan.aircraft) {
-      if (!ICAO.test(hex) || NOT_AIRCRAFT.has(hex)) continue
       const idents = a.squawks.length >= 2
-      const fall = mayFall(a.alt)
-      if (!idents && !fall) continue // the cheap test first: most aircraft are neither
+      const mayDrop = mayFall(a.alt)
+      if (!idents && !mayDrop) continue // the cheap test first: most aircraft are neither
       const typed = this.#typed(hex)
-      if (SURFACE.has(typed.category ?? '')) continue
-      // ponytail: the type table's category is not used for light here (no quiet 7600, no fall skipped): it gives every piston,
-      // turboprop and electric type A1, the ATR 72 and the Dash 8 included. A fall needs a top at or above FL200 (D1) or FL150
-      // (D2), which leaves light aircraft out in practice.
+      if (ignored(hex, typed.category)) continue
+      // ponytail: the type table's category makes a late 7600 quiet on a light type, but it gives every piston, turboprop and
+      // electric type A1, so the ATR 72 and the Dash 8 are quiet too: accepted, radio failures are the least urgent cause (live
+      // sightings use the broadcast category). It is not used to skip a fall: that needs a top at or above FL200 (D1) or FL150
+      // (D2), which leaves light aircraft out in practice, and the Dash 8 is found.
       // ponytail: a late event's place and level are the aircraft's newest of the half hour, not where its cause was.
       const who: Who = { callsign: a.callsign, reg: null, type: typed.type, lat: a.lat, lon: a.lon, altFt: a.alt.ft.at(-1) ?? null }
       if (idents) {
@@ -192,11 +204,11 @@ export class Alerts {
         else {
           this.#open({
             id: `${hex}-${first}`, hex, kind: 'squawk', ...who, squawk, emergency: null, drop: null,
-            openedMs: first, lastMs: last, late: true, quiet: quietFor(null, squawk, null),
+            openedMs: first, lastMs: last, late: true, quiet: quietFor(typed.category, squawk, null),
           })
         }
       }
-      if (!fall) continue
+      if (!mayDrop || typed.military === true || FAST_JETS.has(typed.type ?? '')) continue
       const s = clean(a.alt)
       const d1 = steepDescent(s)
       const d = d1 ?? diveThenLost(s, scan.endS)
@@ -281,10 +293,11 @@ export class Alerts {
    * Its aircraft seen again at t, live or found late. A new cause (a squawk or status it did not have, a fall) changes the
    * rev and is written and pushed at once. A bigger fall replaces the old one, changes the rev and is written 30 s or more
    * after the last write, with no push. A newer place and time change the rev 30 s at most after it last changed (so a client
-   * keeps "ongoing" right) and are written every 5 min at most. A quiet event with a cause that is not minor is quiet no more.
+   * keeps "ongoing" right) and are written every 5 min at most. A quiet event with a cause that is not minor is quiet no more,
+   * an older sighting's too (a 7700 from before a 7600): the event is written and pushed once, with its newer code as it is.
    * A sighting older than the event's newest only fills a squawk or status the event has none of: it never overwrites a newer
    * one, and a code that differs is no new cause. A live sighting of a late event clears late (it is heard again); a late
-   * finding never sets it. ponytail: the older code that differs is dropped, a worse one too (a 7700 from before a 7600).
+   * finding never sets it. ponytail: the older code that differs is not kept, a worse one included: only its effect on quiet.
    */
   #merge(e: AlertEvent, t: number, p: Patch, late: boolean): void {
     const newer = t >= e.lastMs
@@ -293,6 +306,8 @@ export class Alerts {
     const cause = (squawk !== null && squawk !== e.squawk) || (emergency !== null && emergency !== e.emergency) || (p.drop != null && e.drop === null)
     const grew = p.drop != null && e.drop !== null && p.drop.fromFt - p.drop.toFt > e.drop.fromFt - e.drop.toFt
     const heard = !late && e.late // a late event, now heard live
+    // A quiet event turns loud at a worse cause, an older one too: p, not the squawk and status kept above.
+    const loud = e.quiet && ((p.squawk != null && !MINOR.has(p.squawk)) || (p.emergency != null && !MINOR.has(p.emergency)) || p.drop != null)
     if (squawk !== null) e.squawk = squawk
     if (emergency !== null) e.emergency = emergency
     if (p.drop != null && (e.drop === null || grew)) e.drop = p.drop
@@ -308,10 +323,10 @@ export class Alerts {
       }
       if (p.altFt !== null) e.altFt = p.altFt
     }
-    if (e.quiet && ((squawk !== null && !MINOR.has(squawk)) || (emergency !== null && !MINOR.has(emergency)) || p.drop != null)) e.quiet = false
+    if (loud) e.quiet = false
     const now = this.#now()
-    if (cause || grew || heard || now - this.#revMs >= REV_EVERY_MS) this.#bump()
-    if (cause) {
+    if (cause || loud || grew || heard || now - this.#revMs >= REV_EVERY_MS) this.#bump()
+    if (cause || loud) {
       this.#write(e)
       if (!e.quiet) this.#notify(e)
     } else if (heard || now - (this.#writtenMs.get(e.id) ?? -Infinity) >= (grew ? DROP_WRITE_MS : WRITE_EVERY_MS)) this.#write(e)
@@ -426,12 +441,18 @@ function positionOf(ac: ReadsbAircraft): { lat: number; lon: number } | null {
   return typeof lp?.lat === 'number' && typeof lp.lon === 'number' ? { lat: lp.lat, lon: lp.lon } : null
 }
 
-/** Quiet: a light aircraft (or glider…) by its broadcast category, whose only causes are minor (a radio failure, no radio, minimum fuel). */
+/** Never read: an address that is not ICAO (a '~' one), a placeholder some transponders send, a surface vehicle (C1 to C3). */
+const ignored = (hex: string, category: string | null): boolean => !ICAO.test(hex) || NOT_AIRCRAFT.has(hex) || SURFACE.has(category ?? '')
+
+/**
+ * Quiet: a light aircraft (or glider…) by its category (the broadcast one, or the type table's for a late finding), whose only
+ * causes are minor (a radio failure, no radio, minimum fuel).
+ */
 function quietFor(category: string | null, squawk: string | null, emergency: string | null): boolean {
   return LIGHT.has(category ?? '') && (squawk === null || MINOR.has(squawk)) && (emergency === null || MINOR.has(emergency))
 }
 
-/** Whether a half hour's altitudes could hold a fall at all: a top above FL150 and 3,000 ft between its highest and lowest. */
+/** Whether a half hour's altitudes could hold a fall at all: D2 is the loosest rule, FL150 and 3,000 ft between the highest and lowest. */
 function mayFall(s: AltSeries): boolean {
   let hi = -Infinity
   let lo = Infinity
@@ -439,7 +460,7 @@ function mayFall(s: AltSeries): boolean {
     if (ft > hi) hi = ft
     if (ft < lo) lo = ft
   }
-  return hi >= 15_000 && hi - lo >= 3000
+  return hi >= D2.topFt && hi - lo >= D2.fallFt
 }
 
 /**
