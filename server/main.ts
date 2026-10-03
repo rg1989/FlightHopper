@@ -25,7 +25,8 @@
 // half hour: rollHistory), and for any source loads the past's aircraft types and finds the oldest day adsb.lol keeps
 // (historyMeta). A server made in code, a test's included, fetches the past only when it is asked.
 // A live source with EVENTS_DIR set also has the alerts (alerts.ts): the poller feeds them every aircraft it takes and sweeps the
-// emergency squawks worldwide where the source can (adsb.fi), and each new half hour of the rolling past is read for late events.
+// emergency squawks worldwide where the source can (adsb.fi), and each new half hour of the rolling past is read for late events
+// (the first read waits for the type table, so those events have their types).
 import { readFile, stat } from 'node:fs/promises'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -75,7 +76,7 @@ const HISTORY_TICK_MS = 60_000 // the rolling fetch of the newest half hours: a 
 const HISTORY_SLOTS = 5
 const RETRY_AFTER_S = 15 // what a 503 tells the client: the past could not be had now, try again then
 const ORIGIN_MAX_AGE_MS = 10 * 60_000 // a leg that ended longer ago than this is not the flight in the air now
-const TYPES_WAIT_MS = 5000 // the first ask for the past waits this long for the type table, which loads as the server starts
+const TYPES_WAIT_MS = 5000 // the first ask for the past, and the first late scan, wait this long for the type table, which loads as the server starts
 const META_TICK_MS = 60_000 // the type table and the oldest day are checked this often; each loads when it is due
 const SPAN_MAX_MS = 48 * 3_600_000 // the longest span of one aircraft's legs: the client asks for a day and the 12 h before it
 const gzipAsync = promisify(gzip)
@@ -572,7 +573,13 @@ export function createServer(
           // opens on it without a wait. Otherwise the past is fetched only when a client asks. After each tick the alerts read the
           // newest two half hours held (oldest first; one already read costs nothing, nor does any while the switch is off).
           if (deps.rollHistory === true && historyTimer === null) {
-            const scan = (): void => {
+            // ponytail: scanSlot reads a file synchronously, so a scan holds the event loop (poller ticks, HTTP replies): about 0.2 to
+            // 0.6 s for a real 13 to 30 MB half hour, about 1.2 s for the two held the first time the switch is turned on, one half
+            // hour at a time after. A worker thread is the way up if that is ever felt.
+            const scan = async (): Promise<void> => {
+              // The type table loads as the server starts, as the two half hours do. Each half hour is read once, so one read before
+              // the table is in would leave its events without a type for good: wait for it, as the first ask for the past does.
+              await types?.ready(TYPES_WAIT_MS)
               const newest = newestSlotMs(nowMs())
               for (const slot of [newest - SLOT_MS, newest]) {
                 const f = history.held(slot)

@@ -15,8 +15,10 @@ LIVE_RPS_adsblol = 0.04
 LIVE_RECORD_DIR ?=
 # Flights recorded with the flight card's Record button (one file each, server/flightLog.ts).
 FLIGHTS_DIR ?= data/flights
-# The alerts' switch and log (server/alerts.ts). The switch starts off: turn it on in the Events panel (or POST /api/events?on=1);
-# it then stays on across restarts.
+# The alerts' switch and log (server/alerts.ts). make live sets EVENTS_DIR=data/events (make live EVENTS_DIR=<dir> picks another).
+# The switch starts off. Turn it on from the app's Events panel, or with
+#   curl -X POST 'http://127.0.0.1:8787/api/events?on=1'
+# (8787 is API_PORT; on=0 turns it off again). It then stays as it is across restarts.
 EVENTS_DIR ?= data/events
 
 .PHONY: live start replay run

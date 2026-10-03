@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import type { ChaseResponse, RecordResponse, StatusReport, ViewResponse } from '../shared/api.ts'
+import type { ChaseResponse, HistoryStatus, RecordResponse, StatusReport, ViewResponse } from '../shared/api.ts'
 import { pushBody, pushTitle, type EventsReply } from '../shared/alerts.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { SLOT_MS, newestSlotMs } from '../shared/history.ts'
@@ -25,7 +25,7 @@ import { createServer } from './main.ts'
 import { readRecording } from './recording.ts'
 import { makeReplay } from './sources/replay.ts'
 import type { FetchResult, Source } from './sources/types.ts'
-import { TypeDb, buildTypeTable } from './typeDb.ts'
+import { TYPE_DB_URL, TypeDb, buildTypeTable, encodeZip } from './typeDb.ts'
 
 const FILE = fileURLToPath(new URL('../data/fixtures/golden/recording-sample.jsonl', import.meta.url))
 const MAIN = fileURLToPath(new URL('./main.ts', import.meta.url))
@@ -591,7 +591,9 @@ test('alerts: a source that cannot sweep (readsb) is live and has them, with swe
   const { base, world } = await liveServer(t, { kind: 'readsb' })
   assert.deepEqual(await getEvents(base), { on: false, sweep: false, rev: 0, events: [] })
   assert.equal((await (await postEvents(base, 'on=1')).json() as EventsReply).on, true)
-  await sleep(350) // a few poller ticks
+  await waitFor('the poller to ask', async () => world.asked.length, (n) => n > 0)
+  await sleep(350) // a few more poller ticks: a sweep would be asked by now
+  assert.ok(world.asked.length > 0, 'the poller asked at least once')
   assert.ok(world.asked.every((a) => a === 'all'), `only snapshots are asked: ${world.asked.join(', ')}`)
 })
 
@@ -712,6 +714,43 @@ test('alerts: each half hour the rolling fetch holds is read for late events, th
     ['a00001', 'squawk', '7700', true, null, older + 600_000, older + 660_000],
   ])
   assert.deepEqual(pushed, [], 'no NTFY_URL: nothing is pushed')
+})
+
+/** Mictronics' zip as the type table's download serves it: 4691c4 is an A320. */
+const typeZip = (): Uint8Array<ArrayBuffer> =>
+  encodeZip([
+    { name: 'types.json', data: new TextEncoder().encode(JSON.stringify({ A320: { desc: 'L2J', wtc: 'M' } })), method: 8 },
+    { name: 'aircrafts.json', data: new TextEncoder().encode(JSON.stringify({ '4691C4': { r: 'SX-DND', t: 'A320', f: '00', d: '' } })), method: 8 },
+  ])
+
+test('the late scan: the first scan after the start waits for the type table, so the late event has its type for good', async (t) => {
+  const newest = newestSlotMs(T0)
+  const older = newest - SLOT_MS
+  // The command line loads the table as the server starts, while the two half hours come in. Here the table's download is held
+  // back until both half hours are in: a scan that does not wait finds the late event then and leaves it without a type, and each
+  // half hour is read once.
+  let release!: () => void
+  const held = new Promise<void>((resolve) => (release = resolve))
+  t.after(release) // a failed test must not leave the download hanging
+  const heat = heatFetch(new Map([[older, heatWith(older, { '4691c4': [600, 660] })], [newest, heatWith(newest, {})]]))
+  const asked: string[] = []
+  const historyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    asked.push(String(input))
+    if (String(input) !== TYPE_DB_URL) return heat(input, init)
+    await held
+    return new Response(typeZip())
+  }) as typeof fetch
+  const s = await liveServer(t, { on: true, deps: { rollHistory: true, historyMeta: true, historyFetch } })
+
+  const slots = async (): Promise<HistoryStatus['slots']> => (await get<HistoryStatus>(`${s.base}/api/history/status`)).body.slots
+  await waitFor('both half hours held', slots, (l) => l.filter((x) => x.state === 'ready').length === 2)
+  assert.ok(asked.includes(TYPE_DB_URL), 'the table is being downloaded')
+  await sleep(50) // the scan would have run by now
+  assert.deepEqual((await getEvents(s.base)).events, [], 'nothing is read before the table is in')
+
+  release()
+  const { events } = await waitFor('the late event', () => getEvents(s.base), (r) => r.events.length === 1)
+  assert.deepEqual(events.map((e) => [e.hex, e.kind, e.late, e.type, e.openedMs]), [['4691c4', 'squawk', true, 'A320', older + 600_000]])
 })
 
 test('the late scan: a failure of the scan is logged as the late check\'s, not as the history tick\'s', async (t) => {

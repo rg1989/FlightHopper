@@ -129,7 +129,29 @@ test('NTFY_URL: an http(s) URL is kept as given; unset = none; anything else thr
   assert.equal(readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: 'https://ntfy.sh/x' }).ntfyUrl, 'https://ntfy.sh/x')
   assert.equal(readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: 'http://127.0.0.1:2586/topic' }).ntfyUrl, 'http://127.0.0.1:2586/topic')
   for (const bad of ['ftp://x', 'nonsense', 'ntfy.sh/x', 'https://']) {
-    assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: bad }), { message: `NTFY_URL must be an http(s) URL, got "${bad}"` }, bad)
+    assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: bad }), /^Error: NTFY_URL must be an http\(s\) URL/, bad)
+  }
+})
+
+test('NTFY_URL: a refused value is never in the error (the topic is a secret: the message goes to the console)', () => {
+  // Each is refused for a different reason (scheme, no scheme, port, host, credentials); each carries the secret in a place the message could echo.
+  for (const bad of [
+    'ftp://ntfy.sh/s3cret-topic',
+    'ntfy.sh/s3cret-topic',
+    'https://ntfy.sh:99999/s3cret-topic',
+    'https://ntfy .sh/s3cret-topic',
+    'https://user:s3cret-pass@/s3cret-topic',
+  ]) {
+    assert.throws(
+      () => readServerConfig({ REPLAY_FILES: FILE, NTFY_URL: ` ${bad} ` }),
+      (e: Error) => {
+        assert.match(e.message, /^NTFY_URL must be an http\(s\) URL/, bad)
+        assert.ok(!e.message.includes('s3cret'), `the error echoes the value: ${e.message}`)
+        assert.ok(!e.message.includes(bad), `the error echoes the value: ${e.message}`)
+        return true
+      },
+      bad,
+    )
   }
 })
 
@@ -141,6 +163,14 @@ test('ALERT_SQUAWKS: comma-separated four-digit octal codes, 7700, 7600 and 7500
   for (const bad of ['77a0', '7800', '770', '77000', '7700,', '7700,,7600', '7700;7600']) {
     assert.throws(() => readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: bad }), { message: `ALERT_SQUAWKS must be 4-digit octal codes, comma-separated, got "${bad}"` }, bad)
   }
+})
+
+test('ALERT_SQUAWKS: a code listed twice is kept once, where it first was (each code is swept once a round, not twice)', () => {
+  const read = (v: string): string[] => readServerConfig({ REPLAY_FILES: FILE, ALERT_SQUAWKS: v }).alertSquawks
+  assert.deepEqual(read('7700,7700,7600'), ['7700', '7600'])
+  assert.deepEqual(read('7600, 7700 ,7600,7700,7500'), ['7600', '7700', '7500'], 'spaces do not make a code another one; the first order stays')
+  assert.deepEqual(read('7000,7000'), ['7000'])
+  assert.throws(() => read('7700,7700,7800'), /^Error: ALERT_SQUAWKS must be 4-digit octal codes/, 'a bad code is still refused when others are repeated')
 })
 
 test('the alerts settings are read whatever the source is', () => {
