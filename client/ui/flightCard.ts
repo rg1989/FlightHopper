@@ -27,14 +27,22 @@ const REPLAY_QUIET_S = 60 // History: a position older than this at the replay t
 /** A focused aircraft is asked (/api/chase) at least this often whatever the zoom: every poll while it is on screen. */
 export const FOCUS_ASK_MS = 10_000
 
-export type CardState = 'live' | 'predict' | 'lost' | 'locating' | 'none' | 'replay' | 'quiet'
+export type CardState = 'live' | 'predict' | 'lost' | 'landed' | 'locating' | 'none' | 'replay' | 'quiet'
 
 /** The status dot's colour: theme.css's .fh-dot data-state values, and 'quiet' (flightCard.css: a neutral grey). */
 export type CardDot = 'live' | 'replay' | 'trouble' | 'wait' | 'quiet'
 
 // 'quiet' is History's "no position at this time" (grey, never the live red), whichever way the app says so.
 const DOT_OF: Record<CardState, CardDot> = {
-  live: 'live', predict: 'replay', replay: 'replay', lost: 'trouble', none: 'trouble', locating: 'wait', quiet: 'quiet',
+  live: 'live', predict: 'replay', replay: 'replay', lost: 'trouble', landed: 'quiet', none: 'trouble', locating: 'wait', quiet: 'quiet',
+}
+
+/**
+ * Only focused (the map), a signal is lost after this long without a position: 2.5 refreshes of the view, or asks for the
+ * aircraft itself (every FOCUS_ASK_MS), whichever come sooner, and 10 s at least. Chasing, it is lost when its track is stale.
+ */
+export function lostAfterS(status: StatusBrief): number {
+  return Math.max(STALE_AGE_S, 2.5 * Math.min(status.viewEveryS ?? 0, FOCUS_ASK_MS / 1000))
 }
 
 /** History's status line (FlightCardHandle.setReplay). */
@@ -63,6 +71,7 @@ export interface CardView {
   state: CardState
   dot: CardDot
   status: string
+  statusTitle?: string // the status line's tooltip when it says more than the line (an estimated landing: where, and since when)
   range: { dist: string; from: string } | null // a traffic aircraft's card: "7,371 m", "from UAL2478"
   chaseDisabled: boolean // History with nothing to fly behind: the button that starts a chase is off ("Map" never is)
 }
@@ -96,7 +105,8 @@ function split(v: string): [string, string] {
  * itself at least every FOCUS_ASK_MS, so it is Live until 2.5 of the shorter go by without a position: a zoomed-out
  * view's long period no longer keeps a minutes-old position "Live". So is a traffic aircraft (entryState), which also
  * has its range. Still heard without a position (GPS jammed or spoofed, daily around Israel: the upstream drops those
- * positions), lost reads "GPS lost", not "Signal lost".
+ * positions), lost reads "GPS lost", not "Signal lost". Lost on its final approach to a runway, the state is its estimated
+ * landing (RenderState.landing, client/track/landing.ts): "Landing" while it comes down, then "Landed", on the grey dot.
  * replay (History): the app says where the aircraft stands at the replay time, and the card never speaks live (no
  * "Locating…", no "No recent position", no red dot). 'replay': the text, amber; a sample older than quietS (a
  * minute, wider for coarse files) was not heard, which reads "<text> · not heard" on the grey dot with the numbers
@@ -118,10 +128,10 @@ export function cardView(
   const nums = replay?.state === 'none' ? null : s
   const unheard = replay !== null && s !== null && Number.isFinite(s.ageS) && s.ageS > (replay.quietS ?? REPLAY_QUIET_S)
   const fields = hudFields(nums, status)
-  const lostAfterS = Math.max(STALE_AGE_S, 2.5 * Math.min(status.viewEveryS ?? 0, FOCUS_ASK_MS / 1000))
+  const lostAfter = lostAfterS(status)
   const lost = replay !== null
     ? replay.state !== 'replay' || unheard
-    : s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfterS)
+    : s !== null && (chasing ? isStale(s) : Number.isFinite(s.ageS) && s.ageS > lostAfter)
   // Another aircraft's object (the card has just moved on, its own not in yet) says nothing of this one.
   const own = raw !== null && raw.hex.toLowerCase() === hex ? raw : null
   const alt = nums?.onGround ? { value: 'GND', dim: lost } : stat(fields, 'ALT', lost)
@@ -134,16 +144,21 @@ export function cardView(
 
   let state: CardState
   let text: string
+  let title: string | undefined
   if (replay !== null) {
     state = replay.state === 'replay' && !unheard ? 'replay' : 'quiet'
     text = replay.state === 'replay' && unheard ? `${replay.text} · not heard` : replay.text
   } else if (s === null) {
     state = sinceSelectS < LOCATING_S ? 'locating' : 'none'
     text = state === 'locating' ? 'Locating aircraft…' : 'No recent position'
+  } else if (lost && s.landing !== undefined) {
+    state = s.landing.landed ? 'landed' : 'predict'
+    text = s.landing.landed ? `Landed · ${lostFor(s.ageS)} ago` : `Landing · signal lost ${lostFor(s.ageS)} ago`
+    title = `Estimated: last heard ${lostFor(s.ageS)} ago on final to runway ${s.landing.runway}, ${s.landing.airport}`
   } else if (lost) {
     state = 'lost'
     // ponytail: `seen` is as of the last chase reply (≤ FOCUS_ASK_MS old), so "GPS" may outlast a real silence by that.
-    const what = own?.seen !== undefined && own.seen < lostAfterS ? 'GPS lost' : 'Signal lost'
+    const what = own?.seen !== undefined && own.seen < lostAfter ? 'GPS lost' : 'Signal lost'
     text = Number.isFinite(s.ageS) ? `${what} ${lostFor(s.ageS)} ago` : what
   } else if (chasing && s.mode === 'extrap') {
     state = 'predict'
@@ -168,6 +183,7 @@ export function cardView(
     state,
     dot: DOT_OF[state],
     status: text,
+    statusTitle: title,
     range: range === null ? null : { dist: formatDistanceM(range.distM), from: `from ${range.from}` },
     chaseDisabled: replay !== null && !chasing && !(state === 'replay' && s !== null),
   }
@@ -561,7 +577,8 @@ export function mountFlightCard(root: HTMLElement, opts: FlightCardOpts): Flight
       set(rangeDist, v.range.dist)
       set(rangeFrom, v.range.from)
     }
-    if (statusRow.title !== v.status) statusRow.title = v.status // the whole line, should it not fit
+    const tip = v.statusTitle ?? v.status // the whole line, should it not fit; or what it rests on
+    if (statusRow.title !== tip) statusRow.title = tip
     if (!expanded) return
     for (const sec of detailRows(curS, curRaw, curInfo, lk)) {
       for (const r of sec.rows) {

@@ -29,6 +29,7 @@ import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { AlertEvent } from '../shared/alerts.ts'
 import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
+import type { RunwayTable } from '../shared/landing.ts'
 import type { ChaseResponse, HistoryStatus, StatusBrief, TraceReply } from '../shared/api.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { SLOT_MS, newestSlotMs, slotOf } from '../shared/history.ts'
@@ -57,7 +58,7 @@ import { HistoryFeed, type Circle } from './history/feed.ts'
 import { KnownHexes, SlotBlock, SlotFailure, askNm, backMs, lookaheadMs, prefetchMs, wantedSlots } from './history/policy.ts'
 import {
   MapMoves, aheadOf, aircraftLine, areaMiddle, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, historyWait, inArea,
-  inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  inSight, keepLegs, placeLost, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './history/selected.ts'
 import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
@@ -80,12 +81,13 @@ import { Dresser, ScenarioRun } from './scenario/run.ts'
 import { damageOf } from './scenario/timeline.ts'
 import type { Scenario } from './scenario/types.ts'
 import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
+import { LandingEstimate } from './track/landing.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { FAILS_DOWN, mountOutage, outageFor } from './ui/outage.ts'
 import { followTarget, mayAutoFollow, mountAlerts, type AlertsHandle } from './ui/alerts.ts'
 import type { Lookup } from './ui/detail.ts'
-import { FOCUS_ASK_MS, entryState, mountFlightCard } from './ui/flightCard.ts'
+import { FOCUS_ASK_MS, entryState, lostAfterS, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountMapKey } from './ui/mapKey.ts'
 import { SHEET_MEDIA, mountRail } from './ui/rail.ts'
@@ -508,6 +510,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   }
   let histAt: FleetEntry | undefined
   let histCardS: RenderState | null = null
+  // Live, the selected aircraft's signal lost. On its final approach to a runway it is flown on to its landing, an estimate
+  // (track/landing.ts: every runway of OurAirports, fetched when the first lost signal comes), not held in the air where it
+  // was last heard. On the map it stays as a ghost (placeLost, into lostAll and lostOwn), where the Fleet would hide it.
+  const landing = new LandingEstimate(() => getJson<RunwayTable>(`${base}airports/runways.json`))
+  const lostAll: FleetEntry[] = []
+  const lostOwn: FleetEntry = { ...histOwn }
   const moves = new MapMoves() // the person moving the map: History's map does not follow its aircraft meanwhile
   // A scenario playing (run) or being fetched (loadingScenario): either way the polls wait.
   let run: ScenarioRun | null = null
@@ -1739,6 +1747,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         // at that sample until render time reaches it, rather than show nothing.
         const first = track?.oldestTMs ?? null
         if (s === null && track !== undefined && first !== null && tRenderMs < first) s = track.stateAt(first)
+        if (s !== null) {
+          const lostS = chasing ? 0 : lostAfterS(status)
+          s = landing.apply(s, lostS)
+          if (!chasing && s.mode === 'stale' && s.ageS > lostS) {
+            placeLost(all, s, fleet.get(s.hex)?.info ?? chaseInfo, lostAll, lostOwn)
+            all = lostAll
+          }
+        }
       }
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
@@ -1818,7 +1834,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         // The flight-data frame, after the camera (it projects the model). Height above the ground only over the true
         // relief: flattened or growing, the ground drawn is not the ground.
         const aglFt = groundM === null || !prefs.topo || topo.animating ? null : Math.max(0, placed.hM - groundM) / FT
-        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up', hist === null ? modelWind : null)
+        // An estimated landing takes nothing of what the aircraft last sent (its airspeed, its wind): those were then.
+        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, placed.landing === undefined ? chaseRaw : null, aglFt, model.gearPos >= 1 ? 'down' : 'up', hist === null ? modelWind : null)
         // Its flight ID over its brackets, as over the traffic's: the callsign, else the hex (a scenario has its own).
         const id = placed.callsign ?? (sf === null ? placed.hex.toUpperCase() : '')
         flightFrame.update(viewer, model.model, model.entry, data, frameRoom(now), sf?.t, id)

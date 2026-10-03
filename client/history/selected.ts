@@ -118,6 +118,20 @@ function fromState(e: FleetEntry, hex: string, s: RenderState, info: AircraftInf
   return e
 }
 
+/**
+ * Live, the selected aircraft's signal lost: the entries the map draws, written into out (cleared first; entries is never
+ * changed): every one but its own, then a ghost of it at state s (where its track froze, or where it is estimated to have
+ * landed: client/track/landing.ts), written into own. The Fleet hides and forgets an aircraft it has not heard for a while;
+ * the selected one stays on the map, faded.
+ */
+export function placeLost(entries: readonly FleetEntry[], s: RenderState, info: AircraftInfo | null, out: FleetEntry[], own: FleetEntry): FleetEntry {
+  out.length = 0
+  for (let i = 0; i < entries.length; i++) if (entries[i].hex !== s.hex) out.push(entries[i])
+  fromState(own, s.hex, s, info).ghost = true
+  out.push(own)
+  return own
+}
+
 /** e as a ghost at the leg's last point (as tracePath places it), aged from then to t; undefined for a leg with no point. */
 function ghostAt(e: FleetEntry, hex: string, leg: TraceReply, t: number, info: AircraftInfo | null): FleetEntry | undefined {
   const i = leg.t.length - 1

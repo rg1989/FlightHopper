@@ -24,6 +24,9 @@ export interface RenderState {
   typeCode: string | null
   altMslFt?: number | null                      // the smoothed height above mean sea level; null on the ground
   iasKt?: number | null                         // indicated airspeed while the aircraft reports it (averaged, ≤ 30 s old)
+  // Not heard on its final approach: this state is its estimated landing (client/track/landing.ts), not a pose frozen in the
+  // air. landed: at rest on the runway.
+  landing?: { airport: string; runway: string; landed: boolean }
 }
 
 /**

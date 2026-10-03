@@ -11,7 +11,7 @@ import type { FleetEntry, RenderState } from '../types.ts'
 import { dayState, type DayState } from './aircraftDay.ts'
 import {
   MapMoves, aheadOf, aircraftLine, areaMiddle, atClock, cameraTarget, chaseAskAt, dayAsk, daySpan, estimateState, firstDayAsked, flyOver,
-  historyWait, inArea, inSight, keepLegs, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
+  historyWait, inArea, inSight, keepLegs, placeLost, placeSelected, replayStatus, restartsTrack, selectedInfo, trackSource, viewMove,
 } from './selected.ts'
 
 const MIN = 60_000
@@ -176,6 +176,20 @@ test('selectedInfo: the same object while nothing in it changes (the card, label
   assert.equal(selectedInfo(DAY, dayState([l], T + MIN), T + MIN, { ...FEED }, a), a)
   assert.notEqual(selectedInfo(DAY, dayState([l], T + 16 * MIN), T + 16 * MIN, FEED, a), a, 'another callsign')
   assert.notEqual(selectedInfo(DAY, dayState([l], T), T, { ...FEED, squawk: '2000' }, a), a, 'another squawk')
+})
+
+test('placeLost: live, the selected aircraft’s signal lost: a ghost of it at its state, the fleet’s own entry of it left out', () => {
+  const others = [entry('aaaaaa'), entry('738abc'), entry('bbbbbb')]
+  const out: FleetEntry[] = [entry('zzzzzz')]
+  const own = entry('xxxxxx')
+  const s = { ...state(), hex: '738abc', lat: 45.32, lon: -65.89, hM: 96, altBaroFt: 314, onGround: true, gsKt: 0, trackDeg: 301, ageS: 1664 }
+  const got = placeLost(others, s, null, out, own)
+  assert.equal(got, own)
+  assert.deepEqual(out.map((e) => e.hex), ['aaaaaa', 'bbbbbb', '738abc'])
+  assert.deepEqual([own.ghost, own.lat, own.lon, own.hM, own.altFt, own.onGround, own.gsKt, own.trackDeg, own.ageS, own.staleS], [true, 45.32, -65.89, 96, 314, true, 0, 301, 1664, Infinity])
+  assert.equal(others.length, 3, 'the fleet’s array is not changed')
+  placeLost([entry('aaaaaa')], s, null, out, own) // the fleet has forgotten it: still drawn
+  assert.deepEqual(out.map((e) => e.hex), ['aaaaaa', '738abc'])
 })
 
 test('placeSelected: its day not known yet, the fleet’s entries as they are, its own drawn last', () => {

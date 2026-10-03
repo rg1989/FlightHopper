@@ -14,7 +14,7 @@ import { PhotoCache } from './photo.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { LOCATING_S, cardView, entryState, mountFlightCard } = await import('./flightCard.ts')
+const { LOCATING_S, cardView, entryState, lostAfterS, mountFlightCard } = await import('./flightCard.ts')
 const { UPDATE_MS } = await import('./detail.ts')
 
 // An Aegean A320 descending towards Tel Aviv (trimmed from a real adsb.lol object, © adsb.lol contributors, ODbL 1.0).
@@ -61,6 +61,25 @@ test('cardView: status follows the track: predicting, signal lost (numbers fade)
   assert.deepEqual(stats(locating), ['Alt —', 'Speed —', 'V/S —', 'Track —'].map((s) => `${s} (dim)`))
   const none = cardView('abcdef', null, null, null, LIVE, NONE, LOCATING_S)
   assert.deepEqual([none.state, none.status], ['none', 'No recent position'])
+})
+
+test('cardView: not heard on final to a runway, the estimated landing reads "Landing", then "Landed", grey, never "Signal lost"', () => {
+  const landing = { airport: 'Saint John Airport', runway: '32' }
+  const down = cardView('4691c4', { ...S, mode: 'stale', ageS: 40, landing: { ...landing, landed: false } }, SILENT, INFO, LIVE, GR, 60)
+  assert.deepEqual([down.state, down.dot, down.status], ['predict', 'replay', 'Landing · signal lost 40 s ago'])
+  assert.equal(down.statusTitle, 'Estimated: last heard 40 s ago on final to runway 32, Saint John Airport')
+  const landed = cardView('4691c4', { ...S, mode: 'stale', ageS: 1664, onGround: true, gsKt: 0, landing: { ...landing, landed: true } }, SILENT, INFO, LIVE, GR, 60)
+  assert.deepEqual([landed.state, landed.dot, landed.status], ['landed', 'quiet', 'Landed · 28 min ago'])
+  assert.equal(landed.statusTitle, 'Estimated: last heard 28 min ago on final to runway 32, Saint John Airport')
+  assert.equal(stats(landed)[0], 'Alt GND (dim)')
+  assert.ok(landed.stats.every((st) => st.dim), 'an estimate: its numbers are dimmed')
+  // Only focused (the map), it is "Live" until the signal counts as lost there too; then the same words.
+  const wide: StatusBrief = { ...LIVE, viewEveryS: 13 }
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 12, landing: { ...landing, landed: false } }, RAW, INFO, wide, GR, 30, false).state, 'live')
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 1664, landing: { ...landing, landed: true } }, SILENT, INFO, wide, GR, 60, false).status, 'Landed · 28 min ago')
+  assert.equal(lostAfterS(wide), 25)
+  assert.equal(lostAfterS(LIVE), 10)
+  assert.equal(cardView('4691c4', { ...S, mode: 'stale', ageS: 33 }, SILENT, INFO, LIVE, GR, 60).statusTitle, undefined)
 })
 
 test('cardView: only focused, Live until 2.5 view refreshes pass without a position; no "Predicting" on the map', () => {
