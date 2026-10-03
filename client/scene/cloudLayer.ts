@@ -3,7 +3,8 @@
 // place clouds are drawn: Weather3D hands it the specs of every source at once. A spec's heights are above sea level, so a
 // cloud stands that high plus the geoid there (EGM96) above the ellipsoid; as the relief is flattened or grown
 // (exaggeration.ts) it moves with its station's ground, keeping its height above the ground drawn. Its brightness follows
-// the Sun's night (cloudField.ts sunBrightness). frame() runs every frame while the weather shows and writes only on a change.
+// the Sun's night (cloudField.ts sunBrightness). frame() runs every frame while the weather shows and writes only on a change;
+// fade() at each look fades each cloud by its distance from the aircraft (cloudField.ts fadeAlpha), hiding those faded out.
 // Cesium's clouds are billboards that face the camera, each a puff ray-cast through a noise texture: they read best from the
 // side, as from a cockpit or the chase camera; straight from above or below, a deck shows as strips.
 // ponytail: a cloud is drawn whole at its middle's depth, so one the camera flies through fills the view until its middle
@@ -11,20 +12,21 @@
 import { Cartesian2, Cartesian3, CloudCollection, Color, Ellipsoid, type CumulusCloud, type PrimitiveCollection } from 'cesium'
 import { geoidN } from '../../shared/geoid.ts'
 import type { TerrainFrame } from '../types.ts'
-import { sunBrightness, type CloudSpec } from './cloudField.ts'
+import { fadeAlpha, sunBrightness, type CloudSpec } from './cloudField.ts'
 import { drawnHeightM } from './exaggeration.ts'
 
 export const NOISE_DETAIL = 16 // Cesium's default: the detail of its cloud noise texture (a power of two, 8–32)
 const TINT_GREY = [0.55, 0.52, 0.48] // red, green and blue taken away at tint 1: a dark grey, a little blue
 const NIGHT_STEP = 0.02 // the brightness is written again when the night has changed by this
+const FADE_STEP = 0.05 // a cloud's fade is written again when it has changed by this
 const STRIDE = 7 // per cloud in #at: its place at its true height (x, y, z), the ellipsoid's up there (x, y, z), its ground above the ellipsoid
 
 const scratch = new Cartesian3()
 
-/** A cloud's colour for its tint (0 white … 1 dark grey), opaque: Cesium multiplies the puff's own shading by it. */
-export function tintColor(tint: number): Color {
+/** A cloud's colour for its tint (0 white … 1 dark grey) and its fade (alpha): Cesium multiplies the puff's own shading by it. */
+export function tintColor(tint: number, alpha = 1): Color {
   const t = Number.isFinite(tint) ? Math.min(1, Math.max(0, tint)) : 0
-  return new Color(1 - TINT_GREY[0] * t, 1 - TINT_GREY[1] * t, 1 - TINT_GREY[2] * t, 1)
+  return new Color(1 - TINT_GREY[0] * t, 1 - TINT_GREY[1] * t, 1 - TINT_GREY[2] * t, alpha)
 }
 
 export class CloudLayer {
@@ -34,6 +36,8 @@ export class CloudLayer {
   #clouds: CumulusCloud[] = []
   #specs: readonly CloudSpec[] = []
   #at = new Float64Array(0)
+  #alpha = new Float64Array(0) // each cloud's fade as written (in steps)
+  #from: Cartesian3 | null = null // where the clouds are faded from (the aircraft at the last look); none: not faded
   #f = 1 // the factor and relH the clouds are placed for: the true relief until the first frame()
   #relHM = 0
   #night = 0 // the night their brightness is written for, in steps
@@ -80,10 +84,28 @@ export class CloudLayer {
     }
     this.#at = at
     this.#specs = specs
-    this.#clouds = specs.map((s, i) => this.#coll.add({
-      position: this.#placed(i), scale: new Cartesian2(s.scale[0], s.scale[1]), maximumSize: new Cartesian3(s.maxSize[0], s.maxSize[1], s.maxSize[2]),
-      slice: s.slice, brightness: s.brightness * b, color: tintColor(s.tint),
-    }))
+    this.#alpha = new Float64Array(specs.length)
+    this.#clouds = specs.map((s, i) => {
+      const a = (this.#alpha[i] = this.#alphaAt(i))
+      return this.#coll.add({
+        position: this.#placed(i), scale: new Cartesian2(s.scale[0], s.scale[1]), maximumSize: new Cartesian3(s.maxSize[0], s.maxSize[1], s.maxSize[2]),
+        slice: s.slice, brightness: s.brightness * b, color: tintColor(s.tint, a), show: a > 0,
+      })
+    })
+  }
+
+  /** Each look: every cloud faded by its distance from `from` (the aircraft), written only when it has changed by a step. */
+  fade(from: Cartesian3): void {
+    if (this.#destroyed) return
+    this.#from = Cartesian3.clone(from, this.#from ?? new Cartesian3())
+    for (let i = 0; i < this.#clouds.length; i++) {
+      const a = this.#alphaAt(i)
+      if (a === this.#alpha[i]) continue
+      this.#alpha[i] = a
+      const c = this.#clouds[i]
+      c.color = tintColor(this.#specs[i].tint, a)
+      c.show = a > 0
+    }
   }
 
   /** Every frame: the clouds moved with the relief drawn when its factor or plane changed, brightened or dimmed when the night did. */
@@ -107,6 +129,16 @@ export class CloudLayer {
     this.#destroyed = true
     this.#clouds = []
     this.#primitives.remove(this.#coll) // and destroys it
+  }
+
+  /** How much of cloud i shows from where it is faded from, in steps (all of it before any fade). */
+  #alphaAt(i: number): number {
+    const from = this.#from
+    if (from === null) return 1
+    const a = this.#at
+    const k = i * STRIDE
+    const km = Math.hypot(a[k] - from.x, a[k + 1] - from.y, a[k + 2] - from.z) / 1000
+    return Math.round(fadeAlpha(this.#specs[i], km) / FADE_STEP) * FADE_STEP
   }
 
   /** Cloud i where it is drawn: its true place moved along up by as much as its ground is moved (scratch: read it at once). */

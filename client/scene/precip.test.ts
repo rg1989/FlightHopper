@@ -1,10 +1,13 @@
 // client/scene/precip.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Cartesian3, Color, JulianDate, Matrix4, Particle, Transforms, type PrimitiveCollection } from 'cesium'
+import { readFileSync } from 'node:fs'
 import type { Metar } from '../../shared/wx.ts'
 import type { SourceTile } from './radar.ts'
-import { LOOKS, Precipitation, cloudBaseM, nearestStation, particleCount, precipFromDbz, precipFromWx, radarPixel, radarSample, windOf } from './precip.ts'
+import {
+  OVERLAY, Precipitation, cloudBaseM, coverSize, nearestStation, overlayOpacity, precipFromDbz, precipFromWx, radarPixel, radarSample, tiltDeg, windOf,
+  type Fall,
+} from './precip.ts'
 
 const FT = 0.3048
 const near = (a: number, b: number, tol: number): boolean => Math.abs(a - b) <= tol
@@ -45,13 +48,12 @@ test('precipFromWx: nothing for no weather, a thunderstorm with nothing falling,
   for (const wx of [null, '', 'TS', 'VCSH', 'VCTS', 'RERA', 'BR', 'FG', 'HZ', 'NSW']) assert.equal(precipFromWx(wx), null, String(wx))
 })
 
-test('particleCount: rain 1,200 to 3,000 particles by intensity, snow 800 to 2,400', () => {
-  assert.equal(particleCount({ kind: 'rain', intensity: 0 }), 1200)
-  assert.equal(particleCount({ kind: 'rain', intensity: 0.5 }), 2100)
-  assert.equal(particleCount({ kind: 'rain', intensity: 1 }), 3000)
-  assert.equal(particleCount({ kind: 'snow', intensity: 0 }), 800)
-  assert.equal(particleCount({ kind: 'snow', intensity: 1 }), 2400)
-  assert.equal(particleCount({ kind: 'rain', intensity: 7 }), 3000, 'never past 3,000')
+test('precipFromWx: snow blown or drifting off the ground (BLSN, DRSN) is no snow falling; with snow falling too, that falls', () => {
+  assert.equal(precipFromWx('BLSN'), null)
+  assert.equal(precipFromWx('DRSN'), null)
+  assert.equal(precipFromWx('+BLSN'), null)
+  assert.deepEqual(precipFromWx('-SN BLSN'), { kind: 'snow', intensity: 0.25 })
+  assert.deepEqual(precipFromWx('BLSN SN'), { kind: 'snow', intensity: 0.55 })
 })
 
 test('radarPixel: the zoom-7 tile and the pixel in it (Web Mercator, north row first)', () => {
@@ -105,131 +107,169 @@ test('windOf: the surface wind as it blows, metres a second east and north; none
   assert.deepEqual(windOf(null), { east: 0, north: 0 })
 })
 
-// ---- Precipitation -----------------------------------------------------------------------------------------------------
 
-interface FakeSystem {
-  options: Record<string, unknown>
-  show: boolean
-  modelMatrix: Matrix4
-  emissionRate: number
-  minimumSpeed: number
-  maximumSpeed: number
-  startColor: Color
-  endColor: Color
-  times: number[] // the seconds of each update's frameState.time from T0
-  destroyed: boolean
-  update(fs: { time: JulianDate }): void
-  destroy(): void
+// ---- the overlay ---------------------------------------------------------------------------------------------------------
+
+test('overlayOpacity: by intensity, from the kind\'s faint to its full; dimmer at night', () => {
+  const f = (kind: 'rain' | 'snow', intensity: number, night = 0): Fall => ({ kind, intensity, wind: { east: 0, north: 0 }, night })
+  assert.equal(overlayOpacity(f('rain', 0)), OVERLAY.rain.opacity[0])
+  assert.equal(overlayOpacity(f('rain', 1)), OVERLAY.rain.opacity[1])
+  assert.ok(near(overlayOpacity(f('rain', 0.5)), (OVERLAY.rain.opacity[0] + OVERLAY.rain.opacity[1]) / 2, 1e-12))
+  assert.equal(overlayOpacity(f('snow', 1)), OVERLAY.snow.opacity[1])
+  assert.ok(overlayOpacity(f('rain', 1, 1)) < OVERLAY.rain.opacity[1] * 0.6 && overlayOpacity(f('rain', 1, 1)) > 0, 'dimmer at night, still there')
+  assert.equal(overlayOpacity(f('rain', 9)), OVERLAY.rain.opacity[1])
+})
+
+test('tiltDeg: the fall leans with the wind across the camera\'s view (a CSS rotation: negative turns it so drops go right), within the kind\'s most', () => {
+  const east = { east: 4, north: 0 } // blowing towards the east
+  assert.ok(near(tiltDeg('rain', east, 0), -Math.atan2(4, OVERLAY.rain.fallMs) * 180 / Math.PI, 1e-9), 'looking north: it blows to the right')
+  assert.ok(near(tiltDeg('rain', east, Math.PI), Math.atan2(4, OVERLAY.rain.fallMs) * 180 / Math.PI, 1e-9), 'looking south: to the left')
+  assert.ok(near(tiltDeg('rain', east, Math.PI / 2), 0, 1e-9), 'looking downwind: no lean')
+  assert.equal(tiltDeg('rain', { east: 40, north: 0 }, 0), -OVERLAY.rain.maxTiltDeg)
+  assert.ok(Math.abs(tiltDeg('snow', { east: 0.8, north: 0 }, 0)) > Math.abs(tiltDeg('rain', { east: 0.8, north: 0 }, 0)), 'snow, falling slower, leans more')
+  assert.equal(tiltDeg('snow', { east: 0, north: 0 }, 1), 0)
+})
+
+test('coverSize: what a turned layer must span to cover the view', () => {
+  const [w, h] = coverSize(1600, 900, 30)
+  assert.ok(w >= 1600 * Math.cos(Math.PI / 6) + 900 * 0.5 && w <= 1600 * Math.cos(Math.PI / 6) + 900 * 0.5 + 4, String(w))
+  assert.ok(h >= 1600 * 0.5 + 900 * Math.cos(Math.PI / 6) && h <= 1600 * 0.5 + 900 * Math.cos(Math.PI / 6) + 4, String(h))
+  assert.deepEqual(coverSize(1600, 900, 0).map((v) => v >= 1600 || v >= 900), [true, true])
+  assert.deepEqual(coverSize(800, 600, -20), coverSize(800, 600, 20))
+})
+
+// Node has no DOM: just enough of one for the overlay, every style set through setProperty.
+class FakeStyle {
+  props = new Map<string, string>()
+  setProperty(k: string, v: string): void { this.props.set(k, v) }
+  removeProperty(k: string): string { const v = this.props.get(k) ?? ''; this.props.delete(k); return v }
+  getPropertyValue(k: string): string { return this.props.get(k) ?? '' }
 }
-const T0 = JulianDate.fromIso8601('2026-10-03T12:00:00Z')
-
-function precipRig() {
-  const added: { update(fs: object): void }[] = []
-  const removed: unknown[] = []
-  const primitives = { add: (p: { update(fs: object): void }) => (added.push(p), p), remove: (p: unknown) => (removed.push(p), true) } as unknown as PrimitiveCollection
-  let now = 1000
-  const systems: FakeSystem[] = []
-  const makeSystem = (o: Record<string, unknown>): FakeSystem => {
-    const s: FakeSystem = {
-      options: o, show: (o.show as boolean) ?? true, modelMatrix: Matrix4.clone(o.modelMatrix as Matrix4 ?? Matrix4.IDENTITY), emissionRate: o.emissionRate as number,
-      minimumSpeed: o.minimumSpeed as number, maximumSpeed: o.maximumSpeed as number, startColor: o.startColor as Color, endColor: o.endColor as Color,
-      times: [], destroyed: false,
-      update(fs) { this.times.push(JulianDate.secondsDifference(fs.time, T0)) },
-      destroy() { this.destroyed = true },
-    }
-    systems.push(s)
-    return s
+class FakeEl {
+  className = ''
+  hidden = false
+  children: FakeEl[] = []
+  parent: FakeEl | null = null
+  dataset: Record<string, string> = {}
+  style = new FakeStyle()
+  clientWidth = 0
+  clientHeight = 0
+  writes = 0 // style writes, all of them
+  readonly ownerDocument: { createElement: (tag: string) => FakeEl }
+  constructor(doc: { createElement: (tag: string) => FakeEl }) {
+    this.ownerDocument = doc
+    const set = this.style.setProperty.bind(this.style)
+    this.style.setProperty = (k: string, v: string) => { this.writes++; set(k, v) }
   }
-  const p = new Precipitation(primitives, { makeSystem: makeSystem as never, image: (k) => `${k}.png`, now: () => now, epoch: T0 })
-  const camPos = Cartesian3.fromDegrees(34.9, 32, 800)
-  const camDir = Cartesian3.normalize(new Cartesian3(1, 2, -0.5), new Cartesian3())
-  const frame = (time = T0, render = true): void => added[0].update({ camera: { positionWC: camPos, directionWC: camDir }, time, frameNumber: 1, passes: { render, pick: !render } })
-  return { p, systems, added, removed, frame, camPos, camDir, tick: (ms: number) => void (now += ms) }
+  append(...cs: FakeEl[]): void { for (const c of cs) { c.parent = this; this.children.push(c) } }
+  replaceChildren(...cs: FakeEl[]): void { this.children = []; this.append(...cs) }
+  remove(): void { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null }
 }
-const CALM = { east: 0, north: 0 }
 
-test('Precipitation: nothing falling makes nothing; rain makes one particle system, its rate keeping the count alive, its images in metres', () => {
-  const r = precipRig()
-  assert.equal(r.added.length, 1, 'one primitive in the scene, idle until something falls')
+function overlayRig(w = 1600, h = 900) {
+  const doc = { createElement: (): FakeEl => new FakeEl(doc) }
+  const parent = new FakeEl(doc)
+  parent.clientWidth = w
+  parent.clientHeight = h
+  const p = new Precipitation(parent as unknown as HTMLElement, { image: (k) => `${k}.png` })
+  const overlay = (): FakeEl | undefined => parent.children.find((c) => c.className === 'fh-precip')
+  const tilt = (): FakeEl => overlay()!.children[0]
+  const layers = (): FakeEl[] => tilt().children.map((sway) => sway.children[0])
+  return { p, parent, overlay, tilt, layers }
+}
+const fall = (o: Partial<Fall> = {}): Fall => ({ kind: 'rain', intensity: 0.5, wind: { east: 0, north: 0 }, night: 0, ...o })
+const px = (v: string): number => Number(v.replace('px', ''))
+
+test('Precipitation: one overlay over the view, hidden until something falls; rain: layers of the rain texture, the near ones larger and faster; its opacity by intensity', () => {
+  const r = overlayRig()
+  const o = r.overlay()!
+  assert.equal(o.hidden, true)
   r.p.set(null)
-  r.frame()
-  assert.equal(r.systems.length, 0)
-  r.p.set({ kind: 'rain', intensity: 0.5, wind: CALM, night: 0 })
-  assert.equal(r.systems.length, 1)
-  const o = r.systems[0].options
-  assert.equal(o.emissionRate, particleCount({ kind: 'rain', intensity: 0.5 }) / LOOKS.rain.lifeS)
-  assert.equal(o.minimumParticleLife, LOOKS.rain.lifeS)
-  assert.equal(o.maximumParticleLife, LOOKS.rain.lifeS)
-  assert.equal(o.sizeInMeters, true)
-  assert.equal(o.image, 'rain.png')
-  assert.ok((o.startColor as Color).equals(new Color(...LOOKS.rain.color)) && (o.endColor as Color).equals(o.startColor as Color), 'one colour all its life: no per-frame colour writes')
-})
-
-test('Precipitation: each frame the particles are emitted ahead of the camera, and timed by the wall clock in steps of at most 0.1 s', () => {
-  const r = precipRig()
-  r.p.set({ kind: 'rain', intensity: 0.5, wind: CALM, night: 0 })
-  const s = r.systems[0]
-  r.frame()
-  const ahead = Cartesian3.add(r.camPos, Cartesian3.multiplyByScalar(r.camDir, LOOKS.rain.aheadM, new Cartesian3()), new Cartesian3())
-  assert.ok(Cartesian3.equalsEpsilon(Matrix4.getTranslation(s.modelMatrix, new Cartesian3()), ahead, 0, 1e-6))
-  r.tick(16)
-  r.frame() // the scene's clock stands still (a fixed ?sun=): the particles' does not
-  r.tick(5000) // a stalled tab
-  r.frame()
-  r.tick(-50) // a clock that went back
-  r.frame()
-  assert.deepEqual(s.times.map((t) => Math.round(t * 1000)), [0, 16, 116, 116])
-  r.tick(16)
-  r.frame(T0, false) // a pick (Cesium updates the primitives again for it): rain must not catch the clicks, nor take time
-  assert.equal(s.times.length, 4)
-})
-
-test('Precipitation: they fall along their terminal speed plus the wind, emitted through the shell round the emitter', () => {
-  const r = precipRig()
-  r.p.set({ kind: 'rain', intensity: 0.5, wind: { east: 6, north: 0 }, night: 0 })
-  r.frame()
-  const s = r.systems[0]
-  const fall = 8 // 7 to 9 m/s by intensity
-  const speed = Math.hypot(fall, 6)
-  assert.ok(near(s.minimumSpeed, speed * 0.9, 1e-9) && near(s.maximumSpeed, speed * 1.1, 1e-9), `${s.minimumSpeed}–${s.maximumSpeed}`)
-  const enu = Transforms.eastNorthUpToFixedFrame(r.camPos)
-  const east = Matrix4.multiplyByPointAsVector(enu, Cartesian3.UNIT_X, new Cartesian3())
-  const up = Matrix4.multiplyByPointAsVector(enu, Cartesian3.UNIT_Z, new Cartesian3())
-  const want = Cartesian3.normalize(Cartesian3.add(Cartesian3.multiplyByScalar(east, 6, new Cartesian3()), Cartesian3.multiplyByScalar(up, -fall, new Cartesian3()), new Cartesian3()), new Cartesian3())
-  const emitter = s.options.emitter as { emit(p: Particle): void }
-  for (let i = 0; i < 200; i++) {
-    const particle = new Particle({})
-    emitter.emit(particle)
-    const d = Cartesian3.magnitude(particle.position)
-    assert.ok(d >= LOOKS.rain.radiusM[0] - 1e-9 && d <= LOOKS.rain.radiusM[1] + 1e-9, `${d} m from the emitter`)
-    assert.ok(Cartesian3.equalsEpsilon(particle.velocity, want, 0, 1e-9))
-  }
-})
-
-test('Precipitation: harder rain raises the rate in place; snow makes a new system (the old destroyed); the night dims the colour; nothing falling hides it, unupdated', () => {
-  const r = precipRig()
-  r.p.set({ kind: 'rain', intensity: 0, wind: CALM, night: 0 })
-  r.p.set({ kind: 'rain', intensity: 1, wind: CALM, night: 1 })
-  assert.equal(r.systems.length, 1)
-  assert.equal(r.systems[0].emissionRate, 3000 / LOOKS.rain.lifeS)
-  const c = r.systems[0].startColor
-  assert.ok(near(c.red, LOOKS.rain.color[0] * 0.2, 1e-9) && near(c.alpha, LOOKS.rain.color[3], 1e-9), `${c}`)
-  r.p.set({ kind: 'snow', intensity: 0.5, wind: CALM, night: 0 })
-  assert.equal(r.systems.length, 2)
-  assert.equal(r.systems[0].destroyed, true)
-  assert.equal(r.systems[1].options.image, 'snow.png')
-  r.frame()
+  assert.equal(o.hidden, true)
+  r.p.set(fall())
+  assert.equal(o.hidden, false)
+  assert.equal(o.dataset.kind, 'rain')
+  assert.equal(o.style.getPropertyValue('opacity'), String(overlayOpacity(fall())))
+  assert.equal(r.tilt().className, 'fh-precip-tilt')
+  const ls = r.layers()
+  assert.equal(ls.length, OVERLAY.rain.layers.length)
+  const speeds: number[] = []
+  ls.forEach((l, i) => {
+    const look = OVERLAY.rain.layers[i]
+    assert.equal(l.className, 'fh-precip-layer')
+    assert.equal(l.style.getPropertyValue('background-image'), 'url("rain.png")')
+    const th = OVERLAY.rain.tile[1] * look.scale
+    assert.equal(l.style.getPropertyValue('background-size'), `${OVERLAY.rain.tile[0] * look.scale}px ${th}px`)
+    assert.equal(px(l.style.getPropertyValue('--fall')), th, 'falls one tile a loop: seamless')
+    assert.equal(l.style.getPropertyValue('--fall-s'), `${look.fallS}s`)
+    assert.equal(l.style.getPropertyValue('opacity'), String(look.alpha))
+    assert.equal(l.parent!.className, 'fh-precip-sway')
+    assert.equal(l.parent!.style.getPropertyValue('animation-name'), 'none', 'rain does not sway')
+    speeds.push(th / look.fallS)
+  })
+  for (let i = 1; i < speeds.length; i++) assert.ok(speeds[i] < speeds[i - 1] && OVERLAY.rain.layers[i].scale < OVERLAY.rain.layers[i - 1].scale, 'the farther layers smaller and slower')
+  r.p.set(fall({ intensity: 1 }))
+  assert.equal(r.layers()[0], ls[0], 'harder rain: the same layers')
+  assert.equal(o.style.getPropertyValue('opacity'), String(overlayOpacity(fall({ intensity: 1 }))))
   r.p.set(null)
-  assert.equal(r.systems[1].show, false)
-  r.tick(16)
-  r.frame()
-  assert.equal(r.systems[1].times.length, 1, 'not updated while nothing falls')
-  r.p.set({ kind: 'snow', intensity: 0.5, wind: CALM, night: 0 })
-  r.tick(3000)
-  r.frame()
-  assert.deepEqual(r.systems[1].times.length, 2)
-  assert.equal(r.systems[1].times[1], r.systems[1].times[0], 'back on: its clock starts again from where it was')
+  assert.equal(o.hidden, true)
+})
+
+test('Precipitation: snow: its own texture, falling slower, each layer swaying sideways; another kind builds the layers anew', () => {
+  const r = overlayRig()
+  r.p.set(fall())
+  const rain = r.layers()
+  r.p.set(fall({ kind: 'snow' }))
+  const ls = r.layers()
+  assert.notEqual(ls[0], rain[0])
+  assert.equal(r.overlay()!.dataset.kind, 'snow')
+  assert.equal(ls.length, OVERLAY.snow.layers.length)
+  ls.forEach((l, i) => {
+    const look = OVERLAY.snow.layers[i]
+    assert.equal(l.style.getPropertyValue('background-image'), 'url("snow.png")')
+    assert.equal(l.parent!.style.getPropertyValue('--sway'), `${look.swayPx}px`)
+    assert.equal(l.parent!.style.getPropertyValue('--sway-s'), `${look.swayS}s`)
+    assert.ok(OVERLAY.snow.tile[1] * look.scale / look.fallS < OVERLAY.rain.tile[1] * OVERLAY.rain.layers[i].scale / OVERLAY.rain.layers[i].fallS / 5, 'far slower than rain')
+  })
+})
+
+test('Precipitation: aim leans the fall with the wind across the view, in whole degrees, the turned layer sized to cover the view; nothing written for no change', () => {
+  const r = overlayRig(1600, 900)
+  r.p.aim(0)
+  assert.equal(r.tilt().style.getPropertyValue('--tilt'), '', 'nothing falling: nothing to aim')
+  r.p.set(fall({ wind: { east: 3, north: 0 } }))
+  r.p.aim(0)
+  const deg = Math.round(tiltDeg('rain', { east: 3, north: 0 }, 0))
+  assert.equal(r.tilt().style.getPropertyValue('--tilt'), `${deg}deg`)
+  const [w, h] = coverSize(1600, 900, deg)
+  assert.deepEqual([r.tilt().style.getPropertyValue('width'), r.tilt().style.getPropertyValue('height')], [`${w}px`, `${h}px`])
+  const writes = r.tilt().writes
+  r.p.aim(0.001)
+  assert.equal(r.tilt().writes, writes, 'the same whole degree, the same view: no writes')
+  r.parent.clientWidth = 1000
+  r.p.aim(0.001)
+  assert.equal(r.tilt().style.getPropertyValue('width'), `${coverSize(1000, 900, deg)[0]}px`, 'the view resized: sized again')
+  r.p.aim(Math.PI)
+  assert.equal(r.tilt().style.getPropertyValue('--tilt'), `${-deg}deg`)
+  r.p.set(fall({ kind: 'snow', wind: { east: 3, north: 0 } }))
+  r.p.aim(Math.PI)
+  assert.equal(r.tilt().style.getPropertyValue('--tilt'), `${Math.round(tiltDeg('snow', { east: 3, north: 0 }, Math.PI))}deg`, 'snow leans by its own fall: aimed again')
   r.p.destroy()
-  assert.deepEqual(r.removed, [r.added[0]])
-  assert.equal(r.systems[1].destroyed, true)
+  assert.equal(r.overlay(), undefined, 'destroy takes the overlay away')
+  r.p.set(fall())
+  r.p.aim(0)
+  assert.equal(r.overlay(), undefined, 'and stays down')
+})
+
+test('layout.css: the overlay sits under the place names (z 3), takes no pointer, moves by transforms alone, and holds still for reduced motion', () => {
+  const css = readFileSync(new URL('../ui/layout.css', import.meta.url), 'utf8')
+  const block = (sel: string): string => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)))
+  assert.match(block('.fh-precip'), /z-index: 3;/)
+  assert.match(block('.fh-precip'), /pointer-events: none;/)
+  assert.match(block('.fh-precip-tilt'), /rotate\(var\(--tilt/)
+  assert.match(block('.fh-precip-layer'), /animation: fh-precip-fall var\(--fall-s/)
+  assert.match(block('.fh-precip-sway'), /animation: fh-precip-sway var\(--sway-s/)
+  assert.match(css, /@keyframes fh-precip-fall \{[^}]*translate3d\(0, var\(--fall/)
+  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)', css.indexOf('.fh-precip')))
+  assert.match(reduced.slice(0, 400), /\.fh-precip-layer[\s\S]*animation: none/)
 })

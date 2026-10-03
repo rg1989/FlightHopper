@@ -4,8 +4,8 @@
      (flightCard.css, top-left when an aircraft is focused; on phones above the tab bar), the search box (searchBox.css,
      top centre; on phones a sheet from its tab), the toast (ui.css, top centre), the ?bench=1 overlay; while a scenario plays ([data-scenario=<id>], data-mode chase) its play bar, captions
      and ending (playbar.css, captions.css, ending.css).
-   Under it, in the globe's element: the chase's place names and traffic brackets (.fh-places, .fh-traffic, below) and
-   the flight-data frame (.fh-frame, flightFrame.css), so every panel and the ending's veil cover them.
+   Under it, in the globe's element: the chase's rain or snow, place names and traffic brackets (.fh-precip, .fh-places,
+   .fh-traffic, below) and the flight-data frame (.fh-frame, flightFrame.css), so every panel and the ending's veil cover them.
    The overlay layer itself never takes the pointer: the map stays draggable everywhere between the boxes. */
 .fh-ui {
   position: absolute;
@@ -95,6 +95,62 @@
 
 .fh-traffic.fh-traffic-open {
   z-index: 7;
+}
+
+/* Rain and snow round the camera in the chase (client/scene/precip.ts): a texture of streaks or flakes in layers that fall
+   at their own speeds, over the 3-D view and under the place names (z 4). CSS moves the layers, by transforms alone (the
+   compositor's work: no script per frame); the script sets each layer's texture, size, speed and opacity, and a few times a
+   second the lean of the fall (--tilt) with the turned layer's size to cover the view. Each layer is one tile taller than
+   its box and falls one tile a loop: seamless. Reduced motion: a faint still texture. */
+.fh-precip {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+.fh-precip[hidden] {
+  display: none;
+}
+.fh-precip-tilt {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  transition: transform 0.8s ease-out;
+}
+.fh-precip-sway {
+  position: absolute;
+  inset: 0;
+  animation: fh-precip-sway var(--sway-s, 6s) ease-in-out infinite alternate;
+}
+.fh-precip-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: calc(-1 * var(--fall, 0px));
+  background-repeat: repeat;
+  will-change: transform;
+  animation: fh-precip-fall var(--fall-s, 1s) linear infinite;
+}
+@keyframes fh-precip-fall {
+  to { transform: translate3d(0, var(--fall, 0px), 0); }
+}
+@keyframes fh-precip-sway {
+  from { transform: translate3d(calc(-1 * var(--sway, 0px)), 0, 0); }
+  to { transform: translate3d(var(--sway, 0px), 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fh-precip-layer,
+  .fh-precip-sway {
+    animation: none;
+  }
+  .fh-precip {
+    opacity: 0.25 !important;
+  }
 }
 
 /* Place names in the chase (client/scene/placeLabels.ts): upright screen text over the 3-D view, under the traffic

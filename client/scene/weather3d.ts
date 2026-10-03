@@ -13,22 +13,23 @@
 //   30 km, and drawn the frame after (the work spread over two frames) by the one cloud layer (cloudLayer.ts). Clouds of
 //   other sources join the same list after the observed ones (#buildClouds);
 // - ground fog round a station near the aircraft that sees little (groundFog.ts);
-// - rain or snow round the camera, from the radar under it or the nearest station's weather, below the cloud (precip.ts).
+// - rain or snow round the camera, from the radar under it or the nearest station's weather, below the cloud: a light
+//   screen overlay (precip.ts), leaned with the wind across the camera's view a few times a second.
 // Every frame the clouds and the fog follow the relief drawn and the Sun's night (setNight); the rest is looked at once a
-// second.
+// second, when the clouds are also faded by their distance from the aircraft.
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
 // draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
 // weather is taken from round that place and moved by the one shift that puts the place under the aircraft's first position.
 // From then on the aircraft flies through that sky. Everything it holds is where it is drawn (shifted); the radar's tiles are
 // RainViewer's own, so a sample at a drawn place is taken at that place less the shift.
-import { Cartesian3, Color, CustomDataSource, Math as CesiumMath, type Cartographic, type Viewer } from 'cesium'
+import { Cartesian3, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, type Cartographic, type Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
 import type { Metar, Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { nearestClouds, observedClouds, type CloudSpec } from './cloudField.ts'
+import { REBUILD_KM, nearestClouds, observedClouds, type CloudSpec } from './cloudField.ts'
 import { CloudLayer } from './cloudLayer.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
@@ -51,10 +52,10 @@ const LABEL_KEY = 'hazards' // this layer in the names overlay
 const LABEL_RANK = 1.5 // after the seas (1), before every city (2)
 const NOTE = 'some weather unavailable'
 const KM_PER_NM = 1.852
-const CLOUD_MOVE_KM = 30 // the clouds are built again once the aircraft is this far from where they were built
 const PRECIP_OVER_BASE_M = 300 // rain or snow shows round a camera up to this far over its cloud's base,
 const PRECIP_OVER_GROUND_M = 3000 // or this far over the ground when no base is known
 const TRUE_RELIEF: TerrainFrame = { fSampled: 1, fNow: 1, relHM: 0 }
+const AIM_MS = 250 // the rain or snow overlay is leaned for the camera's heading at most this often
 
 /** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn. */
 export interface Aircraft {
@@ -87,13 +88,14 @@ type Feed = 'metar' | 'sigmet' | 'radar'
 
 /** What draws the sky round the aircraft: Cesium's parts in the app (cesiumSky), fakes in tests. */
 export interface Sky {
-  clouds: Pick<CloudLayer, 'show' | 'draw' | 'frame' | 'destroy'>
+  clouds: Pick<CloudLayer, 'show' | 'draw' | 'frame' | 'fade' | 'destroy'>
   fog: Pick<GroundFog, 'set' | 'frame' | 'destroy'>
-  precip: Pick<Precipitation, 'set' | 'destroy'>
+  precip: Pick<Precipitation, 'set' | 'aim' | 'destroy'>
 }
 
+/** The sky's parts in the viewer: the clouds and the fog in its scene, the rain or snow overlay in its element (the globe's). */
 const cesiumSky = (viewer: Viewer): Sky => ({
-  clouds: new CloudLayer(viewer.scene.primitives), fog: new GroundFog(viewer.scene), precip: new Precipitation(viewer.scene.primitives),
+  clouds: new CloudLayer(viewer.scene.primitives), fog: new GroundFog(viewer.scene), precip: new Precipitation(viewer.container as HTMLElement),
 })
 
 export interface Weather3DOptions {
@@ -140,6 +142,7 @@ export class Weather3D {
   readonly #tile: (radar: RadarSource, z: number, x: number, y: number) => Promise<SourceTile | null>
   readonly #volumes = new CustomDataSource('hazard-volumes')
   readonly #here: Aircraft = { lat: 0, lon: 0, altM: 0 }
+  readonly #hereWC = new Cartesian3()
   readonly #shift = { dLat: 0, dLon: 0 }
   readonly #down = new Set<Feed>() // the sources whose last ask failed
   #seen = false // #here holds an aircraft (and the shift, if there is one, is set)
@@ -167,8 +170,12 @@ export class Weather3D {
   #builtLon = Number.NaN
   #stations = 0 // the stations the clouds were built from
   #pending: CloudSpec[] | null = null // built at a look, drawn at the next frame
-  #tf: TerrainFrame = TRUE_RELIEF // the relief drawn, as the last frame gave it
+  #made = new WeakMap<Metar, CloudSpec[]>() // each report's clouds (observedClouds' cache)
+  #fNow = 1 // the relief drawn, as the last frame gave it (its object is reused: copied)
+  #relHM = 0
   #night = 0 // the Sun's night, as setNight gave it
+  #falling = false // the overlay shows rain or snow
+  #aimedMs = -Infinity
   #tileFrom: RadarSource | null = null // the radar tile under the camera: its frame, its z7 x/y, the tile once it has come
   #tileKey = ''
   #tileGot: SourceTile | null = null
@@ -205,6 +212,7 @@ export class Weather3D {
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, [])
       this.#sky.fog.set(null)
       this.#sky.precip.set(null)
+      this.#falling = false
     }
   }
 
@@ -248,8 +256,9 @@ export class Weather3D {
     this.#night = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0
   }
 
-  /** The sky built again from what it holds, at once (a check aid: after changing a look constant in the console). */
+  /** The sky built again from what it holds, every report's clouds worked out anew (a check aid: after changing a look constant in the console). */
   rebuildSky(): void {
+    this.#made = new WeakMap()
     this.#builtGen = -1
     this.#refresh()
   }
@@ -260,13 +269,18 @@ export class Weather3D {
    */
   update(aircraft: Aircraft | null, nowMs: number, tf: TerrainFrame = TRUE_RELIEF): void {
     if (!this.#show) return
-    this.#tf = tf
+    this.#fNow = tf.fNow
+    this.#relHM = tf.relHM
     if (this.#pending !== null) {
       this.#sky.clouds.draw(this.#pending)
       this.#pending = null
     }
     this.#sky.clouds.frame(tf, this.#night)
     this.#sky.fog.frame(tf, this.#night)
+    if (this.#falling && nowMs - this.#aimedMs >= AIM_MS) {
+      this.#aimedMs = nowMs
+      this.#sky.precip.aim(this.#viewer.camera.heading)
+    }
     if (aircraft === null || !Number.isFinite(aircraft.lat) || !Number.isFinite(aircraft.lon)) return
     const a = this.#here
     a.lat = aircraft.lat
@@ -287,13 +301,15 @@ export class Weather3D {
 
   destroy(): void {
     if (this.#destroyed) return
-    this.show = false
+    const alive = !this.#viewer.isDestroyed() // gone first: nothing of its to touch
+    if (alive) this.show = false
+    this.#show = false
     this.#destroyed = true
-    if (this.#viewer.isDestroyed()) return
+    this.#sky.precip.destroy() // the overlay is the page's
+    if (!alive) return
     void this.#viewer.dataSources.remove(this.#volumes, true)
     this.#sky.clouds.destroy()
     this.#sky.fog.destroy()
-    this.#sky.precip.destroy()
   }
 
   /** Asks for what is due: the SIGMETs and the radar frame by the clock, the METARs by the clock or when the aircraft is out of its box. */
@@ -395,16 +411,20 @@ export class Weather3D {
       this.#labelKey = labels
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, this.#hazards.map((h) => this.#label(h, u)))
     }
-    if (this.#builtGen !== this.#metarGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < CLOUD_MOVE_KM)) this.#buildClouds()
+    if (this.#builtGen !== this.#metarGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
+    this.#sky.clouds.fade(Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC))
     this.#sky.fog.set(fogNear(this.#metars, a.lat, a.lon))
-    this.#sky.precip.set(this.#fall())
+    const fall = this.#fall()
+    this.#sky.precip.set(fall)
+    if (fall !== null && !this.#falling) this.#aimedMs = -Infinity // aimed at the next frame
+    this.#falling = fall !== null
     this.#status()
   }
 
   /** The clouds round the aircraft, to be drawn at the next frame: the observed, then (as more sources come) the others, within one cap. */
   #buildClouds(): void {
     const a = this.#here
-    const observed = observedClouds(this.#metars, a.lat, a.lon)
+    const observed = observedClouds(this.#metars, a.lat, a.lon, { cache: this.#made })
     this.#stations = observed.stations
     this.#pending = nearestClouds([observed.specs], a.lat, a.lon)
     this.#builtGen = this.#metarGen
@@ -433,7 +453,7 @@ export class Weather3D {
     if (st === null || base === null || st.elevM === null) return (this.#viewer.scene.globe.getHeight(c) ?? 0) + PRECIP_OVER_GROUND_M
     const n = geoidN(st.lat, st.lon)
     const ground = st.elevM + n
-    return base + n + drawnHeightM(ground, this.#tf.fNow, this.#tf.relHM) - ground + PRECIP_OVER_BASE_M
+    return base + n + drawnHeightM(ground, this.#fNow, this.#relHM) - ground + PRECIP_OVER_BASE_M
   }
 
   /** The radar's strongest echo round a place (RainViewer's own), from its decoded zoom-7 tile; null until the tile has come, or no echo. */

@@ -2,19 +2,18 @@
 // Rain or snow round the camera in the chase, while the camera is under the cloud it falls from. Weather3D decides at its
 // once-a-second look what falls and how hard: the radar under the camera (RainViewer's newest frame, its decoded zoom-7
 // tile: 15 dBZ and up, its own snow flag), else the nearest station's present weather within 30 km (-RA light, RA moderate,
-// +RA or a thunderstorm with rain heavy; snow for SN), and only below that station's cloud base + 300 m (3 km above the
-// ground when no base is known). Precipitation draws it: Cesium particles in the air round the camera, falling at their
-// terminal speed and drifting with the station's surface wind: rain as streaks, 1,200 to 3,000 of them by intensity;
-// snow as soft flakes, slower, 800 to 2,400. Each frame the particles are emitted round where the camera is now, so they
-// stay round it; each lives a second or a few, so those left behind go.
-// The particles keep time by the wall clock (the scene's clock is the sun's: a fixed ?sun= would stand them still), in
-// steps of at most 0.1 s, so a frame after a stall emits no flood of them.
-// ponytail: Cesium's ParticleSystem moves every particle and rewrites its billboard each frame, on the main thread (3,000
-// at most). Upgrade: a rain box drawn by the GPU, each drop's place worked out from the time in the vertex shader.
-import { Cartesian2, Cartesian3, Color, Ellipsoid, JulianDate, Matrix4, ParticleSystem, type Particle, type PrimitiveCollection } from 'cesium'
+// +RA or a thunderstorm with rain heavy; snow for SN, but not snow blown or drifting off the ground), and only below that
+// station's cloud base + 300 m (3 km above the ground when no base is known).
+// Precipitation draws it as a light screen overlay on the 3-D view, under the place names: a texture of thin streaks or
+// soft flakes, drawn once on a canvas, in layers that fall at their own speeds, the near ones larger and faster; snow slower,
+// swaying sideways. CSS moves the layers (transforms only: the compositor's work, no script per frame; layout.css). The
+// script sets each layer's texture, size, speed and opacity (OVERLAY: the look constants), the overlay's opacity by the
+// intensity, and a few times a second the lean of the fall with the station's surface wind across the camera's view. Over
+// the canvas, it is not washed out by the ground fog. Reduced motion: a faint still texture.
 import { distanceNm } from '../../shared/geo.ts'
 import type { Metar } from '../../shared/wx.ts'
-import { FIRST_DBZ, RADAR_SRC_MAX, type SourceTile } from './radar.ts'
+import { sequence } from './cloudField.ts'
+import { FIRST_DBZ, NONE, RADAR_SRC_MAX, type SourceTile } from './radar.ts'
 import { wrapLon } from './wxGeo.ts'
 
 const FT = 0.3048
@@ -22,12 +21,11 @@ const KT = 0.514444 // m/s
 export const STATION_KM = 30 // the station whose weather and wind are taken, at most this far
 const RAIN_FULL_DBZ = 45 // heavy rain from here (Marshall–Palmer: about 24 mm/h)
 const SNOW_FULL_DBZ = 35 // snow reflects less: heavy from here
-const NONE = -128 // a decoded tile's "no echo" (radar.ts)
 const STRENGTH = { '-': 0.25, '': 0.55, '+': 1 } as const // light, moderate, heavy
 const DRIZZLE = 0.5 // drizzle as rain this much lighter
 const SNOW_CODES = new Set(['SN', 'SG', 'IC'])
 const RAIN_CODES = new Set(['RA', 'DZ', 'PL', 'GR', 'GS', 'UP'])
-const DESCRIPTORS = /^(?:MI|PR|BC|DR|BL|SH|TS|FZ)/
+const DESCRIPTORS = /^(?:MI|PR|BC|SH|TS|FZ)/
 
 export type PrecipKind = 'rain' | 'snow'
 /** What falls and how hard: intensity 0 (15 dBZ, a light shower) … 1 (heavy). */
@@ -35,23 +33,6 @@ export interface Precip {
   kind: PrecipKind
   intensity: number
 }
-
-interface Look {
-  count: readonly [number, number] // particles at intensity 0 and 1 (the plan's)
-  fallMs: readonly [number, number] // terminal speed at intensity 0 and 1 (bigger drops fall faster)
-  lifeS: number // each particle's
-  radiusM: readonly [number, number] // they are emitted between these distances round the emitter
-  aheadM: number // the emitter this far ahead of the camera (those behind it go unseen)
-  sizeM: readonly [number, number] // each image's width and height in metres (rain: a streak drawn longer than a drop, its blur)
-  color: readonly [number, number, number, number] // by day; dimmed by night
-}
-
-/** The look constants, tuned by eye: what each kind of precipitation draws. */
-export const LOOKS: Readonly<Record<PrecipKind, Look>> = {
-  rain: { count: [1200, 3000], fallMs: [7, 9], lifeS: 1.2, radiusM: [4, 120], aheadM: 60, sizeM: [0.08, 2], color: [0.75, 0.8, 0.88, 0.35] },
-  snow: { count: [800, 2400], fallMs: [0.9, 1.5], lifeS: 4, radiusM: [4, 100], aheadM: 40, sizeM: [0.14, 0.14], color: [1, 1, 1, 0.85] },
-}
-const NIGHT_DIM = 0.8 // the particles' colour loses this share at full night
 
 const clamp01 = (v: number): number => (v > 0 ? (v < 1 ? v : 1) : 0)
 
@@ -62,16 +43,16 @@ export function precipFromDbz(dbz: number, snow: boolean): Precip | null {
 }
 
 /**
- * What a report's present weather says falls at the station (not nearby, VC, nor recent, RE): by its strength (-, none, +),
- * heavy in a thunderstorm with anything falling; snow when snow is in the group (rain and snow: the flakes show); drizzle
- * lighter than rain. The strongest group wins. Null: nothing falls.
+ * What a report's present weather says falls at the station (not nearby, VC, nor recent, RE, nor blown or drifting off the
+ * ground, BL and DR): by its strength (-, none, +), heavy in a thunderstorm with anything falling; snow when snow is in the
+ * group (rain and snow: the flakes show); drizzle lighter than rain. The strongest group wins. Null: nothing falls.
  */
 export function precipFromWx(wx: string | null): Precip | null {
   let best: Precip | null = null
   for (const tok of (wx ?? '').split(' ')) {
     const sign = tok[0] === '-' || tok[0] === '+' ? tok[0] : ''
     let t = tok.slice(sign.length)
-    if (t.startsWith('VC') || t.startsWith('RE')) continue
+    if (/^(?:VC|RE|BL|DR)/.test(t)) continue
     const storm = t.startsWith('TS')
     if (DESCRIPTORS.test(t)) t = t.slice(2)
     const codes: string[] = []
@@ -83,12 +64,6 @@ export function precipFromWx(wx: string | null): Precip | null {
     if (best === null || intensity > best.intensity) best = { kind: snow ? 'snow' : 'rain', intensity }
   }
   return best
-}
-
-/** How many particles: rain 1,200 to 3,000 by intensity, snow 800 to 2,400. */
-export function particleCount(p: Precip): number {
-  const [lo, hi] = LOOKS[p.kind].count
-  return Math.round(lo + (hi - lo) * clamp01(p.intensity))
 }
 
 /** The radar's deepest (zoom 7) tile under a place and the pixel in it (Web Mercator, north row first; 180° is −180°). */
@@ -142,188 +117,213 @@ export function windOf(m: Metar | null): { east: number; north: number } {
   return { east: -v * Math.sin(a), north: -v * Math.cos(a) }
 }
 
-const MAX_STEP_S = 0.1 // the particles' clock moves at most this much a frame
-const SPEED_SPREAD = 0.1 // each particle falls within this share of the kind's speed
-
-/** A Cesium primitive's frame state, as much of it as this reads. */
-interface Frame {
-  camera: { positionWC: Cartesian3; directionWC: Cartesian3 }
-  time: JulianDate
-  passes: { render: boolean } // false: a pick or depth pass (Cesium updates the primitives for those too)
+type Range = readonly [number, number]
+interface OverlayLayer {
+  scale: number // the texture's size on screen, times its own
+  fallS: number // seconds to fall one tile
+  alpha: number
+  swayPx: number // sideways each way (snow), px; 0: none
+  swayS: number // seconds a sway
+}
+interface Overlay {
+  tile: readonly [number, number] // the texture's width and height, px
+  marks: number // streaks or flakes in it
+  layers: readonly OverlayLayer[] // near (large, fast) to far (small, slow, faint)
+  opacity: readonly [number, number] // the overlay's at intensity 0 and 1
+  fallMs: number // how fast it falls, for its lean in the wind
+  maxTiltDeg: number // it leans no more than this
 }
 
-/** What Precipitation drives: a Cesium ParticleSystem (its update(frameState) is left out of Cesium's typings). */
-export type Particles = Pick<ParticleSystem, 'show' | 'modelMatrix' | 'emissionRate' | 'minimumSpeed' | 'maximumSpeed' | 'startColor' | 'endColor' | 'destroy'> & {
-  update(frameState: object): void
+/** The look constants of the overlay, tuned by eye. */
+export const OVERLAY: Readonly<Record<PrecipKind, Overlay>> = {
+  rain: {
+    tile: [128, 256], marks: 40, fallMs: 8, maxTiltDeg: 30, opacity: [0.35, 0.9],
+    layers: [
+      { scale: 1.6, fallS: 0.3, alpha: 0.65, swayPx: 0, swayS: 0 },
+      { scale: 1, fallS: 0.42, alpha: 0.5, swayPx: 0, swayS: 0 },
+      { scale: 0.6, fallS: 0.6, alpha: 0.35, swayPx: 0, swayS: 0 },
+    ],
+  },
+  snow: {
+    tile: [256, 256], marks: 46, fallMs: 1.2, maxTiltDeg: 50, opacity: [0.45, 1],
+    layers: [
+      { scale: 1.5, fallS: 7, alpha: 0.9, swayPx: 36, swayS: 4.5 },
+      { scale: 1, fallS: 10, alpha: 0.75, swayPx: 24, swayS: 6 },
+      { scale: 0.6, fallS: 14, alpha: 0.55, swayPx: 14, swayS: 8 },
+    ],
+  },
 }
-type ParticleOptions = NonNullable<ConstructorParameters<typeof ParticleSystem>[0]>
+const NIGHT_DIM = 0.6 // the overlay loses this share of its opacity at full night
+const STREAK = { len: [14, 34] as Range, alpha: [0.45, 0.9] as Range, width: [1, 1.6] as Range, rgb: '214, 224, 240' } // in the rain texture, px
+const FLAKE = { r: [1.2, 3.4] as Range, alpha: [0.6, 1] as Range } // in the snow texture, px
 
-/** What falls, the surface wind it drifts with (m/s, as it blows) and the Sun's night (0 day … 1 night) it is lit by. */
+/** What falls, the surface wind it drifts with (m/s, as it blows) and the Sun's night (0 day … 1 night) it is seen by. */
 export interface Fall extends Precip {
   wind: { east: number; north: number }
   night: number
 }
 
-export interface PrecipitationOptions {
-  makeSystem?: (o: ParticleOptions) => Particles // default: a Cesium ParticleSystem
-  image?: (kind: PrecipKind) => string // default: drawn once on a canvas
-  now?: () => number // ms; default performance.now
-  epoch?: JulianDate // where the particles' clock starts
+/** The overlay's opacity: by intensity, from the kind's faint to its full; dimmer by night. */
+export function overlayOpacity(f: Fall): number {
+  const [lo, hi] = OVERLAY[f.kind].opacity
+  return (lo + (hi - lo) * clamp01(f.intensity)) * (1 - NIGHT_DIM * clamp01(f.night))
 }
-
-/** Emits evenly through the shell between rMin and rMax round the emitter, each particle moving along dir (a unit vector, world axes). */
-export class ShellEmitter {
-  rMin = 1
-  rMax = 2
-  readonly dir = new Cartesian3(0, 0, -1)
-
-  emit(particle: Particle): void {
-    const z = 2 * Math.random() - 1
-    const a = 2 * Math.PI * Math.random()
-    const r = Math.cbrt(this.rMin ** 3 + Math.random() * (this.rMax ** 3 - this.rMin ** 3))
-    const s = r * Math.sqrt(1 - z * z)
-    particle.position = Cartesian3.fromElements(s * Math.cos(a), s * Math.sin(a), r * z, particle.position)
-    particle.velocity = Cartesian3.clone(this.dir, particle.velocity)
-  }
-}
-
-// Data URLs: Cesium's billboard atlas keeps one copy of an image named by its URL, where it would take a canvas once a particle.
-const images: Partial<Record<PrecipKind, string>> = {}
-/** A particle's image, drawn once: a soft vertical streak for rain, a soft round flake for snow; white, tinted by its colour. */
-function imageOf(kind: PrecipKind): string {
-  const done = images[kind]
-  if (done !== undefined) return done
-  const c = document.createElement('canvas')
-  ;[c.width, c.height] = kind === 'rain' ? [4, 64] : [32, 32]
-  const g = c.getContext('2d')!
-  const grad = kind === 'rain' ? g.createLinearGradient(0, 0, 0, 64) : g.createRadialGradient(16, 16, 0, 16, 16, 16)
-  if (kind === 'rain') {
-    grad.addColorStop(0, 'rgba(255,255,255,0)')
-    grad.addColorStop(0.5, 'rgba(255,255,255,1)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-  } else {
-    grad.addColorStop(0, 'rgba(255,255,255,1)')
-    grad.addColorStop(0.4, 'rgba(255,255,255,0.8)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-  }
-  g.fillStyle = grad
-  if (kind === 'rain') g.fillRect(1, 0, 2, 64) // clear edges each side: the streak stays soft when filtered
-  else g.fillRect(0, 0, 32, 32)
-  return (images[kind] = c.toDataURL('image/png'))
-}
-
-const scratch = new Cartesian3()
-const scratchUp = new Cartesian3()
-const scratchEast = new Cartesian3()
-const scratchNorth = new Cartesian3()
 
 /**
- * Rain or snow round the camera (set what falls; null: nothing, and nothing is updated). One primitive in the scene drives a
- * Cesium ParticleSystem on its own clock; another kind of precipitation is a new system, the same kind harder or lighter
- * the same system with another rate.
+ * The fall's lean for the wind across a camera looking along headingRad (clockwise from north): a CSS rotation in
+ * degrees, negative turning the layers so the drops go right; as far as the wind over the fall speed says, at most the
+ * kind's most.
+ */
+export function tiltDeg(kind: PrecipKind, wind: { east: number; north: number }, headingRad: number): number {
+  const look = OVERLAY[kind]
+  const across = wind.east * Math.cos(headingRad) - wind.north * Math.sin(headingRad) // to the camera's right
+  const deg = (Math.atan2(across, look.fallMs) * 180) / Math.PI
+  return 0 - Math.max(-look.maxTiltDeg, Math.min(look.maxTiltDeg, deg)) // 0 −: never −0
+}
+
+/** The width and height a layer turned by deg must span to cover a w × h view, px. */
+export function coverSize(w: number, h: number, deg: number): [number, number] {
+  const a = (Math.abs(deg) * Math.PI) / 180
+  const [c, s] = [Math.cos(a), Math.sin(a)]
+  return [Math.ceil(w * c + h * s) + 2, Math.ceil(w * s + h * c) + 2]
+}
+
+const between = (r: () => number, [lo, hi]: Range): number => lo + (hi - lo) * r()
+
+// The textures as data URLs, drawn once: CSS backgrounds.
+const textures: Partial<Record<PrecipKind, string>> = {}
+/** The overlay's texture: thin streaks, fading in from their tops, for rain; soft flakes for snow; each drawn across the tile's edges too, so it repeats seamlessly. */
+function textureOf(kind: PrecipKind): string {
+  const done = textures[kind]
+  if (done !== undefined) return done
+  const look = OVERLAY[kind]
+  const [w, h] = look.tile
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')!
+  const r = sequence(kind === 'rain' ? 7 : 11) // the same texture every time
+  for (let i = 0; i < look.marks; i++) {
+    if (kind === 'rain') {
+      const [x, y, len, a, lw] = [r() * (w - 2), r() * h, between(r, STREAK.len), between(r, STREAK.alpha), between(r, STREAK.width)]
+      for (const dy of [0, -h]) {
+        const grad = g.createLinearGradient(0, y + dy, 0, y + dy + len)
+        grad.addColorStop(0, `rgba(${STREAK.rgb}, 0)`)
+        grad.addColorStop(1, `rgba(${STREAK.rgb}, ${a})`)
+        g.fillStyle = grad
+        g.fillRect(x, y + dy, lw, len)
+      }
+    } else {
+      const [x, y, rr, a] = [r() * w, r() * h, between(r, FLAKE.r), between(r, FLAKE.alpha)]
+      for (const dx of [-w, 0, w]) {
+        for (const dy of [-h, 0, h]) {
+          const grad = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rr)
+          grad.addColorStop(0, `rgba(255, 255, 255, ${a})`)
+          grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
+          g.fillStyle = grad
+          g.beginPath()
+          g.arc(x + dx, y + dy, rr, 0, 2 * Math.PI)
+          g.fill()
+        }
+      }
+    }
+  }
+  return (textures[kind] = c.toDataURL('image/png'))
+}
+
+export interface PrecipitationOptions {
+  image?: (kind: PrecipKind) => string // the texture's URL; default drawn once on a canvas
+}
+
+/**
+ * The overlay (set what falls; null: nothing, hidden). In parent (the globe's element): .fh-precip > .fh-precip-tilt (turned
+ * by --tilt, sized to cover the view) > a .fh-precip-sway per layer > its .fh-precip-layer. Another kind builds the layers
+ * anew; the same kind harder or lighter changes only the opacity.
  */
 export class Precipitation {
-  readonly #primitives: PrimitiveCollection
-  readonly #primitive = { update: (fs: Frame): void => this.#update(fs), isDestroyed: (): boolean => false, destroy: (): void => {} }
-  readonly #make: (o: ParticleOptions) => Particles
+  readonly #parent: HTMLElement
+  readonly #el: HTMLElement
+  readonly #tilt: HTMLElement
   readonly #image: (kind: PrecipKind) => string
-  readonly #now: () => number
-  readonly #time: JulianDate
-  readonly #emitter = new ShellEmitter()
-  readonly #model = new Matrix4()
-  #system: Particles | null = null
-  #kind: PrecipKind = 'rain'
-  #fallMs = 0
-  #windEast = 0
-  #windNorth = 0
-  #on = false
-  #lastMs: number | null = null // the clock's last frame; null: none since it came on
+  #kind: PrecipKind | null = null // the layers built for
+  #fall: Fall | null = null
+  #deg: number | null = null // the lean written, and the view it was sized for
+  #w = -1
+  #h = -1
   #destroyed = false
 
-  constructor(primitives: PrimitiveCollection, opts: PrecipitationOptions = {}) {
-    this.#primitives = primitives
-    this.#make = opts.makeSystem ?? ((o) => new ParticleSystem(o) as unknown as Particles)
-    this.#image = opts.image ?? imageOf
-    this.#now = opts.now ?? (() => performance.now())
-    this.#time = JulianDate.clone(opts.epoch ?? new JulianDate())
-    primitives.add(this.#primitive)
+  constructor(parent: HTMLElement, opts: PrecipitationOptions = {}) {
+    this.#parent = parent
+    this.#image = opts.image ?? textureOf
+    const doc = parent.ownerDocument
+    this.#el = doc.createElement('div')
+    this.#el.className = 'fh-precip'
+    this.#el.hidden = true
+    this.#tilt = doc.createElement('div')
+    this.#tilt.className = 'fh-precip-tilt'
+    this.#el.append(this.#tilt)
+    parent.append(this.#el)
   }
 
   set(f: Fall | null): void {
     if (this.#destroyed) return
+    this.#fall = f
     if (f === null) {
-      this.#on = false
-      this.#lastMs = null
-      if (this.#system !== null) this.#system.show = false
+      this.#el.hidden = true
       return
     }
-    const look = LOOKS[f.kind]
-    this.#fallMs = look.fallMs[0] + (look.fallMs[1] - look.fallMs[0]) * clamp01(f.intensity)
-    this.#windEast = f.wind.east
-    this.#windNorth = f.wind.north
-    const speed = Math.hypot(this.#fallMs, f.wind.east, f.wind.north)
-    const dim = 1 - NIGHT_DIM * clamp01(f.night)
-    const color = new Color(look.color[0] * dim, look.color[1] * dim, look.color[2] * dim, look.color[3])
-    const rate = particleCount(f) / look.lifeS
-    this.#emitter.rMin = look.radiusM[0]
-    this.#emitter.rMax = look.radiusM[1]
-    let s = this.#system
-    if (s === null || f.kind !== this.#kind) {
-      s?.destroy()
-      this.#kind = f.kind
-      const [w, h] = look.sizeM
-      s = this.#system = this.#make({
-        image: this.#image(f.kind), emitter: this.#emitter, modelMatrix: this.#model, emissionRate: rate,
-        minimumParticleLife: look.lifeS, maximumParticleLife: look.lifeS, minimumSpeed: speed * (1 - SPEED_SPREAD), maximumSpeed: speed * (1 + SPEED_SPREAD),
-        minimumImageSize: new Cartesian2(w * 0.8, h * 0.8), maximumImageSize: new Cartesian2(w * 1.2, h * 1.2), sizeInMeters: true, startColor: color, endColor: color,
-      })
-    } else {
-      s.emissionRate = rate
-      s.minimumSpeed = speed * (1 - SPEED_SPREAD)
-      s.maximumSpeed = speed * (1 + SPEED_SPREAD)
-      s.startColor = color
-      s.endColor = color
-    }
-    s.show = true
-    this.#on = true
+    if (f.kind !== this.#kind) this.#build(f.kind)
+    this.#el.style.setProperty('opacity', String(overlayOpacity(f)))
+    this.#el.hidden = false
+  }
+
+  /** A few times a second while something falls: the lean for a camera looking along headingRad (radians clockwise from north), written on a change of a whole degree or of the view's size. */
+  aim(headingRad: number): void {
+    const f = this.#fall
+    if (this.#destroyed || f === null) return
+    const deg = Math.round(tiltDeg(f.kind, f.wind, headingRad))
+    const w = this.#parent.clientWidth
+    const h = this.#parent.clientHeight
+    if (deg === this.#deg && w === this.#w && h === this.#h) return
+    this.#deg = deg
+    this.#w = w
+    this.#h = h
+    const [cw, ch] = coverSize(w, h, deg)
+    const s = this.#tilt.style
+    s.setProperty('--tilt', `${deg}deg`)
+    s.setProperty('width', `${cw}px`)
+    s.setProperty('height', `${ch}px`)
   }
 
   destroy(): void {
     if (this.#destroyed) return
     this.#destroyed = true
-    this.#on = false
-    this.#system?.destroy()
-    this.#system = null
-    this.#primitives.remove(this.#primitive)
+    this.#el.remove()
   }
 
-  /**
-   * Each frame, from the scene: the emitter ahead of the camera and aimed down its fall, then the system on its own clock.
-   * Render passes only: in a pick the particles would catch the click (or the traffic's depth probes) meant for what is behind.
-   */
-  #update(fs: Frame): void {
-    const s = this.#system
-    if (!this.#on || s === null || !fs.passes.render) return
-    const now = this.#now()
-    const step = this.#lastMs === null ? 0 : Math.min(MAX_STEP_S, Math.max(0, (now - this.#lastMs) / 1000))
-    this.#lastMs = now
-    JulianDate.addSeconds(this.#time, step, this.#time)
-    const cam = fs.camera
-    this.#aim(cam.positionWC)
-    Cartesian3.add(cam.positionWC, Cartesian3.multiplyByScalar(cam.directionWC, LOOKS[this.#kind].aheadM, scratch), scratch)
-    s.modelMatrix = Matrix4.fromTranslation(scratch, this.#model) // the setter copies it, and notes a change
-    s.update(Object.assign(Object.create(fs) as object, { time: this.#time })) // the scene's frame, on the particles' clock
-  }
-
-  /** The emitter's direction at a place: down at the fall speed, plus the wind, in world axes. */
-  #aim(at: Cartesian3): void {
-    const up = Ellipsoid.WGS84.geodeticSurfaceNormal(at, scratchUp)
-    const east = Cartesian3.normalize(Cartesian3.cross(Cartesian3.UNIT_Z, up, scratchEast), scratchEast)
-    const north = Cartesian3.cross(up, east, scratchNorth)
-    const d = this.#emitter.dir
-    d.x = east.x * this.#windEast + north.x * this.#windNorth - up.x * this.#fallMs
-    d.y = east.y * this.#windEast + north.y * this.#windNorth - up.y * this.#fallMs
-    d.z = east.z * this.#windEast + north.z * this.#windNorth - up.z * this.#fallMs
-    Cartesian3.normalize(d, d)
+  #build(kind: PrecipKind): void {
+    this.#kind = kind
+    this.#el.dataset.kind = kind
+    const look = OVERLAY[kind]
+    const url = this.#image(kind)
+    const doc = this.#parent.ownerDocument
+    this.#tilt.replaceChildren(...look.layers.map((l) => {
+      const sway = doc.createElement('div')
+      sway.className = 'fh-precip-sway'
+      if (l.swayPx > 0) {
+        sway.style.setProperty('--sway', `${l.swayPx}px`)
+        sway.style.setProperty('--sway-s', `${l.swayS}s`)
+      } else sway.style.setProperty('animation-name', 'none')
+      const layer = doc.createElement('div')
+      layer.className = 'fh-precip-layer'
+      const [tw, th] = [look.tile[0] * l.scale, look.tile[1] * l.scale]
+      layer.style.setProperty('background-image', `url("${url}")`)
+      layer.style.setProperty('background-size', `${tw}px ${th}px`)
+      layer.style.setProperty('--fall', `${th}px`)
+      layer.style.setProperty('--fall-s', `${l.fallS}s`)
+      layer.style.setProperty('opacity', String(l.alpha))
+      sway.append(layer)
+      return sway
+    }))
   }
 }

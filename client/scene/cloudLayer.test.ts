@@ -1,17 +1,17 @@
 // client/scene/cloudLayer.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Cartographic, CloudCollection, Math as CesiumMath, type CumulusCloud, type PrimitiveCollection } from 'cesium'
+import { Cartesian3, Cartographic, CloudCollection, Math as CesiumMath, type CumulusCloud, type PrimitiveCollection } from 'cesium'
 import { geoidN } from '../../shared/geoid.ts'
 import type { CloudSpec } from './cloudField.ts'
-import { sunBrightness } from './cloudField.ts'
+import { fadeAlpha, sunBrightness } from './cloudField.ts'
 import { CloudLayer, tintColor } from './cloudLayer.ts'
 
 const near = (a: number, b: number, tol: number): boolean => Math.abs(a - b) <= tol
 const TRUE = { fSampled: 1, fNow: 1, relHM: 0 }
 
 const spec = (o: Partial<CloudSpec> = {}): CloudSpec => ({
-  lon: 34.9, lat: 32, heightM: 1500, groundM: 40, scale: [2000, 800], maxSize: [22, 12, 13], slice: 0.42, brightness: 0.9, tint: 0.3, ...o,
+  lon: 34.9, lat: 32, heightM: 1500, groundM: 40, scale: [2000, 800], maxSize: [22, 12, 13], slice: 0.42, brightness: 0.9, tint: 0.3, farKm: 150, ...o,
 })
 
 function rig() {
@@ -113,4 +113,31 @@ test('CloudLayer: a new draw replaces the clouds; none draws none; destroy takes
   r.layer.show = true
   r.layer.frame(TRUE, 0)
   assert.equal(r.removed.length, 1, 'destroyed: does nothing')
+})
+
+test('CloudLayer: fade by the distance from the place given (each look): all of a cloud near, none past its farKm (hidden), part between; a draw after it is faded too', () => {
+  const r = rig()
+  const kmNorth = (km: number): number => 32 + km / 111.2
+  const near0 = spec({ lat: kmNorth(10), farKm: 60 })
+  const mid = spec({ lat: kmNorth(51), farKm: 60 })
+  const gone = spec({ lat: kmNorth(70), farKm: 60 })
+  r.layer.draw([near0, mid, gone])
+  const [a, b, c] = r.clouds()
+  assert.deepEqual([a.color.alpha, b.color.alpha, c.color.alpha], [1, 1, 1], 'no place given yet: all shown')
+  const from = Cartesian3.fromDegrees(34.9, 32, 1500 + geoidN(32, 34.9))
+  r.layer.fade(from)
+  assert.equal(a.color.alpha, 1)
+  assert.ok(near(b.color.alpha, fadeAlpha(mid, 51), 0.03) && b.color.alpha > 0 && b.color.alpha < 1, `half faded: ${b.color.alpha}`)
+  assert.equal(c.color.alpha, 0)
+  assert.deepEqual([a.show, b.show, c.show], [true, true, false])
+  assert.ok(near(b.color.red, tintColor(0.3).red, 1e-6), 'its grey kept')
+  r.layer.draw([gone, near0])
+  const [d, e] = r.clouds()
+  assert.deepEqual([d.show, d.color.alpha, e.show, e.color.alpha], [false, 0, true, 1])
+  const there = Cartesian3.fromDegrees(34.9, kmNorth(70), 1500)
+  r.layer.fade(there)
+  assert.deepEqual([d.show, d.color.alpha], [true, 1], 'the aircraft came to it')
+  Cartesian3.clone(from, there) // the caller's object, reused
+  r.layer.draw([gone])
+  assert.equal(r.clouds()[0].color.alpha, 1, 'faded from where it was given, not from what the caller\'s object holds later')
 })

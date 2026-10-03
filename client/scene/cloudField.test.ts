@@ -3,7 +3,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
 import type { Cloud, Metar } from '../../shared/wx.ts'
-import { CLOUD_KM, MAX_CLOUDS, STATION_CAP, metarClouds, nearestClouds, observedClouds, reportsSky, sunBrightness, type CloudSpec } from './cloudField.ts'
+import {
+  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, REBUILD_KM, STATION_CAP, fadeAlpha, metarClouds, nearestClouds, observedClouds, reportsSky, sunBrightness,
+  type CloudSpec,
+} from './cloudField.ts'
 
 const FT = 0.3048
 const DISC_AREA_KM2 = Math.PI * 25 ** 2
@@ -17,14 +20,45 @@ const metar = (o: Partial<Metar> = {}): Metar => ({
   visPlus: true, tempC: null, dewC: null, qnhHpa: null, wx: null, clouds: [], vertVisFt: null, raw: '', ...o,
 })
 const layer = (cover: string, baseFt: number | null, type: 'CB' | 'TCU' | null = null): Cloud => ({ cover, baseFt, type })
-const bottom = (c: CloudSpec): number => c.heightM - c.scale[1] / 2
-const top = (c: CloudSpec): number => c.heightM + c.scale[1] / 2
+/** Where a cloud's puff starts and ends: it fills PUFF_FILL of its billboard's height. */
+const bottom = (c: CloudSpec): number => c.heightM - (PUFF_FILL * c.scale[1]) / 2
+const top = (c: CloudSpec): number => c.heightM + (PUFF_FILL * c.scale[1]) / 2
 
-/** A tower's puffs stand one over the next at one place: the clouds that share a place with another, by place. */
+/** Each tower's puffs (and anvil), lowest first. */
 function towersOf(cs: CloudSpec[]): CloudSpec[][] {
-  const by = new Map<string, CloudSpec[]>()
-  for (const c of cs) by.set(`${c.lon},${c.lat}`, [...(by.get(`${c.lon},${c.lat}`) ?? []), c])
-  return [...by.values()].filter((g) => g.length > 1).map((g) => g.toSorted((a, b) => a.heightM - b.heightM))
+  const by = new Map<number, CloudSpec[]>()
+  for (const c of cs) if (c.tower !== undefined) by.set(c.tower, [...(by.get(c.tower) ?? []), c])
+  return [...by.values()].map((g) => g.toSorted((a, b) => a.heightM - b.heightM))
+}
+
+/** Metres east and north of a place (on the plane round it). */
+const offset = (c: { lat: number; lon: number }, o: { lat: number; lon: number }): [number, number] =>
+  [(c.lon - o.lon) * 111_195 * Math.cos((o.lat * Math.PI) / 180), (c.lat - o.lat) * 111_195]
+
+/**
+ * A model of the share of the low sky (rays at elev degrees round the horizon) the clouds hide from a place on the ground
+ * at the station: each puff a disc-like ellipse PUFF_FILL of its billboard, facing the eye. An estimate, for comparing looks.
+ */
+function lowSkyCover(cs: CloudSpec[], st: Metar, elevDeg: number): number {
+  const e = (elevDeg * Math.PI) / 180
+  const puffs = cs.map((c) => {
+    const [x, y] = offset(c, st)
+    return { d: Math.hypot(x, y), az: Math.atan2(x, y), z: c.heightM - st.elevM!, a: (PUFF_FILL * c.scale[0]) / 2, b: (PUFF_FILL * c.scale[1]) / 2 }
+  })
+  let hidden = 0
+  const RAYS = 720
+  for (let k = 0; k < RAYS; k++) {
+    const az = (2 * Math.PI * k) / RAYS
+    const hit = puffs.some((p) => {
+      const da = az - p.az
+      if (Math.cos(da) <= 0) return false
+      const x = p.d * Math.sin(da)
+      const y = p.d * Math.cos(da) * Math.tan(e) - p.z
+      return (x / p.a) ** 2 + (y / p.b) ** 2 <= 1
+    })
+    if (hit) hidden++
+  }
+  return hidden / RAYS
 }
 
 test('metarClouds: none where the report has no cloud layer (CAVOK, clear, none detected, no significant cloud), a hidden sky, a layer with no base, a station of unknown height', () => {
@@ -50,28 +84,46 @@ test('metarClouds: about 0.02 clouds per km² for FEW and 0.06 for SCT, in a dis
   for (const c of few) assert.ok(c.scale[0] >= 1000 && c.scale[0] <= 3000 && c.scale[1] >= 400 && c.scale[1] <= 1200, `cumulus 1–3 km wide, 0.4–1.2 km tall: ${c.scale}`)
 })
 
-test('metarClouds: BKN and OVC are capped at 120 a station, each cloud made wider so the layer covers as much', () => {
+test('metarClouds: BKN and OVC are capped at 120 a station, each cloud made larger so the layer covers as much, from above and from below', () => {
   for (const [cover, density] of [['BKN', 0.14], ['OVC', 0.25]] as const) {
     const m = metar({ clouds: [layer(cover, 3000)] })
     const all = metarClouds(m, 0, Infinity)
     const capped = metarClouds(m)
     assert.equal(all.length, Math.round(density * DISC_AREA_KM2), `${cover} uncapped`)
     assert.equal(capped.length, STATION_CAP, cover)
-    const cover0 = sum(all.map((c) => c.scale[0] ** 2))
-    const cover1 = sum(capped.map((c) => c.scale[0] ** 2))
-    assert.ok(near(cover1 / cover0, 1, 0.15), `${cover}: ${(cover1 / cover0).toFixed(3)} of the uncapped layer's footprint`)
+    const ratio = (f: (c: CloudSpec) => number): number => sum(capped.map(f)) / sum(all.map(f))
+    assert.ok(near(ratio((c) => c.scale[0] ** 2), 1, 0.15), `${cover}: ${ratio((c) => c.scale[0] ** 2).toFixed(3)} of the uncapped footprint`)
+    assert.ok(near(ratio((c) => c.scale[0] * c.scale[1]), 1, 0.15), `${cover}: ${ratio((c) => c.scale[0] * c.scale[1]).toFixed(3)} of the uncapped face`)
     assert.deepEqual(capped.map((c) => [c.lon, c.lat]), all.slice(0, STATION_CAP).map((c) => [c.lon, c.lat]), 'the same places, fewer of them')
   }
 })
 
-test('metarClouds: BKN wider and flatter than cumulus, OVC flatter still', () => {
-  const shape = (cover: string): { w: number; flat: number } => {
+test('metarClouds: BKN and OVC puffs wider than cumulus and taller (lumpy tops), still wider than tall; greyer, each a little different', () => {
+  const look = (cover: string) => {
     const cs = metarClouds(metar({ clouds: [layer(cover, 3000)] }), 0, Infinity)
-    return { w: mean(cs.map((c) => c.scale[0])), flat: mean(cs.map((c) => c.scale[1] / c.scale[0])) }
+    const b = cs.map((c) => c.brightness)
+    const t = cs.map((c) => c.tint)
+    return { w: mean(cs.map((c) => c.scale[0])), h: mean(cs.map((c) => c.scale[1])), flat: Math.max(...cs.map((c) => c.scale[1] / c.scale[0])), b: mean(b), bSpread: Math.max(...b) - Math.min(...b), tSpread: Math.max(...t) - Math.min(...t) }
   }
-  const [few, sct, bkn, ovc] = ['FEW', 'SCT', 'BKN', 'OVC'].map(shape)
-  assert.ok(bkn.w > sct.w && bkn.w > few.w && ovc.w > bkn.w, `widths ${few.w}, ${sct.w}, ${bkn.w}, ${ovc.w}`)
-  assert.ok(bkn.flat < sct.flat && bkn.flat < few.flat && ovc.flat < bkn.flat, `height/width ${few.flat}, ${sct.flat}, ${bkn.flat}, ${ovc.flat}`)
+  const [few, bkn, ovc] = ['FEW', 'BKN', 'OVC'].map(look)
+  assert.ok(bkn.w > few.w && ovc.w > bkn.w, `widths ${few.w}, ${bkn.w}, ${ovc.w}`)
+  assert.ok(bkn.h > few.h && ovc.h > few.h, `heights ${few.h}, ${bkn.h}, ${ovc.h}`)
+  assert.ok(bkn.flat < 1 && ovc.flat < 1, 'wider than tall')
+  assert.ok(ovc.b < bkn.b && bkn.b < few.b, `brightness ${few.b}, ${bkn.b}, ${ovc.b}: a deck not blown out`)
+  for (const l of [bkn, ovc]) assert.ok(l.bSpread >= 0.1 && l.tSpread >= 0.05, `puffs vary: brightness by ${l.bSpread}, grey by ${l.tSpread}`)
+})
+
+test('metarClouds: seen from the ground at the station (the low sky, 5 to 20° up, the chase camera\'s), FEW hides little, SCT under half, BKN clearly more than half, OVC nearly all', () => {
+  const low = (cover: string): number => mean(['LLBG', 'KDOV', 'EDDN', 'LKPR'].flatMap((id) => {
+    const st = metar({ id, clouds: [layer(cover, 2100)] })
+    const cs = metarClouds(st)
+    return [5, 10, 15, 20].map((e) => lowSkyCover(cs, st, e))
+  }))
+  const [few, sct, bkn, ovc] = ['FEW', 'SCT', 'BKN', 'OVC'].map(low)
+  assert.ok(few < 0.2, `FEW ${few}`)
+  assert.ok(sct > few && sct < 0.5, `SCT ${sct}`)
+  assert.ok(bkn >= 0.65, `BKN ${bkn}`)
+  assert.ok(ovc >= 0.88, `OVC ${ovc}`)
 })
 
 test('metarClouds: every cloud\'s base at the station\'s height plus the layer\'s base; the station\'s height is the ground it stands over', () => {
@@ -91,13 +143,13 @@ test('metarClouds: a layer under a broken or overcast one is in its shade: less 
   const low = cs.filter((c) => near(bottom(c), 40 + 2000 * FT, 1e-6))
   const alone = metarClouds(metar({ clouds: [layer('FEW', 2000)] }))
   assert.ok(low.length > 0)
-  for (const c of low) assert.ok(c.brightness < alone[0].brightness, `${c.brightness} under an overcast, ${alone[0].brightness} alone`)
+  assert.ok(Math.max(...low.map((c) => c.brightness)) < Math.min(...alone.map((c) => c.brightness)), 'every puff under an overcast darker than any alone')
 })
 
-test('metarClouds: CB adds 2 to 4 towers 4 to 9 km tall from the base, darkest at the bottom; TCU 3 to 6 towers 2 to 4 km', () => {
+test('metarClouds: CB adds 2 to 4 towers 4 to 9 km tall, TCU 3 to 6 towers 2 to 4 km: columns of puffs several km wide, dark at the base, white above', () => {
   const counts = { CB: new Set<number>(), TCU: new Set<number>() }
   for (let i = 0; i < 40; i++) {
-    for (const [type, lo, hi, nLo, nHi] of [['CB', 4000, 9000, 2, 4], ['TCU', 2000, 4000, 3, 6]] as const) {
+    for (const [type, lo, hi, nLo, nHi, wide, baseTint] of [['CB', 4000, 9000, 2, 4, 3000, 0.5], ['TCU', 2000, 4000, 3, 6, 2000, 0.2]] as const) {
       const m = metar({ id: `K${i}`, elevM: 100, clouds: [layer('FEW', 3000, type)] })
       const cs = metarClouds(m)
       const towers = towersOf(cs)
@@ -105,13 +157,24 @@ test('metarClouds: CB adds 2 to 4 towers 4 to 9 km tall from the base, darkest a
       counts[type].add(towers.length)
       assert.equal(cs.length - sum(towers.map((t) => t.length)), 39, 'and the cover\'s own clouds, as for FEW')
       for (const t of towers) {
-        const base = bottom(t[0])
+        const base = Math.min(...t.map(bottom))
         const height = Math.max(...t.map(top)) - base
         assert.ok(near(base, 100 + 3000 * FT, 1e-6), `${type} tower base ${base}`)
         assert.ok(height >= lo - 1e-6 && height <= hi + 1e-6, `${type} tower ${height} m tall`)
-        assert.ok(t[0].tint > t.at(-1)!.tint, 'darker at the bottom than the top')
-        if (type === 'CB') assert.ok(t[0].tint >= 0.5, `a thundercloud's dark base: ${t[0].tint}`)
-        for (let j = 1; j < t.length; j++) assert.ok(t[j].tint <= t[j - 1].tint, 'no lighter puff under a darker one')
+        const lowest = t.filter((c) => c.heightM === t[0].heightM)
+        assert.ok(lowest.length >= 3, `${lowest.length} puffs side by side at its base`)
+        const o = { lat: mean(lowest.map((c) => c.lat)), lon: mean(lowest.map((c) => c.lon)) }
+        const span = Math.max(...lowest.flatMap((c) => lowest.map((d) => Math.hypot(...offset(c, o).map((v, k) => v - offset(d, o)[k]))))) + mean(lowest.map((c) => c.scale[0]))
+        assert.ok(span >= wide, `${type}: the column ${span} m wide at its base`)
+        assert.ok(lowest.every((c) => c.tint >= baseTint), `${type}: a dark base (${lowest.map((c) => c.tint)})`)
+        const upper = t.filter((c) => c.heightM - base > height / 2)
+        assert.ok(upper.length > 0 && upper.every((c) => c.tint <= 0.05 && c.brightness >= 0.95), `${type}: white above halfway`)
+        for (let j = 1; j < t.length; j++) assert.ok(t[j].tint <= t[j - 1].tint + 1e-12, 'no lighter puff under a darker one')
+        for (const c of t) assert.ok(c.slice <= 0.32, `dense puffs: slice ${c.slice}`)
+        if (type === 'CB') {
+          const crown = t.filter((c) => c.heightM === t.at(-1)!.heightM)
+          assert.ok(Math.max(...crown.map((c) => c.scale[0])) > Math.max(...lowest.map((c) => c.scale[0])) && crown.every((c) => c.scale[1] < c.scale[0] / 3), 'an anvil: wide flat puffs on top')
+        }
       }
     }
   }
@@ -124,7 +187,7 @@ test('metarClouds: at most 120 clouds a station, its towers all kept', () => {
   assert.equal(cs.length, STATION_CAP)
   const towers = towersOf(cs)
   assert.ok(towers.length >= 2)
-  for (const t of towers) assert.ok(Math.max(...t.map(top)) - bottom(t[0]) >= 4000)
+  for (const t of towers) assert.ok(Math.max(...t.map(top)) - Math.min(...t.map(bottom)) >= 4000)
 })
 
 test('metarClouds: the same report draws the same sky; another station another; a new layer leaves the others where they were; the seed reshuffles', () => {
@@ -185,17 +248,33 @@ test('observedClouds: stations nearest first, and none farther once nearer ones 
     ms.push(metar({ id: `S${i}`, lat: 48 + ((i * 37) % 100) / 25, lon: 8 + ((i * 61) % 100) / 25, clouds: [layer('BKN', 2000, 'CB'), layer('OVC', 8000)] }))
   }
   const capped = observedClouds(ms, 50, 10)
-  const full = observedClouds(ms, 50, 10, Infinity)
+  const full = observedClouds(ms, 50, 10, { max: Infinity })
   assert.equal(capped.stations, full.stations, 'every station within reach counted')
   assert.ok(capped.specs.length < full.specs.length / 2, `${capped.specs.length} of ${full.specs.length} worked out`)
   assert.deepEqual(nearestClouds([capped.specs], 50, 10), nearestClouds([full.specs], 50, 10))
-  assert.equal(observedClouds(ms, 50, 10, 0).specs.length, 0)
+  assert.equal(observedClouds(ms, 50, 10, { max: 0 }).specs.length, 0)
+})
+
+test('observedClouds: a cache keeps each report\'s clouds (the same objects again); a new cache works them out again, as the looks say now', () => {
+  const m = metar({ clouds: [layer('FEW', 3000)] })
+  const cache = new WeakMap<Metar, CloudSpec[]>()
+  const first = observedClouds([m], m.lat, m.lon, { cache }).specs
+  assert.equal(observedClouds([m], m.lat, m.lon, { cache }).specs[0], first[0])
+  const saved = LOOKS.FEW.w
+  try {
+    ;(LOOKS.FEW as { w: readonly [number, number] }).w = [5000, 5000]
+    assert.equal(observedClouds([m], m.lat, m.lon, { cache }).specs[0].scale[0], first[0].scale[0], 'the cache keeps what it worked out')
+    assert.ok(observedClouds([m], m.lat, m.lon, { cache: new WeakMap() }).specs.every((c) => c.scale[0] === 5000), 'a new one, the new look')
+    assert.ok(observedClouds([m], m.lat, m.lon).specs.every((c) => c.scale[0] === 5000), 'none: always worked out')
+  } finally {
+    ;(LOOKS.FEW as { w: readonly [number, number] }).w = saved
+  }
 })
 
 test('nearestClouds: nothing beyond 150 km, the nearest first past 700, the groups in order (observed first)', () => {
   const at = { lat: 32, lon: 34.9 }
-  const spec = (kmNorth: number, tag: number): CloudSpec => ({
-    lon: at.lon, lat: at.lat + kmNorth / 111.195, heightM: 1000 + tag, groundM: 0, scale: [2000, 800], maxSize: [20, 12, 12], slice: 0.4, brightness: 1, tint: 0,
+  const spec = (kmNorth: number, tag: number, farKm = CLOUD_KM): CloudSpec => ({
+    lon: at.lon, lat: at.lat + kmNorth / 111.195, heightM: 1000 + tag, groundM: 0, scale: [2000, 800], maxSize: [20, 12, 12], slice: 0.4, brightness: 1, tint: 0, farKm,
   })
   const far = spec(151, 0)
   const observed = Array.from({ length: 800 }, (_, i) => spec(149 - (i % 149), i))
@@ -210,6 +289,24 @@ test('nearestClouds: nothing beyond 150 km, the nearest first past 700, the grou
   assert.deepEqual(nearestClouds([observed.slice(0, 10), later], at.lat, at.lon).length, 11, 'room: every group in')
   assert.deepEqual(nearestClouds([[far, later[0]]], at.lat, at.lon), [later[0]], 'room, and still nothing beyond 150 km')
   assert.deepEqual(nearestClouds([], at.lat, at.lon), [])
+  const small = [spec(60, 1, 40), spec(75, 2, 40), spec(69, 3, 40)] // faded out by 40 km
+  assert.deepEqual(nearestClouds([small], at.lat, at.lon).map((c) => c.heightM), [1001, 1003], `nor one more than ${REBUILD_KM} km past where it has faded out (it cannot fade in before the next build)`)
+})
+
+test('fadeAlpha and farKm: a cloud fades out where it looks small, over the last 30 % of that; small cumulus by 60–80 km, decks and towers to the cap', () => {
+  const few = metarClouds(metar({ clouds: [layer('FEW', 3000)] }))
+  const mid = few.filter((c) => near(c.scale[0], 2000, 300))
+  assert.ok(mid.length > 0 && mid.every((c) => c.farKm >= 55 && c.farKm <= 85), `2 km cumulus out by ${mid.map((c) => c.farKm.toFixed(0))} km`)
+  const deck = metarClouds(metar({ clouds: [layer('OVC', 3000)] }))
+  assert.ok(deck.every((c) => c.farKm === CLOUD_KM), 'a deck to the cap')
+  const towers = towersOf(metarClouds(metar({ clouds: [layer('FEW', 3000, 'CB')] })))
+  for (const t of towers) assert.ok(new Set(t.map((c) => c.farKm)).size === 1 && t[0].farKm >= 120, `a tower fades as one, late: ${t[0].farKm}`)
+  const c = { ...few[0], farKm: 100 }
+  assert.equal(fadeAlpha(c, 0), 1)
+  assert.equal(fadeAlpha(c, 70), 1)
+  assert.ok(near(fadeAlpha(c, 85), 0.5, 1e-9))
+  assert.equal(fadeAlpha(c, 100), 0)
+  assert.equal(fadeAlpha(c, 150), 0)
 })
 
 test('sunBrightness: full by day, about half at dusk, 0.15 at night', () => {
