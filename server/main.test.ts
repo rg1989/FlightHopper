@@ -618,7 +618,7 @@ test('alerts: a source that cannot sweep (readsb) is live and has them, with swe
   assert.ok(world.asked.every((a) => a === 'all'), `only snapshots are asked: ${world.asked.join(', ')}`)
 })
 
-test('alerts: the poller sweeps the codes in ALERT_SQUAWKS while the switch is on; a squawk seen again 25 s later opens an event, logged and pushed to NTFY_URL', async (t) => {
+test('alerts: the poller sweeps the codes in ALERT_SQUAWKS while the switch is on; a squawk seen again 20 s or more later opens an event, logged and pushed to NTFY_URL', async (t) => {
   const pushed: { url: string; init: RequestInit }[] = []
   const pushFetch = (async (url: string | URL | Request, init?: RequestInit) => {
     pushed.push({ url: String(url), init: init ?? {} })
