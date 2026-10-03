@@ -58,6 +58,7 @@ recipe to `tools/models/variants.json` and build it:
 node tools/models/variants.ts            # builds every recipe: public/models/<id>.glb + the manifest entry
 node tools/models/profile.ts --write     # measures the side profile of every model into the manifest
 node tools/models/light-anchors.ts --write
+node tools/models/outline.ts --write        # the spheres over each mesh: what the place names keep off
 ```
 
 A recipe names the base model, the wingtip device (`sharklet`, `at-winglet`, `blended`, `none`, with sizes), the
@@ -74,7 +75,7 @@ Use a GPL model from FlightAirMap-3dmodels or Flightradar24's fr24-3d-models, as
 1. Put the GLB in `public/models/` and the unchanged source in `third_party/aircraft-models/source/`.
 2. Add a manifest entry (copy a similar one): `uri`, `license`, `author`, `source`, `forwardAxisFix`, `lengthM`,
    `gearHeightM`, `scale`, `types`, `box`, `paint` (the region map), and a `gear` model if there is one.
-3. Run `profile.ts --write` and `light-anchors.ts --write`.
+3. Run `profile.ts --write`, `light-anchors.ts --write` and `outline.ts --write`.
 4. Run `npm test`: `model.test.ts` checks the length and the nose direction from the geometry.
 5. Look at the profile overlay (`profile.ts --png <dir>`): every outline must sit on the mesh.
 

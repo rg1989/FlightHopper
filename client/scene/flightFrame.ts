@@ -888,8 +888,11 @@ export class FlightFrame {
     return this.#idRect
   }
 
-  /** What the frame shows (layer px): its cards, the chased aircraft's brackets and flight ID. The traffic card keeps off it. */
-  occupied(): Rect[] {
+  /**
+   * What the frame shows (layer px): its cards, the chased aircraft's brackets and flight ID. The traffic card keeps off
+   * it. brackets false: without the brackets' square, for what keeps off the aircraft's own outline (the place names).
+   */
+  occupied(brackets = true): Rect[] {
     if (!this.#shown) return []
     const out: Rect[] = []
     for (const k of IDS) {
@@ -898,7 +901,7 @@ export class FlightFrame {
       const b = this.#sizes[k][p.v]
       out.push({ x: p.x, y: p.y, w: b.w, h: b.h })
     }
-    if (this.#brRect !== null) out.push(this.#brRect)
+    if (brackets && this.#brRect !== null) out.push(this.#brRect)
     if (this.#idRect !== null) out.push(this.#idRect)
     return out
   }

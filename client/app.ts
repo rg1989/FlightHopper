@@ -44,6 +44,7 @@ import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room, type WindAloft } from './scene/flightFrame.ts'
 import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
+import { NO_DISCS, outlineDiscs, type Discs } from './scene/modelOutline.ts'
 import { PlaceLabels } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
 import { Weather3D, parseWxAt } from './scene/weather3d.ts'
@@ -787,6 +788,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // The chase's place names, upright over the 3-D view (Esri's places raster lays them on the ground): under the traffic brackets.
   const placesLayer = div('fh-places', root)
   const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, countriesUrl: `${base}map/countries.json`, seasUrl: `${base}map/seas.json` })
+  const aircraftDiscs: Discs = { n: 0, d: new Float64Array(0) } // the chased aircraft's outline on screen: no name over it
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. Its overcast greys the sky and
   // dims the Sun's light too (0 when it is hidden). ?wxat= is a check aid.
@@ -1840,8 +1842,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       weather3d.setNight(prefs.light && st !== null ? st.night : 0)
       weather3d.update(chased !== null ? wxAircraft : null, now, tf)
     }
-    // The names over the 3-D view, after the camera moved; none over the flight-data frame (its cards, the chased aircraft).
-    placeLabels.update(tf, now, chasing && placeLabels.active ? flightFrame.occupied() : NO_RECTS)
+    // The names over the 3-D view, after the camera moved; none over the flight-data frame's cards and flight ID, nor
+    // over the chased aircraft itself (its outline as drawn this frame; the rest of its brackets' square is ground).
+    // ponytail: every sphere of the outline is projected every frame (about 150); only when a name reaches the square,
+    // if it ever shows in a profile.
+    const named = chasing && placeLabels.active
+    const over = named && framed && model !== null
+      ? outlineDiscs(viewer.scene, model.model.modelMatrix, model.entry, (model.model as { computedScale?: number }).computedScale ?? 1, aircraftDiscs)
+      : NO_DISCS
+    placeLabels.update(tf, now, named ? flightFrame.occupied(false) : NO_RECTS, over)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
     runways.setLight(chasing && prefs.light && st !== null ? st : null) // the light as set: the Moon's too

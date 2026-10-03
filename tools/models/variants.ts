@@ -2,7 +2,7 @@
 // Builds derived type models from a base model by recipe (tools/models/variants.json): a new wingtip device and bigger
 // engine nacelles on the same airframe (A320neo and A321neo sharklets and neo nacelles, the 737 MAX's AT winglets and
 // LEAP-1B nacelles). Writes public/models/<id>.glb and its manifest entry (the base's, with the new id, uri, types,
-// box, lights, engine region and profile; the types move from the base's entry).
+// box, lights, outline, engine region and profile; the types move from the base's entry).
 //
 //   node tools/models/variants.ts                build every recipe (GLB + manifest entry)
 //   node tools/models/variants.ts --png <dir>    also render each result (render.py): whole views and close-ups
@@ -26,6 +26,7 @@ import { measureGlb } from '../../client/scene/model.ts'
 import type { ModelManifest, ModelManifestEntry, ModelProfile } from '../../client/types.ts'
 import { readGlb, writeGlb, type Glb } from './glb.ts'
 import { MANIFEST, lightsFor, lightsLine, type Mesh } from './light-anchors.ts'
+import { outlineFor, outlineLine } from './outline.ts'
 import { engineParts, partBoxes, parts, profileLine, profileOf, section } from './profile.ts'
 
 type V3 = [number, number, number]
@@ -540,7 +541,7 @@ export function applyNacelle(w: Work, op: NacelleOp, e: ModelManifestEntry): { w
 
 const cm = (x: number): number => Math.round(x * 100) / 100 + 0
 
-/** Builds a recipe: the GLB bytes, and its manifest entry (profile and lights measured on the new mesh). */
+/** Builds a recipe: the GLB bytes, and its manifest entry (profile, lights and outline measured on the new mesh). */
 export function build(id: string, r: Recipe, manifest: ModelManifest): { bytes: Uint8Array; entry: ModelManifestEntry } {
   const base = manifest.models.find((m) => m.id === r.base)
   if (base === undefined || base.paint === undefined) throw new Error(`${id}: no painted base ${r.base}`)
@@ -572,6 +573,7 @@ export function build(id: string, r: Recipe, manifest: ModelManifest): { bytes: 
   }
   delete entry.profile
   delete entry.lights
+  delete entry.outline
   const axes = measureGlb(bytes)
   entry.box = { centre: [cm(axes.centre.x), cm(axes.centre.y), cm(axes.centre.z)], half: Math.ceil(108 * Math.max(axes.spanM, axes.lengthM) / 2) / 100 }
   return { bytes, entry }
@@ -593,7 +595,7 @@ export function inline(v: unknown): string {
 
 /**
  * The manifest text with the variant's entry: the base's lines with the variant's id, uri, author, source, types, box,
- * lights, engine region and profile; after the base's entry (or in place of its own). Its types come off every other
+ * lights, outline, engine region and profile; after the base's entry (or in place of its own). Its types come off every other
  * entry.
  */
 export function withEntry(text: string, e: ModelManifestEntry, baseId: string): string {
@@ -612,6 +614,7 @@ export function withEntry(text: string, e: ModelManifestEntry, baseId: string): 
   set('types', inline(e.types))
   set('box', inline(e.box))
   set('lights', lightsLine(e.lights!).replace(/^"lights": /, ''))
+  set('outline', outlineLine(e.outline!).replace(/^"outline": /, ''))
   set('profile', profileLine(e.profile!).replace(/^"profile": /, ''))
   const paintAt = block.findIndex((l) => l.trimStart().startsWith('"paint": {'))
   const ei = block.findIndex((l, i) => i > paintAt && l.includes('"engines": ['))
@@ -669,6 +672,7 @@ if (import.meta.main) {
     const { bytes, entry } = build(id, r, manifest)
     writeFileSync(join(PUBLIC, entry.uri), bytes)
     entry.lights = lightsFor(entry)
+    entry.outline = outlineFor(entry)
     entry.profile = profileOf(entry).profile
     text = withEntry(text, entry, r.base)
     writeFileSync(MANIFEST, text)

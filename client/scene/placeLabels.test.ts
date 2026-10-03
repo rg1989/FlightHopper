@@ -322,7 +322,20 @@ test('PlaceLabels: active while the names show or another layer has labels set (
   })
 })
 
-test('PlaceLabels: no name over the areas kept off (the flight-data frame: its cards, the chased aircraft\'s brackets)', async () => {
+test('PlaceLabels: no name over the chased aircraft\'s outline; one beside it, inside its brackets, shows', async () => {
+  await withDom(async () => {
+    const o = overlay({ cities: [city('Under the aircraft', { lat: 32, lon: 35 }, 1e6), city('Beside', { lat: 32.04, lon: 35.04 }, 1e5)] })
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    o.labels.update(TF, 1, [], { n: 1, d: Float64Array.of(500, 300, 20) })
+    assert.deepEqual(shown(o.layer).map((e) => e.textContent), ['Beside'], 'the name under the aircraft keeps no room either')
+    o.labels.update(TF, 2, [], { n: 0, d: new Float64Array(0) })
+    assert.deepEqual(shown(o.layer).map((e) => e.textContent).sort(), ['Beside', 'Under the aircraft'], 'the aircraft gone, its name is back')
+  })
+})
+
+test('PlaceLabels: no name over the areas kept off (the flight-data frame\'s cards)', async () => {
   await withDom(async () => {
     const o = overlay({ cities: [city('Under the aircraft', { lat: 32, lon: 35 }, 1e6), city('Clear', { lat: 32.2, lon: 35.3 }, 1e6)] })
     o.labels.show = true

@@ -73,6 +73,9 @@ export interface ModelManifestEntry {
   paint?: Paint                                 // where the livery goes (client/scene/livery.ts); absent: unpainted
   types?: string[]                              // ICAO designators it draws; "B73*" matches a prefix (modelFor.ts)
   box?: { centre: [number, number, number]; half: number } // traffic bracket square: model frame, unscaled (traffic.ts)
+  // spheres that cover the mesh, in `box`'s frame (tools/models/outline.ts): what is the aircraft and what is only the
+  // square round it (scene/modelOutline.ts)
+  outline?: [x: number, y: number, z: number, r: number][]
   // landing gear drawn with the model (ChaseModel.setGear, Traffic); heightM: origin → wheel bottom, gear down. legs: the
   // GLB's leg nodes (tools/models/gear-glb.ts), each swung upDeg about axis (body frame: nose +X, left +Y, up +Z) to retract.
   gear?: { uri: string; heightM: number; legs?: Array<{ node: string; axis: [number, number, number]; upDeg: number }> }

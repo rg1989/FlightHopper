@@ -8,9 +8,11 @@
 //   (Natural Earth's scalerank ≤ 2) or 800 km. A name fades out over the last 20 % of its reach.
 // - every SELECT_MS the candidates in reach of the camera; every frame those in front of the camera, above the globe's
 //   horizon and on screen, placed in rank order (countries, seas, then cities, biggest first), each left out where it
-//   would come within GAP_PX of one placed before it or of an area kept off (the flight-data frame); at most MAX_LABELS,
-//   their nodes reused. A name stands on the ground as globe.getHeight has it, read a few a frame under a time budget
-//   (at the ellipsoid until then).
+//   would come within GAP_PX of one placed before it or of an area kept off (the flight-data frame's cards); at most
+//   MAX_LABELS, their nodes reused. One within GAP_PX of the chased aircraft's outline is left out first, and keeps no
+//   room: the aircraft is drawn over the names, the rest of the square its brackets mark is ground like any other.
+//   A name stands on the ground as globe.getHeight has it, read a few a frame under a time budget (at the ellipsoid
+//   until then).
 // Other layers add labels of their own (setLayer), placed with the names by a rank of their own.
 // Text drawn by the browser at device resolution, at whole device pixels: crisp, and upright by construction.
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, EllipsoidalOccluder, Math as CesiumMath, SceneTransforms } from 'cesium'
@@ -21,6 +23,7 @@ import type { Places } from '../../shared/places.ts'
 import type { TerrainFrame } from '../types.ts'
 import { drawnHeightM, trueHeightM } from './exaggeration.ts'
 import type { Rect } from './flightFrame.ts'
+import { NO_DISCS, overDiscs, type Discs } from './modelOutline.ts'
 
 declare module 'cesium' {
   /** The globe's own horizon test (Core/EllipsoidalOccluder.js): Cesium exports it but leaves it out of its typings. */
@@ -323,8 +326,11 @@ export class PlaceLabels {
     this.#dirty = true
   }
 
-  /** This frame's names, after the camera moved: tf the frame's exaggeration; keepOff the areas no name goes over (canvas px). */
-  update(tf: TerrainFrame, nowMs: number, keepOff: readonly Rect[] = NO_RECTS): void {
+  /**
+   * This frame's names, after the camera moved: tf the frame's exaggeration; keepOff the areas no name goes over (canvas
+   * px), aircraft the chased aircraft's outline, which none goes over either.
+   */
+  update(tf: TerrainFrame, nowMs: number, keepOff: readonly Rect[] = NO_RECTS, aircraft: Discs = NO_DISCS): void {
     if (this.#destroyed) return
     if (!this.active) {
       if (this.#shown.length > 0) this.#hideAll()
@@ -336,7 +342,7 @@ export class PlaceLabels {
       this.#selectedAt = nowMs
       this.#select()
     }
-    this.#draw(tf, keepOff)
+    this.#draw(tf, keepOff, aircraft)
   }
 
   destroy(): void {
@@ -422,7 +428,7 @@ export class PlaceLabels {
     l.relHM = tf.relHM
   }
 
-  #draw(tf: TerrainFrame, keepOff: readonly Rect[]): void {
+  #draw(tf: TerrainFrame, keepOff: readonly Rect[], aircraft: Discs): void {
     const scene = this.#viewer.scene
     const cam = scene.camera
     const list = this.#list
@@ -452,13 +458,15 @@ export class PlaceLabels {
       if (!inSight(l.pos, cam, this.#occluder)) continue
       const p = this.#project(scene, l.pos, this.#win)
       if (p === undefined || !(p.x >= 0 && p.x <= w && p.y >= 0 && p.y <= h)) continue
+      const top = l.kind === 'city' ? p.y - DOT_GAP_PX - l.h : p.y - l.h / 2
+      const bottom = l.kind === 'city' ? p.y + DOT_R_PX : top + l.h
+      if (overDiscs(p.x - l.w / 2, top, p.x + l.w / 2, bottom, aircraft, GAP_PX)) continue
       l.x = p.x
       l.y = p.y
-      const top = l.kind === 'city' ? p.y - DOT_GAP_PX - l.h : p.y - l.h / 2
       b[n * 4] = p.x - l.w / 2
       b[n * 4 + 1] = top
       b[n * 4 + 2] = p.x + l.w / 2
-      b[n * 4 + 3] = l.kind === 'city' ? p.y + DOT_R_PX : top + l.h
+      b[n * 4 + 3] = bottom
       vis.push(l)
       n++
     }

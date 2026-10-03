@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import type { ModelManifest, ModelManifestEntry } from '../../client/types.ts'
 import { readGlb } from './glb.ts'
 import { MANIFEST, lightsFor } from './light-anchors.ts'
+import { outlineFor } from './outline.ts'
 import { engineParts, partBoxes, parts, profileOf } from './profile.ts'
 import { build, cutOutboard, devicePieces, measureTip, meshOf, recipes, signedVolume, spine, toWork, withEntry, type Work } from './variants.ts'
 
@@ -140,7 +141,7 @@ test('public/models/<id>.glb and its manifest entry are up to date (regenerate: 
   for (const { id, r, bytes, entry } of built) {
     assert.deepEqual(new Uint8Array(readFileSync(new URL(`../../public/${entry.uri}`, import.meta.url))), bytes, `${id}.glb`)
     const e = byId(id)
-    assert.deepEqual(e, { ...entry, lights: lightsFor(entry), profile: profileOf(entry).profile, ...{} } as ModelManifestEntry, `${id} entry`)
+    assert.deepEqual(e, { ...entry, lights: lightsFor(entry), outline: outlineFor(entry), profile: profileOf(entry).profile, ...{} } as ModelManifestEntry, `${id} entry`)
     assert.equal(withEntry(text, e, r.base), text, `${id}: the manifest lines are the writer's`)
   }
 })
