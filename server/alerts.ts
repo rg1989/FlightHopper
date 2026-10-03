@@ -20,6 +20,8 @@ const PENDING_MS = 2 * 60_000 // a first sighting not seen again within this is 
 const EPISODE_MS = 30 * 60_000 // an event takes in sightings this close to it; later, a new one opens
 const REV_EVERY_MS = 30_000 // a sighting with nothing new changes the rev only this long after it last changed
 const WRITE_EVERY_MS = 5 * 60_000 // a sighting with nothing new is written this often at most
+const DROP_WRITE_MS = 30_000 // a bigger fall is written this long after the last write at the earliest, not on the 5 min above
+const LOG_EVERY_MS = 60_000 // a failure is logged this often at most (each kind)
 const KEEP_DAYS = 7 // the reply's events
 const READ_DAYS = 8 // the day files read at start
 const MAX_REPLY = 300
@@ -33,6 +35,7 @@ const LIGHT = new Set(['A1', 'B1', 'B2', 'B3', 'B4', 'B6', 'B7']) // light aircr
 const MINOR = new Set(['7600', 'nordo', 'minfuel']) // causes that are quiet on a light aircraft (most 7600s are on approach)
 const NO_TYPE = Object.freeze({ type: null, category: null })
 
+type Typed = { type: string | null; category: string | null } // an aircraft's type designator and emitter category (typeDb.ts)
 type Who = Pick<AlertEvent, 'callsign' | 'reg' | 'type' | 'lat' | 'lon' | 'altFt'>
 type Patch = Who & { squawk?: string | null; emergency?: string | null; drop?: AlertDrop | null }
 
@@ -42,7 +45,7 @@ export interface AlertsOpts {
   codes?: readonly string[] // the squawks swept and read as emergencies (ALERT_SQUAWKS); default 7700, 7600, 7500
   sweep: boolean // the source sweeps them worldwide (adsb.fi)
   push?: (e: AlertEvent) => void // a new event that is not quiet, or a new cause on one (ntfyPush)
-  typeOf?: (hex: string) => { type: string | null; category: string | null } // a half-hour file's aircraft (typeDb.ts)
+  typeOf?: (hex: string) => Typed // a half-hour file's aircraft (typeDb.ts)
 }
 
 export class Alerts {
@@ -52,16 +55,16 @@ export class Alerts {
   #codeList: readonly string[]
   #sweep: boolean
   #push: (e: AlertEvent) => void
-  #typeOf: (hex: string) => { type: string | null; category: string | null }
+  #typeOf: (hex: string) => Typed
   #on = false
   #rev = 0
   #revMs = -Infinity // when the rev last changed (server clock)
   #events = new Map<string, AlertEvent>() // by id
-  #latest = new Map<string, AlertEvent>() // by hex: its newest event
+  #byHex = new Map<string, AlertEvent[]>() // by hex: its events, oldest first (by openedMs)
   #pending = new Map<string, { firstMs: number; lastMs: number }>() // by hex: a first sighting waiting to be seen again
   #writtenMs = new Map<string, number>() // by id: when its last line was written
   #scanned: number[] = [] // the half hours read, the newest last
-  #failedMs = -Infinity // the last write failure logged
+  #failedMs = new Map<string, number>() // by kind of failure: when it was last logged
 
   constructor(o: AlertsOpts) {
     this.#dir = o.dir
@@ -93,7 +96,7 @@ export class Alerts {
     try {
       writeFileSync(join(this.#dir, 'state.json'), `${JSON.stringify({ on })}\n`)
     } catch (e) {
-      this.#failed(e)
+      this.#fail('write failed', e)
     }
   }
 
@@ -106,6 +109,7 @@ export class Alerts {
    * One aircraft object of a good answer (Poller opts.onAircraft), rxMs its receipt. An emergency squawk or status counts
    * once it is seen again 25 s or more after it was first seen: its event opens then, or the aircraft's event within 30 min
    * takes it in. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and 000001.
+   * ponytail: the 25 s is for opening only; a new cause on an open event counts at once.
    */
   observe(ac: ReadsbAircraft, rxMs: number): void {
     if (!this.#on) return
@@ -119,8 +123,8 @@ export class Alerts {
       callsign: callsignOf(ac.flight), reg: str(ac.r), type: str(ac.t),
       lat: at?.lat ?? null, lon: at?.lon ?? null, altFt: typeof ac.alt_baro === 'number' ? ac.alt_baro : null,
     }
-    const open = this.#near(hex, rxMs)
-    if (open !== null) return this.#merge(open, rxMs, { ...who, squawk, emergency })
+    const open = this.#near(hex, rxMs, rxMs)
+    if (open !== null) return this.#merge(open, rxMs, { ...who, squawk, emergency }, false)
     for (const [h, p] of this.#pending) if (rxMs - p.lastMs > PENDING_MS) this.#pending.delete(h)
     const p = this.#pending.get(hex)
     if (p === undefined) return void this.#pending.set(hex, { firstMs: rxMs, lastMs: rxMs })
@@ -136,11 +140,12 @@ export class Alerts {
   /**
    * A new stored sample of a polled aircraft (Poller opts.onSample). At a baro_rate of −3,000 fpm or steeper, its recent
    * track (asked for only then) is checked for an emergency descent (descent.ts D1). Not for military aircraft (dbFlags),
-   * light aircraft or gliders.
+   * light aircraft or gliders, surface vehicles, addresses that are not ICAO, 000000 and 000001.
    */
   sample(s: Sample, track: () => readonly Sample[], dbFlags = 0): void {
     if (!this.#on || s.onGround || s.altBaroFt === null || !((s.baroRateFpm ?? 0) <= LIVE_RATE_FPM)) return
-    if ((dbFlags & MILITARY) !== 0 || LIGHT.has(s.category ?? '') || !ICAO.test(s.hex)) return
+    const category = s.category ?? ''
+    if ((dbFlags & MILITARY) !== 0 || LIGHT.has(category) || SURFACE.has(category) || !ICAO.test(s.hex) || NOT_AIRCRAFT.has(s.hex)) return
     const series: AltSeries = { t: [], ft: [] }
     for (const x of track()) {
       if (x.onGround || x.altBaroFt === null) continue
@@ -154,8 +159,11 @@ export class Alerts {
 
   /**
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
-   * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) of an
-   * aircraft that is not light, opens a late event, or joins the aircraft's event within 30 min of it.
+   * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
+   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. Not read: surface vehicles
+   * (the type table's C1 to C3), 000000 and 000001.
+   * ponytail: the half hours must come in time order (the caller scans the older first): a merge never moves an event's
+   * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began.
    */
   scanSlot(buf: Uint8Array, slotMs: number): void {
     if (!this.#on || this.#scanned.includes(slotMs)) return
@@ -165,22 +173,30 @@ export class Alerts {
     if (scan === null) return
     for (const [hex, a] of scan.aircraft) {
       if (!ICAO.test(hex) || NOT_AIRCRAFT.has(hex)) continue
-      const typed = this.#typeOf(hex)
+      const idents = a.squawks.length >= 2
+      const fall = mayFall(a.alt)
+      if (!idents && !fall) continue // the cheap test first: most aircraft are neither
+      const typed = this.#typed(hex)
+      if (SURFACE.has(typed.category ?? '')) continue
+      // ponytail: the type table's category is not used for light here (no quiet 7600, no fall skipped): it gives every piston,
+      // turboprop and electric type A1, the ATR 72 and the Dash 8 included. A fall needs a top at or above FL200 (D1) or FL150
+      // (D2), which leaves light aircraft out in practice.
+      // ponytail: a late event's place and level are the aircraft's newest of the half hour, not where its cause was.
       const who: Who = { callsign: a.callsign, reg: null, type: typed.type, lat: a.lat, lon: a.lon, altFt: a.alt.ft.at(-1) ?? null }
-      if (a.squawks.length >= 2) {
+      if (idents) {
         const first = slotMs + a.squawks[0].tS * 1000
         const last = slotMs + a.squawks[a.squawks.length - 1].tS * 1000
         const squawk = a.squawks[a.squawks.length - 1].squawk
-        const open = this.#near(hex, first)
-        if (open !== null) this.#merge(open, last, { ...who, squawk })
+        const open = this.#near(hex, first, last)
+        if (open !== null) this.#merge(open, last, { ...who, squawk }, true)
         else {
           this.#open({
             id: `${hex}-${first}`, hex, kind: 'squawk', ...who, squawk, emergency: null, drop: null,
-            openedMs: first, lastMs: last, late: true, quiet: quietFor(typed.category, squawk, null),
+            openedMs: first, lastMs: last, late: true, quiet: quietFor(null, squawk, null),
           })
         }
       }
-      if (LIGHT.has(typed.category ?? '') || !mayFall(a.alt)) continue
+      if (!fall) continue
       const s = clean(a.alt)
       const d1 = steepDescent(s)
       const d = d1 ?? diveThenLost(s, scan.endS)
@@ -200,18 +216,25 @@ export class Alerts {
     const startMs = baseMs + d.startS * 1000
     const endMs = baseMs + d.endS * 1000
     const drop: AlertDrop = { fromFt: d.fromFt, toFt: d.toFt, overS: Math.round(d.endS - d.startS), lost: kind === 'dive' }
-    const open = this.#near(hex, startMs)
-    if (open !== null) return this.#merge(open, endMs, { ...who, drop })
+    const open = this.#near(hex, startMs, endMs)
+    if (open !== null) return this.#merge(open, endMs, { ...who, drop }, late)
     this.#open({
       id: `${hex}-${startMs}`, hex, kind, ...who, squawk: null, emergency: null, drop,
       openedMs: startMs, lastMs: endMs, late, quiet: false,
     })
   }
 
-  /** The aircraft's newest event, when t is within 30 min of it (before its first sighting or after its newest). */
-  #near(hex: string, t: number): AlertEvent | null {
-    const e = this.#latest.get(hex)
-    return e !== undefined && t >= e.openedMs - EPISODE_MS && t <= e.lastMs + EPISODE_MS ? e : null
+  /**
+   * The aircraft's event that a sighting's span (fromMs to toMs; one time for a live sighting) is within 30 min of: the span
+   * does not end over 30 min before the event's start, nor start over 30 min after its newest sighting (an overlap counts).
+   * Of several, the one seen last. ponytail: two events of an aircraft are never joined, even when a later finding bridges them.
+   */
+  #near(hex: string, fromMs: number, toMs: number): AlertEvent | null {
+    let found: AlertEvent | null = null
+    for (const e of this.#byHex.get(hex) ?? []) {
+      if (toMs >= e.openedMs - EPISODE_MS && fromMs <= e.lastMs + EPISODE_MS && (found === null || e.lastMs >= found.lastMs)) found = e
+    }
+    return found
   }
 
   #open(e: AlertEvent): void {
@@ -220,16 +243,33 @@ export class Alerts {
       if (x.lastMs >= old) continue
       this.#events.delete(id)
       this.#writtenMs.delete(id)
-      if (this.#latest.get(x.hex) === x) this.#latest.delete(x.hex)
+      this.#unlist(x)
     }
     this.#events.set(e.id, e)
-    // A late finding from over 30 min before the aircraft's newest event must not take its place: the aircraft's next
-    // sighting would then open a second event for the episode that is still going on.
-    const newest = this.#latest.get(e.hex)
-    if (newest === undefined || e.openedMs >= newest.openedMs) this.#latest.set(e.hex, e)
+    this.#list(e)
     this.#bump()
     this.#write(e)
-    if (!e.quiet) this.#push(e)
+    if (!e.quiet) this.#notify(e)
+  }
+
+  /** An event into its aircraft's list, which stays in order of openedMs (a late finding can be older than the others). */
+  #list(e: AlertEvent): void {
+    const list = this.#byHex.get(e.hex)
+    if (list === undefined) {
+      this.#byHex.set(e.hex, [e])
+      return
+    }
+    let i = list.length
+    while (i > 0 && list[i - 1].openedMs > e.openedMs) i--
+    list.splice(i, 0, e)
+  }
+
+  #unlist(e: AlertEvent): void {
+    const list = this.#byHex.get(e.hex)
+    const i = list?.indexOf(e) ?? -1
+    if (list === undefined || i < 0) return
+    list.splice(i, 1)
+    if (list.length === 0) this.#byHex.delete(e.hex)
   }
 
   #bump(): void {
@@ -238,20 +278,29 @@ export class Alerts {
   }
 
   /**
-   * Its aircraft seen again at t. A new cause (a squawk or status it did not have, a fall) changes the rev and is written and
-   * pushed at once; a bigger fall replaces the old one quietly; a newer place and time change the rev 30 s at most after it
-   * last changed (so a client keeps "ongoing" right) and are written every 5 min at most. A quiet event with a cause that is
-   * not minor is quiet no more.
+   * Its aircraft seen again at t, live or found late. A new cause (a squawk or status it did not have, a fall) changes the
+   * rev and is written and pushed at once. A bigger fall replaces the old one, changes the rev and is written 30 s or more
+   * after the last write, with no push. A newer place and time change the rev 30 s at most after it last changed (so a client
+   * keeps "ongoing" right) and are written every 5 min at most. A quiet event with a cause that is not minor is quiet no more.
+   * A sighting older than the event's newest only fills a squawk or status the event has none of: it never overwrites a newer
+   * one, and a code that differs is no new cause. A live sighting of a late event clears late (it is heard again); a late
+   * finding never sets it. ponytail: the older code that differs is dropped, a worse one too (a 7700 from before a 7600).
    */
-  #merge(e: AlertEvent, t: number, p: Patch): void {
-    const cause = (p.squawk != null && p.squawk !== e.squawk) || (p.emergency != null && p.emergency !== e.emergency) || (p.drop != null && e.drop === null)
-    if (p.squawk != null) e.squawk = p.squawk
-    if (p.emergency != null) e.emergency = p.emergency
-    if (p.drop != null && (e.drop === null || p.drop.fromFt - p.drop.toFt > e.drop.fromFt - e.drop.toFt)) e.drop = p.drop
+  #merge(e: AlertEvent, t: number, p: Patch, late: boolean): void {
+    const newer = t >= e.lastMs
+    const squawk = p.squawk != null && (newer || e.squawk === null) ? p.squawk : null
+    const emergency = p.emergency != null && (newer || e.emergency === null) ? p.emergency : null
+    const cause = (squawk !== null && squawk !== e.squawk) || (emergency !== null && emergency !== e.emergency) || (p.drop != null && e.drop === null)
+    const grew = p.drop != null && e.drop !== null && p.drop.fromFt - p.drop.toFt > e.drop.fromFt - e.drop.toFt
+    const heard = !late && e.late // a late event, now heard live
+    if (squawk !== null) e.squawk = squawk
+    if (emergency !== null) e.emergency = emergency
+    if (p.drop != null && (e.drop === null || grew)) e.drop = p.drop
+    if (heard) e.late = false
     e.callsign ??= p.callsign
     e.reg ??= p.reg
     e.type ??= p.type
-    if (t >= e.lastMs) {
+    if (newer) {
       e.lastMs = t
       if (p.lat !== null && p.lon !== null) {
         e.lat = p.lat
@@ -259,33 +308,57 @@ export class Alerts {
       }
       if (p.altFt !== null) e.altFt = p.altFt
     }
-    if (e.quiet && ((p.squawk != null && !MINOR.has(p.squawk)) || (p.emergency != null && !MINOR.has(p.emergency)) || p.drop != null)) e.quiet = false
-    if (cause || this.#now() - this.#revMs >= REV_EVERY_MS) this.#bump()
+    if (e.quiet && ((squawk !== null && !MINOR.has(squawk)) || (emergency !== null && !MINOR.has(emergency)) || p.drop != null)) e.quiet = false
+    const now = this.#now()
+    if (cause || grew || heard || now - this.#revMs >= REV_EVERY_MS) this.#bump()
     if (cause) {
       this.#write(e)
-      if (!e.quiet) this.#push(e)
-    } else if (this.#now() - (this.#writtenMs.get(e.id) ?? -Infinity) >= WRITE_EVERY_MS) this.#write(e)
+      if (!e.quiet) this.#notify(e)
+    } else if (heard || now - (this.#writtenMs.get(e.id) ?? -Infinity) >= (grew ? DROP_WRITE_MS : WRITE_EVERY_MS)) this.#write(e)
   }
 
-  /** One line in today's file (UTC). A failure is logged once a minute at most; the event stays in memory. */
+  /** One line in today's file (UTC). A failure is logged once a minute at most and the event stays in memory; the next change tries again. */
   #write(e: AlertEvent): void {
     const now = this.#now()
-    this.#writtenMs.set(e.id, now)
     try {
       appendFileSync(join(this.#dir, `${new Date(now).toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(e)}\n`)
+      this.#writtenMs.set(e.id, now)
     } catch (err) {
-      this.#failed(err)
+      this.#fail('write failed', err)
     }
   }
 
-  #failed(err: unknown): void {
-    const now = this.#now()
-    if (now - this.#failedMs < 60_000) return
-    this.#failedMs = now
-    console.error('alerts: write failed:', (err as Error).message)
+  /** The push of an event (opts.push). It cannot break the caller: a failure is logged once a minute at most. */
+  #notify(e: AlertEvent): void {
+    try {
+      this.#push(e)
+    } catch (err) {
+      this.#fail('push failed', err)
+    }
   }
 
-  /** The switch and the events of the last 8 day files; a line that does not read (a write cut short) is skipped. */
+  /** The type table's answer for an address (opts.typeOf); a lookup that throws counts as no type. */
+  #typed(hex: string): Typed {
+    try {
+      return this.#typeOf(hex)
+    } catch (err) {
+      this.#fail('type lookup failed', err)
+      return NO_TYPE
+    }
+  }
+
+  /** A failure to say: each kind once a minute at most. */
+  #fail(what: string, err: unknown): void {
+    const now = this.#now()
+    if (now - (this.#failedMs.get(what) ?? -Infinity) < LOG_EVERY_MS) return
+    this.#failedMs.set(what, now)
+    console.error(`alerts: ${what}:`, err instanceof Error ? err.message : String(err))
+  }
+
+  /**
+   * The switch and the events of the last 8 day files; a line that does not read (a write cut short) or is not an event is
+   * skipped. A file that ends in a cut line gets a newline, or the next line written would join it and be lost with it.
+   */
   #load(): void {
     try {
       this.#on = (JSON.parse(readFileSync(join(this.#dir, 'state.json'), 'utf8')) as { on?: unknown }).on === true
@@ -306,18 +379,42 @@ export class Alerts {
       } catch {
         continue
       }
+      if (text !== '' && !text.endsWith('\n')) {
+        try {
+          appendFileSync(join(this.#dir, name), '\n')
+        } catch (err) {
+          this.#fail('write failed', err)
+        }
+      }
       for (const line of text.split('\n')) {
         if (line.trim() === '') continue
         try {
-          const e = JSON.parse(line) as AlertEvent
-          if (typeof e?.id === 'string' && typeof e.hex === 'string' && typeof e.openedMs === 'number' && typeof e.lastMs === 'number') this.#events.set(e.id, e)
+          const e: unknown = JSON.parse(line)
+          if (isEvent(e)) this.#events.set(e.id, e)
         } catch {
           // a line cut short
         }
       }
     }
-    for (const e of [...this.#events.values()].sort((a, b) => a.openedMs - b.openedMs)) this.#latest.set(e.hex, e)
+    for (const e of [...this.#events.values()].sort((a, b) => a.openedMs - b.openedMs)) this.#list(e)
   }
+}
+
+const isText = (v: unknown): boolean => v === null || typeof v === 'string'
+const isNum = (v: unknown): boolean => v === null || typeof v === 'number'
+
+/** Whether a parsed log line has an event's shape: the file can be cut short, edited or from another version. */
+function isEvent(v: unknown): v is AlertEvent {
+  if (typeof v !== 'object' || v === null) return false
+  const e = v as Record<string, unknown>
+  const d = e.drop as Record<string, unknown> | null | undefined
+  return (
+    typeof e.id === 'string' && typeof e.hex === 'string' && typeof e.kind === 'string' &&
+    typeof e.openedMs === 'number' && typeof e.lastMs === 'number' && typeof e.late === 'boolean' && typeof e.quiet === 'boolean' &&
+    isText(e.callsign) && isText(e.reg) && isText(e.type) && isText(e.squawk) && isText(e.emergency) &&
+    isNum(e.lat) && isNum(e.lon) && isNum(e.altFt) &&
+    (d === null || (typeof d === 'object' && typeof d.fromFt === 'number' && typeof d.toFt === 'number' && typeof d.overS === 'number'))
+  )
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
@@ -329,7 +426,7 @@ function positionOf(ac: ReadsbAircraft): { lat: number; lon: number } | null {
   return typeof lp?.lat === 'number' && typeof lp.lon === 'number' ? { lat: lp.lat, lon: lp.lon } : null
 }
 
-/** Quiet: a light aircraft (or glider…) whose only causes are minor (a radio failure, no radio, minimum fuel). */
+/** Quiet: a light aircraft (or glider…) by its broadcast category, whose only causes are minor (a radio failure, no radio, minimum fuel). */
 function quietFor(category: string | null, squawk: string | null, emergency: string | null): boolean {
   return LIGHT.has(category ?? '') && (squawk === null || MINOR.has(squawk)) && (emergency === null || MINOR.has(emergency))
 }
