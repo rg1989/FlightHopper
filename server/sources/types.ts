@@ -24,5 +24,6 @@ export interface Source {
   caps: SourceCaps
   circle(lat: number, lon: number, radiusNm: number): Promise<FetchResult>
   hexes(hexes: string[]): Promise<FetchResult>
+  squawk?(code: string): Promise<FetchResult> // every aircraft on this squawk, worldwide (the alerts' sweep); sources that have it
   all(): Promise<FetchResult>              // rejects with Error('unsupported') when !caps.fullSnapshot
 }

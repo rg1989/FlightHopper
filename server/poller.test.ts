@@ -33,7 +33,7 @@ const HEXES_NOW_MS = normalizeAdsblol(BODIES.hexes).nowMs // 1_790_081_641_500
 
 interface Call {
   t: number
-  m: Method
+  m: Method | 'squawk' // 'squawk': a sweep request (sweepSetup), which has no golden body of its own
   args: unknown[]
 }
 
@@ -90,7 +90,7 @@ async function runUntil(s: ReturnType<typeof setup>, untilMs: number, each?: () 
   }
 }
 
-const rel = (calls: Call[], m?: Method): number[] => calls.filter((c) => m === undefined || c.m === m).map((c) => c.t - T0)
+const rel = (calls: Call[], m?: Call['m']): number[] => calls.filter((c) => m === undefined || c.m === m).map((c) => c.t - T0)
 
 test('touchView: a view up to 250 nm is one circle of its own; a wider one, the grid cells covering it', () => {
   const s = setup()
@@ -520,4 +520,109 @@ test('watched (recorded) aircraft outside every view get a hex request once thei
   ])
   assert.ok(seen.includes('a1c7e4'), 'onSample gets every sample the store took')
   assert.ok(rel(s.calls, 'circle').length >= 3, 'the view is still asked in between')
+})
+
+/** setup() with a source that also answers squawk(code) with one aircraft on that code. */
+function sweepSetup(codes: string[], opts: Partial<PollerOpts> = {}) {
+  const seen: { hex: string; squawk?: string }[] = []
+  const s = setup({ opts: { squawks: () => codes, onAircraft: (ac) => seen.push({ hex: ac.hex, squawk: ac.squawk }), ...opts } })
+  s.source.squawk = (code: string) => {
+    s.calls.push({ t: s.clock.t, m: 'squawk', args: [code] })
+    const body = JSON.stringify({ ac: [{ hex: '89645a', squawk: code, lat: 29.9, lon: 38.1, seen_pos: 1, alt_baro: 30_000 }], msg: 'No error', now: HEXES_NOW_MS, total: 1 })
+    return Promise.resolve({ url: `fake:sqk/${code}`, status: 200, tSendMs: s.clock.t, tRecvMs: s.clock.t, bytes: body.length, body, retryAfterS: null, snapshot: normalizeAdsblol(body) })
+  }
+  return { ...s, seen }
+}
+
+test('the sweep: one code every 30 s / codes, in turn, with no view or chase asked; its aircraft go to the store and onAircraft', async () => {
+  const s = sweepSetup(['7700', '7600', '7500'])
+  await runUntil(s, 60_000)
+  const sweeps = s.calls.filter((c) => c.m === 'squawk')
+  assert.deepEqual(sweeps.map((c) => c.args[0]), ['7700', '7600', '7500', '7700', '7600', '7500', '7700'])
+  assert.deepEqual(sweeps.map((c) => c.t - T0), [0, 10_000, 20_000, 30_000, 40_000, 50_000, 60_000])
+  assert.ok(s.store.latest('89645a') !== null)
+  assert.deepEqual(s.seen[0], { hex: '89645a', squawk: '7700' })
+})
+
+test('the sweep: none while no code is asked for, or when the source has no squawk()', async () => {
+  const off = sweepSetup([])
+  await runUntil(off, 30_000)
+  assert.equal(off.calls.filter((c) => c.m === 'squawk').length, 0)
+  const none = setup({ opts: { squawks: () => ['7700'] } })
+  await runUntil(none, 30_000)
+  assert.equal(none.calls.length, 0)
+})
+
+test('the sweep: a due chase goes first; the sweep takes the next token', async () => {
+  const s = sweepSetup(['7700'])
+  s.poller.touchChase('a448f2') // not stored: a hex request
+  await s.poller.tick()
+  assert.equal(s.calls[0].m, 'hexes')
+  await s.poller.tick()
+  assert.equal(s.calls[1].m, 'squawk')
+})
+
+test('onAircraft: every aircraft of a circle answer too, the hidden ones not', async () => {
+  const seen: string[] = []
+  const s = setup({ opts: { onAircraft: (ac) => seen.push(ac.hex) } })
+  s.poller.touchView(KSFO[0], KSFO[1], 40)
+  await s.poller.tick()
+  assert.ok(seen.length >= 5)
+  assert.equal(seen.includes('000001'), false, 'dbFlags 8 (LADD) is hidden')
+})
+
+test('the sweep: each code every 30 s whatever the list: one code every 30 s, two every 15 s', async () => {
+  const one = sweepSetup(['7700'])
+  await runUntil(one, 60_000)
+  assert.deepEqual(rel(one.calls, 'squawk'), [0, 30_000, 60_000])
+  const two = sweepSetup(['7700', '7600'])
+  await runUntil(two, 45_000)
+  assert.deepEqual(rel(two.calls, 'squawk'), [0, 15_000, 30_000, 45_000])
+})
+
+test('the sweep: after a due chase, before the watched hexes and the areas', async () => {
+  const s = sweepSetup(['7700'], { watched: () => ['abcdef'] }) // abcdef is not in the golden hex answer: always due
+  s.poller.touchView(LLBG[0], LLBG[1], 5)
+  s.poller.touchChase('a448f2')
+  for (let i = 0; i < 4; i++) {
+    await s.poller.tick() // each tick takes the next request in line
+    s.clock.t += 100
+  }
+  assert.deepEqual(s.calls.map((c) => (c.m === 'hexes' ? `hexes ${(c.args[0] as string[]).join()}` : c.m)), ['hexes a448f2', 'squawk', 'hexes abcdef', 'circle'])
+})
+
+test('onAircraft: one that throws on the first aircraft still lets every aircraft of the answer reach the store', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const seen: string[] = []
+  const s = setup({
+    opts: {
+      onAircraft: (ac) => {
+        seen.push(ac.hex)
+        if (seen.length === 1) throw new Error('boom')
+      },
+    },
+  })
+  s.poller.touchView(KSFO[0], KSFO[1], 40)
+  assert.equal(await s.poller.tick(), true, 'the tick goes on')
+  assert.equal(seen.length, 6, 'the other aircraft are offered to the hook too')
+  assert.equal(s.store.size, 6, 'and stored, the one that threw as well')
+  assert.equal(err.mock.callCount(), 1)
+  assert.equal(err.mock.calls[0].arguments[0], 'poller: onAircraft failed:')
+  assert.match(String(err.mock.calls[0].arguments[1]), /boom/)
+})
+
+test('onAircraft: one that keeps throwing is logged once a minute, not once per aircraft', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const s = setup({
+    opts: {
+      onAircraft: () => {
+        throw new Error('boom')
+      },
+    },
+  })
+  await runUntil(s, 125_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(KSFO[0], KSFO[1], 40) // a circle answer every 5 s, 6 throws each
+  })
+  assert.equal(err.mock.callCount(), 3, 'at 0, 60 s and 120 s')
+  assert.equal(s.store.size, 6, 'the answers were ingested all the same')
 })

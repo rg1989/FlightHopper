@@ -10,6 +10,8 @@ import type { Source } from './types.ts'
 const golden = (f: string): string => readFileSync(new URL(`../../data/fixtures/golden/${f}`, import.meta.url), 'utf8')
 const POINT = golden('adsbfi-point-llbg.json') // one real answer, 2026-09-23: /api/v3/lat/32.0114/lon/34.8867/dist/40
 const HEX = golden('adsbfi-hex.json')
+// A squawk answer in the adsb.lol envelope (a real empty one, 2026-10-03: {"ac":[],"msg":"No error","now":…,"total":0}).
+const SQK = '{"ac":[{"hex":"89645a","squawk":"7700","lat":29.9,"lon":38.1,"seen_pos":1,"alt_baro":30000}],"msg":"No error","now":1790995674001,"total":1}'
 const UA = 'FlightHopper/0.1 (+test@example.com)'
 
 const seen: { url: string; ua: string | undefined }[] = []
@@ -21,6 +23,7 @@ before(async () => {
     seen.push({ url: req.url ?? '', ua: req.headers['user-agent'] })
     if (req.url?.startsWith('/api/v3/lat/')) return void res.end(POINT)
     if (req.url?.startsWith('/api/v2/hex/')) return void res.end(HEX)
+    if (req.url?.startsWith('/api/v2/sqk/')) return void res.end(SQK)
     res.writeHead(404)
     res.end()
   })
@@ -63,4 +66,20 @@ test('hexes: one ICAO hex per request, /v2/hex/{hex}; non-ICAO ("~") addresses a
   assert.equal(skipped.status, 200)
   assert.deepEqual(skipped.snapshot!.aircraft, [])
   await assert.rejects(src.all(), /unsupported/)
+})
+
+test('squawk: /v2/sqk/{code} for four octal digits and the envelope parses; any other code is never sent, answered 200 with no aircraft', async () => {
+  const r = await src.squawk!('7700')
+  assert.equal(seen.at(-1)!.url, '/api/v2/sqk/7700')
+  assert.equal(seen.at(-1)!.ua, UA)
+  assert.equal(r.status, 200)
+  assert.equal(r.snapshot!.nowMs, 1_790_995_674_001)
+  assert.deepEqual(r.snapshot!.aircraft.map((a) => [a.hex, a.squawk]), [['89645a', '7700']])
+  const n = seen.length
+  for (const code of ['7708', '77', '', '77000', '770a', '7700\n', ' 7700', '7700/../hex/abcdef']) {
+    const skipped = await src.squawk!(code)
+    assert.equal(skipped.status, 200, JSON.stringify(code))
+    assert.deepEqual(skipped.snapshot!.aircraft, [], JSON.stringify(code))
+  }
+  assert.equal(seen.length, n, 'nothing sent: a 400 or 404 counts toward adsb.fi\'s IP restriction')
 })
