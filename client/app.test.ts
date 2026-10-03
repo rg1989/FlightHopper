@@ -14,7 +14,7 @@ import type { FleetEntry } from './types.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm } =
+const { browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm, weatherView } =
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
@@ -130,6 +130,20 @@ test('scene keys: T topography and L sun, either case; not with a modifier, on a
   for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) assert.equal(sceneKey(press('t', { target: { tagName } })), null, tagName) // the table's search box
   assert.equal(sceneKey(press('t', { target: { tagName: 'DIV', isContentEditable: true } })), null)
   assert.equal(sceneKey(press('t', { target: { tagName: 'BUTTON', isContentEditable: false } })), 'topo') // a focused toggle
+})
+
+test('weatherView: the top-down map\'s weather or the chase\'s, on a live sky only; History and a scenario get "Live only" instead', () => {
+  const view = (o: Partial<Parameters<typeof weatherView>[0]>): ReturnType<typeof weatherView> =>
+    weatherView({ wx: true, chasing: false, history: false, scenario: false, ...o })
+  assert.deepEqual(view({}), { topDown: true, chase: false, liveOnly: false })
+  assert.deepEqual(view({ chasing: true }), { topDown: false, chase: true, liveOnly: false })
+  for (const chasing of [false, true]) {
+    for (const [history, scenario] of [[true, false], [false, true], [true, true]]) {
+      assert.deepEqual(view({ chasing, history, scenario }), { topDown: false, chase: false, liveOnly: true }, `${chasing ? 'chase' : 'top-down'}, history ${history}, scenario ${scenario}`)
+      assert.deepEqual(view({ wx: false, chasing, history, scenario }), { topDown: false, chase: false, liveOnly: false }, 'switched off: none, and nothing to say')
+    }
+    assert.deepEqual(view({ wx: false, chasing }), { topDown: false, chase: false, liveOnly: false })
+  }
 })
 
 test('flat plane (design D4): a hero airport within 30 km gives its runway height, else the ground under the aircraft, else the plane stays', () => {

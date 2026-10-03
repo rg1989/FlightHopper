@@ -181,7 +181,7 @@ export interface ScenePrefs {
   dark: boolean                                 // the street map in its dark theme (its own tiles recoloured), both views
   roads: boolean                                // streets and highways over the satellite imagery
   places: boolean                               // country borders and place names over the satellite imagery
-  wx: boolean                                   // aviation weather on the top-down map: radar, METARs, SIGMETs
+  wx: boolean                                   // aviation weather: the top-down map's radar, airports and hazard areas; the chase's clouds, rain and hazard areas
 }
 
 /**

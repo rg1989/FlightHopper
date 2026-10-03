@@ -10,7 +10,7 @@ const near = (a: number | null, b: number): boolean => a !== null && Math.abs(a 
 const LLHA = {
   icaoId: 'LLHA', name: 'Haifa Intl, HA, IL', obsTime: 1790956200, temp: 26, dewp: 16, wdir: 250, wspd: 5, wgst: null,
   visib: '6+', altim: 1014, wxString: null, clouds: [{ cover: 'FEW', base: 4500 }], fltCat: 'VFR', vertVis: null,
-  rawOb: 'METAR LLHA 021550Z AUTO 25005KT 9999 FEW045 26/16 Q1014', lat: 32.81, lon: 35.04,
+  rawOb: 'METAR LLHA 021550Z AUTO 25005KT 9999 FEW045 26/16 Q1014', lat: 32.81, lon: 35.04, elev: 3,
 }
 
 test('slimMetars: Haifa, every field', () => {
@@ -18,7 +18,7 @@ test('slimMetars: Haifa, every field', () => {
   const { visKm, ...rest } = m
   assert.ok(near(visKm, 6 * MI), String(visKm)) // 9.66 km: "6+" is 6 miles or more
   assert.deepEqual(rest, {
-    id: 'LLHA', name: 'Haifa Intl, HA, IL', lat: 32.81, lon: 35.04, obsMs: 1790956200000, cat: 'VFR', wdir: 250, wspd: 5, wgst: null,
+    id: 'LLHA', name: 'Haifa Intl, HA, IL', lat: 32.81, lon: 35.04, elevM: 3, obsMs: 1790956200000, cat: 'VFR', wdir: 250, wspd: 5, wgst: null,
     visPlus: true, tempC: 26, dewC: 16, qnhHpa: 1014, wx: null, clouds: [{ cover: 'FEW', baseFt: 4500, type: null }], vertVisFt: null,
     raw: 'METAR LLHA 021550Z AUTO 25005KT 9999 FEW045 26/16 Q1014',
   })
@@ -27,14 +27,14 @@ test('slimMetars: Haifa, every field', () => {
 test('slimMetars: a variable wind, 1 1/2 miles, weather, and a thundercloud read from the raw report', () => {
   const [m] = slimMetars([{
     icaoId: 'KXYZ', name: 'Example Rgnl, TX, US', lat: 31.5, lon: -97.2, obsTime: 1790956200, temp: -3.4, dewp: -5, wdir: 'VRB', wspd: 3,
-    visib: '1 1/2', altim: 1020.7, wxString: '-RA BR', fltCat: 'IFR',
+    visib: '1 1/2', altim: 1020.7, wxString: '-RA BR', fltCat: 'IFR', elev: 312,
     clouds: [{ cover: 'FEW', base: 3000 }, { cover: 'FEW', base: 3300 }, { cover: 'BKN', base: 8000 }],
     rawOb: 'METAR KXYZ 021550Z VRB03KT 1 1/2SM -RA BR FEW030 FEW033CB BKN080 M03/M05 A3014',
   }])
   const { visKm, ...rest } = m
   assert.ok(near(visKm, 1.5 * MI), String(visKm))
   assert.deepEqual(rest, {
-    id: 'KXYZ', name: 'Example Rgnl, TX, US', lat: 31.5, lon: -97.2, obsMs: 1790956200000, cat: 'IFR', wdir: null, wspd: 3, wgst: null,
+    id: 'KXYZ', name: 'Example Rgnl, TX, US', lat: 31.5, lon: -97.2, elevM: 312, obsMs: 1790956200000, cat: 'IFR', wdir: null, wspd: 3, wgst: null,
     visPlus: false, tempC: -3.4, dewC: -5, qnhHpa: 1020.7, wx: '-RA BR',
     clouds: [{ cover: 'FEW', baseFt: 3000, type: null }, { cover: 'FEW', baseFt: 3300, type: 'CB' }, { cover: 'BKN', baseFt: 8000, type: null }],
     vertVisFt: null, raw: 'METAR KXYZ 021550Z VRB03KT 1 1/2SM -RA BR FEW030 FEW033CB BKN080 M03/M05 A3014',
@@ -76,10 +76,19 @@ test('slimMetars: sky hidden: vertVis is in hundreds of feet, the cloud list say
 
 test('slimMetars: a bare record gets null, false and empty for everything it lacks; no position or a non-array gives nothing', () => {
   assert.deepEqual(slimMetars([{ icaoId: 'BARE', lat: 1, lon: 2 }]), [{
-    id: 'BARE', name: null, lat: 1, lon: 2, obsMs: null, cat: null, wdir: null, wspd: 0, wgst: null, visKm: null, visPlus: false,
+    id: 'BARE', name: null, lat: 1, lon: 2, elevM: null, obsMs: null, cat: null, wdir: null, wspd: 0, wgst: null, visKm: null, visPlus: false,
     tempC: null, dewC: null, qnhHpa: null, wx: null, clouds: [], vertVisFt: null, raw: '',
   }])
   assert.deepEqual(slimMetars([{ icaoId: 'X', lat: null, lon: 1 }, { lat: 1, lon: 2 }]), [])
   assert.deepEqual(slimMetars({}), [])
   assert.equal(slimMetars([{ icaoId: 'X', lat: 1, lon: 2, wxString: '  ' }])[0].wx, null) // nothing to say is no weather
+})
+
+test('slimMetars: elevM is the API\'s elev, the station\'s metres above sea level (below it too); missing or not a number is null', () => {
+  const elev = (v: unknown): number | null => slimMetars([{ icaoId: 'X', lat: 1, lon: 2, elev: v }])[0].elevM
+  assert.equal(elev(1656), 1656) // Denver
+  assert.equal(elev(0), 0) // at sea level is not unknown
+  assert.equal(elev(-12), -12)
+  for (const bad of ['35', null, undefined, Number.NaN, {}]) assert.equal(elev(bad), null, String(bad))
+  assert.equal(slimMetars([{ icaoId: 'X', lat: 1, lon: 2 }])[0].elevM, null)
 })

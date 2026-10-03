@@ -7,7 +7,8 @@
 //   (scene/traffic.ts); chase shows no flat icons. The sun lights the chase view, and
 //   the relief can sink into the map and grow back (the Scene panel's switches, keys T and L). A frame of flight data
 //   hugs the chased aircraft (scene/flightFrame.ts); the flight card stays. Roads and Borders & places are drawn for
-//   3-D there: roads on near terrain only, thin borders, place names upright over the view (scene/placeLabels.ts).
+//   3-D there: roads on near terrain only, thin borders, place names upright over the view (scene/placeLabels.ts). Weather
+//   is drawn there too, round the aircraft and live only (scene/weather3d.ts).
 // - Scenario (the Scenarios panel's Play, or ?scenario=<id>&t=<s>): a recorded flight played from static files
 //   (scenario/run.ts) in the chase view: only its aircraft, no polls, no card (the frame carries the data), no 3-D
 //   buildings (they are modern), its era imagery, the sun at its instant. Esc or exit goes back to the map over it.
@@ -43,6 +44,7 @@ import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './
 import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
 import { PlaceLabels } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
+import { Weather3D, parseWxAt } from './scene/weather3d.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
 import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
@@ -277,6 +279,15 @@ export function sceneKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; a
   return ({ t: 'topo', l: 'light', x: 'glass', m: 'base', r: 'roads', p: 'places', w: 'wx' } as const)[k as 't'] ?? null
 }
 
+/**
+ * Which weather the prefs, the view and the time ask for: the top-down map's, the chase's, or none; and whether the panel says
+ * "Live only" (the weather is today's: History and a scenario are not).
+ */
+export function weatherView(o: { wx: boolean; chasing: boolean; history: boolean; scenario: boolean }): { topDown: boolean; chase: boolean; liveOnly: boolean } {
+  const live = !o.history && !o.scenario
+  return { topDown: o.wx && live && !o.chasing, chase: o.wx && live && o.chasing, liveOnly: o.wx && !live }
+}
+
 export interface AppParams {
   hex: string | null // ?hex=a1b2c3: this aircraft from the start: focused (with ?at=, a reload) or chased (a bare link, G3)
   bench: boolean // ?bench=1: bench overlay and User Timing measures, 'b' downloads the report
@@ -472,6 +483,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const carto = new Cartographic()
   const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
   const aimAt = new Cartesian3() // the chased aircraft's middle, where the chase camera looks
+  const wxAircraft = { lat: 0, lon: 0, altM: 0 } // the chased aircraft as the 3-D weather takes it, rewritten each frame
   const onScreen: FleetEntry[] = [] // reused every frame
   // History, every frame (history/selected.ts placeSelected): the fleet's entries with the selected aircraft's own as its
   // day says (its track's state, or a ghost where it was last heard or is estimated to be in a hole of its leg, written into
@@ -728,11 +740,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const placesLayer = div('fh-places', root)
   const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, countriesUrl: `${base}map/countries.json`, seasUrl: `${base}map/seas.json` })
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
+  // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. ?wxat= is a check aid.
+  const weather3d = new Weather3D(viewer, {
+    apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
+  })
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
-   * satellite (the chase's own in the chase, its names upright), weather top-down and live only (it is today's: it says
-   * nothing of the past), its rain in the colours for the top-down map's base (the satellite is dark under the rain) and
-   * under the map's names (lift) or the satellite's roads and places.
+   * satellite (the chase's own in the chase, its names upright), weather live only (it is today's: it says nothing of the
+   * past): top-down, its rain in the colours for the map's base (the satellite is dark under the rain) and under the map's
+   * names (lift) or the satellite's roads and places; in the chase, the weather round the aircraft.
    */
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
@@ -743,9 +759,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     reference.places.show = prefs.places && !onMap
     placeLabels.show = chasing && prefs.places && !onMap
     weather.theme = rainTheme(prefs)
-    weather.show = prefs.wx && !chasing && hist === null
+    const wx = weatherView({ wx: prefs.wx, chasing, history: hist !== null, scenario: run !== null })
+    weather.show = wx.topDown
+    weather3d.show = wx.chase
     map.lift = weather.show
-    if (hist !== null && prefs.wx) toggles.setWeather('Live only') // the chase has no weather row to say anything on
+    if (wx.liveOnly) toggles.setWeather('Live only')
     else if (!prefs.wx) toggles.setWeather(null)
   }
   applyLayers()
@@ -788,6 +806,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // DevTools. ponytail: entries pile up (~200 per second) until performance.clearMeasures(); fine for runs of minutes.
   const measure = bench === null ? null : (name: string, startMs: number): void => void performance.measure(name, { start: startMs })
   ;(window as unknown as { viewer?: Viewer }).viewer = viewer // console access for debugging and G3, as in WP-00
+  ;(window as unknown as { weather3d?: Weather3D }).weather3d = weather3d // and for checks of the chase's weather
 
   // The first view: ?at= (a reload or a shared link), else ?airport=, else all of Israel (a chase: over the home airport).
   const urlView = readView(location.search)
@@ -1477,7 +1496,6 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     chaseCam.release() // the first frame puts the camera behind the aircraft
     if (o.cam) chaseCam.orbit.set(o.cam.headingDeg, o.cam.pitchDeg, o.cam.rangeM)
     chasing = true
-    applyLayers()
     relatchPending = true
     chased = null
     groundM = null
@@ -1489,6 +1507,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     liveGear = null
     dress = new Dresser(e, livery, scn.aircraft.shape?.halfSpanM ?? null)
     run = ScenarioRun.start({ viewer, ui, scenario: scn, t: o.t, play: o.play, under: night, onExit: exitScenario })
+    applyLayers() // with the run set: its weather is "Live only"
     if (aps.length > 0) {
       airfield = addRunways(viewer, aps, { markers: false }) // a replay's airfields: no live-map threshold dots
       viewer.terrainProvider = new FlatTerrainProvider(baseTerrain, [...heroStrips, ...stripsFor(aps)], areasFor(aps))
@@ -1713,6 +1732,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     runways.update(tf)
     airfield?.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
+    // The weather round the chased aircraft (shown in a live chase only: applyLayers), before the names that carry its labels.
+    if (chased !== null) {
+      wxAircraft.lat = chased.lat
+      wxAircraft.lon = chased.lon
+      wxAircraft.altM = chased.hM
+    }
+    weather3d.update(chasing && chased !== null ? wxAircraft : null, now)
     // The names over the 3-D view, after the camera moved; none over the flight-data frame (its cards, the chased aircraft).
     placeLabels.update(tf, now, chasing && placeLabels.active ? flightFrame.occupied() : NO_RECTS)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
@@ -2101,6 +2127,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       map.destroy()
       reference.roads.destroy()
       reference.places.destroy()
+      weather3d.destroy()
       placeLabels.destroy()
       placesLayer.remove()
       weather.destroy()
@@ -2110,6 +2137,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       buildings.destroy()
       viewer.destroy()
       delete (window as unknown as { viewer?: Viewer }).viewer
+      delete (window as unknown as { weather3d?: Weather3D }).weather3d
     },
   }
 }

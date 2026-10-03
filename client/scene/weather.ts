@@ -1,6 +1,6 @@
 // client/scene/weather.ts
-// Aviation weather on the top-down map (the Layers panel's Weather switch; in the chase it is hidden: drawing real
-// clouds there is a later piece of work):
+// Aviation weather on the top-down map (the Layers panel's Weather switch; in the chase weather3d.ts draws the weather
+// round the aircraft, and this is hidden):
 // - rain radar: RainViewer's newest past frame (keyless tiles, CORS *; its free API serves zoom ≤ 7). Checked 2026-09-30:
 //   https://www.rainviewer.com/api.html. radar.ts draws it smooth to zoom 12, in a palette for the map under it (theme), and
 //   it lies under the map's names and lines (radarIndex; mapLayer.ts lifts their ink over it).
@@ -36,11 +36,10 @@ import type { FlightCategory, Metar, Sigmet } from '../../shared/wx.ts'
 import { DEFAULT_UNITS, speedIn, type Units } from '../ui/units.ts'
 import { queueDraw } from './drawQueue.ts'
 import { whenTilesLoaded } from './mapLayer.ts'
-import { RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, renderTile, sourceTiles, type Palette } from './radar.ts'
+import { RADAR_INDEX, RADAR_MAX_LEVEL, RADAR_SRC_MAX, RAIN_PALETTE, RadarSource, renderTile, sourceTiles, type Palette, type RadarIndex } from './radar.ts'
 import { metarCard, sigmetCards } from './wxCard.ts'
 import { CATEGORY_COLOR, hhmm, sigmetColor, sigmetLabel } from './wxText.ts'
 
-const RADAR_INDEX = 'https://api.rainviewer.com/public/weather-maps.json'
 const METAR_EVERY_MS = 5 * 60_000
 const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and radar
 const VIEW_CHECK_MS = 2_000
@@ -448,7 +447,7 @@ export class Weather {
   }
 
   private async loadRadar(): Promise<void> {
-    const idx = await this.get<{ host: string; radar: { past: { time: number; path: string }[] } }>(RADAR_INDEX)
+    const idx = await this.get<RadarIndex>(RADAR_INDEX)
     const last = idx?.radar.past.at(-1)
     if (!idx || !last) return this.status()
     this.radar.frame(idx.host, last.path)

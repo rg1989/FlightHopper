@@ -17,6 +17,7 @@ export interface Metar {
   name: string | null // "Haifa Intl, HA, IL" as the API sends it
   lat: number
   lon: number
+  elevM: number | null // the station's height above sea level, metres (the API's elev): cloud bases are feet above it
   obsMs: number | null // observation time
   cat: FlightCategory | null
   wdir: number | null // degrees true the wind blows FROM; null: variable or calm
@@ -96,6 +97,7 @@ export function slimMetars(json: unknown): Metar[] {
       name: typeof m.name === 'string' ? m.name : null,
       lat,
       lon,
+      elevM: fin(m.elev),
       obsMs: obsS === null ? null : obsS * 1000,
       cat: CATS.has(m.fltCat as string) ? (m.fltCat as FlightCategory) : null,
       wdir: fin(m.wdir), // "VRB" is a string: null

@@ -14,6 +14,8 @@
 // so tiles meet without seams. The data is RainViewer's as sent; only the drawing is ours.
 // Colours: https://www.rainviewer.com/files/rainviewer_api_colors_table.csv, column "Universal Blue" (read 2026-10-02).
 
+export const RADAR_INDEX = 'https://api.rainviewer.com/public/weather-maps.json' // its frames, newest past one last
+export interface RadarIndex { host: string; radar: { past: { time: number; path: string }[] } }
 export const RADAR_SRC_MAX = 7 // RainViewer's free API: deeper zooms are a "zoom not supported" picture
 export const RADAR_MAX_LEVEL = 12 // our deepest tile (a source pixel 32 px wide); Cesium magnifies past it
 export const FIRST_DBZ = 15 // RainViewer's coloured scale starts here; their faint beige below it is left out

@@ -15,7 +15,7 @@ const KEYS: Section[] = [
     ['M', 'Map or satellite, for the view on screen (in a scenario it mutes)'],
     ['R', 'Roads over the satellite'],
     ['P', 'Borders and places over the satellite'],
-    ['W', 'Weather on the top-down map'],
+    ['W', 'Weather: on the top-down map, and round the aircraft in the 3-D chase'],
   ] },
   { title: '3-D chase', rows: [
     ['T', '3-D terrain'],

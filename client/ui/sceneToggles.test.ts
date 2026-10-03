@@ -20,7 +20,8 @@ class El {
   children: El[] = []
   parent: El | null = null
   className = ''
-  textContent = ''
+  #text = ''
+  textWrites = 0
   title = ''
   type = ''
   #hidden = false
@@ -39,6 +40,13 @@ class El {
   listeners = new Map<string, (() => void)[]>()
   constructor(tag: string) {
     this.tag = tag
+  }
+  get textContent(): string {
+    return this.#text
+  }
+  set textContent(v: string) {
+    this.textWrites++
+    this.#text = v
   }
   get hidden(): boolean {
     return this.#hidden
@@ -83,11 +91,12 @@ const all = (el: El): El[] => [el, ...el.children.flatMap(all)]
 const text = (el: El): string => el.textContent + el.children.map(text).join('')
 /** What is on screen: the tree without its hidden parts. */
 const visible = (el: El): El[] => (el.hidden ? [] : [el, ...el.children.flatMap(visible)])
-/** The panel as it shows: section titles, button groups, switches and the weather's legend, top to bottom. */
+/** The panel as it shows: section titles, button groups, switches and the weather's rain scale, legend and line, top to bottom. */
+const PARTS: Record<string, string> = { 'fh-wx-rain': 'rain scale', 'fh-wx-legend': 'weather legend', 'fh-wx-line': 'weather line' }
 const screen = (root: El): string[] => visible(root).flatMap((e) => {
   if (e.className === 'fh-scene-title') return [e.textContent]
   if (e.attrs.role === 'group' || e.attrs.role === 'switch') return [e.attrs['aria-label']]
-  return e.className === 'fh-wx-more' ? ['weather legend'] : []
+  return PARTS[e.className] === undefined ? [] : [PARTS[e.className]]
 })
 const MAP = ['Map', 'Base map']
 const SCENE = ['3-D scene', '3-D terrain', 'Sun', 'See-through buildings']
@@ -132,8 +141,8 @@ test('only what applies to the view on screen: top-down or chase, on the map or 
   const cases: [string, boolean, Partial<ScenePrefs>, string[]][] = [
     ['top-down, map', false, { mapTop: true }, [...MAP, 'Map theme', 'Weather']],
     ['top-down, satellite', false, { mapTop: false }, [...MAP, 'Roads', 'Borders & places', 'Weather']],
-    ['chase, map', true, { mapChase: true }, [...MAP, 'Map theme', ...SCENE]],
-    ['chase, satellite', true, { mapChase: false }, [...MAP, 'Roads', 'Borders & places', ...SCENE]],
+    ['chase, map', true, { mapChase: true }, [...MAP, 'Map theme', 'Weather', ...SCENE]],
+    ['chase, satellite', true, { mapChase: false }, [...MAP, 'Roads', 'Borders & places', 'Weather', ...SCENE]],
   ]
   for (const [name, chasing, base, want] of cases) {
     const { root, t } = mount({ ...DEFAULT_PREFS, ...base })
@@ -151,9 +160,9 @@ test('the rows follow the base and the view as they change: Satellite, the chase
   t.update(changes.at(-1)!)
   assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather'])
   t.setChasing(true) // the chase keeps its own base: the satellite by default
-  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', ...SCENE])
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather', ...SCENE])
   t.update({ ...DEFAULT_PREFS, mapTop: false, mapChase: true })
-  assert.deepEqual(screen(root), [...MAP, 'Map theme', ...SCENE])
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', ...SCENE])
   t.setChasing(false)
   assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather'])
 })
@@ -219,7 +228,7 @@ test('update() only re-renders: no onChange, and the next click toggles from the
 
 test('update() and setChasing() with nothing changed write nothing (both run every frame)', () => {
   const { root, light, t } = mount({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
-  const writes = (): number => all(root).reduce((n, e) => n + e.attrWrites + e.hiddenWrites + e.styleWrites, 0)
+  const writes = (): number => all(root).reduce((n, e) => n + e.attrWrites + e.hiddenWrites + e.styleWrites + e.textWrites, 0)
   const before = writes()
   for (let i = 0; i < 100; i++) {
     t.update({ ...DEFAULT_PREFS, topo: true, light: false, glass: false })
@@ -316,16 +325,40 @@ test('weather legend: the word Airports, then how the flight rules read, each in
   assert.deepEqual(colors, [CATEGORY_COLOR.VFR, CATEGORY_COLOR.MVFR, CATEGORY_COLOR.IFR, CATEGORY_COLOR.LIFR]) // as the markers' rings
 })
 
-test('weather is the top-down map\'s: in the chase its row, legend and line go, and come back with the map', () => {
+test('weather has a row in both views; its rain scale and airports legend are the top-down map\'s, its status line is both\'s', () => {
   const { root, t } = mount({ ...DEFAULT_PREFS, wx: true })
   t.setWeather('Live only')
-  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'weather legend'])
-  assert.ok(visible(root).some((e) => e.className === 'fh-wx-line'))
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'rain scale', 'weather legend', 'weather line'])
   t.setChasing(true) // on the satellite, the chase's default
-  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', ...SCENE])
-  assert.ok(!visible(root).some((e) => e.className === 'fh-wx-line'))
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather', 'weather line', ...SCENE]) // the line stays: the chase's weather writes it
+  t.setWeather('Clouds from 3 airports · 2 hazard areas')
+  assert.equal(all(root).find((e) => e.className === 'fh-wx-line')!.textContent, 'Clouds from 3 airports · 2 hazard areas')
+  t.setWeather(null)
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather', ...SCENE])
   t.setChasing(false)
-  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'weather legend'])
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather', 'rain scale', 'weather legend'])
+})
+
+test('weather off: nothing under its row in either view', () => {
+  const { root, t } = mount({ ...DEFAULT_PREFS, wx: false })
+  t.setWeather('Live only')
+  assert.deepEqual(screen(root), [...MAP, 'Map theme', 'Weather'])
+  t.setChasing(true)
+  assert.deepEqual(screen(root), [...MAP, 'Roads', 'Borders & places', 'Weather', ...SCENE])
+})
+
+test('the weather row\'s hint follows the view: radar and airports top-down, clouds, rain and hazard areas round the aircraft in the chase', () => {
+  const { root, wx, t, changes } = mount({ ...DEFAULT_PREFS })
+  const row = (): El => all(root).filter((e) => e.className === 'fh-scene-row')[2]
+  const hint = (): string => text(row().children[1])
+  assert.equal(hint(), 'WeatherWRain radar, airport weather, hazard areas')
+  t.setChasing(true)
+  assert.equal(hint(), 'WeatherWClouds, rain and hazard areas around the aircraft')
+  assert.equal(row().children.at(-1), wx) // the same switch: nothing was rebuilt, so the focus stays
+  wx.click() // key W and the switch ask for the same pref in the chase as on the map
+  assert.deepEqual(changes.at(-1), { ...DEFAULT_PREFS, wx: true })
+  t.setChasing(false)
+  assert.equal(hint(), 'WeatherWRain radar, airport weather, hazard areas')
 })
 
 test('weather: a rain scale above the airports legend, Light to Heavy, in the radar\'s colours for the map on screen', () => {
@@ -347,7 +380,7 @@ test('weather: a rain scale above the airports legend, Light to Heavy, in the ra
   assert.equal(scale.vars['--scale'], gradient('light'))
 })
 
-test('rainTheme: the top-down map\'s base decides (the weather shows there only): light over the light street map, else dark', () => {
+test('rainTheme: the top-down map\'s base decides (the radar is drawn there only): light over the light street map, else dark', () => {
   assert.equal(rainTheme(DEFAULT_PREFS), 'light')
   assert.equal(rainTheme({ ...DEFAULT_PREFS, dark: true }), 'dark')
   assert.equal(rainTheme({ ...DEFAULT_PREFS, mapTop: false }), 'dark')

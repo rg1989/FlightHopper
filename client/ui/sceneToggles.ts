@@ -1,13 +1,14 @@
 // client/ui/sceneToggles.ts
 // The Layers panel (the square under the rail): only what applies to the view on screen. Map: the base for that view,
 // Map or Satellite (M; the top-down view and the chase each keep their own); under Map its theme, Light or Dark (both
-// views; Settings › Display too); under Satellite, Roads (R) and Borders & places (P) over it; on the top-down map,
-// Weather (W). In the chase, the 3-D scene (design D11): a switch row each for 3-D terrain (T), Sun (L) and See-through
+// views; Settings › Display too); under Satellite, Roads (R) and Borders & places (P) over it; Weather (W) in both views
+// (its hint says what each draws: the top-down map's radar and airports, the chase's clouds, rain and hazard areas round the
+// aircraft). In the chase, the 3-D scene (design D11): a switch row each for 3-D terrain (T), Sun (L) and See-through
 // buildings (X). Each row has its icon and key. A click asks the app for the toggled prefs through onChange and changes
 // nothing itself; update() only re-renders. A view or base change hides and shows rows (none is rebuilt, so the focus
 // stays put). setBusy(true) shows a spinner on the terrain row while the relief grows or sinks. Under Weather: the rain
-// scale in the radar's colours for the top-down map, the airports legend, and setWeather()'s line on what the weather
-// layer holds. The app owns the keys, the stored prefs and the panel.
+// scale in the radar's colours and the airports legend, for the top-down map only, and setWeather()'s line on what the
+// weather layer holds, in both views. The app owns the keys, the stored prefs and the panel.
 import { icon, type IconName } from './icons.ts'
 import { RAIN_PALETTE } from '../scene/radar.ts'
 import { CATEGORY_COLOR } from '../scene/wxText.ts'
@@ -29,10 +30,11 @@ export interface SceneTogglesHandle {
 
 type Key = Exclude<keyof ScenePrefs, 'mapTop' | 'mapChase' | 'dark'>
 interface Row { key: Key; icon: IconName; label: string; hint: string; shortcut: string }
+const WX_HINT = { top: 'Rain radar, airport weather, hazard areas', chase: 'Clouds, rain and hazard areas around the aircraft' } // the Weather row's, per view
 const LAYER_ROWS: Row[] = [
   { key: 'roads', icon: 'road', label: 'Roads', hint: 'Streets and highways over the satellite', shortcut: 'R' },
   { key: 'places', icon: 'flag', label: 'Borders & places', hint: 'Country lines and city names over the satellite', shortcut: 'P' },
-  { key: 'wx', icon: 'cloud', label: 'Weather', hint: 'Rain radar, airport weather, hazard areas', shortcut: 'W' },
+  { key: 'wx', icon: 'cloud', label: 'Weather', hint: WX_HINT.top, shortcut: 'W' },
 ]
 const SCENE_ROWS: Row[] = [
   { key: 'topo', icon: 'mountain', label: '3-D terrain', hint: 'Mountains and valleys in relief', shortcut: 'T' },
@@ -53,7 +55,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, tex
 /** The base-map pref the view on screen uses. */
 export const baseKey = (chasing: boolean): 'mapTop' | 'mapChase' => (chasing ? 'mapChase' : 'mapTop')
 
-/** The radar's palette. The weather shows on the top-down map only, so its base decides: light over the light street map;
+/** The radar's palette. The radar is drawn on the top-down map only, so its base decides: light over the light street map;
  *  the dark map and the satellite, dark. */
 export const rainTheme = (prefs: ScenePrefs): 'light' | 'dark' => (prefs.dark || !prefs.mapTop ? 'dark' : 'light')
 
@@ -61,6 +63,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   let prefs = { ...opts.prefs }
   let chasing = false
   const switches = new Map<Key, HTMLButtonElement>()
+  const hints = new Map<Key, HTMLElement>()
   let spinner: HTMLElement | null = null
 
   const row = (r: Row): HTMLElement => {
@@ -70,7 +73,9 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     const text = h('div', 'fh-scene-text')
     const label = h('span', 'fh-scene-label', r.label)
     label.append(h('kbd', 'fh-kbd', r.shortcut))
-    text.append(label, h('span', 'fh-scene-hint', r.hint))
+    const hint = h('span', 'fh-scene-hint', r.hint)
+    hints.set(r.key, hint)
+    text.append(label, hint)
     const sw = h('button', 'fh-switch')
     sw.type = 'button'
     sw.setAttribute('role', 'switch')
@@ -130,8 +135,10 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     scale.style.setProperty('--scale', `linear-gradient(90deg, ${RAIN_PALETTE[theme].rain.map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`).join(', ')})`)
   }
   showBase()
-  // The overlays, only while the view shows the satellite; the weather, only on the top-down map (the chase draws none).
+  // The overlays, only while the view shows the satellite; the weather, in both views (its rain scale and legend are the
+  // top-down map's).
   const [roadsRow, placesRow, wxRow] = LAYER_ROWS.map(row)
+  const wxHint = hints.get('wx')!
   const wxMore = h('div', 'fh-wx-more')
   const legend = h('div', 'fh-wx-legend')
   legend.append(h('span', 'fh-wx-legend-title', 'Airports'))
@@ -162,8 +169,11 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     show(theme, map)
     show(roadsRow, !map)
     show(placesRow, !map)
-    show(wxRow, !chasing)
-    show(wxMore, !chasing && prefs.wx)
+    show(wxMore, prefs.wx)
+    show(rain, !chasing)
+    show(legend, !chasing)
+    const hint = chasing ? WX_HINT.chase : WX_HINT.top
+    if (wxHint.textContent !== hint) wxHint.textContent = hint
     show(scene, chasing)
   }
   fit()

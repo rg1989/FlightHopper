@@ -32,7 +32,7 @@ const pairs = (dl: El): string[][] => els(dl).reduce<string[][]>((out, e) => (e.
 const metric: Units = { alt: 'm', speed: 'kmh', vs: 'ms' }
 
 const llha: Metar = {
-  id: 'LLHA', name: 'Haifa Intl, HA, IL', lat: 32.81, lon: 35.04, obsMs: new Date(2026, 9, 2, 18, 50).getTime(), cat: 'VFR', wdir: 250, wspd: 5,
+  id: 'LLHA', name: 'Haifa Intl, HA, IL', lat: 32.81, lon: 35.04, elevM: 3, obsMs: new Date(2026, 9, 2, 18, 50).getTime(), cat: 'VFR', wdir: 250, wspd: 5,
   wgst: null, visKm: 9.656, visPlus: true, tempC: 26, dewC: 16, qnhHpa: 1014, wx: null, clouds: [{ cover: 'FEW', baseFt: 4500, type: null }],
   vertVisFt: null, raw: 'METAR LLHA 021550Z AUTO 25005KT 9999 FEW045 26/16 Q1014',
 }
