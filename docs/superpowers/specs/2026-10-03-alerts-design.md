@@ -39,8 +39,9 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     stays, and it goes only where it is at least as far off as the points next to it, so the good point beside a spike stays.
   - Tuned on 8 real half hours (2026-10-03, `docs/anomaly-alerts.md` §3.2): D1 first took 10,000 ft and gave 21 events, mostly
     military and fighter aircraft, and the first D2 missed FZ1073.
-  - A fall's steps are 45,000 fpm at most, and two or more of them go down by 200 ft or more: one jump between two level
-    stretches is an altitude encoder's stuck bit.
+  - A fall's steps are 45,000 fpm at most, and a point between its top and its bottom is 200 ft or more from each, and a
+    twentieth of the fall or more: one jump between two level stretches is an altitude encoder's stuck bit. Lost means no
+    position of any kind after the fall.
   - Live, D1 and D3 run on the samples of every aircraft the server takes: the view, the chase, recorded flights, and the sweep's
     answers. It runs only on a sample whose `baro_rate` is −3,000 fpm or lower, so most samples cost nothing.
   - Worldwide, D1, D3 and D2 run on each new adsb.lol half-hour file that the server already downloads for History. This

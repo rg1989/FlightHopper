@@ -53,14 +53,16 @@ const FAST_JETS = new Set([
 // ICAO type designators of airliners and freighters: aircraft that never dive in ordinary flight, so a smaller fall is an event
 // for them (descent.ts D1, D2, D3); any other civil type needs D1_OTHER's 20,000 ft, or D2_OTHER's 10,000 fpm from FL150 (jump
 // planes, business jets and their drills dive as routine: descent.ts has the measured values).
+// Not here, though airliners by birth: the A310 and the Boeing 727 (the types of the civil parabolic-flight aircraft, 8,000 ft
+// in 30 s on each parabola), and the Il-76 and An-124 (tactical descents).
 // ponytail: a list by hand, as FAST_JETS is; a type not here is only less watched. Add a new airliner when one enters service.
 const AIRLINERS = new Set([
-  'A19N', 'A20N', 'A21N', 'A318', 'A319', 'A320', 'A321', 'A306', 'A30B', 'A310', 'A332', 'A333', 'A337', 'A338', 'A339', 'A342', 'A343', 'A345',
-  'A346', 'A359', 'A35K', 'A388', 'A3ST', 'BCS1', 'BCS3', 'B37M', 'B38M', 'B39M', 'B3XM', 'B461', 'B462', 'B463', 'B712', 'B721', 'B722', 'B732',
+  'A19N', 'A20N', 'A21N', 'A318', 'A319', 'A320', 'A321', 'A306', 'A30B', 'A332', 'A333', 'A337', 'A338', 'A339', 'A342', 'A343', 'A345',
+  'A346', 'A359', 'A35K', 'A388', 'A3ST', 'BCS1', 'BCS3', 'B37M', 'B38M', 'B39M', 'B3XM', 'B461', 'B462', 'B463', 'B712', 'B732',
   'B733', 'B734', 'B735', 'B736', 'B737', 'B738', 'B739', 'B741', 'B742', 'B743', 'B744', 'B748', 'B74R', 'B74S', 'B752', 'B753', 'B762', 'B763',
   'B764', 'B772', 'B773', 'B778', 'B779', 'B77L', 'B77W', 'B788', 'B789', 'B78X', 'BLCF', 'CRJ1', 'CRJ2', 'CRJ7', 'CRJ9', 'CRJX', 'E135', 'E145',
   'E45X', 'E170', 'E75L', 'E75S', 'E190', 'E195', 'E290', 'E295', 'F70', 'F100', 'RJ1H', 'RJ70', 'RJ85', 'SU95', 'AJ27', 'C919', 'MD11', 'MD81',
-  'MD82', 'MD83', 'MD87', 'MD88', 'MD90', 'DC10', 'IL62', 'IL76', 'IL96', 'T204', 'T214', 'A124', 'A148', 'A158', 'YK42', 'AT43', 'AT45', 'AT46',
+  'MD82', 'MD83', 'MD87', 'MD88', 'MD90', 'DC10', 'IL62', 'IL96', 'T204', 'T214', 'A148', 'A158', 'YK42', 'AT43', 'AT45', 'AT46',
   'AT72', 'AT73', 'AT75', 'AT76', 'DH8A', 'DH8B', 'DH8C', 'DH8D', 'SF34', 'SB20', 'E120', 'F50', 'JS41', 'D328',
 ])
 const NO_TYPE = Object.freeze({ type: null, category: null })
@@ -71,7 +73,7 @@ type Who = Pick<AlertEvent, 'callsign' | 'reg' | 'type' | 'lat' | 'lon' | 'altFt
 type Patch = Who & { squawk?: string | null; emergency?: string | null; drop?: AlertDrop | null }
 
 /** An aircraft of a half hour as the late check judges it: its altitudes (t in s into the half hour), newest place and callsign. */
-type Heard = Pick<ScanAircraft, 'alt' | 'lat' | 'lon' | 'callsign'>
+type Heard = Pick<ScanAircraft, 'alt' | 'lat' | 'lon' | 'tS' | 'callsign'>
 /** The ends of the newest half hour read (scanSlot), by hex: each aircraft's points in its last 150 s, t in s into the NEXT half hour. */
 type Tails = ReadonlyMap<string, Heard>
 const NO_TAILS: Tails = new Map()
@@ -271,12 +273,14 @@ export class Alerts {
         })
       }
     }
-    // No fall is 3,000 ft (D2, the loosest rule) from top to bottom; one that is no airliner's has its top at FL150 or above.
+    // No fall is under 2,000 ft (D2, the loosest rule) from top to bottom; one that is no airliner's has its top at FL150 or above.
     const liner = AIRLINERS.has(typed.type ?? '')
     if (hi - lo < D2.fallFt || (!liner && hi < D2_OTHER.topFt) || this.#noFalls(hex, typed.type, 0, typed)) return
     const s = clean(before === undefined ? at.alt : { t: before.t.concat(at.alt.t), ft: before.ft.concat(at.alt.ft) })
     const d1 = descentIn(s, liner)
-    const d = d1 ?? diveThenLost(s, endS, liner ? D2 : D2_OTHER)
+    // Lost: no position of any kind after the fall. One heard after it on the ground, or with no altitude, is not lost.
+    const lost = at.tS <= (s.t.at(-1) ?? -Infinity)
+    const d = d1 ?? (lost ? diveThenLost(s, endS, liner ? D2 : D2_OTHER) : null)
     if (d !== null) this.#fell(hex, d1 !== null ? 'descent' : 'dive', d, slotMs, who, true)
   }
 
@@ -568,7 +572,7 @@ function tailsOf(scan: SlotScan): Tails {
     let i = t.length
     while (i > 0 && t[i - 1] >= from) i--
     if (i === t.length) continue
-    out.set(hex, { alt: { t: t.slice(i).map((x) => x - SLOT_S), ft: ft.slice(i) }, lat: a.lat, lon: a.lon, callsign: a.callsign })
+    out.set(hex, { alt: { t: t.slice(i).map((x) => x - SLOT_S), ft: ft.slice(i) }, lat: a.lat, lon: a.lon, tS: a.tS - SLOT_S, callsign: a.callsign })
   }
   return out
 }

@@ -14,7 +14,7 @@ export interface Case {
   end: string // its last message received (impact, landing, out of reach, transponder off)
   sqk?: [string, string][] // [time, code]: the squawk it sends from then on; before the first, an ordinary one
   deaf?: [string, string][] // [from, to): spans in which no receiver of the open networks heard it
-  want: { sweep: string | null; late: string | null; onMap: string | null } // 'squawk 7700', 'descent' (D1), 'dive' (D2), null: not found
+  want: { sweep: string | null; late: string | null; onMap: string | null } // 'squawk 7700', 'descent' (D1, D3 or D1_OTHER), 'dive' (D2 or D2_OTHER), null: not found
   src: string
 }
 

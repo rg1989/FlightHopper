@@ -215,8 +215,8 @@ test('steepDescent (D1): the limits of a step, shared with D2: a hole of 60 s, a
   const fast = (ft: number) => steepDescent(series([[0, 35_000], [10, 35_000 - ft], [60, 25_000], [120, 19_000]])) // the first step ft in 10 s, at 6 × ft fpm
   assert.deepEqual(fast(7_500), { startS: 0, endS: 120, fromFt: 35_000, toFt: 19_000 }, '45,000 fpm')
   assert.equal(fast(7_501), null, '45,006 fpm')
-  const slow = (ft: number) => steepDescent(series([[0, 49_000], [40, 49_000 - ft], [90, 18_500], [120, 18_000]])) // the first step ft in 40 s: 1.5 × ft fpm
-  assert.deepEqual(slow(30_000), { startS: 0, endS: 120, fromFt: 49_000, toFt: 18_000 }, '45,000 fpm')
+  const slow = (ft: number) => steepDescent(series([[0, 49_000], [40, 49_000 - ft], [80, 12_000], [120, 6_000]])) // the first step ft in 40 s: 1.5 × ft fpm
+  assert.deepEqual(slow(30_000), { startS: 0, endS: 120, fromFt: 49_000, toFt: 6_000 }, '45,000 fpm')
   assert.equal(slow(30_001), null, '45,001.5 fpm')
 })
 
@@ -244,7 +244,7 @@ test('diveThenLost (D2): the real FZ1073 points: clean drops the GNSS altitude, 
   assert.deepEqual(diveThenLost(s, 1790), { startS: 1270, endS: 1330, fromFt: 33_950, toFt: 27_950 })
   assert.deepEqual(diveThenLost(s, 1390), { startS: 1270, endS: 1330, fromFt: 33_950, toFt: 27_950 }, 'lost for 60 s')
   assert.equal(diveThenLost(s, 1380), null, 'lost for 50 s')
-  assert.equal(diveThenLost(raw, 1790), null, 'with the GNSS altitude in, the step into the last point is over 30,000 fpm')
+  assert.equal(diveThenLost(raw, 1790), null, 'with the GNSS altitude in, the step into the last point is over 45,000 fpm (7,600 ft in 10 s)')
   assert.equal(steepDescent(s), null, 'not 15,000 ft in 2 min')
 })
 
@@ -357,17 +357,28 @@ const N6262W: [number, number][] = [
   [500, 6600], [520, 6600], [530, 38_900], [540, 38_900], [550, 6600], [560, 38_900], [580, 6600], [600, 6600], [610, 6600], [630, 6600], [650, 6600],
 ]
 
-test('one jump between two level stretches is no fall, by any rule: a stuck altitude bit (N6262W, real), however many level points follow', () => {
+test('one jump between two level stretches is no fall, by any rule: a stuck altitude bit (N6262W, real), whatever lies at its ends', () => {
   const s = clean(series(N6262W))
   assert.deepEqual([s.ft[s.t.indexOf(530)], s.ft[s.t.indexOf(540)], s.t.includes(560)], [38_900, 38_900, false], 'clean takes the single wrong point, not the two in a row')
-  for (const rule of [D1, D1_OTHER, D3]) assert.equal(steepDescent(s, rule), null)
-  // The same jump over 44 s is 44,045 fpm, under the 45,000 fpm limit: only the two steps keep it out.
+  for (const rule of [D1, D1_OTHER, D3]) assert.equal(steepDescent(s, rule), null) // here the jump is over the 45,000 fpm limit too (48,450 fpm)
+  // The same jump over 44 s is 44,045 fpm, under the limit: only the point inside keeps it out.
   assert.equal(diveThenLost(series([[0, 38_900], [10, 38_900], [54, 6600]]), 200), null, 'then lost: still one jump')
   assert.equal(steepDescent(series([[0, 38_900], [10, 38_900], [54, 6600], [64, 6600], [74, 6600]])), null)
-  // Two steps down by 200 ft or more make a fall; 199 ft and the jump do not.
-  const two = (ft: number): ReturnType<typeof series> => series([[0, 38_900], [10, 38_900 - ft], [54, 6600]])
-  assert.deepEqual(diveThenLost(two(200), 200), { startS: 0, endS: 54, fromFt: 38_900, toFt: 6600 })
-  assert.equal(diveThenLost(two(199), 200), null)
+  assert.equal(steepDescent(series([[0, 38_900], [10, 38_900], [54, 6600], [64, 6400], [74, 6400]])), null, 'an ordinary step down after it: still one jump')
+  // A point inside it, a twentieth of the fall or more from both ends (1,615 ft of 32,300 ft), makes it a fall; 1 ft less does not.
+  const mid = (ft: number): ReturnType<typeof series> => series([[0, 38_900], [10, 38_900 - ft], [54, 6600]])
+  assert.deepEqual(diveThenLost(mid(1615), 200), { startS: 0, endS: 54, fromFt: 38_900, toFt: 6600 })
+  assert.equal(diveThenLost(mid(1614), 200), null)
+  // A small fall: 200 ft or more from both ends.
+  assert.deepEqual(diveThenLost(series([[0, 35_000], [10, 34_800], [20, 33_000]]), 100), { startS: 0, endS: 20, fromFt: 35_000, toFt: 33_000 })
+  assert.equal(diveThenLost(series([[0, 35_000], [10, 34_801], [20, 33_000]]), 100), null, '199 ft from the top')
+  assert.equal(diveThenLost(series([[0, 35_000], [10, 33_199], [20, 33_000]]), 100), null, '199 ft from the bottom')
+})
+
+test('a fall is a fall at any spacing of its points: 15,000 ft in 120 s as 1 s points (a chased aircraft) is D1, as it is with 10 s points', () => {
+  assert.deepEqual(steepDescent(series(line(0, 120, 1, (t) => 35_000 - 125 * t))), { startS: 0, endS: 120, fromFt: 35_000, toFt: 20_000 })
+  assert.deepEqual(steepDescent(series(line(0, 120, 10, (t) => 35_000 - 125 * t))), { startS: 0, endS: 120, fromFt: 35_000, toFt: 20_000 })
+  assert.deepEqual(steepDescent(series(line(0, 60, 1.4, (t) => 12_000 - 140 * t)), D3)?.fromFt, 12_000, 'D3 at 1.4 s points')
 })
 
 test('diveThenLost (D2): a last row repeated does not hide the dive', () => {

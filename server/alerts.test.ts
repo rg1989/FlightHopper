@@ -929,12 +929,35 @@ test('an airliner\'s plunge (D3), 8,000 ft in 60 s at any level, is a descent ev
   assert.deepEqual(late(LINER), [{ fromFt: 12_900, toFt: 1900, overS: 80, lost: false }])
   assert.deepEqual(late(NO_TYPE), [])
   assert.deepEqual(late(() => ({ type: 'C208', category: 'A1' })), [], 'a jump plane dives like that every load')
+  assert.deepEqual(late(() => ({ type: 'A310', category: 'A5' })), [], 'the A310 flies parabolas: it is not on the list')
   const live = (typeCode: string | null): number => {
     const { a } = setup()
     feed(a, samples((t) => fall(t + 950), 200, { typeCode }))
     return a.reply().events.length
   }
-  assert.deepEqual([live('B735'), live('AT76'), live('C208'), live('GLF6'), live(null)], [1, 1, 0, 0, 0])
+  assert.deepEqual([live('B735'), live('AT76'), live('C208'), live('GLF6'), live('B722'), live(null)], [1, 1, 0, 0, 0, 0])
+})
+
+test('scanSlot: a dive then lost needs silence: an aircraft heard after the fall, on the ground or with no altitude, is not lost', () => {
+  // A B738 on approach whose last altitude off the ground is wrong: 2,700, 2,400, 300 ft. Then `after` in every slice to the file's end.
+  const file = (after: 'g' | null | undefined): Uint8Array => {
+    const slices: Slices = []
+    for (let s = 0; s < 1800; s += 10) {
+      const ft = s < 1000 ? 3000 : s === 1000 ? 2700 : s === 1010 ? 2400 : s === 1020 ? 300 : after
+      const records: Slices[number]['records'] = [{ hex: 'a00002', lat: 41, lon: -70, alt: 31_000, gs: 450 }] // another cruises to the last slice
+      if (ft !== undefined) records.push({ hex: 'a00001', lat: 40, lon: -70, alt: ft, gs: ft === 'g' ? 20 : 140 })
+      slices.push({ tMs: SLOT + s * 1000, records })
+    }
+    return encodeHeatmap(slices)
+  }
+  const drops = (after: 'g' | null | undefined): (AlertDrop | null)[] => {
+    const { a } = setup()
+    a.scanSlot(file(after), SLOT)
+    return a.reply().events.map((e) => e.drop)
+  }
+  assert.deepEqual(drops(undefined), [{ fromFt: 2700, toFt: 300, overS: 20, lost: true }], 'nothing after it')
+  assert.deepEqual(drops('g'), [], 'on the ground after it: it landed')
+  assert.deepEqual(drops(null), [], 'heard with no altitude after it')
 })
 
 // Coverage

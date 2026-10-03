@@ -14,9 +14,9 @@
 // jets and their drills 18,000 ft from FL250, and one at 5,070 fpm into the edge of coverage): the type decides
 // (server/alerts.ts AIRLINERS). Known emergencies replayed against these rules: server/alerts.cases.ts.
 // Each step of a fall goes down, or up by 300 ft at most (noise), at 45,000 fpm or less (faster is a bad decode or spoofed
-// GNSS), with at most 60 s between its points (a longer gap is a coverage hole, not a fall), and two of its steps or more go
-// down by 200 ft or more (one jump between two level stretches is an altitude encoder's stuck bit). Pure: server/alerts.ts runs the
-// rules on live samples and on adsb.lol's half-hour files (server/heatmap.ts scanSlot).
+// GNSS), with at most 60 s between its points (a longer gap is a coverage hole, not a fall), and a point of it lies well
+// inside it (one jump between two level stretches is an altitude encoder's stuck bit). Pure: server/alerts.ts runs the rules
+// on live samples and on adsb.lol's half-hour files (server/heatmap.ts scanSlot).
 
 /** Barometric altitudes in time order: t in s (any origin), ft. Airborne points only. After clean, t is strictly increasing. */
 export interface AltSeries {
@@ -54,10 +54,11 @@ const OUTLIER_FT = 1000 // off the line between its neighbours by more than this
 // A step faster than this is not flown. The last seconds of real dives passed 30,000 fpm (Sriwijaya 182 10,650 ft in 21 s, Lion
 // Air 610, Ethiopian 302, China Eastern 5735), so the limit is half as much again.
 const MAX_FPM = 45_000
-// A fall has this many steps down by STEP_FT or more. One jump is no fall, however many level points follow it: N6262W, a
-// PA-28 at 6,600 ft on 2026-10-03, sent 38,900 ft every few messages, twice in a row once (clean takes single ones).
-const STEPS = 2
-const STEP_FT = 200
+// A fall has a point inside it, this far or more from its top and from its bottom: 200 ft, or a twentieth of the fall if that
+// is more. One jump is no fall, however many points lie at its ends: N6262W, a PA-28 at 6,600 ft on 2026-10-03, sent 38,900 ft
+// every few messages, twice in a row once (clean takes single ones).
+const INSIDE_FT = 200
+const INSIDE_PARTS = 20
 const SPIKE_FPM = 30_000 // a point between two steps in opposite directions, both faster than this, is a spike
 const NOISE_FT = 300 // a fall may rise this much between two points
 const MAX_GAP_S = 60
@@ -115,11 +116,15 @@ function falls(s: AltSeries, a: number): boolean {
   return dt > 0 && dt <= MAX_GAP_S && dft <= NOISE_FT && (-dft / dt) * 60 <= MAX_FPM
 }
 
-/** Whether the points from a to b hold two steps or more down by 200 ft or more: a fall, not one jump. */
-function stepped(s: AltSeries, a: number, b: number): boolean {
-  let n = 0
-  for (let m = a; m < b && n < STEPS; m++) if (s.ft[m] - s.ft[m + 1] >= STEP_FT) n++
-  return n >= STEPS
+/**
+ * Whether a point between a and b lies well inside the fall from a to b: a fall, not one jump. Whatever the spacing of the
+ * points: a track of 1 s points has such a point as one of 30 s points has.
+ */
+function spread(s: AltSeries, a: number, b: number): boolean {
+  const fall = s.ft[a] - s.ft[b]
+  const far = (ft: number): boolean => ft >= INSIDE_FT && ft * INSIDE_PARTS >= fall
+  for (let m = a + 1; m < b; m++) if (far(s.ft[a] - s.ft[m]) && far(s.ft[m] - s.ft[b])) return true
+  return false
 }
 
 /**
@@ -143,7 +148,7 @@ export function steepDescent(s: AltSeries, rule: FallRule = D1): Drop | null {
     while (s.t[j] - s.t[k] > rule.windowS) k++
     let top = k // the highest point in the window, the latest of equals: a fall starts where level flight ends
     for (let m = k + 1; m < j; m++) if (s.ft[m] >= s.ft[top]) top = m
-    if (j - top + 1 < rule.points || s.ft[top] < rule.topFt || s.ft[top] - s.ft[j] < rule.fallFt || !stepped(s, top, j)) continue
+    if (j - top + 1 < rule.points || s.ft[top] < rule.topFt || s.ft[top] - s.ft[j] < rule.fallFt || !spread(s, top, j)) continue
     // The bottom: the first lowest point so far (the point that completed the fall may be a small rise after it). When that
     // is j, on while each step is a fall and at most 60 s have passed since the last low: a repeat or a small rise is bridged.
     let low = top
@@ -169,7 +174,7 @@ export function diveThenLost(s: AltSeries, endS: number, rule: DiveRule = D2): D
   let top = -1
   for (let m = last - 1; m >= 0 && s.t[last] - s.t[m] <= rule.windowS && falls(s, m); m--) {
     const fall = s.ft[m] - s.ft[last]
-    const fits = last - m + 1 >= rule.points && s.ft[m] >= rule.topFt && fall >= rule.fallFt && fall * 60 >= rule.minFpm * (s.t[last] - s.t[m]) && stepped(s, m, last)
+    const fits = last - m + 1 >= rule.points && s.ft[m] >= rule.topFt && fall >= rule.fallFt && fall * 60 >= rule.minFpm * (s.t[last] - s.t[m]) && spread(s, m, last)
     if (fits && (top < 0 || fall > s.ft[top] - s.ft[last])) top = m
   }
   return top < 0 ? null : { startS: s.t[top], endS: s.t[last], fromFt: s.ft[top], toFt: s.ft[last] }

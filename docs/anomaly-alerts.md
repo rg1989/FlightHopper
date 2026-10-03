@@ -95,7 +95,8 @@ The rules use `alt_baro`. Points are an aircraft's reports, or the 10 s heatmap 
 - **D1, emergency descent.** From FL200 or above, 15,000 ft or more lost within 120 s (7,500 fpm), over 4 or more falling points. The fall is then followed to its bottom: on while each step is a fall, until 60 s pass with no new low. For an aircraft that is not an airliner the fall is 20,000 ft (section 3.3).
 - **D2, dive then lost.** The fall into the last point. Its top is within the last 60 s, with every step from it a fall, over 3 or more points. The fall is 3,000 ft or more, at 5,000 fpm or more on average. Then no position for 60 s. Of the tops that fit, the biggest fall is taken. FZ1073 fits (section 7.5). For an aircraft that is not an airliner the top is at FL150 or above and the average is 10,000 fpm or more (section 3.3).
 - **D3, plunge (airliners only).** 8,000 ft or more lost within 60 s, over 3 or more points, at any level (section 3.3).
-- **A fall has two steps.** Each step is at most 45,000 fpm, and two or more steps go down by 200 ft or more. One jump between two level stretches is an altitude encoder's stuck bit (section 3.3).
+- **A fall has a point inside it.** Each step is at most 45,000 fpm. A point between the top and the bottom is 200 ft or more from each, and a twentieth of the fall or more. One jump between two level stretches is an altitude encoder's stuck bit (section 3.3).
+- **Lost** means no position of any kind after the fall. An aircraft heard after it on the ground, or with no altitude, is not lost.
 - **No fall event.** Military aircraft (the Mictronics flag, and live `dbFlags & 1`) and fighter and trainer types (a list of type designators in `server/alerts.ts`: F-5, T-38, Texan II, L-39, Su-27 and others). They dive as routine. Their squawks and statuses still count.
 - **Not built: a rate rule on polled aircraft** (log only). `baro_rate` at −6,000 fpm or lower, with `alt_baro` falling at 4,000 fpm or more since a report 5 to 120 s earlier. In the recordings, 2 aircraft passed: a jump plane and a military jet.
 - **Urgent.** A 7x00 code or an emergency status at the same time, or `nav_altitude_mcp` 5,000 ft or more above `alt_baro` (not commanded).
@@ -123,7 +124,7 @@ Question: do the alerts find known emergencies, and can they find more without f
 | Airliners lost while descending | At most 4,975 fpm over the last minute. Up to 3,960 fpm below 10,000 ft. | D2 at 6,000 fpm is clear of it. A descent like Germanwings 9525 (3,500 fpm) is not. |
 | Jump planes (C208, PC-6, SC-7, P-750) | 10,000 to 12,400 ft in 120 s from FL130, each load. | No low-level rule for aircraft that are not airliners. |
 | Business jets | 15,850 ft (C25M, a drill) and 17,925 ft (FA20, a contractor's target aircraft) in 120 s. One G200 at 5,070 fpm into the edge of coverage. | D1_OTHER at 20,000 ft and D2_OTHER at 10,000 fpm. |
-| A PA-28 with a faulty altitude encoder | 6,600 ft and 38,900 ft in turn, twice in a row once. | A fall needs two steps down. |
+| A PA-28 with a faulty altitude encoder | 6,600 ft and 38,900 ft in turn, twice in a row once. | A fall needs a point inside it. |
 
 **Result on the 18 real files.** The first rules gave 4 fall events: FZ1073 (real) and 3 false ones (the FA20, the C25M and the G200).
 The rules of section 3.2 give 1: FZ1073. Both give the same 8 squawk events, which are real codes.
@@ -141,6 +142,10 @@ The rules of section 3.2 give 1: FZ1073. Both give the same 8 squawk events, whi
 
 The first rules found 10 of the 33. The rules of section 3.2 find 13: Metrojet 9268, Sriwijaya 182 and Lion Air 610 are new, and
 Voepass 2283 is now found live on the map.
+
+**The airliner list** (`AIRLINERS` in `server/alerts.ts`) holds the type designators of airliners and freighters. It leaves out the
+A310 and the Boeing 727, the types of the civil parabolic-flight aircraft (about 8,000 ft in 30 s on each parabola), and the Il-76
+and An-124 (tactical descents). A type that is not on the list keeps the strict values.
 
 **Not built, and why.**
 - A rule for a slower emergency descent. Ordinary airliners descend as fast.
