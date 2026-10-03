@@ -1,6 +1,7 @@
 // client/api.ts
 // Browser client for the FlightHopper server: GET /view and /chase with a per-key `since`, plus the server clock; the
-// past (/history, /trace) for the flown path and the History mode.
+// past (/history, /trace) for the flown path and the History mode; the alerts' switch and events (/events).
+import type { EventsReply } from '../shared/alerts.ts'
 import type { ChaseResponse, HistorySlot, HistoryStatus, RecordingInfo, RecordingTrack, RecordResponse, TraceDay, TraceReply, ViewResponse } from '../shared/api.ts'
 import { MinOffset } from '../shared/clock.ts'
 
@@ -98,6 +99,18 @@ export class ApiClient {
    */
   traceDay(hex: string, fromMs: number, toMs: number): Promise<TraceDay | null> {
     return this.#getOrNull(`/trace?hex=${encodeURIComponent(hex)}&from=${Math.round(fromMs)}&to=${Math.round(toMs)}`, DAY_TIMEOUT_MS)
+  }
+
+  /** The alerts' switch and the last 7 days of events; null when the server has no alerts (no EVENTS_DIR, or a replay). */
+  events(): Promise<EventsReply | null> {
+    return this.#getOrNull('/events', TIMEOUT_MS)
+  }
+
+  /** Turns the server's watch on or off; the switch and the events after. */
+  async setAlerts(on: boolean): Promise<EventsReply> {
+    const res = await this.#fetch(`${this.#base}/events?on=${on ? 1 : 0}`, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as EventsReply
   }
 
   async #getOrNull<T>(path: string, timeoutMs: number): Promise<T | null> {
