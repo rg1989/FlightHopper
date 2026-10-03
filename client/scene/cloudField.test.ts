@@ -1129,3 +1129,44 @@ test('the slices keep the draws as they were: raising a slice moves no cloud and
     ;(LOOKS.OVC as { slice: readonly [number, number] }).slice = was
   }
 })
+
+// ---- severity ---------------------------------------------------------------------------------------------------------------
+
+const sevOf = (c: CloudSpec): number => c.sev ?? 0
+
+test('severity: a CB layer\'s tower puffs and its anvil are 3, a TCU layer\'s tower puffs 2; the layer\'s own puffs, and a plain layer\'s, are 0', () => {
+  for (const [type, want] of [['CB', 3], ['TCU', 2]] as const) {
+    const cs = metarClouds(metar({ clouds: [layer('SCT', 3000, type)] }))
+    const tower = cs.filter((c) => c.tower !== undefined)
+    assert.ok(tower.length > 6, `${type}: ${tower.length} tower puffs`)
+    assert.ok(tower.every((c) => c.sev === want), `${type}: every tower puff ${want}`)
+    if (type === 'CB') assert.ok(tower.some((c) => c.scale[1] < c.scale[0] / 3), 'the anvil\'s flat puffs are among them')
+    const own = cs.filter((c) => c.tower === undefined)
+    assert.ok(own.length > 0 && own.every((c) => sevOf(c) === 0), `${type}: the layer\'s own puffs`)
+  }
+  const plain = metarClouds(metar({ clouds: [layer('BKN', 3000), layer('OVC', 8000)] }))
+  assert.ok(plain.length > 0 && plain.every((c) => sevOf(c) === 0), 'BKN and OVC')
+})
+
+test('severity: a radar tower is 2 from 30 to under 40 dBZ and 3 from 40 dBZ, its anvil too; a deck puff is 1, snow\'s too', () => {
+  assert.equal(RADAR_LOOK.stormDbz, 40)
+  for (const [dbz, want] of [[30, 2], [35, 2], [39.9, 2], [40, 3], [45, 3], [55, 3], [70, 3]] as const) {
+    const t = towersOf(radarClouds([cell(0, 0, dbz)], base1500))[0]
+    assert.ok(t.length > 2 && t.every((c) => c.sev === want), `${dbz} dBZ: every puff ${want} (${t.map((c) => c.sev)})`)
+  }
+  const tall = towersOf(radarClouds([cell(0, 0, 45)], base1500))[0]
+  assert.ok(tall.some((c) => c.scale[1] < c.scale[0] / 3), '45 dBZ has an anvil, and it is among the 3s')
+  for (const dbz of [15, 20, 29.9]) {
+    const decks = decksOf(radarClouds(spaced(dbz, 3), base1500))
+    assert.ok(decks.length === 3 && decks.every((c) => c.sev === 1), `${dbz} dBZ deck puffs 1`)
+  }
+  const snow = decksOf(radarClouds(spaced(50, 3, { snow: true }), base1500))
+  assert.ok(snow.length === 3 && snow.every((c) => c.sev === 1), 'snow, however strong: a deck puff 1')
+})
+
+test('severity: the model\'s puffs are cloud, 0, at every kind of level', () => {
+  for (const hPa of [850, 500, 250]) {
+    const cs = modelClouds(one(hPa, 80), [])
+    assert.ok(cs.length > 0 && cs.every((c) => sevOf(c) === 0), `${hPa} hPa`)
+  }
+})
