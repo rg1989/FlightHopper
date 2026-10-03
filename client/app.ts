@@ -106,6 +106,8 @@ import { readHist, readScenario, readView, writeUrl, type Orbit } from './ui/url
 import { mountTable, type TableHandle } from './ui/table.ts'
 import { mountSearchBox, type SearchBoxHandle } from './ui/searchBox.ts'
 import { mountWxHud } from './ui/wxHud.ts'
+import { mountWxMenu, type WxMenuHandle } from './ui/wxMenu.ts'
+import { WX_KEYS, WX_PREFS_KEY, dropWxAids, readWxPrefs, writeWxPrefs, type WxPrefs } from './ui/wxPrefs.ts'
 import type { Item as SearchItem } from './search/search.ts'
 import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
 import './ui/theme.css'
@@ -303,6 +305,14 @@ export function weatherView(o: { wx: boolean; chasing: boolean; history: boolean
   return { topDown: o.wx && live && !o.chasing, chase: o.wx && live && o.chasing, liveOnly: o.wx && !live }
 }
 
+/**
+ * Whether the Weather panel opens by itself: the person has just turned Weather on (the Layers switch, the W key) and the chase's weather
+ * is drawn for it. Not when a chase, or a live view after History or a scenario, begins with Weather already on.
+ */
+export function weatherMenuOpens(o: { was: boolean; now: boolean; chasing: boolean; history: boolean; scenario: boolean }): boolean {
+  return !o.was && weatherView({ wx: o.now, chasing: o.chasing, history: o.history, scenario: o.scenario }).chase
+}
+
 export interface AppParams {
   hex: string | null // ?hex=a1b2c3: this aircraft from the start: focused (with ?at=, a reload) or chased (a bare link, G3)
   bench: boolean // ?bench=1: bench overlay and User Timing measures, 'b' downloads the report
@@ -416,10 +426,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let store: Storage | null = null
   let stored: string | null = null
   let storedFrame: string | null = null
+  let storedWx: string | null = null
   try {
     store = window.localStorage
     stored = store.getItem(PREFS_KEY)
     storedFrame = store.getItem(FRAME_PREFS_KEY)
+    storedWx = store.getItem(WX_PREFS_KEY)
   } catch {
     // blocked: nothing stored, nothing kept
   }
@@ -427,6 +439,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Stored at once: the address bar keeps only toggles that differ from the defaults (urlState.ts), so a ?topo=1 read
   // here must be what a reload finds in storage once the bar has dropped it.
   writeScenePrefs(prefs, store)
+  // The Weather menu's choices: ?wxlook, ?wxhaz, ?wxtrack, ?wxslice and ?wxstrip win for this load only, so they are not stored here: a choice made in the menu is.
+  let wxPrefs = readWxPrefs(location.search, storedWx)
   const base = import.meta.env.BASE_URL
   const scenarioBase = scenarioBaseFor(location.search, base, import.meta.env.DEV)
   const urlScenario = readScenario(location.search) // ?scenario=<id>&t=<s>: that scenario, paused at t, once loaded
@@ -592,6 +606,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Every tool sits behind a small icon on the rail (right edge), or on a button of its own (rail.ts spots): Layers under
   // the rail, the instrument layout at the bottom centre, settings and full screen at the bottom right. All panels start closed. layout.css places the rest.
   let toggles!: SceneTogglesHandle
+  let wxMenu!: WxMenuHandle
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
   let scenarioPanel!: ScenarioPanelHandle
@@ -658,6 +673,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
     { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
       title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
+    } },
+    // A square of its own just under Layers, there only while the chase's weather is drawn (applyLayers): the clouds' look, the hazard areas'
+    // style and the looking-ahead aids. It opens by itself when Weather is turned on in a live chase (setPrefs).
+    { id: 'weather', icon: 'cloud', label: 'Weather: clouds, hazard areas, looking ahead', short: 'Weather', spot: 'under', panel: {
+      title: 'Weather', mount: (b) => (wxMenu = mountWxMenu(b, { prefs: wxPrefs, onChange: (next) => setWxPrefs(next) })),
     } },
     // Chase only (flightFrame.css): the frame's cards, to move, hide and show; an open panel closes to show them.
     // A traffic aircraft's card closes too (it and its brackets would sit over the cards), and none opens while editing.
@@ -802,22 +822,20 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const aircraftDiscs: Discs = { n: 0, d: new Float64Array(0) } // the chased aircraft's outline on screen: no name over it
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. Its overcast greys the sky and
-  // dims the Sun's light too (0 when it is hidden). ?wxat=, ?wxdemo= and ?wxlook= are check aids: the weather of another place, a
-  // made-up sky in place of the real one, and the clouds' look at the start (natural, severity or blocks).
+  // dims the Sun's light too (0 when it is hidden). ?wxat= and ?wxdemo= are check aids: the weather of another place, and a made-up sky in place of
+  // the real one. The clouds' look and the other Weather-menu choices are applied below (applyWxPrefs).
   const weather3d = new Weather3D(viewer, {
     apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
     demo: parseWxDemo(location.search), onShade: (shade) => sun.setOvercast(shade),
   })
-  const wxLook = new URLSearchParams(location.search).get('wxlook')
-  if (wxLook === 'natural' || wxLook === 'severity' || wxLook === 'blocks') weather3d.look = wxLook
   // What is ahead on this heading (scene/wxAhead.ts): the way the chased aircraft goes if it keeps its track, speed and climb is worked out
   // every frame, for the 3-D view's track line and level slice (Weather3D.setAhead); a few times a second (WX_LOOK_MS) the status line,
   // the ahead strip (ui/wxHud.ts) and the track line's minute labels follow from it. Hidden with the weather: nothing is worked out.
-  // wxAids are the Looking ahead choices: the track line and the strip on, the level slice off.
+  // wxAids are the Looking ahead choices of the Weather menu (wxPrefs: the track line, the level slice, the ahead strip).
   // ponytail: the minute labels are placed with the names (placeLabels.ts), a few times a second, so they trail the track line by up to
   // WX_LOOK_MS, and they show only while the names do (Borders & places). Upgrade: PlaceLabels moves a layer's labels in place, every frame.
   const wxHud = mountWxHud(ui)
-  const wxAids = { track: true, slice: false, strip: true }
+  const wxAids = { track: wxPrefs.track, slice: wxPrefs.slice, strip: wxPrefs.strip }
   let wxLookMs = -Infinity
   let wxHudUp = false // the HUD shows something
   let wxMinutesUp = false // the names overlay holds the minute labels
@@ -845,6 +863,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       wxMinutesUp = minutes.length > 0
     }
   }
+  /** The Weather menu's choices put to work (and, at the next frame, the status, the strip and the minute labels follow the aids). */
+  const applyWxPrefs = (p: WxPrefs): void => {
+    weather3d.look = p.look
+    weather3d.hazardStyle = p.hazard
+    wxAids.track = p.track
+    wxAids.slice = p.slice
+    wxAids.strip = p.strip
+    wxHud.setStrip(p.strip)
+    wxLookMs = -Infinity
+  }
+  applyWxPrefs(wxPrefs)
   // The flight-data frame's wind where the aircraft sends none: the weather model's (a forecast, drawn as an estimate). It has one
   // only while the 3-D weather is shown, which is a live chase with the Weather switch on.
   const modelWind: WindAloft = (lat, lon, ft) => weather3d.windAt(lat, lon, ft)
@@ -866,6 +895,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const wx = weatherView({ wx: prefs.wx, chasing, history: hist !== null, scenario: run !== null })
     weather.show = wx.topDown
     weather3d.show = wx.chase
+    rail.setHidden('weather', !weather3d.show) // the Weather button is there while the chase's weather is drawn; its panel goes with it
     map.lift = weather.show
     if (wx.liveOnly) toggles.setWeather('Live only')
     else if (!prefs.wx) toggles.setWeather(null)
@@ -1596,6 +1626,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   /** Every scene-toggle change, from a button or a key: apply it, store it, show it. */
   function setPrefs(next: ScenePrefs): void {
     if (next.topo !== prefs.topo) topo.set(next.topo, performance.now(), relHFor(chased, groundM, topo.relHM, airports))
+    const wxWas = prefs.wx
     prefs = next
     sun.setEnabled(chasing && next.light)
     buildings.setGlass(next.glass)
@@ -1603,6 +1634,18 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     writeScenePrefs(next, store)
     toggles.update(next)
     settings.setDark(next.dark)
+    // Every call is the person's own (a switch, a key): turning Weather on in a live chase opens its panel, after applyLayers showed its button.
+    if (weatherMenuOpens({ was: wxWas, now: next.wx, chasing, history: hist !== null, scenario: run !== null })) rail.open('weather')
+  }
+
+  /** Every Weather-menu choice: apply it, store it, show it. A URL aid (?wxlook …) was for the load it came with: a choice made since is the one a reload keeps. */
+  function setWxPrefs(next: WxPrefs): void {
+    const search = dropWxAids(location.search, WX_KEYS.filter((k) => next[k] !== wxPrefs[k]))
+    if (search !== location.search) history.replaceState(history.state, '', `${location.pathname}${search}${location.hash}`)
+    wxPrefs = next
+    applyWxPrefs(next)
+    writeWxPrefs(next, store)
+    wxMenu.update(next)
   }
 
   /**
@@ -2311,6 +2354,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       alertsUi.destroy()
       searchBox.destroy()
       toggles.destroy()
+      wxMenu.destroy()
       outage.destroy()
       card.destroy()
       trafficCard.destroy()

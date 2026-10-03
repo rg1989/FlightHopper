@@ -20,6 +20,12 @@
   background: var(--fh-hairline);
 }
 
+/* A button the app took away (rail.ts setHidden), and its square: the display they are given below would beat the hidden attribute's own. */
+.fh-ibtn[hidden],
+.fh-corner-b[hidden] {
+  display: none !important;
+}
+
 /* The state dot sits on the button's corner. */
 .fh-ibtn-dot {
   position: absolute;

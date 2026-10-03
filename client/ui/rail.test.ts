@@ -1,6 +1,7 @@
 // client/ui/rail.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 
 // rail.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -153,4 +154,83 @@ test('mountRail: on phones every button is a tab in the one strip, in item order
   assert.equal(find(nav, (e) => e.classes.has('fh-rail-sep')).length, 1)
   assert.deepEqual(ids(find(root, (e) => e.classes.has('fh-spot-bottom'))[0]), ['layout'])
   rail.destroy()
+})
+
+test('mountRail: setHidden takes a button away, and the square it stands in; shown again it is back, in its place under the one before', () => {
+  const root = new El('div')
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', spot: 'under', panel: { title: 'Layers', mount: () => {} } },
+    { id: 'weather', icon: 'cloud', label: 'Weather', short: 'Weather', spot: 'under', panel: { title: 'Weather', mount: () => {} } },
+  ])
+  const [under] = find(root, (e) => e.classes.has('fh-under'))
+  assert.deepEqual(ids(under), ['scene', 'weather'], 'two squares under the rail, in item order')
+  const square = (id: string): El => under.children.find((s) => s.dataset.id === id)!
+  const shown = (): boolean[] => ['scene', 'weather'].map((id) => !square(id).hidden && !(rail.button(id) as unknown as El).hidden)
+  assert.deepEqual(shown(), [true, true])
+  rail.setHidden('weather', true)
+  assert.deepEqual(shown(), [true, false], 'the Layers square stays')
+  assert.equal(square('weather').hidden, true)
+  assert.equal((rail.button('weather') as unknown as El).hidden, true)
+  rail.setHidden('weather', true) // again: nothing more to do
+  rail.setHidden('weather', false)
+  assert.deepEqual(shown(), [true, true])
+  assert.deepEqual(ids(under), ['scene', 'weather'])
+  assert.throws(() => rail.setHidden('nothing', true), /no item nothing/)
+  rail.destroy()
+})
+
+test('mountRail: a hidden button is a hidden tab on phones, and stays hidden going back to the wide rail', () => {
+  const root = new El('div')
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'scene', icon: 'layers', label: 'Layers', short: 'Layers', spot: 'under', panel: { title: 'Layers', mount: () => {} } },
+    { id: 'weather', icon: 'cloud', label: 'Weather', short: 'Weather', spot: 'under', panel: { title: 'Weather', mount: () => {} } },
+  ])
+  const [nav] = find(root, (e) => e.tagName === 'nav')
+  const [under] = find(root, (e) => e.classes.has('fh-under'))
+  const tab = (id: string): El => find(nav, (e) => e.dataset.id === id)[0]
+  rail.setHidden('weather', true)
+  phone = true
+  for (const f of phoneListeners) f()
+  assert.deepEqual(ids(nav), ['status', 'scene', 'weather'], 'its tab is in the strip, after Layers')
+  assert.equal(tab('weather').hidden, true, 'hidden there')
+  assert.equal(tab('scene').hidden, false)
+  rail.setHidden('weather', false)
+  assert.equal(tab('weather').hidden, false, 'a tab again')
+  rail.setHidden('weather', true)
+  phone = false
+  for (const f of phoneListeners) f()
+  assert.deepEqual(ids(nav), ['status'])
+  assert.deepEqual(ids(under), ['scene', 'weather'])
+  assert.equal(under.children.find((s) => s.dataset.id === 'weather')!.hidden, true, 'its square is hidden still')
+  rail.destroy()
+})
+
+test('mountRail: hiding the button of the open panel closes the panel; hiding another one leaves it open', () => {
+  const root = new El('div')
+  const opened: (string | null)[] = []
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'weather', icon: 'cloud', label: 'Weather', short: 'Weather', spot: 'under', panel: { title: 'Weather', mount: () => {} } },
+  ], (id) => opened.push(id))
+  const [panel] = find(root, (e) => e.classes.has('fh-panel'))
+  rail.open('status')
+  rail.setHidden('weather', true)
+  assert.equal(rail.openId, 'status', 'another button going away leaves the panel')
+  rail.setHidden('weather', false)
+  rail.open('weather')
+  assert.equal(panel.hidden, false)
+  rail.setHidden('weather', true)
+  assert.equal(rail.openId, null)
+  assert.equal(panel.hidden, true)
+  assert.deepEqual(opened, ['status', 'weather', null], 'the app is told, as for any close')
+  assert.equal((rail.button('weather') as unknown as El).attrs['aria-expanded'], 'false')
+  rail.destroy()
+})
+
+// .fh-ibtn and .fh-rail .fh-ibtn (the phone tab) set a display, which beats the hidden attribute's own. CSS, so checked as text.
+test('rail.css: a hidden button and its square really go, in the wide rail and the phone tab bar', () => {
+  const css = readFileSync(new URL('./rail.css', import.meta.url), 'utf8')
+  assert.match(css, /\.fh-ibtn\[hidden\],\s*\.fh-corner-b\[hidden\] \{\s*display: none !important;\s*\}/)
 })

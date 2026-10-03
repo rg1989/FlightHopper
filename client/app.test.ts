@@ -14,7 +14,7 @@ import type { FleetEntry } from './types.ts'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm, weatherView } =
+const { browseCircle, entriesIn, flagOf, lookupFor, placedHeightM, readParams, relHFor, safeArea, scenarioBaseFor, sceneKey, statusShown, viewRadiusNm, weatherMenuOpens, weatherView } =
   await import('./app.ts')
 
 const entry = (hex: string, lat: number, lon: number): FleetEntry => ({
@@ -149,6 +149,19 @@ test('weatherView: the top-down map\'s weather or the chase\'s, on a live sky on
     }
     assert.deepEqual(view({ wx: false, chasing }), { topDown: false, chase: false, liveOnly: false })
   }
+})
+
+test('weatherMenuOpens: the Weather panel opens when Weather is turned on in a live chase, not when a chase or a live view comes with it already on', () => {
+  const opens = (o: Partial<Parameters<typeof weatherMenuOpens>[0]>): boolean =>
+    weatherMenuOpens({ was: false, now: true, chasing: true, history: false, scenario: false, ...o })
+  assert.equal(opens({}), true, 'switched on in a live chase (the Layers switch or the W key)')
+  assert.equal(opens({ was: true }), false, 'on already: no change to answer')
+  assert.equal(opens({ was: true, now: false }), false, 'switched off')
+  assert.equal(opens({ now: false }), false)
+  assert.equal(opens({ chasing: false }), false, 'top-down: that weather has no panel')
+  assert.equal(opens({ history: true }), false, 'History: the weather is today\'s, none is drawn')
+  assert.equal(opens({ scenario: true }), false)
+  assert.equal(opens({ history: true, scenario: true }), false)
 })
 
 test('flat plane (design D4): a hero airport within 30 km gives its runway height, else the ground under the aircraft, else the plane stays', () => {
