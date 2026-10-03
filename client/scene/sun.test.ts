@@ -311,6 +311,60 @@ test('update reports the light it set, moonlight included: what the runways ligh
   near(dark.dayBrightness, 0.3, 1e-12)
 })
 
+test('setOvercast: while the Sun is on, a deck takes up to 40 % of the light and 20 % of the day imagery\'s brightness, in proportion to its shade; update reports what was written (the runways match the globe)', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  s.sun.setOvercast(0.5)
+  const half = s.sun.update(T10, AIRCRAFT)! // day: light 2, brightness 0.9999
+  near(s.light.intensity, 2 * 0.8, 1e-12, 'half a deck')
+  near(s.day.brightness, 0.9999 * 0.9, 1e-12)
+  near(half.intensity, s.light.intensity, 1e-12, 'reported as written')
+  near(half.dayBrightness, s.day.brightness, 1e-12)
+  s.sun.setOvercast(1)
+  const full = s.sun.update(T10, AIRCRAFT)!
+  near(s.light.intensity, 1.2, 1e-12, 'a full deck')
+  near(s.day.brightness, 0.9999 * 0.8, 1e-12)
+  near(full.intensity, 1.2, 1e-12)
+  near(full.dayBrightness, 0.9999 * 0.8, 1e-12)
+  assert.deepEqual([s.light.color.red, s.light.color.green, s.light.color.blue], [1, 1, 1], 'the colour is not touched')
+  s.sun.setOvercast(0)
+  s.sun.update(T10, AIRCRAFT)
+  assert.deepEqual([s.light.intensity, s.day.brightness], [2, 0.9999], 'clear again: as before')
+  s.sun.setOvercast(1) // the Moon's light and a dark night are dimmed the same
+  near(s.sun.update(TFULL, AIRCRAFT)!.intensity, 1.7 * 0.6, 0.005, 'full moon')
+  const dark = s.sun.update(TNEW, AIRCRAFT)!
+  near(s.light.intensity, 0.45 * 0.6, 1e-12, 'new moon')
+  near(s.day.brightness, 0.3 * 0.8, 1e-12)
+  near(dark.intensity, s.light.intensity, 1e-12)
+  near(s.night.brightness * groundLight(s.light, LOWI), 1, 1e-6, 'the lamps still shine by themselves: they undo the dimmer light too')
+  assert.ok(s.day.brightness < 1, 'never 1: APPLY_BRIGHTNESS stays on')
+})
+
+test('setOvercast: the shade is clamped to 0 … 1, and one that is no number is none', () => {
+  const s = fakeViewer()
+  s.sun.setEnabled(true)
+  for (const [shade, used] of [[0.25, 0.25], [5, 1], [-2, 0], [Number.NaN, 0], [Number.POSITIVE_INFINITY, 0], [Number.NEGATIVE_INFINITY, 0]] as const) {
+    s.sun.setOvercast(shade)
+    s.sun.update(T10, AIRCRAFT)
+    near(s.light.intensity, 2 * (1 - 0.4 * used), 1e-12, `${shade}`)
+    near(s.day.brightness, 0.9999 * (1 - 0.2 * used), 1e-12, `${shade}`)
+  }
+})
+
+test('setOvercast changes nothing while the Sun is off: the fixed light and the imagery stay as they were, and what update reports is the look\'s; the shade waits for the Sun', () => {
+  const s = fakeViewer()
+  s.sun.setOvercast(1)
+  const off = s.sun.update(T10, AIRCRAFT)!
+  assert.deepEqual([s.light.intensity, s.day.brightness, off.intensity, off.dayBrightness], [2, 0.9999, 2, 0.9999])
+  s.sun.setEnabled(true)
+  s.sun.update(T10, AIRCRAFT)
+  near(s.light.intensity, 1.2, 1e-12, 'on: the shade was kept')
+  s.sun.setEnabled(false)
+  assert.deepEqual([s.light.intensity, s.day.brightness], [2, 0.9999], 'off again: as it always was')
+  const again = s.sun.update(T10, AIRCRAFT)!
+  assert.deepEqual([s.light.intensity, s.day.brightness, again.intensity, again.dayBrightness], [2, 0.9999, 2, 0.9999])
+})
+
 test('a partly lit moon at LOWI (22 Sep, 21:00 local, 84 %, +21.6°): between the overhead light and the full-moon look', () => {
   const s = fakeViewer()
   s.sun.setEnabled(true)

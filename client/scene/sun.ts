@@ -45,6 +45,9 @@ const NIGHT_SHOW_ALPHA = 0.01
 const LAMBERT = 0.9
 /** The model's environment map is rebuilt after this much movement (Cesium: 1 km, every ~4 s at airliner speed). */
 const ENV_MAP_EPSILON_M = 20_000
+/** Under a deck the light is diffuse and dimmer: at full overcast (setOvercast(1)) the scene light loses this share of its intensity, the day imagery this share of its brightness. By eye. */
+const OVERCAST_LIGHT = 0.4
+const OVERCAST_GROUND = 0.2
 /** Sun off: a light from 60° above the southern horizon. Where it travels, in east-north-up: north and down. */
 const OFF_TRAVEL_ENU = new Cartesian3(0, Math.cos(60 * RAD), -Math.sin(60 * RAD))
 
@@ -185,7 +188,7 @@ export interface SunState {
   elevDeg: number
   night: number
   golden: number
-  // The light as set, the Moon's included: what draws its own light by it (the runways) matches the lit globe.
+  // The light as set, the Moon's and the overcast's included: what draws its own light by it (the runways) matches the lit globe.
   intensity: number
   dayBrightness: number
 }
@@ -200,6 +203,7 @@ export class Sun {
   #night: ImageryLayer | null
   #model: Model | null = null
   #enabled = false
+  #overcast = 0 // setOvercast's shade
   #light = new DirectionalLight({ direction: new Cartesian3(0, 0, -1), intensity: DAY_INTENSITY })
   #date = new Date(0)
   #jd = new JulianDate()
@@ -241,6 +245,11 @@ export class Sun {
     Color.clone(Color.WHITE, this.#light.color)
     this.#setIbl(1)
     this.#aimOff()
+  }
+
+  /** The overcast over the aircraft, 0 (clear) … 1 (a full deck); not a number: 0. While the Sun is on, the next update() dims the light and the day imagery by it. */
+  setOvercast(shade: number): void {
+    this.#overcast = Number.isFinite(shade) ? Math.min(1, Math.max(0, shade)) : 0
   }
 
   /** A new base imagery layer (Esri → EOX fallback): dim this one from now on. */
@@ -286,16 +295,17 @@ export class Sun {
     const toMoon = Cartesian3.normalize(Cartesian3.subtract(moon, atWC, this.#toMoon), this.#toMoon)
     const moonW = moonWeight(sunElevationDeg(toMoon, atWC), moonLitFraction(moon, sun))
     moonLook(look, moonW)
-    st.intensity = look.intensity
+    st.intensity = look.intensity * (1 - OVERCAST_LIGHT * this.#overcast)
+    st.dayBrightness = look.dayBrightness * (1 - OVERCAST_GROUND * this.#overcast)
     const light = this.#light
     const up = Ellipsoid.WGS84.geodeticSurfaceNormal(atWC, this.#up)
     aimLight(sun, up, look.night, light.direction, nightFrom(up, toMoon, moonW, this.#nightFrom))
-    light.intensity = look.intensity
+    light.intensity = st.intensity
     light.color.red = look.red
     light.color.green = look.green
     light.color.blue = look.blue
     this.#viewer.scene.globe.vertexShadowDarkness = look.vertexShadowDarkness
-    if (this.#day) this.#day.brightness = look.dayBrightness
+    if (this.#day) this.#day.brightness = st.dayBrightness
     if (this.#night) {
       this.#night.alpha = look.nightAlpha
       this.#night.show = look.nightAlpha > NIGHT_SHOW_ALPHA // hidden layers request no tiles: none by day
