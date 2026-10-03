@@ -32,15 +32,14 @@
 // standing from the level's height (taken as the layer's base: an estimate). A level's density follows its cover: sparse up to 40 %
 // (a share of the observed density for each kind of level), rising to nearly the observed look by 80 %; its puffs grow with the
 // cover too (none at 40 %, MODEL_LOOK.grow times as large from 80 %) and are that squared fewer, so a fuller deck covers as much with
-// larger puffs. Low
-// levels (1000 to 850 hPa) look like the observed layers, mid levels (700 to 400) are flat altocumulus, high levels (300 to 200)
-// thin, flat, pale cirrus. Observations win: no low level within 40 km of a station that reports the sky, cloudy or clear. The
-// grid's outer ring keeps a quarter of its puffs and the next three fifths, so the sky thins out at its edge instead of ending as a
-// wall. 49 places and ten levels want far more than the cap, so the puffs are thinned to MODEL_LOOK.max, evenly in the sky they
-// cover (a deck of large puffs keeps more than a few small cumulus): each place and level keeps the first puffs of its own sequence,
-// the same size they always are, so the next grid draws a place as it drew it (a puff's number changes a little with the thinning,
-// never its size or its spot). The model's clouds are the last group nearestClouds takes: they fill what the observed and the
-// radar's leave of the 700. Every puff carries clearKm, so that none is drawn round the aircraft that is at its height.
+// larger puffs. Low levels (1000 to 850 hPa) look like the observed layers, mid levels (700 to 400) are flat altocumulus, high levels
+// (300 to 200) thin, flat, pale cirrus. Observations win: no low level within 40 km of a station that reports the sky, cloudy or clear.
+// The grid's outer ring keeps a quarter of its puffs and the next three fifths, so the sky thins out at its edge instead of ending as a
+// wall. 49 places and ten levels want far more than the cap, so the puffs are thinned to MODEL_LOOK.max, evenly in the sky they cover (a
+// deck of large puffs keeps more than a few small cumulus): each place and level keeps the first puffs of its own sequence, the same
+// size they always are, so the next grid draws a place as it drew it (a puff's number changes a little with the thinning, never its size
+// or its spot). The model's clouds are the last group nearestClouds takes: they fill what the observed and the radar's leave of the 700.
+// Every puff carries clearKm, so that none is drawn round the aircraft that is at its height.
 // A puff must end inside its billboard: the shader draws the ellipsoid it ray-casts, sliced, and where that ends in the quad (its
 // cut, or the quad's edge) the alpha is whatever the geometry says, a hard straight edge for a low slice on a narrow puff (a tower's
 // or an anvil's). cloudQuad.ts knows where it ends; the slices drawn from the looks are raised just far enough that no puff of any

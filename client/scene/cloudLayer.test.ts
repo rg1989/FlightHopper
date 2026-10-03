@@ -159,7 +159,7 @@ test('CloudLayer: a puff with clearKm is hidden while the aircraft is at the hei
   assert.equal(cs[4].color.alpha, 0, 'its own clearKm: 5 km')
   assert.ok(cs[5].color.alpha > 0 && cs[5].color.alpha < 1, `7 km of 5: ${cs[5].color.alpha} on its way back`)
   assert.equal(cs[6].color.alpha, 0, 'and the distance fade still hides what is far')
-  r.layer.fade(at(10_000 + 650)) // 350 m over its span: within the margin (300 m) of the camera, and 50 more?
+  r.layer.fade(at(10_000 + 650)) // 650 m over the middle: 350 m over the top of its span, 50 m past the margin (300 m)
   assert.equal(cs[0].color.alpha, 1, '650 m above the middle: beyond the span (300 m) and the margin (300 m): the aircraft is not at its height')
   r.layer.fade(at(10_000 + 550))
   assert.equal(cs[0].color.alpha, 0, '550 m above the middle: within the span and the margin of a camera that is not on the aircraft')

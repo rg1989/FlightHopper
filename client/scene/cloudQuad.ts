@@ -6,10 +6,12 @@
 // offset is scaled by maximumSize.xy, neither the billboard's aspect nor maximumSize.x and .y decide where the cloud ends in its
 // quad: maximumSize.z and the slice do (quadReach: a disc, a share of the quad's half size, the same along x and y). A slice cuts
 // the sphere by a plane; only rays whose hit lies inside the plane's disc draw anything, and where that region ends, and at the
-// quad's own edge if it gets there, the alpha is whatever the geometry says: 1.3 × ndDot³ less the noise, ndDot being the
-// cosine between the surface normal and the ray. A cloud cut low and narrow, as a tower's puff or an anvil is, has a hard
-// rim there (or a hard cut by the quad's edge); the noise only takes alpha away, never adds it, so the noise-free value is the
-// most the shader can draw whatever the noise texture holds, which the browser's, or its GPU's, may make low.
+// quad's own edge if it gets there, the alpha is whatever the geometry says: 1.3 × ndDot³ and the noise's part of it, ndDot being
+// the cosine between the surface normal and the ray. A cloud cut low and narrow, as a tower's puff or an anvil is, has a hard
+// rim there (or a hard cut by the quad's edge). The noise does not only take alpha away: the shader adds its second layer where
+// ndDot is over 0.5 and its third over 0.75. But where the noise-free alpha is no more than EDGE_ALPHA, ndDot is no more than 0.285 and
+// the noise only takes away, so that value is the most the shader can draw there whatever the noise texture holds, which the
+// browser's, or its GPU's, may make low.
 // edgeAlpha is that value; staysInside says it is no more than EDGE_ALPHA; softSlice raises a slice just far enough that it is.
 
 /** A cloud's maximumSize: x, y, z, in the units of Cesium's cloud noise. */
@@ -76,8 +78,9 @@ export function quadReach(m: Size, slice: number): number {
 }
 
 /**
- * The most alpha the shader can draw on the edge of what it draws, whatever the noise (it can only take away from 1.3 ndDot³): at
- * the end of the hit region where that is inside the quad, at the quad's edge where the region reaches it.
+ * The alpha, noise-free, on the edge of what the shader draws: at the end of the hit region where that is inside the quad, at the
+ * quad's edge where the region reaches it. Up to EDGE_ALPHA it is the most the shader can draw whatever the noise (the header says
+ * why); above it, it only says that the edge shows.
  */
 export function edgeAlpha(m: Size, slice: number): number {
   const uReach = quadReach(m, slice) / 2
