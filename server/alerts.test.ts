@@ -90,9 +90,10 @@ const plunge = (top: number, atS: number, fallFt = 18_000) => (s: number): numbe
 /** Level, then 4,700 ft lost in the last 30 s (9,400 fpm) and no position after it: a dive then lost. */
 const dive = (s: number): number | null => (s > 1300 ? null : s < 1270 ? 34_700 : 34_700 - ((s - 1270) / 30) * 4700)
 
-test('a squawk counts once it is seen again 25 s or more after it was first seen; then one event opens and is pushed', () => {
+test('a squawk counts once it is seen again 20 s or more after it was first seen; then one event opens and is pushed', () => {
   const { a, pushed } = setup()
   a.observe(ac(), T0)
+  assert.deepEqual([a.reply().events.length, pushed.length], [0, 0], 'one sighting: a glitch, never an event by itself')
   a.observe(ac(), T0 + 10_000)
   assert.equal(a.reply().events.length, 0)
   a.observe(ac(), T0 + 30_000)
@@ -102,6 +103,14 @@ test('a squawk counts once it is seen again 25 s or more after it was first seen
   assert.deepEqual([e.kind, e.squawk, e.callsign, e.reg, e.type, e.openedMs, e.lastMs, e.late, e.quiet], ['squawk', '7700', 'FDB1073', 'A6-FNC', 'B38M', T0, T0 + 30_000, false, false])
   assert.deepEqual([e.lat, e.lon, e.altFt], [29.95, 38.12, 30_000])
   assert.equal(pushed.length, 1)
+  // The edge: 1 ms short of 20 s is a glitch still, 20 s is not.
+  const edge = setup()
+  edge.a.observe(ac(), T0)
+  edge.a.observe(ac(), T0 + 19_999)
+  assert.equal(edge.a.reply().events.length, 0, '19.999 s')
+  edge.a.observe(ac(), T0 + 20_000)
+  assert.equal(edge.a.reply().events.length, 1, '20 s')
+  assert.equal(edge.pushed.length, 1)
 })
 
 test('a first sighting not seen again within 10 min is forgotten', () => {
@@ -1019,6 +1028,23 @@ test('confirmation goes by the time of each message (receipt − seen), not of t
   assert.equal(a.reply().events[0].lastMs, T0 + 118_000, 'its newest message')
 })
 
+test('confirmation: two sweeps 30 s apart confirm on the second even when its newest message is 8 s old (22 s after the first); 10 s old still does, 11 s waits for the third', () => {
+  for (const seen of [8, 10]) {
+    const { a, pushed } = setup()
+    a.observe(ac({ seen: 0 }), T0) // the first sweep: a message just now
+    a.observe(ac({ seen }), T0 + 30_000) // the second, 30 s on: its newest message `seen` s old, so 30 − seen s after the first
+    assert.deepEqual(a.reply().events.map((e) => [e.openedMs, e.lastMs]), [[T0, T0 + 30_000 - seen * 1000]], `${seen} s old`)
+    assert.equal(pushed.length, 1)
+  }
+  const { a, pushed } = setup()
+  a.observe(ac({ seen: 0 }), T0)
+  a.observe(ac({ seen: 11 }), T0 + 30_000) // 19 s after the first message: not yet
+  assert.equal(a.reply().events.length, 0)
+  a.observe(ac({ seen: 0 }), T0 + 60_000) // the third sweep
+  assert.deepEqual(a.reply().events.map((e) => [e.openedMs, e.lastMs]), [[T0, T0 + 60_000]])
+  assert.equal(pushed.length, 1)
+})
+
 test('the rev starts at the server clock (whole ms): a restarted server\'s rev is above any its last run gave', () => {
   const dir = tmp()
   const one = setup({ dir })
@@ -1115,6 +1141,17 @@ test('late, across a boundary: nothing is carried into a half hour read without 
   gap.a.scanSlot(half(0, [plane]), SLOT)
   gap.a.scanSlot(half(1, [plane], 2), SLOT + 2 * SLOT_MS) // what 05:30 held, as the 06:00 half hour: 05:00's end is not before it
   assert.equal(gap.a.reply().events.length, 0, 'after a gap')
+})
+
+test('late, across a boundary: an older half hour read after a newer one (its download failed once) does not take the newer one\'s end', () => {
+  const plane = { hex: 'a00001', alt: descentAt(3540) } // 05:59:00 to 06:01:00: split by the 06:00 boundary, between half hours 1 and 2
+  const { a, pushed } = setup()
+  a.scanSlot(half(1, [plane]), NEXT)
+  a.scanSlot(half(0, [plane]), SLOT) // half hour 0 only now: out of order
+  assert.deepEqual(falls(a), [], 'neither of the two holds the fall')
+  a.scanSlot(half(2, [plane]), SLOT + 2 * SLOT_MS)
+  assert.deepEqual(falls(a), [['a00001', 'descent', 37_000, 17_000, at(59)]], 'half hour 2 still follows the end of half hour 1')
+  assert.equal(pushed.length, 1)
 })
 
 test('ntfyPush: an answer that is not OK and a fetch that fails are logged; nothing is thrown or left unhandled', async (t) => {

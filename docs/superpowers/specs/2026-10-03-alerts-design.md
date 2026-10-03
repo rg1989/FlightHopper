@@ -46,10 +46,11 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
 - **The late check also reads emergency squawks.** An aircraft with two or more 7500, 7600 or 7700 ident records in a
   half-hour file is an event. This catches codes that adsb.fi did not hear.
 - **False alarms.** These rules are from section 4 of the research:
-  - Confirmation: a squawk or status counts only when it is seen again 25 s or more after it was first seen. One-off
+  - Confirmation: a squawk or status counts only when it is seen again 20 s or more after it was first seen. One-off
     glitches are common (OpenSky counted over 8,000 brief 7500s in 4 months). The times are those of the messages (the
     answer's receipt minus `seen`), not of the answers: readsb serves a squawk for 60 s after its last message, so two sweeps
-    30 s apart can hold one message. A first sighting waits 10 min for its second, then it is forgotten. That is two rounds
+    30 s apart can hold one message. The 20 s lets two sweeps 30 s apart confirm on the second even when its newest message
+    is up to 10 s old. A first sighting waits 10 min for its second, then it is forgotten. That is two rounds
     of the sweep (a failed answer skips its code for one round) down to 0.08 req/s; after three 429s (0.1125 req/s) each
     code is asked every 213 s.
   - Ignored: aircraft on the ground, surface vehicles (C1 to C3), addresses that are not ICAO, `000000`, `000001`,

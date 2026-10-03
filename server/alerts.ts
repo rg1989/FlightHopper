@@ -17,7 +17,9 @@ import { D2, clean, diveThenLost, steepDescent, type AltSeries, type Drop } from
 import { scanSlot, type ScanAircraft, type SlotScan } from './heatmap.ts'
 
 const DAY_MS = 86_400_000
-const CONFIRM_MS = 25_000 // a cause counts once it is seen again this long after it was first seen (glitches are brief)
+// A cause counts once it is seen again this long after it was first seen (glitches are brief), by the times of its messages. The
+// sweep asks each code every 30 s: 20 s, so that the second sweep confirms even when its newest message is up to 10 s old.
+const CONFIRM_MS = 20_000
 // A first sighting not seen again within this is forgotten. 10 min is two rounds of the sweep (an answer that fails skips its
 // code for a round) down to 0.08 req/s; at adsb.fi's 0.9 req/s after three 429s (0.1125) each of 3 codes is asked every 213 s.
 // ponytail: slower still (a fourth 429, a lower MAX_RPS, more ALERT_SQUAWKS codes), an emergency that only the sweep sees, once
@@ -57,7 +59,7 @@ type Patch = Who & { squawk?: string | null; emergency?: string | null; drop?: A
 
 /** An aircraft of a half hour as the late check judges it: its altitudes (t in s into the half hour), newest place and callsign. */
 type Heard = Pick<ScanAircraft, 'alt' | 'lat' | 'lon' | 'callsign'>
-/** The ends of the half hour read last (scanSlot), by hex: each aircraft's points in its last 150 s, t in s into the NEXT half hour. */
+/** The ends of the newest half hour read (scanSlot), by hex: each aircraft's points in its last 150 s, t in s into the NEXT half hour. */
 type Tails = ReadonlyMap<string, Heard>
 const NO_TAILS: Tails = new Map()
 
@@ -89,7 +91,7 @@ export class Alerts {
   #writtenMs = new Map<string, number>() // by id: when its last line was written
   #torn = false // the last write failed, perhaps part way through a line: the next one starts on a line of its own
   #scanned: number[] = [] // the half hours read, the newest last
-  #tails: { slotMs: number; byHex: Tails } | null = null // the ends of the half hour read last, for the one after it
+  #tails: { slotMs: number; byHex: Tails } | null = null // the ends of the newest half hour read, for the one after it
   #failedMs = new Map<string, number>() // by kind of failure: when it was last logged
 
   constructor(o: AlertsOpts) {
@@ -135,11 +137,11 @@ export class Alerts {
 
   /**
    * One aircraft object of a good answer (Poller opts.onAircraft), rxMs its receipt. An emergency squawk or status counts
-   * once it is seen again 25 s or more after it was first seen: its event opens then, or the aircraft's event within 30 min
+   * once it is seen again 20 s or more after it was first seen: its event opens then, or the aircraft's event within 30 min
    * takes it in. Each sighting's time is its last message's (rxMs − seen): readsb serves a squawk for 60 s after it, so two
    * answers can hold one message. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and
    * 000001. Military aircraft and fast jets are read: their squawks and statuses are emergencies.
-   * ponytail: the 25 s is for opening only; a new cause on an open event counts at once.
+   * ponytail: the 20 s is for opening only; a new cause on an open event counts at once.
    */
   observe(ac: ReadsbAircraft, rxMs: number): void {
     if (!this.#on) return
@@ -193,14 +195,16 @@ export class Alerts {
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
    * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
    * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. When this half hour follows
-   * the one read last, each aircraft's points in that one's last 150 s go before its points here, so a fall across the boundary
+   * the newest one read, each aircraft's points in that one's last 150 s go before its points here, so a fall across the boundary
    * is found; an aircraft heard there and not here was lost at the boundary, and its end is judged alone, up to this half
    * hour's last slice. A fall that both half hours hold joins one event (no second push). Not read: addresses that are not
    * ICAO, 000000 and 000001 (the type table is not asked for them), and surface vehicles (the type table's C1 to C3). No fall
    * is looked for in an aircraft the type table calls military or whose type is in FAST_JETS; its squawks are read. A late
    * 7600 on a type the table calls light (A1, B1…) is quiet.
-   * ponytail: the half hours must come in time order (the caller scans the older first): a merge never moves an event's
-   * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began.
+   * ponytail: the half hours should come in time order (the caller scans the older first): a merge never moves an event's
+   * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began. An
+   * older half hour read late (its download failed once) is judged alone and does not take the newer one's end, which the half
+   * hour after the newer still follows; a fall across the older one's own boundary with the newer is lost.
    * ponytail: nothing is carried across a gap in the reads (the server down over a half hour, the switch off), so a fall across
    * that boundary is still lost; and only altitudes are carried, so an emergency squawk with one ident on each side of a boundary
    * is not an event.
@@ -210,9 +214,10 @@ export class Alerts {
     this.#scanned.push(slotMs)
     if (this.#scanned.length > 4) this.#scanned.shift()
     const scan = scanSlot(buf, slotMs, this.#codes)
-    // The ends of the half hour read last go before this one's points only when this one follows it: after a gap, none.
+    // The ends of the newest half hour read go before this one's points only when this one follows it: after a gap, none.
     const tails = this.#tails !== null && this.#tails.slotMs + SLOT_MS === slotMs ? this.#tails.byHex : NO_TAILS
-    this.#tails = scan === null ? null : { slotMs, byHex: tailsOf(scan) }
+    // Those kept are the newest half hour's: an older one read late (its download failed once) does not take them.
+    if (this.#tails === null || slotMs > this.#tails.slotMs) this.#tails = { slotMs, byHex: scan === null ? NO_TAILS : tailsOf(scan) }
     if (scan === null) return
     for (const [hex, a] of scan.aircraft) {
       const tail = tails.get(hex)
