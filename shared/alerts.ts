@@ -16,6 +16,7 @@ export interface AlertDrop {
   fromFt: number
   toFt: number
   overS: number // from the top of the fall to its bottom
+  lost: boolean // true for a dive then lost (D2): no position followed the fall
 }
 
 export interface AlertEvent {
@@ -58,8 +59,11 @@ const STATUS_TEXT: Record<string, string> = {
   downed: 'Downed aircraft',
 }
 
+/** A table's own entry for the key: not an inherited name such as 'constructor'. */
+const text = (table: Record<string, string>, key: string): string | undefined => (Object.hasOwn(table, key) ? table[key] : undefined)
+
 const feet = (ft: number): string => `${Math.round(ft).toLocaleString('en-US')} ft`
-const level = (ft: number): string => `FL${String(Math.round(ft / 100)).padStart(3, '0')}`
+const level = (ft: number): string => `FL${String(Math.max(0, Math.round(ft / 100))).padStart(3, '0')}` // FL000 below sea level
 
 /** "30 s", "2 min", "1 min 50 s". */
 function span(s: number): string {
@@ -80,14 +84,14 @@ export function who(e: AlertEvent): string {
  * "Emergency · 7700", "Unlawful interference · 7500", "Fell 12,300 ft in 1 min 50 s from FL350", "Dived 4,633 ft in 30 s, then lost · 7700".
  */
 export function what(e: AlertEvent): string {
-  const status = e.emergency === null ? null : (STATUS_TEXT[e.emergency] ?? e.emergency)
+  const status = e.emergency === null ? null : (text(STATUS_TEXT, e.emergency) ?? e.emergency)
   const parts: string[] = []
   if (e.drop !== null) {
     const fell = e.drop.fromFt - e.drop.toFt
-    parts.push(e.kind === 'dive' ? `Dived ${feet(fell)} in ${span(e.drop.overS)}, then lost` : `Fell ${feet(fell)} in ${span(e.drop.overS)} from ${level(e.drop.fromFt)}`)
+    parts.push(e.drop.lost ? `Dived ${feet(fell)} in ${span(e.drop.overS)}, then lost` : `Fell ${feet(fell)} in ${span(e.drop.overS)} from ${level(e.drop.fromFt)}`)
     if (status !== null) parts.push(status)
   } else if (status !== null) parts.push(status)
-  else if (e.squawk !== null) parts.push(SQUAWK_TEXT[e.squawk] ?? 'Squawk')
+  else if (e.squawk !== null) parts.push(text(SQUAWK_TEXT, e.squawk) ?? 'Squawk')
   if (e.squawk !== null) parts.push(e.squawk)
   return parts.join(' · ')
 }
@@ -100,12 +104,13 @@ export function pushTitle(e: AlertEvent): string {
   return ascii(`${what(e)}: ${who(e)}`)
 }
 
-/** The push's text: its level, where and when (UTC). "FL300 at 29.95 N 38.12 E, 05:31 UTC". */
+/** The push's text: its level, where and when (UTC). "FL300 at 29.95 N 38.12 E, 05:31 UTC", "FL300, position unknown, 05:31 UTC". */
 export function pushBody(e: AlertEvent): string {
   const at = new Date(e.lastMs).toISOString().slice(11, 16)
-  const where = e.lat === null || e.lon === null
-    ? 'position unknown'
-    : `at ${Math.abs(e.lat).toFixed(2)} ${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lon).toFixed(2)} ${e.lon >= 0 ? 'E' : 'W'}`
-  const alt = e.altFt === null ? '' : `${level(e.altFt)} `
-  return `${alt}${where}, ${at} UTC${e.late ? ' (found in the half-hour file)' : ''}`
+  const place = e.lat === null || e.lon === null
+    ? null
+    : `${Math.abs(e.lat).toFixed(2)} ${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lon).toFixed(2)} ${e.lon >= 0 ? 'E' : 'W'}`
+  const where = place === null ? 'position unknown' : `at ${place}`
+  const alt = e.altFt === null ? '' : `${level(e.altFt)}${place === null ? ', ' : ' '}`
+  return `${alt}${where}, ${at} UTC${e.late ? ' (found after the fact)' : ''}`
 }

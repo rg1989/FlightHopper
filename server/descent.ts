@@ -6,7 +6,7 @@
 // GNSS), with at most 60 s between its points (a longer gap is a coverage hole, not a fall). Pure: server/alerts.ts runs the
 // rules on live samples and on adsb.lol's half-hour files (server/heatmap.ts scanSlot).
 
-/** Barometric altitudes in time order: t in s (any origin), ft. Airborne points only. */
+/** Barometric altitudes in time order: t in s (any origin), ft. Airborne points only. After clean, t is strictly increasing. */
 export interface AltSeries {
   t: number[]
   ft: number[]
@@ -31,13 +31,20 @@ const MAX_GAP_S = 60
 const fpm = (s: AltSeries, a: number, b: number): number => ((s.ft[b] - s.ft[a]) / Math.max(1e-6, s.t[b] - s.t[a])) * 60
 
 /**
- * Without impossible points: none above 50,000 ft, and no spike, a point whose steps to both neighbours are over
- * 30,000 fpm in opposite directions. The first and last points have one neighbour each and are kept: a fall cannot use a
- * step over 30,000 fpm anyway.
+ * Without impossible points: none above 50,000 ft, none at or before the time of the point kept before it (a repeated
+ * row would cut a fall in two), and no spike, a point whose steps to both neighbours are over 30,000 fpm in opposite
+ * directions. The first and last points have one neighbour each and are kept: a fall cannot use a step over 30,000 fpm
+ * anyway. A spike is judged against the points that the first two rules leave.
  */
 export function clean(s: AltSeries): AltSeries {
   const kept: number[] = []
-  for (let i = 0; i < s.t.length; i++) if (s.ft[i] <= CEILING_FT) kept.push(i)
+  let lastT = -Infinity // the time of the point kept last
+  for (let i = 0; i < s.t.length; i++) {
+    if (s.ft[i] <= CEILING_FT && s.t[i] > lastT) {
+      kept.push(i)
+      lastT = s.t[i]
+    }
+  }
   const out: AltSeries = { t: [], ft: [] }
   for (let k = 0; k < kept.length; k++) {
     if (k > 0 && k < kept.length - 1) {
@@ -59,23 +66,25 @@ function falls(s: AltSeries, a: number): boolean {
 }
 
 /**
- * D1: the first emergency descent in the series, from its top to its bottom (followed on while it keeps falling); null
- * when there is none. ponytail: O(points × points in 120 s), about 2,000 steps for a half hour of 10 s points.
+ * D1: the first emergency descent in the series, from its top to its bottom (the fall is followed on while each step goes
+ * down); null when there is none. ponytail: costs O(points × points in the 120 s window), about 2,000 steps for a half
+ * hour of 10 s points: the window's start only moves forward, and its top is looked for in the window at every point.
  */
 export function steepDescent(s: AltSeries): Drop | null {
   let run = 0 // the first point of the run of falling steps that ends at j
+  let k = 0 // the first point of the window that ends at j, never before the run
   for (let j = 1; j < s.t.length; j++) {
     if (!falls(s, j - 1)) {
       run = j
       continue
     }
-    let k = run
+    if (k < run) k = run
     while (s.t[j] - s.t[k] > D1.windowS) k++
     let top = k // the highest point in the window, the latest of equals: a fall starts where level flight ends
     for (let m = k + 1; m < j; m++) if (s.ft[m] >= s.ft[top]) top = m
     if (j - top + 1 < D1.points || s.ft[top] < D1.topFt || s.ft[top] - s.ft[j] < D1.fallFt) continue
-    let low = j
-    for (let m = j; m + 1 < s.t.length && falls(s, m); m++) if (s.ft[m + 1] < s.ft[low]) low = m + 1
+    let low = j // the bottom: follow the fall on while each step goes down, and stop at the first level or rising step
+    while (low + 1 < s.t.length && s.ft[low + 1] < s.ft[low] && falls(s, low)) low++
     return { startS: s.t[top], endS: s.t[low], fromFt: s.ft[top], toFt: s.ft[low] }
   }
   return null
