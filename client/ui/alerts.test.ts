@@ -101,7 +101,7 @@ test('primaryAction: an ongoing live event is followed; any other is replayed on
   assert.equal(primaryAction(ev('a', { openedMs: past, lastMs: past, late: true }), T), 'replay')
 })
 
-test('primaryAction: not ongoing and not in History yet: followed while seen within the hour, else replayed', () => {
+test('primaryAction: not ongoing and not in History yet: followed (to where it was last heard) while seen within the hour, else replayed', () => {
   const e = ev('a', { openedMs: T - 10 * 60_000, lastMs: T - 3 * 60_000 }) // 11:50: History has it from 12:00:20
   assert.equal(primaryAction(e, T), 'follow', 'probably still flying')
   assert.equal(primaryAction(e, replayableAt(e) - 1), 'follow')
@@ -109,13 +109,13 @@ test('primaryAction: not ongoing and not in History yet: followed while seen wit
   assert.equal(primaryAction({ ...e, lastMs: T - 61 * 60_000 }, T), 'replay', 'not seen for an hour: replay (the row says when)')
 })
 
-test('secondaryAction: Replay beside a followed row; Live beside a replayed one seen within the hour; else the wait for History', () => {
+test('secondaryAction: Replay beside a followed row; nothing beside a replayed one (no Live for an aircraft not heard with its cause now); else the wait for History', () => {
   const past = T - 2 * 3_600_000 // 10:00: in History
   assert.equal(secondaryAction(ev('a', { openedMs: past, lastMs: T - 60_000 }), T), 'replay')
-  assert.equal(secondaryAction(ev('a', { openedMs: past, lastMs: T - 3 * 60_000 }), T), 'follow')
-  assert.equal(secondaryAction(ev('a', { openedMs: past, late: true, lastMs: T - 20 * 60_000 }), T), 'follow', 'found late, perhaps still flying')
-  assert.equal(secondaryAction(ev('a', { openedMs: past, lastMs: T - 59 * 60_000 }), T), 'follow')
-  assert.equal(secondaryAction(ev('a', { openedMs: past, lastMs: T - 60 * 60_000 }), T), null)
+  // C-FRSJ, 2026-10-03: 7600 until it landed; 28 min later its row offered Live, and Live showed "Signal lost 1664 s ago".
+  assert.equal(secondaryAction(ev('a', { openedMs: T - 34 * 60_000, lastMs: T - 28 * 60_000 }), T), null, 'not heard with its cause for 28 min')
+  assert.equal(secondaryAction(ev('a', { openedMs: past, lastMs: T - 3 * 60_000 }), T), null, '3 min: no longer ongoing')
+  assert.equal(secondaryAction(ev('a', { openedMs: past, late: true, lastMs: T - 20 * 60_000 }), T), null, 'found late')
   assert.equal(secondaryAction(ev('a', { openedMs: T - 3 * 86_400_000, lastMs: T - 3 * 86_400_000 }), T), null)
   const soon = ev('a', { openedMs: T - 10 * 60_000, lastMs: T - 30_000 }) // ongoing; in History from 12:00:20
   assert.equal(secondaryAction(soon, T), 'later')
@@ -149,6 +149,8 @@ test('rowLabel: the action, the aircraft, what happened and when, for a screen r
   assert.equal(rowLabel({ ...e, late: true }, T), 'Replay FDB1073 · B38M in History: Emergency · 7700, 40 min ago, found late')
   const soon = { ...e, openedMs: T - 5 * 60_000 }
   assert.equal(rowLabel(soon, T), `Follow FDB1073 · B38M live: Emergency · 7700, 5 min ago, replay at ${hm(Date.UTC(2026, 9, 3, 12, 1))}`)
+  // Not ongoing and not in History yet: its click goes to where it was last heard, and says so (it is live only if it still flies).
+  assert.equal(rowLabel({ ...soon, lastMs: T - 3 * 60_000 }, T), `Go to where FDB1073 · B38M was last heard: Emergency · 7700, 5 min ago, replay at ${hm(Date.UTC(2026, 9, 3, 12, 1))}`)
 })
 
 test('followTarget: where Follow flies the map: the newer of the live map’s position and the event’s', () => {
@@ -899,16 +901,15 @@ test('mountAlerts: a row follows an ongoing event and replays any other; its sma
   assert.equal(shown(one(a, 'fh-alerts-at')), false)
   assert.equal(b.dataset.action, 'replay')
   assert.equal(shown(one(b, 'fh-alerts-live')), false)
-  assert.equal(one(b, 'fh-alerts-alt').textContent, 'Live', 'seen within the hour')
+  assert.equal(shown(one(b, 'fh-alerts-alt')), false, 'not ongoing: no Live')
   assert.equal(shown(one(c, 'fh-alerts-alt')), false, 'two days ago: replay only')
   assert.equal(shown(one(d, 'fh-alerts-late')), true)
   assert.equal(shown(one(a, 'fh-alerts-late')), false)
   one(a, 'fh-alerts-main').click()
   one(b, 'fh-alerts-main').click()
   one(a, 'fh-alerts-alt').click()
-  one(b, 'fh-alerts-alt').click()
   one(c, 'fh-alerts-when').click() // the time is the row's too
-  assert.deepEqual(m.calls.follow, ['aaaaaa-1', 'bbbbbb-2'])
+  assert.deepEqual(m.calls.follow, ['aaaaaa-1'])
   assert.deepEqual(m.calls.replay, ['bbbbbb-2', 'aaaaaa-1', 'cccccc-3'])
 })
 
@@ -919,7 +920,8 @@ test('mountAlerts: a row whose event History lacks yet says when Replay opens, a
   const e = live('aaaaaa-1', { openedMs: T - 10 * 60_000, lastMs: T - 5 * 60_000 }) // 11:50, not ongoing: History has it at 12:00:20
   m.handle.update(reply(1, [e]))
   const r = rowOf(m.body, 'aaaaaa-1')
-  assert.equal(r.dataset.action, 'follow', 'probably still flying')
+  assert.equal(r.dataset.action, 'follow', 'to where it was last heard')
+  assert.equal(one(r, 'fh-alerts-main').title, 'Go to where it was last heard')
   assert.equal(shown(one(r, 'fh-alerts-alt')), false)
   const at = one(r, 'fh-alerts-at')
   assert.equal(shown(at), true)
@@ -931,7 +933,7 @@ test('mountAlerts: a row whose event History lacks yet says when Replay opens, a
   t.mock.timers.tick(15_000)
   assert.equal(r.dataset.action, 'replay')
   assert.equal(shown(at), false)
-  assert.equal(one(r, 'fh-alerts-alt').textContent, 'Live')
+  assert.equal(shown(one(r, 'fh-alerts-alt')), false, 'no Live beside a replayed row')
 })
 
 test('mountAlerts: opened() counts what is listed as seen (kept in the store) and asks afresh; an open panel counts new ones as seen too', (t) => {

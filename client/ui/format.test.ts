@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { StatusBrief } from '../../shared/api.ts'
 import type { RenderState } from '../types.ts'
-import { bannerText, formatDistanceM, hudFields, hudTitle } from './format.ts'
+import { bannerText, formatDistanceM, hudFields, hudTitle, lostFor } from './format.ts'
 
 const live: StatusBrief = { source: 'adsblol', degraded: null, cellPeriodP95S: 2, chasePeriodP95S: 1 }
 
@@ -101,9 +101,11 @@ test('banner: provider problems first, with the exact wording', () => {
 })
 
 test('banner: selected aircraft stale → signal lost, whole seconds', () => {
-  assert.equal(bannerText(live, state({ mode: 'stale', ageS: 14.4 })), 'Signal lost 14s ago')
-  assert.equal(bannerText(live, state({ mode: 'stale', ageS: 9.6 })), 'Signal lost 10s ago')
-  assert.equal(bannerText(live, state({ mode: 'extrap', ageS: 10.6 })), 'Signal lost 11s ago')
+  assert.equal(bannerText(live, state({ mode: 'stale', ageS: 14.4 })), 'Signal lost 14 s ago')
+  assert.equal(bannerText(live, state({ mode: 'stale', ageS: 9.6 })), 'Signal lost 10 s ago')
+  assert.equal(bannerText(live, state({ mode: 'extrap', ageS: 10.6 })), 'Signal lost 11 s ago')
+  assert.equal(bannerText(live, state({ mode: 'stale', ageS: 1664 })), 'Signal lost 28 min ago')
+  assert.deepEqual([lostFor(119.4), lostFor(119.6), lostFor(-1), lostFor(3570)], ['119 s', '2 min', '0 s', '60 min'])
   assert.equal(bannerText(live, state({ mode: 'stale', ageS: Number.NaN })), 'Signal lost')
 })
 

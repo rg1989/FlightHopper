@@ -3,8 +3,9 @@
 // (server/alerts.ts; shared/alerts.ts words them). The panel, top to bottom: the server's switch, Watch the world, with a
 // line on what it watches; two options kept in this browser, Follow automatically and Notifications (where the browser
 // has them); then the last 7 days of events, newest first. A row follows its aircraft live while its event is ongoing, else
-// replays it in History once History has it (until then it follows, and says when Replay opens); a small text button
-// beside it does the other (Live only within the hour). Quiet events (a light aircraft's radio failure) are listed, dimmed,
+// replays it in History once History has it (until then it goes to where the aircraft was last heard, and says when Replay
+// opens); a small text button beside a followed row replays it. No row offers Live for an aircraft that is not heard with
+// its cause now: it has most often landed. Quiet events (a light aircraft's radio failure) are listed, dimmed,
 // and raise nothing by themselves. After the first answer, each new alerting event shows a toast (at most 3, each closing
 // by itself after 30 s) and, with the option on, a notification while the page is hidden or not focused; with Follow
 // automatically on, the app is asked to follow the newest that is followed (onAuto). The rail's bell counts the events
@@ -47,7 +48,7 @@ type Action = 'follow' | 'replay'
 const TOAST_MS = 30_000 // a toast closes by itself after this
 const TOAST_AFTER_MS = 4000 // …and at least this long after the pointer or the focus leaves it
 const MAX_TOASTS = 3
-const LIVE_MS = 60 * 60_000 // a replayed row offers Live while its aircraft was seen with its cause this recently
+const LIVE_MS = 60 * 60_000 // until History has it, a row goes to its aircraft while it was seen with its cause this recently
 const TICK_MS = 15_000 // the open panel's times, live dots and actions are redrawn this often
 const FOLLOW_KEY = 'fh.alerts.follow'
 const NOTIFY_KEY = 'fh.alerts.notify'
@@ -118,8 +119,9 @@ export function replayAtText(e: AlertEvent): string {
 
 /**
  * What a click on its row does: an ongoing live event is followed; any other is replayed in History once History has it;
- * until then it is followed while its aircraft was seen within the hour (it is probably still flying), else replayed (the
- * row says when Replay opens). A quiet event's row too: "listed only" means no toast, notification or follow by itself, and
+ * until then it is followed while its aircraft was seen within the hour, else replayed (the row says when Replay opens).
+ * Followed and not ongoing, the click goes to where the aircraft was last heard: live if it still flies, and its card says
+ * for how long its signal is lost if it does not. A quiet event's row too: "listed only" means no toast, notification or follow by itself, and
  * a click is the person's own.
  */
 export function primaryAction(e: AlertEvent, nowMs: number): Action {
@@ -130,12 +132,14 @@ export function primaryAction(e: AlertEvent, nowMs: number): Action {
 
 /**
  * Beside the row: 'later' while History lacks the event (a note, not a button: replayAtText); else Replay beside a followed
- * row, Live beside a replayed one seen within the hour, or nothing.
+ * row, or nothing. Never Live beside a replayed row: its aircraft is not heard with its cause now, so Live would promise
+ * what is most often a landed aircraft (C-FRSJ, 2026-10-03: "Signal lost" for 28 min under a Live button).
+ * ponytail: an aircraft that flies on after its cause (a code set back, a fall found late) has no way to it from its row but
+ * Replay. Upgrade: the server asks for each recent event's aircraft once a minute and says whether it is heard.
  */
-export function secondaryAction(e: AlertEvent, nowMs: number): Action | 'later' | null {
+export function secondaryAction(e: AlertEvent, nowMs: number): 'replay' | 'later' | null {
   if (nowMs < replayableAt(e)) return 'later'
-  if (primaryAction(e, nowMs) === 'follow') return 'replay'
-  return nowMs - e.lastMs < LIVE_MS ? 'follow' : null
+  return primaryAction(e, nowMs) === 'follow' ? 'replay' : null
 }
 
 /** The tag: the squawk, else EMG for a status, else an arrow for a fall. Red for 7700, 7500 and any fall; amber for the rest. */
@@ -153,12 +157,16 @@ export function watchText(reply: EventsReply | null): string {
     : 'Watching what this app polls, and each half hour of adsb.lol'
 }
 
-const actionText = (e: AlertEvent, action: Action): string => (action === 'follow' ? `Follow ${who(e)} live` : `Replay ${who(e)} in History`)
+/** What an action does, in words. Follow is live only while the event is ongoing; else it goes to where the aircraft was last heard. */
+function actionText(e: AlertEvent, action: Action, nowMs: number): string {
+  if (action === 'replay') return `Replay ${who(e)} in History`
+  return ongoing(e, nowMs) ? `Follow ${who(e)} live` : `Go to where ${who(e)} was last heard`
+}
 
 /** A row's accessible name: what its click does, then what happened and when; and when Replay opens, while History lacks it. */
 export function rowLabel(e: AlertEvent, nowMs: number): string {
   const wait = nowMs < replayableAt(e) ? `, ${replayAtText(e).toLowerCase()}` : ''
-  return `${actionText(e, primaryAction(e, nowMs))}: ${what(e)}, ${ago(e.openedMs, nowMs)}${e.late ? ', found late' : ''}${wait}`
+  return `${actionText(e, primaryAction(e, nowMs), nowMs)}: ${what(e)}, ${ago(e.openedMs, nowMs)}${e.late ? ', found late' : ''}${wait}`
 }
 
 /**
@@ -348,7 +356,7 @@ function show(el: HTMLElement, on: boolean): void {
 interface Row {
   e: AlertEvent
   action: Action
-  alt: Action | 'later' | null
+  alt: 'replay' | 'later' | null
   li: HTMLLIElement
   main: HTMLButtonElement
   tag: HTMLElement
@@ -551,7 +559,7 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     main.addEventListener('click', () => act(r.e, r.action))
     altBtn.addEventListener('click', (ev) => {
       ev.stopPropagation() // the row's own click is the other action
-      if (r.alt === 'follow' || r.alt === 'replay') act(r.e, r.alt)
+      if (r.alt === 'replay') act(r.e, r.alt)
     })
     li.addEventListener('click', (ev) => {
       const t = ev.target
@@ -574,15 +582,15 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     setText(r.what, what(e))
     setText(r.ago, ago(e.openedMs, now))
     setAttr(r.main, 'aria-label', rowLabel(e, now))
-    const tip = r.action === 'follow' ? 'Follow live' : 'Replay in History'
+    const tip = r.action === 'replay' ? 'Replay in History' : ongoing(e, now) ? 'Follow live' : 'Go to where it was last heard'
     if (r.main.title !== tip) r.main.title = tip
     show(r.dot, ongoing(e, now)) // live
     show(r.late, e.late)
-    show(r.altBtn, r.alt === 'follow' || r.alt === 'replay')
+    show(r.altBtn, r.alt === 'replay')
     show(r.at, r.alt === 'later')
-    if (r.alt === 'follow' || r.alt === 'replay') {
-      setText(r.altBtn, r.alt === 'follow' ? 'Live' : 'Replay')
-      setAttr(r.altBtn, 'aria-label', actionText(e, r.alt))
+    if (r.alt === 'replay') {
+      setText(r.altBtn, 'Replay')
+      setAttr(r.altBtn, 'aria-label', actionText(e, r.alt, now))
     } else if (r.alt === 'later') setText(r.at, replayAtText(e))
   }
 
@@ -680,7 +688,7 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     text.append(h('strong', 'fh-alerts-toast-who', who(e)), h('span', 'fh-alerts-toast-what', what(e)))
     const go = h('button', 'fh-pill fh-alerts-toast-go', action === 'follow' ? 'Follow' : 'Replay')
     go.type = 'button'
-    go.setAttribute('aria-label', actionText(e, action))
+    go.setAttribute('aria-label', actionText(e, action, now))
     const x = h('button', 'fh-ibtn fh-sm fh-alerts-toast-x')
     x.type = 'button'
     x.setAttribute('aria-label', 'Close')

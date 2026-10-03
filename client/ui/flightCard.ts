@@ -16,7 +16,7 @@ import type { AircraftInfo } from '../../shared/info.ts'
 import type { ReadsbAircraft } from '../../shared/types.ts'
 import type { FleetEntry, RenderState } from '../types.ts'
 import { UPDATE_MS, detailRows, shareLink, sourceLabel, type Lookup } from './detail.ts'
-import { STALE_AGE_S, formatDistanceM, hudFields, isStale } from './format.ts'
+import { STALE_AGE_S, formatDistanceM, hudFields, isStale, lostFor } from './format.ts'
 import { icon } from './icons.ts'
 import type { PhotoCache } from './photo.ts'
 import './flightCard.css'
@@ -144,7 +144,7 @@ export function cardView(
     state = 'lost'
     // ponytail: `seen` is as of the last chase reply (≤ FOCUS_ASK_MS old), so "GPS" may outlast a real silence by that.
     const what = own?.seen !== undefined && own.seen < lostAfterS ? 'GPS lost' : 'Signal lost'
-    text = Number.isFinite(s.ageS) ? `${what} ${Math.round(Math.max(0, s.ageS))} s ago` : what
+    text = Number.isFinite(s.ageS) ? `${what} ${lostFor(s.ageS)} ago` : what
   } else if (chasing && s.mode === 'extrap') {
     state = 'predict'
     text = 'Predicting · waiting for data'

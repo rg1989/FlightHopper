@@ -76,12 +76,18 @@ export function hudTitle(s: RenderState): string {
   return [s.callsign, s.typeCode, s.hex].filter((x) => x).join(' · ')
 }
 
+/** For how long a signal is lost, for "… ago": seconds up to two minutes, then minutes ("47 s", "28 min"). */
+export function lostFor(ageS: number): string {
+  const s = Math.round(Math.max(0, ageS))
+  return s < 120 ? `${s} s` : `${Math.round(s / 60)} min`
+}
+
 /** One line for the top banner, or null when there is nothing to warn about. Provider problems win over the aircraft's state. */
 /** chasing: an aircraft is selected, so no state means no data for it (yet): say so instead of an empty screen. */
 export function bannerText(status: StatusBrief, s: RenderState | null, chasing = false): string | null {
   if (status.degraded !== null) return DEGRADED_TEXT[status.degraded]
   if (s === null) return chasing ? 'No recent position for this aircraft' : null
-  if (isStale(s)) return Number.isFinite(s.ageS) ? `Signal lost ${Math.round(Math.max(0, s.ageS))}s ago` : 'Signal lost'
+  if (isStale(s)) return Number.isFinite(s.ageS) ? `Signal lost ${lostFor(s.ageS)} ago` : 'Signal lost'
   if (s.mode === 'extrap') return 'Predicting (no fresh data)'
   return null
 }

@@ -87,9 +87,10 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     whether it is ongoing or late.
   - **Opening an event.** A click on an ongoing, live event follows the aircraft. A click on any other event opens
     History at the event, with the aircraft selected. History replays any aircraft that adsb.lol heard, for 42 days.
-    History has an event only once its half hour is published, 20 s after the half hour ends. Until then the row follows
-    the aircraft if it was seen within the hour, and it says "Replay at hh:mm". A small button beside a row does the other
-    action: Replay beside a followed row, Live beside a replayed one (only within the hour).
+    History has an event only once its half hour is published, 20 s after the half hour ends. Until then the row goes to
+    where the aircraft was last heard, and it says "Replay at hh:mm". A small Replay button is beside a followed row.
+    No row offers Live for an aircraft that is not heard with its cause now: it has most often landed (2026-10-03: a
+    Live button stood beside an aircraft that had landed 28 min before, and Live showed "Signal lost").
   - **New events.** After the page has loaded, each new alerting event shows a toast (Follow or Replay, ×). With that
     option on, it also shows a notification, but only while the page is hidden or not focused (a visible, focused page has
     the toast); the permission is asked for in the switch's click. While the panel is closed, the rail's bell shows the
