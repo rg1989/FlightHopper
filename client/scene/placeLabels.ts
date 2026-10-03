@@ -3,19 +3,20 @@
 // layer over the canvas, under the traffic brackets and every panel), where Esri's places raster lays the names on the
 // ground, blurred and turned with the map. Shown while Borders & places is on (mapLayer.ts draws the borders):
 // - cities (public/search/places.json, the search box's file: the browser's cache shares it), each within a reach of its
-//   size, 1,500 km for 5 M+ people down to 25 km (cityReachKm); countries (the middle of their box) from 150 to 3,000 km;
-//   seas (public/map/seas.json) from 50 km to 4,000 km (Natural Earth's scalerank ≤ 2) or 800 km. A name fades out over
-//   the last 20 % of its reach.
-// - every SELECT_MS the candidates in reach of the camera, each on the ground as globe.getHeight has it (at the ellipsoid
-//   until it answers); every frame those in front of the camera, above the globe's horizon and on screen, placed in rank
-//   order (countries, seas, then cities, biggest first), each left out where it would come within GAP_PX of one placed
-//   before it or of an area kept off (the flight-data frame); at most MAX_LABELS, their nodes reused.
+//   size, 1,500 km for 5 M+ people down to 25 km (cityReachKm); countries (public/map/countries.json, at Natural Earth's
+//   label points) from 150 to 3,000 km, the largest to 4,000; seas (public/map/seas.json) from 50 km to 4,000 km
+//   (Natural Earth's scalerank ≤ 2) or 800 km. A name fades out over the last 20 % of its reach.
+// - every SELECT_MS the candidates in reach of the camera; every frame those in front of the camera, above the globe's
+//   horizon and on screen, placed in rank order (countries, seas, then cities, biggest first), each left out where it
+//   would come within GAP_PX of one placed before it or of an area kept off (the flight-data frame); at most MAX_LABELS,
+//   their nodes reused. A name stands on the ground as globe.getHeight has it, read a few a frame under a time budget
+//   (at the ellipsoid until then).
 // Other layers add labels of their own (setLayer), placed with the names by a rank of their own.
 // Text drawn by the browser at device resolution, at whole device pixels: crisp, and upright by construction.
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, EllipsoidalOccluder, Math as CesiumMath, SceneTransforms } from 'cesium'
 import type { Scene, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
-import type { SeasJson } from '../../shared/mapOverlays.ts'
+import type { CountriesJson, SeasJson } from '../../shared/mapOverlays.ts'
 import type { Places } from '../../shared/places.ts'
 import type { TerrainFrame } from '../types.ts'
 import { drawnHeightM, trueHeightM } from './exaggeration.ts'
@@ -34,14 +35,21 @@ export const MAX_LABELS = 60
 export const GAP_PX = 4 // the least room between two names
 const SELECT_MS = 500 // the candidates are looked up this often
 const FADE = 0.2 // of a reach: the far end, over which a name fades out
-const MIN_ALPHA = 0.02 // fainter than this a name is not placed: it would keep others out for nothing
-const HEIGHT_READS = 16 // globe.getHeight calls in one look, at most; the rest wait for the next
+const MIN_ALPHA = 0.1 // fainter than this a name is not placed: it would keep legible ones out for next to nothing
+// Ground heights: globe.getHeight's first pick on a tile scans its whole mesh (again while a worker sorts the tile's
+// triangles, and after each exaggeration change), a millisecond or more. So a frame reads a few at most, and none once
+// READ_MS has gone; the names on screen first.
+const READ_MS = 1
+const READS_PER_FRAME = 4
 const REREAD = 4 // a height read from far away (a coarse tile) is read again once the place is this many times nearer
+const TRUE_MIN_F = 0.5 // below this factor a drawn height says nothing of the true one (exaggeration.ts' INVERT_MIN_F, unexported)
 /** The order names are placed in, lowest first; cities within theirs by population. Another layer's labels take a rank of their own (setLayer). */
 export const RANK = { country: 0, sea: 1, city: 2 } as const
 const CITY_TIERS: readonly (readonly [minPop: number, reachKm: number])[] = [[5e6, 1500], [1e6, 600], [3e5, 250], [1e5, 120], [3e4, 60], [0, 25]]
 const COUNTRY_MIN_KM = 150 // nearer, the name would stand under the camera: you are in it
 const COUNTRY_KM = 3000
+const LARGE_COUNTRY_KM = 4000 // Natural Earth's label rank ≤ LARGE_COUNTRY
+const LARGE_COUNTRY = 2
 const SEA_MIN_KM = 50
 const SEA_KM = 800
 const MAJOR_SEA_KM = 4000 // the oceans and the big seas: scalerank ≤ MAJOR_SEA
@@ -66,8 +74,8 @@ export type Kind = 'country' | 'sea' | 'city'
  * chase runs.
  */
 export interface PlaceIndex {
-  countries: Places['countries']
   cities: Places['cities']
+  countries: CountriesJson['countries']
   seas: SeasJson['seas']
   tiers: { reachKm: number; ids: Int32Array; start: Int32Array }[]
 }
@@ -97,8 +105,7 @@ export const cityReachKm = (pop: number): number => CITY_TIERS[tierOf(pop)][1]
 
 const bandOf = (lat: number): number => Math.min(BANDS - 1, Math.max(0, Math.floor((lat + 90) * BANDS_PER_DEG)))
 
-export function indexPlaces(places: Pick<Places, 'countries' | 'cities'>, seas: SeasJson['seas']): PlaceIndex {
-  const { countries, cities } = places
+export function indexPlaces(cities: Places['cities'], countries: CountriesJson['countries'], seas: SeasJson['seas']): PlaceIndex {
   const tierOfCity = Uint8Array.from(cities, (c) => tierOf(c[5]))
   const bandOfCity = Uint16Array.from(cities, (c) => bandOf(c[3]))
   // A counting sort per tier: count each band, add up the starts, then deal the cities out.
@@ -110,7 +117,7 @@ export function indexPlaces(places: Pick<Places, 'countries' | 'cities'>, seas: 
   }
   const next = tiers.map((t) => t.start.slice(0, BANDS))
   for (let i = 0; i < cities.length; i++) tiers[tierOfCity[i]].ids[next[tierOfCity[i]][bandOfCity[i]]++] = i
-  return { countries, cities, seas, tiers }
+  return { cities, countries, seas, tiers }
 }
 
 const kmBetween = (lat1: number, lon1: number, lat2: number, lon2: number): number => distanceNm(lat1, lon1, lat2, lon2) * KM_PER_NM
@@ -120,8 +127,9 @@ const fade = (km: number, reachKm: number): number => Math.min(1, (reachKm - km)
 export function placeCandidates(ix: PlaceIndex, lat: number, lon: number, out: Candidate[] = []): Candidate[] {
   out.length = 0
   ix.countries.forEach((c, i) => {
-    const km = kmBetween(lat, lon, (c[3] + c[4]) / 2, (c[5] + c[6]) / 2)
-    if (km >= COUNTRY_MIN_KM && km <= COUNTRY_KM) out.push({ kind: 'country', i, km, alpha: fade(km, COUNTRY_KM) })
+    const reach = c[3] <= LARGE_COUNTRY ? LARGE_COUNTRY_KM : COUNTRY_KM
+    const km = kmBetween(lat, lon, c[2], c[1])
+    if (km >= COUNTRY_MIN_KM && km <= reach) out.push({ kind: 'country', i, km, alpha: fade(km, reach) })
   })
   ix.seas.forEach((s, i) => {
     const reach = s[3] <= MAJOR_SEA ? MAJOR_SEA_KM : SEA_KM
@@ -190,10 +198,9 @@ interface Label {
   w: number // px, measured once
   h: number
   km: number // from the camera, at the last look it was in
-  look: number // that look
   groundM: number | undefined // the true ground height, once read
   groundKm: number // how far away it was read
-  readLook: number
+  readFrame: number // the frame it was last read in
   pos: Cartesian3 // where it is drawn in the world
   f: number // the exaggeration it was placed for (NaN: not yet)
   relHM: number
@@ -228,10 +235,12 @@ function canvasMeasure(text: string, font: string): number {
 
 export interface PlaceLabelsOptions {
   placesUrl: string // public/search/places.json
+  countriesUrl: string // public/map/countries.json
   seasUrl: string // public/map/seas.json
   getJson?: (url: string) => Promise<unknown>
   measure?: (text: string, font: string) => number // a text's width (px) in a CSS font; default a canvas's measureText
   project?: (scene: Scene, p: Cartesian3, out: Cartesian2) => Cartesian2 | undefined // default SceneTransforms.worldToWindowCoordinates
+  now?: () => number // ms, for the reads' budget; default performance.now
 }
 
 /**
@@ -244,10 +253,12 @@ export class PlaceLabels {
   readonly #viewer: Viewer
   readonly #layer: HTMLElement
   readonly #placesUrl: string
+  readonly #countriesUrl: string
   readonly #seasUrl: string
   readonly #getJson: (url: string) => Promise<unknown>
   readonly #measure: (text: string, font: string) => number
   readonly #project: (scene: Scene, p: Cartesian3, out: Cartesian2) => Cartesian2 | undefined
+  readonly #now: () => number
   readonly #occluder = new EllipsoidalOccluder(Ellipsoid.WGS84)
   readonly #labels = new Map<string, Label>() // the places' names, by kind and index
   readonly #layers = new Map<string, Label[]>()
@@ -270,7 +281,6 @@ export class PlaceLabels {
   #dirty = true
   #selectedAt = -Infinity
   #frame = 0
-  #look = 0
   #family: string | null = null
   #destroyed = false
 
@@ -278,10 +288,12 @@ export class PlaceLabels {
     this.#viewer = viewer
     this.#layer = layer
     this.#placesUrl = opts.placesUrl
+    this.#countriesUrl = opts.countriesUrl
     this.#seasUrl = opts.seasUrl
     this.#getJson = opts.getJson ?? getJson
     this.#measure = opts.measure ?? canvasMeasure
     this.#project = opts.project ?? SceneTransforms.worldToWindowCoordinates
+    this.#now = opts.now ?? (() => performance.now())
   }
 
   get show(): boolean {
@@ -322,7 +334,7 @@ export class PlaceLabels {
     if (this.#dirty || nowMs - this.#selectedAt >= SELECT_MS) {
       this.#dirty = false
       this.#selectedAt = nowMs
-      this.#select(tf)
+      this.#select()
     }
     this.#draw(tf, keepOff)
   }
@@ -335,26 +347,31 @@ export class PlaceLabels {
     this.#layers.clear()
   }
 
+  /** The three files, once; a failed fetch or a file of the wrong shape is one warning, and asked again at the next show. */
   #load(): void {
     if (this.#loading || this.#failed) return
     this.#loading = true
-    Promise.all([this.#getJson(this.#placesUrl), this.#getJson(this.#seasUrl)]).then(
-      ([places, seas]) => {
-        this.#ix = indexPlaces(places as Places, (seas as SeasJson).seas)
+    Promise.all([this.#getJson(this.#placesUrl), this.#getJson(this.#countriesUrl), this.#getJson(this.#seasUrl)])
+      .then(([places, countries, seas]) => {
+        if (this.#destroyed) return
+        const cities = (places as Partial<Places> | null)?.cities
+        const named = (countries as Partial<CountriesJson> | null)?.countries
+        const sea = (seas as Partial<SeasJson> | null)?.seas
+        if (!Array.isArray(cities) || !Array.isArray(named) || !Array.isArray(sea)) throw new Error('not the place files')
+        this.#ix = indexPlaces(cities, named, sea)
         this.#dirty = true
-      },
-      (e: unknown) => {
+      })
+      .catch((e: unknown) => {
         console.warn('FlightHopper: no place names:', e)
         this.#failed = true
-      },
-    ).finally(() => (this.#loading = false))
+      })
+      .finally(() => (this.#loading = false))
   }
 
-  /** The look: the candidates from the camera's position and the layers' labels, in rank order; some ground heights read. */
-  #select(tf: TerrainFrame): void {
+  /** The look: the candidates from the camera's position and the layers' labels, in rank order. */
+  #select(): void {
     const list = this.#list
     list.length = 0
-    const look = ++this.#look
     if (this.#show && this.#ix !== null) {
       const c = this.#viewer.scene.camera.positionCartographic
       placeCandidates(this.#ix, CesiumMath.toDegrees(c.latitude), CesiumMath.toDegrees(c.longitude), this.#cands)
@@ -362,33 +379,40 @@ export class PlaceLabels {
         const l = this.#placeLabel(k)
         l.alpha = k.alpha
         l.km = k.km
-        l.look = look
         list.push(l)
       }
     }
     for (const ls of this.#layers.values()) for (const l of ls) list.push(l)
     list.sort(byRank)
-    // The ground under the names on screen first, then in rank order. Read once, and again only once the place is REREAD
-    // times nearer: globe.getHeight answers from the most detailed tile it has, a coarse one for a place far away.
-    let reads = 0
-    const read = (l: Label): void => {
-      if (reads >= HEIGHT_READS || l.look !== look || l.readLook === look || (l.groundM !== undefined && l.km * REREAD >= l.groundKm)) return
-      l.readLook = look
-      reads++
-      this.#readGround(l, tf)
-    }
-    for (const l of this.#shown) read(l)
-    for (const l of list) read(l)
   }
 
-  #readGround(l: Label, tf: TerrainFrame): void {
-    const h = this.#viewer.scene.globe.getHeight(Cartographic.fromDegrees(l.lon, l.lat, 0, this.#carto))
-    // Flat (the topography off), the ground drawn says nothing of the true one: asked again at a later look.
-    const t = h === undefined ? null : trueHeightM(h, tf.fSampled, tf.relHM)
-    if (t === null) return
-    l.groundM = t
-    l.groundKm = l.km
-    l.f = NaN // placed again this frame
+  /**
+   * Some ground heights, under READS_PER_FRAME and READ_MS: the names on screen this frame first, then the others in rank
+   * order. Each is read once, and again only once the place is REREAD times nearer: globe.getHeight answers from the most
+   * detailed tile it has, a coarse one for a place far away. None while the relief is flat (the drawn ground says nothing
+   * of the true one), nor while it grows or sinks (each frame resets the tiles' pickers: every read would scan a mesh).
+   */
+  #readGrounds(tf: TerrainFrame, onScreen: readonly Label[]): void {
+    if (tf.fSampled < TRUE_MIN_F || tf.fSampled !== tf.fNow) return
+    const frame = this.#frame
+    const start = this.#now()
+    let reads = 0
+    const read = (l: Label): boolean => { // false: this frame's reads are spent
+      if (l.kind === 'layer' || l.readFrame === frame || (l.groundM !== undefined && l.km * REREAD >= l.groundKm)) return true
+      if (reads >= READS_PER_FRAME || this.#now() - start >= READ_MS) return false
+      l.readFrame = frame
+      reads++
+      const h = this.#viewer.scene.globe.getHeight(Cartographic.fromDegrees(l.lon, l.lat, 0, this.#carto))
+      const t = h === undefined ? null : trueHeightM(h, tf.fSampled, tf.relHM)
+      if (t !== null) {
+        l.groundM = t
+        l.groundKm = l.km
+        l.f = NaN // placed on it from the next frame
+      }
+      return true
+    }
+    for (const l of onScreen) if (!read(l)) return
+    for (const l of this.#list) if (!read(l)) return
   }
 
   /** Where a place's name stands this frame: on its ground as the terrain is drawn (exaggerated, or flat). */
@@ -452,6 +476,7 @@ export class PlaceLabels {
     for (const l of next) this.#write(l, dpr)
     this.#next = this.#shown
     this.#shown = next
+    this.#readGrounds(tf, vis)
   }
 
   /** A placed name's node: dressed when it takes one, then only its place and fade written, when they change. */
@@ -523,11 +548,9 @@ export class PlaceLabels {
       l = this.#label('city', name, RANK.city, pop, lat, lon, px, this.#width(name, px))
       l.size = px === 15 ? 'l' : px === 12 ? 's' : ''
     } else if (k.kind === 'country') {
-      const [, name, , south, north, west, east] = ix.countries[k.i]
+      const [name, lon, lat, rank] = ix.countries[k.i]
       const text = name.toUpperCase() // layout.css spaces the letters; the text comes in capitals
-      const lat = (south + north) / 2
-      const area = (north - south) * (east - west) * Math.cos(CesiumMath.toRadians(lat))
-      l = this.#label('country', text, RANK.country, area, lat, (west + east) / 2, AREA_PX, this.#width(text, AREA_PX) + COUNTRY_SPACING * AREA_PX * text.length)
+      l = this.#label('country', text, RANK.country, -rank, lat, lon, AREA_PX, this.#width(text, AREA_PX) + COUNTRY_SPACING * AREA_PX * text.length)
     } else {
       const [name, lon, lat, scalerank] = ix.seas[k.i]
       l = this.#label('sea', name, RANK.sea, -scalerank, lat, lon, AREA_PX, this.#width(name, AREA_PX, true))
@@ -547,8 +570,8 @@ export class PlaceLabels {
 
   #label(kind: Label['kind'], text: string, rank: number, weight: number, lat: number, lon: number, px: number, w: number): Label {
     return {
-      kind, text, rank, weight, size: '', color: '', lon, lat, w, h: px * LINE, km: 0, look: 0, groundM: undefined, groundKm: Infinity,
-      readLook: 0, pos: new Cartesian3(), f: NaN, relHM: NaN, alpha: 1, x: 0, y: 0, seen: 0, el: null, tx: NaN, ty: NaN, ta: NaN,
+      kind, text, rank, weight, size: '', color: '', lon, lat, w, h: px * LINE, km: 0, groundM: undefined, groundKm: Infinity,
+      readFrame: 0, pos: new Cartesian3(), f: NaN, relHM: NaN, alpha: 1, x: 0, y: 0, seen: 0, el: null, tx: NaN, ty: NaN, ta: NaN,
     }
   }
 }

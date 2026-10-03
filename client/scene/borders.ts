@@ -15,6 +15,7 @@ const HALO = 'rgba(0, 0, 0, 0.45)' // legible over bright desert and snow as ove
 const HALO_PX = 3
 const LINE = 'rgba(255, 238, 205, 0.92)'
 const LINE_PX = 1.4
+const RETRY_MS = 60_000 // after a failed fetch the tiles stay clear this long before the data is asked for again
 
 /** A border line: its points as lon, lat pairs (degrees), and its box. */
 export interface BorderLine {
@@ -62,6 +63,9 @@ const latitudeOf = (y: number): number => (Math.atan(Math.sinh(Math.PI * (1 - 2 
  * The stretches of the lines that tile (x, y) of level z draws, in its pixels (Web Mercator, TILE px a side, y down): each
  * run the points of consecutive steps that come within MARGIN_PX of it, so a long line costs only its steps through the
  * tile (and one each side, from outside to its edge). [] when no line comes near.
+ * ponytail: longitudes are taken as plain numbers and latitudes through Web Mercator, so a line across the antimeridian
+ * would be drawn the long way round and a stretch beyond ±85.05° is lost; Natural Earth's land borders have neither.
+ * Upgrade, should a source have them: split lines at ±180° and clamp latitudes to ±85.05°.
  */
 export function tileRuns(lines: readonly BorderLine[], x: number, y: number, z: number): number[][] {
   const n = 2 ** z
@@ -146,32 +150,49 @@ async function getBorders(url: string): Promise<BordersJson> {
   return (await res.json()) as BordersJson
 }
 
+export interface BordersOptions {
+  live?: () => boolean // whether its layer is shown: a tile still waiting to be drawn when it turns false is dropped
+  getJson?: (url: string) => Promise<BordersJson>
+  now?: () => number // ms, for the retry after a failure
+}
+
 /**
  * The borders as an imagery provider (Web Mercator tiles to level 18; the URL is the data's, not a tile template). The
  * data comes at the first load() (mapLayer.ts calls it when the layer first shows) or tile asked for, and every tile waits
  * for it. A tile's drawing is a drawQueue job: a view's tiles arriving together fill in over a few frames instead of
- * stalling one, and one still waiting when live() (its layer shown) turns false is dropped undrawn.
+ * stalling one, and one still waiting when live() turns false is dropped undrawn.
+ * ponytail: tiles drawn clear while the data was missing stay clear until Cesium asks for them again (the chase keeps
+ * moving onto new ones). Upgrade: rebuild the layer when the data comes back.
  */
 export class BordersProvider extends UrlTemplateImageryProvider {
   readonly #url: string
   readonly #live: () => boolean
   readonly #get: (url: string) => Promise<BordersJson>
+  readonly #now: () => number
   #lines: Promise<readonly BorderLine[]> | null = null
+  #failedAt: number | null = null
 
-  constructor(url: string, live: () => boolean = () => true, get: (url: string) => Promise<BordersJson> = getBorders) {
+  constructor(url: string, opts: BordersOptions = {}) {
     super({ url, maximumLevel: BORDERS_MAX_LEVEL })
     this.#url = url
-    this.#live = live
-    this.#get = get
+    this.#live = opts.live ?? (() => true)
+    this.#get = opts.getJson ?? getBorders
+    this.#now = opts.now ?? (() => performance.now())
   }
 
-  /** The lines, fetched on the first call. A failed fetch leaves the tiles clear (one warning) and the next call fetches again. */
+  /**
+   * The lines, fetched on the first call. A fetch that fails, or a file that does not decode, leaves the tiles clear with
+   * one warning, and the data is asked for again at the first call RETRY_MS after.
+   */
   load(): Promise<readonly BorderLine[]> {
-    this.#lines ??= this.#get(this.#url).then(decodeBorders, (e: unknown) => {
-      console.warn('FlightHopper: no borders:', e)
-      this.#lines = null
-      return []
-    })
+    if (this.#lines === null || (this.#failedAt !== null && this.#now() - this.#failedAt >= RETRY_MS)) {
+      this.#failedAt = null
+      this.#lines = this.#get(this.#url).then(decodeBorders).catch((e: unknown) => {
+        console.warn('FlightHopper: no borders (asked again in a minute):', e)
+        this.#failedAt = this.#now()
+        return []
+      })
+    }
     return this.#lines
   }
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, EllipsoidalOccluder, Math as CesiumMath } from 'cesium'
 import type { Scene, Viewer } from 'cesium'
 import { destination } from '../../shared/geo.ts'
-import type { SeasJson } from '../../shared/mapOverlays.ts'
+import type { CountriesJson, SeasJson } from '../../shared/mapOverlays.ts'
 import type { Places } from '../../shared/places.ts'
 import type { TerrainFrame } from '../types.ts'
 import { GAP_PX, MAX_LABELS, PlaceLabels, RANK, cityReachKm, declutter, inSight, indexPlaces, placeCandidates } from './placeLabels.ts'
@@ -13,11 +13,11 @@ const NM_PER_KM = 1 / 1.852
 /** The point km away from (lat, lon) on a bearing. */
 const at = (lat: number, lon: number, brg: number, km: number): { lat: number; lon: number } => destination(lat, lon, brg, km * NM_PER_KM)
 type City = Places['cities'][number]
-type Country = Places['countries'][number]
+type Country = CountriesJson['countries'][number]
 type Sea = SeasJson['seas'][number]
 const city = (name: string, p: { lat: number; lon: number }, pop: number): City => [name, 'IL', -1, p.lat, p.lon, pop]
-/** A country whose box is centred on p. */
-const country = (name: string, p: { lat: number; lon: number }): Country => ['XX', name, '', p.lat - 1, p.lat + 1, p.lon - 1, p.lon + 1]
+/** A country named at p, of Natural Earth's label rank (2 the largest). */
+const country = (name: string, p: { lat: number; lon: number }, rank = 4): Country => [name, p.lon, p.lat, rank]
 const sea = (name: string, p: { lat: number; lon: number }, scalerank: number): Sea => [name, p.lon, p.lat, scalerank]
 
 test('cityReachKm: the bigger the city, the farther its name shows', () => {
@@ -27,21 +27,25 @@ test('cityReachKm: the bigger the city, the farther its name shows', () => {
 
 const HOME = { lat: 32, lon: 35 }
 
-test('placeCandidates: each city within the reach of its size, countries 150–3,000 km, seas from 50 km to 4,000 (scalerank ≤ 2) or 800', () => {
-  const ix = indexPlaces({
-    countries: [country('Near', at(32, 35, 90, 100)), country('Mid', at(32, 35, 90, 1000)), country('Far', at(32, 35, 90, 3500))],
-    cities: [
+test('placeCandidates: each city within the reach of its size; countries from 150 km to 3,000 (4,000 the largest, rank ≤ 2); seas from 50 km to 4,000 (scalerank ≤ 2) or 800', () => {
+  const ix = indexPlaces(
+    [
       city('Big', at(32, 35, 0, 1000), 6e6), city('Million', at(32, 35, 0, 700), 2e6), city('Million2', at(32, 35, 180, 500), 2e6),
       city('Small', at(32, 35, 270, 30), 20_000), city('Small2', at(32, 35, 270, 20), 20_000), city('Town', at(32, 35, 45, 50), 50_000),
     ],
-  }, [sea('Close', at(32, 35, 0, 30), 1), sea('Major', at(32, 35, 270, 3000), 1), sea('Minor', at(32, 35, 270, 3000), 4), sea('Minor2', at(32, 35, 270, 500), 4)])
-  const name = (c: { kind: string; i: number }): string => c.kind === 'city' ? ix.cities[c.i][0] : c.kind === 'country' ? ix.countries[c.i][1] : ix.seas[c.i][0]
+    [
+      country('Near', at(32, 35, 90, 100)), country('Mid', at(32, 35, 90, 1000)), country('Far', at(32, 35, 90, 3500)),
+      country('Large', at(32, 35, 90, 3500), 2), country('Larger', at(32, 35, 90, 4500), 2),
+    ],
+    [sea('Close', at(32, 35, 0, 30), 1), sea('Major', at(32, 35, 270, 3000), 1), sea('Minor', at(32, 35, 270, 3000), 4), sea('Minor2', at(32, 35, 270, 500), 4)],
+  )
+  const name = (c: { kind: string; i: number }): string => c.kind === 'city' ? ix.cities[c.i][0] : c.kind === 'country' ? ix.countries[c.i][0] : ix.seas[c.i][0]
   const got = placeCandidates(ix, HOME.lat, HOME.lon).map((c) => `${c.kind}:${name(c)}`).sort()
-  assert.deepEqual(got, ['city:Big', 'city:Million2', 'city:Small2', 'city:Town', 'country:Mid', 'sea:Major', 'sea:Minor2'])
+  assert.deepEqual(got, ['city:Big', 'city:Million2', 'city:Small2', 'city:Town', 'country:Large', 'country:Mid', 'sea:Major', 'sea:Minor2'])
 })
 
 test('placeCandidates: a name fades out over the last 20 % of its reach', () => {
-  const ix = indexPlaces({ countries: [], cities: [city('A', at(32, 35, 0, 400), 5e5), city('B', at(32, 35, 0, 225), 5e5), city('C', at(32, 35, 0, 100), 5e5)] }, [])
+  const ix = indexPlaces([city('A', at(32, 35, 0, 400), 5e5), city('B', at(32, 35, 0, 225), 5e5), city('C', at(32, 35, 0, 100), 5e5)], [], [])
   const alpha = new Map(placeCandidates(ix, HOME.lat, HOME.lon).map((c) => [ix.cities[c.i][0], c.alpha]))
   assert.equal(alpha.has('A'), false, 'out of reach (250 km)')
   assert.ok(Math.abs(alpha.get('B')! - 0.5) < 0.01, `${alpha.get('B')}: 225 km of 250, halfway through the fade`)
@@ -49,7 +53,7 @@ test('placeCandidates: a name fades out over the last 20 % of its reach', () => 
 })
 
 test('placeCandidates: a city in the latitude band but far along it is out; one across the antimeridian is in', () => {
-  const ix = indexPlaces({ countries: [], cities: [city('Same latitude', { lat: 0, lon: 120 }, 20_000), city('Across', { lat: 0.05, lon: -179.95 }, 20_000)] }, [])
+  const ix = indexPlaces([city('Same latitude', { lat: 0, lon: 120 }, 20_000), city('Across', { lat: 0.05, lon: -179.95 }, 20_000)], [], [])
   assert.deepEqual(placeCandidates(ix, 0, 179.95).map((c) => ix.cities[c.i][0]), ['Across'])
 })
 
@@ -103,6 +107,8 @@ interface FakeEl {
   style: Record<string, string>
   textContent: string
   hidden: boolean
+  removed: boolean
+  remove(): void
 }
 function fakeLayer() {
   const children: FakeEl[] = []
@@ -111,7 +117,7 @@ function fakeLayer() {
 const shown = (layer: { children: FakeEl[] }): FakeEl[] => layer.children.filter((e) => !e.hidden)
 const TF: TerrainFrame = { fSampled: 1, fNow: 1, relHM: 0 }
 
-function fakeViewer(o: { lat?: number; lon?: number; scale?: number; heights?: Map<string, number> } = {}) {
+function fakeViewer(o: { lat?: number; lon?: number; scale?: number; heights?: Map<string, number>; onRead?: () => void } = {}) {
   const cam = { lat: o.lat ?? HOME.lat, lon: o.lon ?? HOME.lon }
   const scale = o.scale ?? 1000
   const asked: string[] = []
@@ -130,6 +136,7 @@ function fakeViewer(o: { lat?: number; lon?: number; scale?: number; heights?: M
     getHeight: (c: Cartographic): number | undefined => {
       const key = `${CesiumMath.toDegrees(c.latitude).toFixed(3)},${CesiumMath.toDegrees(c.longitude).toFixed(3)}`
       asked.push(key)
+      o.onRead?.()
       return o.heights?.get(key)
     },
   }
@@ -149,7 +156,12 @@ function fakeViewer(o: { lat?: number; lon?: number; scale?: number; heights?: M
 async function withDom(run: () => Promise<void>, dpr = 1): Promise<void> {
   const g = globalThis as unknown as Record<string, unknown>
   const saved = (['document', 'devicePixelRatio'] as const).map((k) => [k, g[k]] as const)
-  const createElement = (): FakeEl => ({ className: '', dataset: {}, style: {}, textContent: '', hidden: false })
+  const createElement = (): FakeEl => ({
+    className: '', dataset: {}, style: {}, textContent: '', hidden: false, removed: false,
+    remove(): void {
+      this.removed = true
+    },
+  })
   Object.assign(g, { document: { createElement }, devicePixelRatio: dpr })
   try {
     await run()
@@ -160,30 +172,48 @@ async function withDom(run: () => Promise<void>, dpr = 1): Promise<void> {
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 const measure = (text: string): number => text.length * 7
 
-function overlay(data: { places: Pick<Places, 'countries' | 'cities'>; seas?: Sea[] }, v = fakeViewer()) {
+const URLS = { placesUrl: 'places.json', countriesUrl: 'countries.json', seasUrl: 'seas.json' }
+/** The files' contents as the overlay reads them: places.json's cities, countries.json, seas.json. */
+const files = (data: { cities?: City[]; countries?: Country[]; seas?: Sea[] }) => (url: string): unknown =>
+  url === URLS.placesUrl ? { cities: data.cities ?? [] } : url === URLS.countriesUrl ? { countries: data.countries ?? [] } : { seas: data.seas ?? [] }
+
+function overlay(data: { cities?: City[]; countries?: Country[]; seas?: Sea[] }, v = fakeViewer(), now?: () => number) {
   const layer = fakeLayer()
   const urls: string[] = []
   const getJson = (url: string): Promise<unknown> => {
     urls.push(url)
-    return Promise.resolve(url === 'places.json' ? data.places : { seas: data.seas ?? [] })
+    return Promise.resolve(files(data)(url))
   }
-  const labels = new PlaceLabels(v.viewer, layer as unknown as HTMLElement, { placesUrl: 'places.json', seasUrl: 'seas.json', getJson, measure, project: v.project })
+  const labels = new PlaceLabels(v.viewer, layer as unknown as HTMLElement, { ...URLS, getJson, measure, project: v.project, now })
   return { labels, layer, urls, ...v }
+}
+
+/** Runs with console.warn collected into the array it gets, then puts it back. */
+async function withWarnings(run: (warned: unknown[][]) => Promise<void>): Promise<void> {
+  const warn = console.warn
+  const warned: unknown[][] = []
+  console.warn = (...a: unknown[]) => void warned.push(a)
+  try {
+    await run(warned)
+  } finally {
+    console.warn = warn
+  }
 }
 
 test('PlaceLabels: hidden, it asks for nothing and draws nothing', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Tel Aviv', { lat: 32.08, lon: 34.78 }, 460_000)] } })
+    const o = overlay({ cities: [city('Tel Aviv', { lat: 32.08, lon: 34.78 }, 460_000)] })
     for (let t = 0; t < 2000; t += 16) o.labels.update(TF, t)
     await flush()
     assert.deepEqual([o.urls, o.layer.children.length, o.projected.length, o.asked.length], [[], 0, 0, 0])
   })
 })
 
-test('PlaceLabels: shown, it fetches the places and seas once; a city\'s name centred above its place, a country\'s in spaced capitals, a sea\'s', async () => {
+test('PlaceLabels: shown, it fetches its three files once; a city\'s name centred above its place, a country\'s in spaced capitals at its label point, a sea\'s', async () => {
   await withDom(async () => {
     const o = overlay({
-      places: { countries: [country('Jordan', { lat: 31.9, lon: 37.2 })], cities: [city('Tel Aviv', { lat: 32.08, lon: 34.78 }, 460_000)] },
+      cities: [city('Tel Aviv', { lat: 32.08, lon: 34.78 }, 460_000)],
+      countries: [country('Jordan', { lat: 31.9, lon: 37.2 })],
       seas: [sea('Mediterranean Sea', { lat: 32.6, lon: 33.6 }, 1)],
     }, fakeViewer({ scale: 100 }))
     o.labels.show = true
@@ -191,7 +221,7 @@ test('PlaceLabels: shown, it fetches the places and seas once; a city\'s name ce
     await flush()
     o.labels.update(TF, 16)
     o.labels.update(TF, 32)
-    assert.deepEqual(o.urls, ['places.json', 'seas.json'])
+    assert.deepEqual(o.urls, ['places.json', 'countries.json', 'seas.json'])
     const els = shown(o.layer)
     assert.deepEqual(els.map((e) => [e.dataset.kind, e.textContent]).sort(), [['city', 'Tel Aviv'], ['country', 'JORDAN'], ['sea', 'Mediterranean Sea']])
     const tlv = els.find((e) => e.dataset.kind === 'city')!
@@ -203,7 +233,7 @@ test('PlaceLabels: shown, it fetches the places and seas once; a city\'s name ce
 
 test('PlaceLabels: a name whose box would touch a bigger city\'s is left out', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Bat Yam', { lat: 32.0, lon: 35.005 }, 160_000), city('Holon', { lat: 32.0, lon: 35.0 }, 190_000)] } })
+    const o = overlay({ cities: [city('Bat Yam', { lat: 32.0, lon: 35.005 }, 160_000), city('Holon', { lat: 32.0, lon: 35.0 }, 190_000)] })
     o.labels.show = true
     o.labels.update(TF, 0)
     await flush()
@@ -217,7 +247,7 @@ test('PlaceLabels: at most MAX_LABELS nodes, the biggest cities first; reused as
     // A 10 × 10 grid of cities, 90 × 50 px apart (none touching), C00 the smallest … C99 the biggest.
     const grid: City[] = []
     for (let i = 0; i < 100; i++) grid.push(city(`C${String(i).padStart(2, '0')}`, { lat: 31.76 + Math.floor(i / 10) * 0.05, lon: 34.56 + (i % 10) * 0.09 }, 1e6 + i))
-    const o = overlay({ places: { countries: [], cities: grid } })
+    const o = overlay({ cities: grid })
     o.labels.show = true
     o.labels.update(TF, 0)
     await flush()
@@ -237,7 +267,7 @@ test('PlaceLabels: at most MAX_LABELS nodes, the biggest cities first; reused as
 
 test('PlaceLabels: a name fades over the last 20 % of its reach', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Near', { lat: 32.1, lon: 35 }, 20_000), city('Edge', { lat: 32, lon: 35.24 }, 20_000)] } })
+    const o = overlay({ cities: [city('Near', { lat: 32.1, lon: 35 }, 20_000), city('Edge', { lat: 32, lon: 35.24 }, 20_000)] })
     o.labels.show = true
     o.labels.update(TF, 0)
     await flush()
@@ -251,7 +281,7 @@ test('PlaceLabels: a name fades over the last 20 % of its reach', async () => {
 
 test('PlaceLabels: other layers\' labels show without the place names, decluttered by their rank, and go when cleared', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Haifa', { lat: 32.0, lon: 35.0 }, 280_000)] } })
+    const o = overlay({ cities: [city('Haifa', { lat: 32.0, lon: 35.0 }, 280_000)] })
     const storm = { text: 'Thunderstorms · FL250–FL450', position: Cartesian3.fromDegrees(35, 32.004, 13_000), color: '#ff8a3d' }
     o.labels.setLayer('hazards', RANK.sea + 0.5, [storm])
     o.labels.update(TF, 0)
@@ -280,7 +310,7 @@ test('PlaceLabels: other layers\' labels show without the place names, declutter
 
 test('PlaceLabels: active while the names show or another layer has labels set (the app measures the areas kept off only then)', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [] } })
+    const o = overlay({})
     assert.equal(o.labels.active, false)
     o.labels.show = true
     assert.equal(o.labels.active, true)
@@ -294,7 +324,7 @@ test('PlaceLabels: active while the names show or another layer has labels set (
 
 test('PlaceLabels: no name over the areas kept off (the flight-data frame: its cards, the chased aircraft\'s brackets)', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Under the aircraft', { lat: 32, lon: 35 }, 1e6), city('Clear', { lat: 32.2, lon: 35.3 }, 1e6)] } })
+    const o = overlay({ cities: [city('Under the aircraft', { lat: 32, lon: 35 }, 1e6), city('Clear', { lat: 32.2, lon: 35.3 }, 1e6)] })
     o.labels.show = true
     o.labels.update(TF, 0)
     await flush()
@@ -307,7 +337,7 @@ test('PlaceLabels: a name stands on the ground once its tile is in (cached), at 
   await withDom(async () => {
     const heights = new Map<string, number>()
     const v = fakeViewer({ heights })
-    const o = overlay({ places: { countries: [], cities: [city('Jerusalem', { lat: 31.95, lon: 35.1 }, 900_000)] } }, v)
+    const o = overlay({ cities: [city('Jerusalem', { lat: 31.95, lon: 35.1 }, 900_000)] }, v)
     const heightNow = (): number => Cartographic.fromCartesian(o.projected[o.projected.length - 1]).height
     o.labels.show = true
     o.labels.update(TF, 0)
@@ -315,7 +345,8 @@ test('PlaceLabels: a name stands on the ground once its tile is in (cached), at 
     o.labels.update(TF, 1)
     assert.ok(Math.abs(heightNow()) < 0.01, 'unknown: at 0')
     heights.set('31.950,35.100', 780)
-    o.labels.update(TF, 600) // the next look
+    o.labels.update(TF, 17) // read after this frame's names are placed: they stand on it from the next frame
+    o.labels.update(TF, 33)
     assert.ok(Math.abs(heightNow() - 780) < 0.01, `${heightNow()}`)
     const asks = o.asked.length
     o.labels.update(TF, 1200)
@@ -327,7 +358,7 @@ test('PlaceLabels: a name stands on the ground once its tile is in (cached), at 
 
 test('PlaceLabels: written at whole device pixels, so the text stays crisp', async () => {
   await withDom(async () => {
-    const o = overlay({ places: { countries: [], cities: [city('Ashdod', { lat: 31.80123, lon: 34.65037 }, 220_000)] } })
+    const o = overlay({ cities: [city('Ashdod', { lat: 31.80123, lon: 34.65037 }, 220_000)] })
     o.labels.show = true
     o.labels.update(TF, 0)
     await flush()
@@ -335,4 +366,188 @@ test('PlaceLabels: written at whole device pixels, so the text stays crisp', asy
     const [x, y] = shown(o.layer)[0].style.transform.match(/-?[\d.]+/g)!.map(Number)
     assert.ok(Number.isInteger(x * 2) && Number.isInteger(y * 2), `${x}, ${y}: half-pixels at a device ratio of 2`)
   }, 2)
+})
+
+/** n towns of 50 000 on screen round HOME, 150 × 100 px apart, each with its ground height in heights. */
+function towns(n: number, heights: Map<string, number>): City[] {
+  const out: City[] = []
+  for (let i = 0; i < n; i++) {
+    const p = { lat: 31.8 + Math.floor(i / 5) * 0.1, lon: 34.7 + (i % 5) * 0.15 }
+    out.push(city(`T${i}`, p, 50_000))
+    heights.set(`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`, 100 + i)
+  }
+  return out
+}
+
+test('PlaceLabels: ground heights are read under a time budget, a few a frame and spread over frames (a tile\'s first pick scans its whole mesh)', async () => {
+  await withDom(async () => {
+    let clock = 0
+    const heights = new Map<string, number>()
+    const cities = towns(20, heights)
+    const o = overlay({ cities }, fakeViewer({ heights, onRead: () => (clock += 0.4) }), () => clock)
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    const perFrame: number[] = []
+    for (let f = 1; f <= 12; f++) {
+      const before = o.asked.length
+      o.labels.update(TF, f * 16)
+      perFrame.push(o.asked.length - before)
+    }
+    assert.ok(perFrame.every((n) => n <= 3), `${perFrame}: at 0.4 ms a read, none starts once 1 ms has gone`)
+    assert.equal(o.asked.length, 20, 'each name read once')
+    assert.deepEqual(new Set(o.asked).size, 20)
+    // Instant reads: a few a frame all the same.
+    const quick = overlay({ cities }, fakeViewer({ heights }))
+    quick.labels.show = true
+    quick.labels.update(TF, 0)
+    await flush()
+    quick.labels.update(TF, 16)
+    assert.equal(quick.asked.length, 4)
+  })
+})
+
+test('PlaceLabels: a slow pick is the frame\'s only read; with the relief flat nothing is read at all, the names standing on the flat plane', async () => {
+  await withDom(async () => {
+    let clock = 0
+    const heights = new Map<string, number>()
+    const cities = towns(6, heights)
+    const slow = overlay({ cities }, fakeViewer({ heights, onRead: () => (clock += 5) }), () => clock)
+    slow.labels.show = true
+    slow.labels.update(TF, 0)
+    await flush()
+    for (let f = 1; f <= 6; f++) {
+      const before = slow.asked.length
+      slow.labels.update(TF, f * 16)
+      assert.equal(slow.asked.length - before, 1, `frame ${f}`)
+    }
+    const FLAT: TerrainFrame = { fSampled: 0, fNow: 0, relHM: 40 }
+    const flat = overlay({ cities }, fakeViewer({ heights }))
+    flat.labels.show = true
+    flat.labels.update(FLAT, 0)
+    await flush()
+    for (let f = 1; f <= 40; f++) flat.labels.update(FLAT, f * 100) // past several looks
+    assert.equal(flat.asked.length, 0)
+    assert.equal(shown(flat.layer).length, 6)
+    const h = Cartographic.fromCartesian(flat.projected[flat.projected.length - 1]).height
+    assert.ok(Math.abs(h - 40) < 0.01, `${h}`)
+  })
+})
+
+test('PlaceLabels: files of the wrong shape are one warning, and nothing is fetched again until the next show', async () => {
+  await withDom(() => withWarnings(async (warned) => {
+    const v = fakeViewer()
+    const layer = fakeLayer()
+    const urls: string[] = []
+    const getJson = (url: string): Promise<unknown> => (urls.push(url), Promise.resolve({ oops: true }))
+    const labels = new PlaceLabels(v.viewer, layer as unknown as HTMLElement, { ...URLS, getJson, measure, project: v.project })
+    labels.show = true
+    for (let f = 0; f < 30; f++) {
+      labels.update(TF, f * 16)
+      await flush()
+    }
+    assert.deepEqual([urls.length, warned.length], [3, 1])
+    labels.show = false
+    labels.update(TF, 600)
+    labels.show = true
+    labels.update(TF, 616)
+    await flush()
+    assert.equal(urls.length, 6, 'asked again at the next show')
+  }))
+})
+
+test('PlaceLabels: destroy removes its nodes; a fetch that lands after it, and any update after it, do nothing', async () => {
+  await withDom(async () => {
+    const o = overlay({ cities: [city('Haifa', { lat: 32.05, lon: 35.05 }, 280_000)] })
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    o.labels.update(TF, 1)
+    assert.equal(shown(o.layer).length, 1)
+    o.labels.destroy()
+    assert.ok(o.layer.children.every((e) => e.removed))
+    const projected = o.projected.length
+    o.labels.update(TF, 600)
+    assert.equal(o.projected.length, projected)
+    // A fetch still out when the overlay goes.
+    const v = fakeViewer()
+    const layer = fakeLayer()
+    const pending: [string, (x: unknown) => void][] = []
+    const getJson = (url: string): Promise<unknown> => new Promise((r) => pending.push([url, r]))
+    const late = new PlaceLabels(v.viewer, layer as unknown as HTMLElement, { ...URLS, getJson, measure, project: v.project })
+    late.show = true
+    late.update(TF, 0)
+    late.destroy()
+    for (const [url, land] of pending) land(files({ cities: [city('Haifa', { lat: 32.05, lon: 35.05 }, 280_000)] })(url))
+    await flush()
+    late.update(TF, 600)
+    assert.deepEqual([layer.children.length, v.projected.length], [0, 0])
+  })
+})
+
+test('PlaceLabels: a name all but faded out (under 10 %) keeps no room from a legible one', async () => {
+  await withDom(async () => {
+    // Both reach 25 km and sit side by side on screen: the bigger at 24.75 km (5 % left) would push out the other (22 km, 60 %).
+    const o = overlay({ cities: [city('Aaaa', at(32, 35, 90, 24.75), 25_000), city('Bbbb', at(32, 35, 90, 22), 16_000)] })
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    o.labels.update(TF, 1)
+    assert.deepEqual(shown(o.layer).map((e) => e.textContent), ['Bbbb'])
+  })
+})
+
+test('PlaceLabels: the names on screen are read first, a bigger city off screen after them', async () => {
+  await withDom(async () => {
+    let clock = 0
+    const heights = new Map<string, number>()
+    const cities = [city('Off screen', { lat: 32, lon: 36 }, 2e6), ...towns(3, heights)] // 1° east: x 1500 on a 1000-px canvas
+    const o = overlay({ cities }, fakeViewer({ heights, onRead: () => (clock += 5) }), () => clock)
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    for (let f = 1; f <= 4; f++) o.labels.update(TF, f * 16)
+    assert.deepEqual(o.asked, ['31.800,34.700', '31.800,34.850', '31.800,35.000', '32.000,36.000'])
+  })
+})
+
+test('PlaceLabels: a countries file without its list is caught at load (one warning), not thrown from every frame after', async () => {
+  await withDom(() => withWarnings(async (warned) => {
+    const v = fakeViewer()
+    const layer = fakeLayer()
+    const good = files({ cities: [city('Haifa', { lat: 32.05, lon: 35.05 }, 280_000)] })
+    const getJson = (url: string): Promise<unknown> => Promise.resolve(url === URLS.countriesUrl ? {} : good(url))
+    const labels = new PlaceLabels(v.viewer, layer as unknown as HTMLElement, { ...URLS, getJson, measure, project: v.project })
+    labels.show = true
+    labels.update(TF, 0)
+    await flush()
+    for (let f = 1; f <= 40; f++) labels.update(TF, f * 50) // past several looks
+    assert.equal(warned.length, 1)
+  }))
+})
+
+test('PlaceLabels: a name whose tile is not in yet is asked once a frame, not once for being on screen and again in rank order', async () => {
+  await withDom(async () => {
+    const o = overlay({ cities: towns(2, new Map()) }) // no heights: every answer undefined
+    o.labels.show = true
+    o.labels.update(TF, 0)
+    await flush()
+    o.labels.update(TF, 16)
+    assert.deepEqual(o.asked, ['31.800,34.700', '31.800,34.850'])
+  })
+})
+
+test('PlaceLabels: nothing is read while the relief grows or sinks (each frame resets the tiles\' pickers: every read a whole mesh)', async () => {
+  await withDom(async () => {
+    const heights = new Map<string, number>()
+    const o = overlay({ cities: towns(3, heights) })
+    o.labels.show = true
+    const growing = (f: number): TerrainFrame => ({ fSampled: 0.5 + f * 0.01, fNow: 0.51 + f * 0.01, relHM: 30 })
+    o.labels.update(growing(0), 0)
+    await flush()
+    for (let f = 1; f <= 30; f++) o.labels.update(growing(f), f * 16)
+    assert.equal(o.asked.length, 0)
+    o.labels.update(TF, 600) // at rest again
+    assert.equal(o.asked.length, 3)
+  })
 })

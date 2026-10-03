@@ -4,18 +4,22 @@
 // - borders.json: every land border line (ne_10m_admin_0_boundary_lines_land), for client/scene/borders.ts to draw.
 // - seas.json: one label point per named ocean, sea, gulf and bay (ne_10m_geography_marine_polys), for
 //   client/scene/placeLabels.ts: the centre of the largest circle inside it (insidePoint), so the name sits well inside.
+// - countries.json: each country at Natural Earth's own label point (ne_10m_admin_0_countries), for placeLabels.ts: on
+//   the mainland where a box round the people would fall in the sea (Spain with the Canaries, Portugal with the Azores).
 //
 //   node tools/build-map-overlays.ts [--out public/map] [--cache node_modules/.cache]
 //
-// The sources (~4 MB) are downloaded once into --cache (under node_modules, so gitignored); delete them to refresh.
+// The sources (~17 MB) are downloaded once into --cache (under node_modules, so gitignored); delete them to refresh.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { BORDER_UNIT, type BordersJson, type SeasJson } from '../shared/mapOverlays.ts'
+import { BORDER_UNIT, type BordersJson, type CountriesJson, type SeasJson } from '../shared/mapOverlays.ts'
 
 const NATURAL_EARTH = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/'
 const BORDERS_FILE = 'ne_10m_admin_0_boundary_lines_land.geojson'
 const SEAS_FILE = 'ne_10m_geography_marine_polys.geojson'
+const COUNTRIES_FILE = 'ne_10m_admin_0_countries.geojson'
+const COUNTRY_MIN_LABEL = 6 // Natural Earth names these only from zoom 6 on: bases, leases, reefs, disputed specks
 const SEA_KINDS = new Set(['ocean', 'sea', 'gulf', 'bay']) // not the straits, channels, sounds, fjords and lagoons
 const GRID = 24 // insidePoint's first look: GRID × GRID points over the polygon's box
 const REFINE = 8 // then this many rounds of 5 × 5 points round the best, each at half the last step
@@ -150,6 +154,26 @@ export function seasFrom(fc: FeatureCollection): SeasJson['seas'] {
   return out.sort((a, b) => a[3] - b[3] || a[0].localeCompare(b[0]))
 }
 
+/**
+ * Each country at Natural Earth's label point (LABEL_X, LABEL_Y) with its LABELRANK (2 the largest … 10), lowest rank
+ * first, then by name; MIN_LABEL ≥ COUNTRY_MIN_LABEL left out. The name is the shorter of NAME_EN and NAME_LONG: plain
+ * English either way, without the formal "People's Republic of China" (NAME_EN) or "Russian Federation" (NAME_LONG), and
+ * without NAME's abbreviations ("Dem. Rep. Congo").
+ */
+export function countriesFrom(fc: FeatureCollection): CountriesJson['countries'] {
+  const out: CountriesJson['countries'] = []
+  for (const f of fc.features) {
+    const p = f.properties ?? {}
+    const named = (n: unknown): string => (typeof n === 'string' ? n.trim() : '')
+    const english = [named(p.NAME_EN), named(p.NAME_LONG)].filter((n) => n !== '')
+    const name = english.length > 0 ? english.reduce((a, b) => (b.length < a.length ? b : a)) : named(p.NAME)
+    const [lon, lat, rank, minLabel] = [p.LABEL_X, p.LABEL_Y, p.LABELRANK, p.MIN_LABEL].map(Number)
+    if (name === '' || !Number.isFinite(lon) || !Number.isFinite(lat) || !(minLabel < COUNTRY_MIN_LABEL)) continue
+    out.push([name, r2(lon), r2(lat), Number.isFinite(rank) ? rank : 10])
+  }
+  return out.sort((a, b) => a[3] - b[3] || a[0].localeCompare(b[0]))
+}
+
 /** Text of `dir/name`, downloaded from `base` first when it is not cached yet (tools/build-places.ts' pattern). */
 async function cached(dir: string, base: string, name: string): Promise<Buffer> {
   const path = join(dir, name)
@@ -171,13 +195,15 @@ export async function main(argv: string[]): Promise<void> {
   const json = async (name: string): Promise<FeatureCollection> => JSON.parse((await cached(dir, NATURAL_EARTH, name)).toString('utf8')) as FeatureCollection
   const borders = bordersFrom(await json(BORDERS_FILE))
   const seas = seasFrom(await json(SEAS_FILE))
+  const countries = countriesFrom(await json(COUNTRIES_FILE))
   mkdirSync(values.out, { recursive: true })
   // One row a line: small diffs when the source changes.
   const rows = (key: string, list: readonly unknown[]): string => `{"${key}":[\n${list.map((r) => JSON.stringify(r)).join(',\n')}\n]}\n`
   writeFileSync(join(values.out, 'borders.json'), rows('lines', borders.lines))
   writeFileSync(join(values.out, 'seas.json'), rows('seas', seas))
+  writeFileSync(join(values.out, 'countries.json'), rows('countries', countries))
   const points = borders.lines.reduce((n, l) => n + l.length / 2, 0)
-  console.log(`${values.out}: borders.json ${borders.lines.length} lines, ${points} points; seas.json ${seas.length} seas`)
+  console.log(`${values.out}: borders.json ${borders.lines.length} lines, ${points} points; seas.json ${seas.length} seas; countries.json ${countries.length} countries`)
 }
 
 if (import.meta.main) await main(process.argv.slice(2))

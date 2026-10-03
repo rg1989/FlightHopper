@@ -116,9 +116,11 @@ test('BordersProvider: Web Mercator tiles to level 18; the data fetched once, on
   await withBrowser(async () => {
     const urls: string[] = []
     let answer!: (j: BordersJson) => void
-    const p = new BordersProvider('map/borders.json', () => true, (url) => {
-      urls.push(url)
-      return new Promise((r) => (answer = r))
+    const p = new BordersProvider('map/borders.json', {
+      getJson: (url) => {
+        urls.push(url)
+        return new Promise((r) => (answer = r))
+      },
     })
     assert.equal(p.maximumLevel, BORDERS_MAX_LEVEL)
     assert.equal(BORDERS_MAX_LEVEL, 18)
@@ -141,7 +143,7 @@ test('BordersProvider: Web Mercator tiles to level 18; the data fetched once, on
 test('BordersProvider: a tile still waiting for its turn when the layer hides is dropped, and Cesium hears it cancelled', async () => {
   await withBrowser(async () => {
     let shown = true
-    const p = new BordersProvider('map/borders.json', () => shown, () => Promise.resolve(ISRAEL))
+    const p = new BordersProvider('map/borders.json', { live: () => shown, getJson: () => Promise.resolve(ISRAEL) })
     const request = new Request({ url: 'map/borders.json' })
     const tile = p.requestImage(9, 6, 4, request)
     shown = false
@@ -150,22 +152,54 @@ test('BordersProvider: a tile still waiting for its turn when the layer hides is
   })
 })
 
-test('BordersProvider: a failed fetch leaves the tiles clear (one warning, no tile errors) and the next ask fetches again', async () => {
-  await withBrowser(async () => {
+/** Runs with console.warn collected into the array it gets, then puts it back. */
+async function withWarnings(run: (warned: unknown[][]) => Promise<void>): Promise<void> {
+  const warn = console.warn
+  const warned: unknown[][] = []
+  console.warn = (...a: unknown[]) => void warned.push(a)
+  try {
+    await run(warned)
+  } finally {
+    console.warn = warn
+  }
+}
+
+test('BordersProvider: a failed fetch leaves the tiles clear with one warning; nothing is asked again for a minute, then it is', async () => {
+  await withBrowser(() => withWarnings(async (warned) => {
+    let t = 0
     let calls = 0
-    const warn = console.warn
-    const warned: unknown[] = []
-    console.warn = (...a: unknown[]) => void warned.push(a)
-    try {
-      const p = new BordersProvider('map/borders.json', () => true, () => (++calls === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(ISRAEL)))
-      const first = (await p.requestImage(9, 6, 4)) as unknown as FakeImageData
-      assert.ok(first instanceof FakeImageData, 'clear')
-      assert.equal(warned.length, 1)
-      const again = (await p.requestImage(9, 6, 4)) as unknown as FakeCanvas
-      assert.equal(calls, 2)
-      assert.equal(again.strokes.length, 2, 'drawn this time')
-    } finally {
-      console.warn = warn
+    const p = new BordersProvider('map/borders.json', {
+      getJson: () => (++calls === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(ISRAEL)),
+      now: () => t,
+    })
+    assert.ok((await p.requestImage(9, 6, 4)) instanceof FakeImageData, 'clear, not a tile error for Cesium to log')
+    for (const at of [1000, 30_000, 59_999]) {
+      t = at
+      assert.ok((await p.requestImage(9, 6, 4)) instanceof FakeImageData)
     }
-  })
+    assert.deepEqual([calls, warned.length], [1, 1], 'one fetch and one warning in the minute')
+    t = 60_000
+    const again = (await p.requestImage(9, 6, 4)) as unknown as FakeCanvas
+    assert.equal(calls, 2)
+    assert.equal(again.strokes.length, 2, 'drawn this time')
+    assert.equal(warned.length, 1)
+  }))
+})
+
+test('BordersProvider: a file that will not decode is a failure like any other: clear tiles, one warning, asked again only after the minute', async () => {
+  await withBrowser(() => withWarnings(async (warned) => {
+    let t = 0
+    let calls = 0
+    const p = new BordersProvider('map/borders.json', {
+      getJson: () => (++calls, Promise.resolve({ lines: 5 } as unknown as BordersJson)),
+      now: () => t,
+    })
+    assert.ok((await p.requestImage(9, 6, 4)) instanceof FakeImageData)
+    t = 10_000
+    assert.ok((await p.requestImage(1, 1, 4)) instanceof FakeImageData)
+    assert.deepEqual([calls, warned.length], [1, 1])
+    t = 70_000
+    await p.requestImage(9, 6, 4)
+    assert.deepEqual([calls, warned.length], [2, 2], 'one warning a failed minute')
+  }))
 })

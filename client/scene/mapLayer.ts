@@ -402,7 +402,7 @@ export function makeReferenceLayers(viewer: Viewer, bordersUrl: string): Referen
   const chaseRoads = add(esri(ROADS_URL), { minimumTerrainLevel: CHASE_ROADS_MIN_TERRAIN_LEVEL })
   const places = add(esri(PLACES_URL))
   // A tile still waiting to be drawn when the borders hide or go is dropped.
-  const drawn = new BordersProvider(bordersUrl, () => borders.show && !borders.isDestroyed())
+  const drawn = new BordersProvider(bordersUrl, { live: () => borders.show && !borders.isDestroyed() })
   const borders = add(drawn)
   let chase = false
   let wantRoads = false

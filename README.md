@@ -37,7 +37,7 @@ make replay                  # the same, replaying the newest recording
 - Aircraft types in the past: the [Mictronics aircraft database](https://github.com/Mictronics/aircraft-database). Contains information from the Mictronics aircraft database, made available under the [ODC Attribution License](https://opendatacommons.org/licenses/by/1-0/). The server downloads it and holds it in memory only.
 - Airports: [OurAirports](https://ourairports.com/data/) (public domain).
 - Search places: airports and countries from OurAirports, cities of 15 000+ people and their regions from [GeoNames](https://www.geonames.org/) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)); `node tools/build-places.ts` rebuilds `public/search/places.json`.
-- Chase map borders and sea names: [Natural Earth](https://www.naturalearthdata.com/) (public domain); `node tools/build-map-overlays.ts` rebuilds `public/map/`.
+- Chase map borders, country and sea names: [Natural Earth](https://www.naturalearthdata.com/) (public domain); `node tools/build-map-overlays.ts` rebuilds `public/map/`.
 - Terrain / imagery: Cesium ion (Community plan), Re:Earth terrain, Esri World Imagery (optional `VITE_ARCGIS_KEY`), EOX Sentinel-2 cloudless.
 
 Contact: roman.grinevic@gmail.com

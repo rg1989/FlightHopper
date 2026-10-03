@@ -726,7 +726,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const reference = makeReferenceLayers(viewer, `${base}map/borders.json`) // over the map, the satellite and the night lights
   // The chase's place names, upright over the 3-D view (Esri's places raster lays them on the ground): under the traffic brackets.
   const placesLayer = div('fh-places', root)
-  const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, seasUrl: `${base}map/seas.json` })
+  const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, countriesUrl: `${base}map/countries.json`, seasUrl: `${base}map/seas.json` })
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
