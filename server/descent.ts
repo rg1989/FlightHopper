@@ -83,8 +83,11 @@ export function steepDescent(s: AltSeries): Drop | null {
     let top = k // the highest point in the window, the latest of equals: a fall starts where level flight ends
     for (let m = k + 1; m < j; m++) if (s.ft[m] >= s.ft[top]) top = m
     if (j - top + 1 < D1.points || s.ft[top] < D1.topFt || s.ft[top] - s.ft[j] < D1.fallFt) continue
-    let low = j // the bottom: follow the fall on while each step goes down, and stop at the first level or rising step
-    while (low + 1 < s.t.length && s.ft[low + 1] < s.ft[low] && falls(s, low)) low++
+    // The bottom: the first lowest point so far (the point that completed the fall may be a small rise after it), then on
+    // while each step goes down; the first level or rising step ends the fall.
+    let low = top
+    for (let m = top + 1; m <= j; m++) if (s.ft[m] < s.ft[low]) low = m
+    if (low === j) while (low + 1 < s.t.length && s.ft[low + 1] < s.ft[low] && falls(s, low)) low++
     return { startS: s.t[top], endS: s.t[low], fromFt: s.ft[top], toFt: s.ft[low] }
   }
   return null

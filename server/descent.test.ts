@@ -126,3 +126,8 @@ test('diveThenLost (D2): a last row repeated does not hide the dive', () => {
   const s = series([...rows, rows[rows.length - 1]])
   assert.deepEqual(diveThenLost(clean(s), 150), { startS: 0, endS: 30, fromFt: 35_000, toFt: 31_000 })
 })
+
+test('steepDescent (D1): when the point that completes the fall is a small rise after the bottom, the fall ends at the bottom', () => {
+  const d = steepDescent(series([[0, 35_000], [30, 30_000], [60, 24_000], [90, 24_200]]))
+  assert.deepEqual(d, { startS: 0, endS: 60, fromFt: 35_000, toFt: 24_000 })
+})
