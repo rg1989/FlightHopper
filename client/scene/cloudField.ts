@@ -75,8 +75,8 @@ interface Look {
 export const LOOKS: Readonly<Record<Cover, Look>> = {
   FEW: { perKm2: 0.02, w: [1000, 3000], h: [400, 1200], shape: [[18, 28], [10, 14], [10, 16]], slice: [0.32, 0.45], brightness: [0.9, 1], tint: [0, 0.05] },
   SCT: { perKm2: 0.06, w: [1000, 3000], h: [400, 1200], shape: [[18, 28], [10, 14], [10, 16]], slice: [0.32, 0.45], brightness: [0.9, 1], tint: [0, 0.05] },
-  BKN: { perKm2: 0.14, w: [2500, 4500], h: [900, 1700], shape: [[22, 32], [13, 18], [10, 15]], slice: [0.25, 0.36], brightness: [0.78, 0.95], tint: [0.04, 0.16] },
-  OVC: { perKm2: 0.25, w: [3500, 6000], h: [900, 1500], shape: [[24, 36], [13, 18], [10, 14]], slice: [0.24, 0.34], brightness: [0.72, 0.88], tint: [0.1, 0.24] },
+  BKN: { perKm2: 0.14, w: [3500, 6000], h: [1000, 1800], shape: [[22, 32], [13, 18], [10, 15]], slice: [0.25, 0.36], brightness: [0.78, 0.95], tint: [0.04, 0.16] },
+  OVC: { perKm2: 0.25, w: [5500, 9000], h: [1000, 1700], shape: [[24, 36], [13, 18], [10, 14]], slice: [0.24, 0.34], brightness: [0.72, 0.88], tint: [0.1, 0.24] },
 }
 const SHADE = 0.75 // a layer's brightness under each broken or overcast layer above it (estimate)
 
@@ -90,17 +90,17 @@ interface TowerLook {
 
 /** The towers a CB or TCU layer stands up. */
 export const TOWERS: Readonly<Record<'CB' | 'TCU', TowerLook>> = {
-  CB: { count: [2, 4], h: [4000, 9000], w: [3000, 6000], baseTint: 0.65, anvil: [2.5, 3.5] },
-  TCU: { count: [3, 6], h: [2000, 4000], w: [2000, 4000], baseTint: 0.3, anvil: null },
+  CB: { count: [2, 4], h: [4000, 9000], w: [4500, 8000], baseTint: 0.65, anvil: [2.5, 3.5] },
+  TCU: { count: [3, 6], h: [2000, 4000], w: [2500, 5000], baseTint: 0.3, anvil: null },
 }
 const TOWER_DISC = 0.8 // towers stand within this share of the disc's radius
 const LEVEL_ASPECT = 0.8 // a tower's levels are about this tall for its width
 const LEVEL_PUFFS = 3 // puffs side by side at its base, down to one at its top
-const PUFF_W = 0.6 // a tower puff's width, of its column's, narrowing a fifth up the tower
+const PUFF_W = 0.75 // a tower puff's width, of its column's, narrowing a fifth up the tower
 const PUFF_RING = 0.3 // a level's puffs stand round the axis this share of the column's width from it
 const PUFF_STACK = 1.4 // each level's puffs are this much taller than the level, so the levels merge
 const TOWER_SHAPE: readonly [Range, Range, Range] = [[14, 20], [14, 19], [14, 18]]
-const TOWER_SLICE: Range = [0.22, 0.3] // low slices: dense, opaque puffs
+const TOWER_SLICE: Range = [0.18, 0.26] // low slices: dense, opaque puffs
 const TOWER_BRIGHTNESS: Range = [0.95, 1]
 const ANVIL_H: Range = [800, 1100] // m
 const ANVIL_PUFFS = 3 // side by side along the way it spreads
@@ -172,6 +172,24 @@ function shares(wanted: number[], n: number): number[] {
 }
 
 type Layer = Cloud & { cover: Cover; baseFt: number }
+
+const SHADE_OF: Readonly<Record<string, number>> = { BKN: 0.55, OVC: 0.85, VV: 0.95, OVX: 0.95 }
+
+/**
+ * How much a station's broken or overcast layer greys the sky over the camera, 0 (none) to about 1: its thickest such
+ * layer whose base is above the camera. Metres as the station reports them (MSL); the camera's height above the ellipsoid
+ * differs by the geoid's few tens of metres, nothing against a cloud base.
+ */
+export function overcastShade(m: Metar | null, camM: number): number {
+  if (m === null || m.elevM === null) return 0
+  let shade = 0
+  for (const c of m.clouds) {
+    const s = SHADE_OF[c.cover] ?? 0
+    if (s > shade && c.baseFt !== null && m.elevM + c.baseFt * FT > camM) shade = s
+  }
+  if (m.vertVisFt !== null && m.elevM + m.vertVisFt * FT > camM) shade = Math.max(shade, SHADE_OF.VV)
+  return shade
+}
 
 /**
  * The clouds of one report: its towers (never thinned), then each layer's clouds by its cover, thinned to its share of

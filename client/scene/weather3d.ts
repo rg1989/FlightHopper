@@ -29,7 +29,7 @@ import { geoidN } from '../../shared/geoid.ts'
 import type { Metar, Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { REBUILD_KM, nearestClouds, observedClouds, type CloudSpec } from './cloudField.ts'
+import { REBUILD_KM, nearestClouds, observedClouds, overcastShade, type CloudSpec } from './cloudField.ts'
 import { CloudLayer } from './cloudLayer.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
@@ -47,7 +47,7 @@ const LOOK_MS = 1000 // update() looks at its clocks and the aircraft this often
 export const HAZARD_KM = 800 // hazard areas are drawn when their ring passes this near the aircraft
 const PICK_KM = 10 // the hazard areas are picked again once the aircraft has moved this far
 const FILL_ALPHA = 0.1
-const LINE_ALPHA = 0.6
+const LINE_ALPHA = 0.3
 const LABEL_KEY = 'hazards' // this layer in the names overlay
 const LABEL_RANK = 1.5 // after the seas (1), before every city (2)
 const NOTE = 'some weather unavailable'
@@ -56,6 +56,11 @@ const PRECIP_OVER_BASE_M = 300 // rain or snow shows round a camera up to this f
 const PRECIP_OVER_GROUND_M = 3000 // or this far over the ground when no base is known
 const TRUE_RELIEF: TerrainFrame = { fSampled: 1, fNow: 1, relHM: 0 }
 const AIM_MS = 250 // the rain or snow overlay is leaned for the camera's heading at most this often
+// Under a broken or overcast layer the sky greys (Cesium's sky atmosphere): its colour and light drop by these at full
+// shade (cloudField.ts overcastShade), easing over SHADE_EASE_S: an estimate, by eye.
+const SKY_DESATURATE = 0.75
+const SKY_DARKEN = 0.3
+const SHADE_EASE_S = 2
 
 /** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn. */
 export interface Aircraft {
@@ -174,6 +179,10 @@ export class Weather3D {
   #fNow = 1 // the relief drawn, as the last frame gave it (its object is reused: copied)
   #relHM = 0
   #night = 0 // the Sun's night, as setNight gave it
+  #shadeTarget = 0 // the overcast's grey over the camera, from the last look
+  #shade = 0 // as the sky has it now, easing to the target
+  #shadeMs = Number.NaN
+  #written = 0 // the grey last written to the sky
   #falling = false // the overlay shows rain or snow
   #aimedMs = -Infinity
   #tileFrom: RadarSource | null = null // the radar tile under the camera: its frame, its z7 x/y, the tile once it has come
@@ -213,6 +222,7 @@ export class Weather3D {
       this.#sky.fog.set(null)
       this.#sky.precip.set(null)
       this.#falling = false
+      this.#greySky(0)
     }
   }
 
@@ -277,6 +287,7 @@ export class Weather3D {
     }
     this.#sky.clouds.frame(tf, this.#night)
     this.#sky.fog.frame(tf, this.#night)
+    this.#easeShade(nowMs)
     if (this.#falling && nowMs - this.#aimedMs >= AIM_MS) {
       this.#aimedMs = nowMs
       this.#sky.precip.aim(this.#viewer.camera.heading)
@@ -418,6 +429,7 @@ export class Weather3D {
     this.#sky.precip.set(fall)
     if (fall !== null && !this.#falling) this.#aimedMs = -Infinity // aimed at the next frame
     this.#falling = fall !== null
+    this.#shadeTarget = this.#overcast()
     this.#status()
   }
 
@@ -430,6 +442,36 @@ export class Weather3D {
     this.#builtGen = this.#metarGen
     this.#builtLat = a.lat
     this.#builtLon = a.lon
+  }
+
+  /** The overcast's grey over the camera: the nearest station's (within its 30 km) broken or overcast layer above it. */
+  #overcast(): number {
+    const c = this.#viewer.camera.positionCartographic
+    return overcastShade(nearestStation(this.#metars, CesiumMath.toDegrees(c.latitude), CesiumMath.toDegrees(c.longitude)), c.height)
+  }
+
+  /** The sky's grey eased toward the look's; written to the sky in steps of 1 % and at the target. */
+  #easeShade(nowMs: number): void {
+    const dt = Number.isFinite(this.#shadeMs) ? Math.min(0.25, Math.max(0, (nowMs - this.#shadeMs) / 1000)) : 0
+    this.#shadeMs = nowMs
+    if (this.#shade === this.#shadeTarget) return
+    const next = this.#shade + (this.#shadeTarget - this.#shade) * Math.min(1, dt / SHADE_EASE_S)
+    this.#shade = Math.abs(this.#shadeTarget - next) < 0.001 ? this.#shadeTarget : next
+    if (Math.abs(this.#shade - this.#written) >= 0.01 || this.#shade === this.#shadeTarget) this.#writeSky(this.#shade)
+  }
+
+  /** The sky's grey at once (hidden: none). */
+  #greySky(shade: number): void {
+    this.#shade = this.#shadeTarget = shade
+    this.#writeSky(shade)
+  }
+
+  #writeSky(shade: number): void {
+    this.#written = shade
+    const sky = this.#viewer.isDestroyed?.() ? undefined : this.#viewer.scene?.skyAtmosphere
+    if (sky === undefined) return
+    sky.saturationShift = -SKY_DESATURATE * shade
+    sky.brightnessShift = -SKY_DARKEN * shade
   }
 
   /**

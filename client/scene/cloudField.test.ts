@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
 import type { Cloud, Metar } from '../../shared/wx.ts'
 import {
-  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, REBUILD_KM, STATION_CAP, fadeAlpha, metarClouds, nearestClouds, observedClouds, reportsSky, sunBrightness,
+  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, REBUILD_KM, STATION_CAP, fadeAlpha, metarClouds, nearestClouds, observedClouds, overcastShade, reportsSky, sunBrightness,
   type CloudSpec,
 } from './cloudField.ts'
 
@@ -317,3 +317,17 @@ test('sunBrightness: full by day, about half at dusk, 0.15 at night', () => {
   assert.ok(near(sunBrightness(2), 0.15, 1e-9))
   assert.equal(sunBrightness(Number.NaN), 1)
 })
+
+test('overcastShade: the thickest broken or overcast layer above the camera greys the sky; none above it, none for few or scattered', () => {
+  const cl = (cover: string, baseFt: number): Cloud => ({ cover, baseFt, type: null })
+  const m = metar({ elevM: 40, clouds: [cl('SCT', 1500), cl('BKN', 3000), cl('OVC', 6000)] })
+  assert.equal(overcastShade(m, 100), 0.85) // under all three: the overcast's
+  assert.equal(overcastShade(m, 40 + 4000 * FT), 0.85) // between the broken and the overcast: the overcast above
+  assert.equal(overcastShade(m, 40 + 7000 * FT), 0) // above every layer
+  assert.equal(overcastShade(metar({ clouds: [cl('BKN', 2000)] }), 100), 0.55)
+  assert.equal(overcastShade(metar({ clouds: [cl('FEW', 2000), cl('SCT', 3000)] }), 100), 0)
+  assert.equal(overcastShade(metar({ clouds: [], vertVisFt: 200 }), 50), 0.95) // a hidden sky: fog overhead
+  assert.equal(overcastShade(metar({ elevM: null, clouds: [cl('OVC', 1000)] }), 0), 0) // unknown height: nothing to compare
+  assert.equal(overcastShade(null, 0), 0)
+})
+

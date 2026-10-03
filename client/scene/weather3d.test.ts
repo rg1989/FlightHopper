@@ -117,7 +117,7 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     dataSources: { add: async (ds: CustomDataSource) => void sources.push(ds), remove: async (ds: CustomDataSource, destroy?: boolean) => void removed.push([ds, destroy]) },
     isDestroyed: () => gone,
     camera,
-    scene: { globe: { getHeight: (): number | undefined => ground } },
+    scene: { globe: { getHeight: (): number | undefined => ground }, skyAtmosphere: { saturationShift: 0, brightnessShift: 0 } },
   } as unknown as Viewer
   const labelCalls: LabelCall[] = []
   const labels = { setLayer: (key: string, rank: number, ls: readonly LayerLabel[]) => void labelCalls.push({ key, rank, labels: [...ls] }) }
@@ -142,6 +142,7 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     shown: (): LayerLabel[] => labelCalls.at(-1)?.labels ?? [], // the labels the overlay holds for the layer now
     asks: (what: 'metar' | 'sigmet' | 'weather-maps'): string[] => asked.filter((u) => u.includes(what === 'metar' ? '/wx/metar' : what === 'sigmet' ? '/wx/sigmet' : 'weather-maps')),
     setUnits: (u: Units): void => void (units = u),
+    skyShift: (): { saturationShift: number; brightnessShift: number } => (viewer.scene as unknown as { skyAtmosphere: { saturationShift: number; brightnessShift: number } }).skyAtmosphere,
   }
 }
 type Rig = ReturnType<typeof rig>
@@ -291,7 +292,7 @@ test('Weather3D: what it keeps for the pieces that draw: the METARs, the SIGMETs
   assert.match(r.w.radar!.url, /\/v2\/radar\/newer\//)
 })
 
-test('Weather3D: hazard areas within 800 km are translucent volumes from base to top: 0.10 fill, 0.6 outline, the hazard\'s colour', async () => {
+test('Weather3D: hazard areas within 800 km are translucent volumes from base to top: 0.10 fill, 0.3 outline, the hazard\'s colour', async () => {
   const r = rig()
   const ts = sigmet({ rings: [northOf(300, 2)], base: 18000, top: 35000 })
   const turb = sigmet({ hazard: 'TURB', qualifier: 'SEV', rings: [northOf(500, 2), northOf(2000, 2)] }) // base none: from the ground
@@ -304,8 +305,8 @@ test('Weather3D: hazard areas within 800 km are translucent volumes from base to
   const red = Color.fromCssColorString(sigmetColor('TS'))
   const amber = Color.fromCssColorString(sigmetColor('TURB'))
   assert.ok(a.fill.equals(red.withAlpha(0.1)), String(a.fill))
-  assert.ok(a.line.equals(red.withAlpha(0.6)), String(a.line))
-  assert.ok(b.fill.equals(amber.withAlpha(0.1)) && b.line.equals(amber.withAlpha(0.6)))
+  assert.ok(a.line.equals(red.withAlpha(0.3)), String(a.line))
+  assert.ok(b.fill.equals(amber.withAlpha(0.1)) && b.line.equals(amber.withAlpha(0.3)))
   assert.deepEqual([a.outlined, b.outlined], [true, true])
   assert.ok(a.ring.some(([lon, lat]) => near(lon, AC.lon - 1, 1e-6) && near(lat, AC.lat + 300 / KM_PER_DEG, 1e-6)), 'the ring as the SIGMET gives it')
   assert.equal(r.w.hazards.length, 2)
@@ -919,3 +920,23 @@ test('Weather3D: the relief is read from each frame, not kept (Topography reuses
   r.w.rebuildSky()
   assert.equal(r.sky.precip.sets.at(-1), null, 'the flat relief this frame gave')
 })
+
+test('Weather3D: under a nearby station’s overcast the sky greys, easing in; above the deck or hidden it is the sky’s own again', async () => {
+  const r = rig()
+  r.answers.metar = [metar('LLBG', AC.lat, AC.lon, { elevM: 30, clouds: [{ cover: 'OVC', baseFt: 2000, type: null }] })]
+  r.setCamera(AC.lat, AC.lon, 200) // under the deck (base 30 + 610 m)
+  await open(r)
+  for (let t = 1000; t <= 12_000; t += 100) r.w.update(AC, t) // a look a second, eased every frame
+  assert.ok(r.skyShift().saturationShift < -0.6, `${r.skyShift().saturationShift}`) // about 0.75 × 0.85
+  assert.ok(r.skyShift().brightnessShift < -0.24, `${r.skyShift().brightnessShift}`)
+  r.setCamera(AC.lat, AC.lon, 3000) // above it
+  for (let t = 12_100; t <= 30_000; t += 100) r.w.update(AC, t)
+  assert.equal(r.skyShift().saturationShift, -0)
+  r.setCamera(AC.lat, AC.lon, 200)
+  for (let t = 30_100; t <= 45_000; t += 100) r.w.update(AC, t)
+  assert.ok(r.skyShift().saturationShift < -0.6)
+  r.w.show = false // hidden: the sky's own colours at once
+  assert.equal(r.skyShift().saturationShift, -0)
+  assert.equal(r.skyShift().brightnessShift, -0)
+})
+
