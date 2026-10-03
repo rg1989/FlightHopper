@@ -74,6 +74,8 @@ const TILE_WAIT_MS = 3000 // tiles that have come are built from once none is st
 const SKY_DESATURATE = 0.75
 const SKY_DARKEN = 0.3
 const SHADE_EASE_S = 2
+/** How grey rain on the radar over the camera makes the sky: none under 15 dBZ, light rain 0.5, heavy 0.9 (an estimate, by eye). */
+export const echoShade = (dbz: number): number => (dbz < 15 ? 0 : dbz >= 40 ? 0.9 : dbz >= 30 ? 0.75 : 0.5)
 
 /** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn. */
 export interface Aircraft {
@@ -523,7 +525,12 @@ export class Weather3D {
   /** The overcast's grey over the camera: the nearest station's (within its 30 km) broken or overcast layer above it. */
   #overcast(): number {
     const c = this.#viewer.camera.positionCartographic
-    return overcastShade(nearestStation(this.#metars, CesiumMath.toDegrees(c.latitude), CesiumMath.toDegrees(c.longitude)), c.height)
+    const lat = CesiumMath.toDegrees(c.latitude)
+    const lon = CesiumMath.toDegrees(c.longitude)
+    const station = overcastShade(nearestStation(this.#metars, lat, lon), c.height)
+    // Rain on the radar over the camera is cloud overhead too, whatever the nearest report says (an estimate, by eye).
+    const echo = this.#echo(lat - this.#shift.dLat, wrapLon(lon - this.#shift.dLon))
+    return Math.max(station, echo === null ? 0 : echoShade(echo.dbz))
   }
 
   /** The sky's grey eased toward the look's; written to the sky in steps of 1 % and at the target. */

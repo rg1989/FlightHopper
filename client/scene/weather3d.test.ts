@@ -18,7 +18,7 @@ import { radarPixel, windOf, type Fall } from './precip.ts'
 import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { pickShafts, type RainShaft } from './rainShafts.ts'
-import { HAZARD_KM, Weather3D, parseWxAt, statusText3d } from './weather3d.ts'
+import { HAZARD_KM, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 type Ring = [number, number][]
@@ -1344,3 +1344,11 @@ test('Weather3D: the radar frames it has left do not stay in memory: its tiles h
   }
   assert.equal(old.deref(), undefined, 'the older frame\'s source is gone')
 })
+
+test('echoShade: rain on the radar over the camera greys the sky by its strength', () => {
+  assert.equal(echoShade(5), 0)
+  assert.equal(echoShade(15), 0.5)
+  assert.equal(echoShade(32), 0.75)
+  assert.equal(echoShade(48), 0.9)
+})
+
