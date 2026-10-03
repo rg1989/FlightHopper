@@ -1,7 +1,7 @@
 // shared/wx.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MODEL_CLOUD_HPA, MODEL_VARIABLES, MODEL_WIND_HPA, assembleModel, slimMetars, slimModel, slimPlaces, type ModelGeo, type ModelPlace } from './wx.ts'
+import { MODEL_CLOUD_HPA, MODEL_VARIABLES, MODEL_WIND_HPA, assembleModel, slimMetars, slimPlaces, type ModelGeo, type ModelGrid, type ModelPlace } from './wx.ts'
 
 const MI = 1.609344 // km in a statute mile
 const near = (a: number | null, b: number): boolean => a !== null && Math.abs(a - b) < 1e-9
@@ -93,7 +93,7 @@ test('slimMetars: elevM is the API\'s elev, the station\'s metres above sea leve
   assert.equal(slimMetars([{ icaoId: 'X', lat: 1, lon: 2 }])[0].elevM, null)
 })
 
-// ---- slimModel --------------------------------------------------------------------------------------------------------------
+// ---- a grid from Open-Meteo's answer: slimPlaces, then assembleModel -------------------------------------------------------------
 
 // One place of Open-Meteo's multi-point answer as it came (api.open-meteo.com/v1/forecast, 2026-10-03 08:40 UTC, forecast_hours=1,
 // wind_speed_unit=kn, timeformat=unixtime), without its hourly_units: the model's own nearest point (not the one asked for), its
@@ -112,6 +112,9 @@ const REAL_PLACE = {
 }
 
 const GEO: ModelGeo = { lat0: 31.5, lon0: 34, step: 0.25, n: 7 }
+
+/** What the server makes of Open-Meteo's answer for all the places of geo (in the order asked): slimPlaces, assembled. */
+const gridOf = (json: unknown, geo: ModelGeo): ModelGrid => assembleModel(geo, slimPlaces(json, geo.n * geo.n))
 
 /** A 7 × 7 answer whose values say where they belong: place k, level l. `over` replaces some of one place's arrays. */
 function answer(over: Record<number, Record<string, unknown>> = {}, n = 49): unknown[] {
@@ -140,8 +143,8 @@ test('MODEL_VARIABLES: cloud cover and level height at ten levels, wind speed an
   assert.deepEqual(MODEL_WIND_HPA, [850, 700, 500, 300, 250, 200])
 })
 
-test('slimModel: the real place of an Open-Meteo answer: every level by its own name, the ground and the hour', () => {
-  const g = slimModel([REAL_PLACE], { lat0: 32.25, lon0: 34.75, step: 0.25, n: 1 })
+test('slimPlaces + assembleModel: the real place of an Open-Meteo answer: every level by its own name, the ground and the hour', () => {
+  const g = gridOf([REAL_PLACE], { lat0: 32.25, lon0: 34.75, step: 0.25, n: 1 })
   assert.deepEqual([g.lat0, g.lon0, g.step, g.n, g.timeMs], [32.25, 34.75, 0.25, 1, 1791014400_000], 'where it was asked for, not where the model answered from')
   assert.deepEqual(g.elevM, [0])
   assert.deepEqual(g.clouds.map((l) => l.hPa), MODEL_CLOUD_HPA)
@@ -152,8 +155,8 @@ test('slimModel: the real place of an Open-Meteo answer: every level by its own 
   assert.deepEqual(g.winds.map((l) => l.deg[0]), [213, 231, 236, 237, 236, 233])
 })
 
-test('slimModel: 49 places in the order asked become arrays by level: index = row × 7 + column, rows north, columns east', () => {
-  const g = slimModel(answer(), GEO)
+test('slimPlaces + assembleModel: 49 places in the order asked become arrays by level: index = row × 7 + column, rows north, columns east', () => {
+  const g = gridOf(answer(), GEO)
   assert.equal(g.elevM.length, 49)
   assert.equal(g.clouds.length, 10)
   assert.equal(g.winds.length, 6)
@@ -169,8 +172,8 @@ test('slimModel: 49 places in the order asked become arrays by level: index = ro
   assert.equal(g.timeMs, 1791014400_000)
 })
 
-test('slimModel: a value the model has none for is null, wherever it is; so is one that is not a number; the rest of the grid stays', () => {
-  const g = slimModel(answer({
+test('slimPlaces + assembleModel: a value the model has none for is null, wherever it is; so is one that is not a number; the rest of the grid stays', () => {
+  const g = gridOf(answer({
     2: { cloud_cover_700hPa: [null], geopotential_height_300hPa: [null], wind_speed_500hPa: [null] },
     5: { wind_direction_500hPa: ['north'], cloud_cover_850hPa: [Number.NaN] },
     8: { cloud_cover_925hPa: [], wind_speed_200hPa: undefined },
@@ -184,19 +187,19 @@ test('slimModel: a value the model has none for is null, wherever it is; so is o
   assert.equal(g.winds[5].kt[8], null, 'a key left out')
   assert.equal(g.clouds[3].cover[1], 4, 'a neighbour is as it was')
   assert.equal(g.clouds[3].cover[3], 6)
-  const bare = slimModel(answer({ 0: { time: [] }, 1: { time: [null] }, 2: { time: [1791010800] } }), GEO)
+  const bare = gridOf(answer({ 0: { time: [] }, 1: { time: [null] }, 2: { time: [1791010800] } }), GEO)
   assert.equal(bare.timeMs, 1791010800_000, 'the hour is the oldest place\'s: a place without one counts for nothing')
-  const none = slimModel(answer().map(() => ({ hourly: {} })), GEO)
+  const none = gridOf(answer().map(() => ({ hourly: {} })), GEO)
   assert.equal(none.timeMs, null)
   assert.ok(none.elevM.every((v) => v === null) && none.clouds.every((l) => l.cover.every((v) => v === null)) && none.winds.every((l) => l.kt.every((v) => v === null)))
 })
 
-test('slimModel: whole percent, metres and degrees; the wind to 0.1 kt, its direction never 360; a place with no height is null', () => {
+test('slimPlaces + assembleModel: whole percent, metres and degrees; the wind to 0.1 kt, its direction never 360; a place with no height is null', () => {
   const places = answer({
     0: { cloud_cover_1000hPa: [49.6], geopotential_height_1000hPa: [-120.6], wind_speed_850hPa: [17.26], wind_direction_850hPa: [212.5], wind_direction_700hPa: [359.6] },
   })
   delete (places[1] as { elevation?: number }).elevation
-  const g = slimModel(places, GEO)
+  const g = gridOf(places, GEO)
   assert.equal(g.clouds[0].cover[0], 50)
   assert.equal(g.clouds[0].zM[0], -121, 'below sea level in a deep low')
   assert.equal(g.winds[0].kt[0], 17.3)
@@ -205,12 +208,12 @@ test('slimModel: whole percent, metres and degrees; the wind to 0.1 kt, its dire
   assert.equal(g.elevM[1], null)
 })
 
-test('slimModel: anything but one object a place is an error: the server serves the last good answer, or says it failed', () => {
+test('slimPlaces + assembleModel: anything but one object a place is an error: the server serves the last good answer, or says it failed', () => {
   for (const bad of [null, {}, 'x', [], answer({}, 48), answer({}, 50), { error: true, reason: 'Latitude must be in range of -90 to 90°.' }]) {
-    assert.throws(() => slimModel(bad, GEO), /expected an object for each of 49 places/, JSON.stringify(bad)?.slice(0, 40))
+    assert.throws(() => gridOf(bad, GEO), /expected an object for each of 49 places/, JSON.stringify(bad)?.slice(0, 40))
   }
-  assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? null : p)), GEO), /expected an object for each of 49 places/, 'a place that is not an object')
-  assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? 'x' : p)), GEO), /expected an object/)
+  assert.throws(() => gridOf(answer().map((p, k) => (k === 3 ? null : p)), GEO), /expected an object for each of 49 places/, 'a place that is not an object')
+  assert.throws(() => gridOf(answer().map((p, k) => (k === 3 ? 'x' : p)), GEO), /expected an object/)
 })
 
 test('slimPlaces: one ModelPlace for each place asked, by level; many places come as an array, one place as the object itself (or an array of one)', () => {
@@ -261,9 +264,4 @@ test('assembleModel: places row by row become the grid\'s arrays by level; its h
   assert.equal(assembleModel(GEO, places.map((p) => ({ ...p, timeMs: null }))).timeMs, null, 'no place knows its hour')
   assert.throws(() => assembleModel(GEO, places.slice(1)), /expected 49 places, got 48/)
   assert.throws(() => assembleModel(GEO, [...places, places[0]]), /expected 49 places, got 50/)
-})
-
-test('slimModel is slimPlaces assembled: the same grid, place for place', () => {
-  const json = answer({ 7: { cloud_cover_700hPa: [null] } })
-  assert.deepEqual(slimModel(json, GEO), assembleModel(GEO, slimPlaces(json, 49)))
 })

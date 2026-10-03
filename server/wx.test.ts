@@ -137,7 +137,7 @@ const COVER = (lat: number, lon: number): number => Math.round((lat + 90) * 4 + 
 interface Ask { url: string; ua: string; places: [number, number][] }
 function upstream() {
   const asks: Ask[] = []
-  const state = { how: 'ok' as 'ok' | 'down' | 'http' | 'error' | 'short' }
+  const state = { how: 'ok' as 'ok' | 'down' | 'timeout' | 'http' | 'error' | 'short' }
   const fetchFn = (async (url: string, init?: RequestInit) => {
     const q = new URL(url).searchParams
     const lats = q.get('latitude')!.split(',').map(Number)
@@ -145,6 +145,7 @@ function upstream() {
     asks.push({ url, ua: (init?.headers as Record<string, string>)['user-agent'], places: lats.map((la, i) => [la, lons[i]]) })
     await Promise.resolve()
     if (state.how === 'down') throw new Error('offline')
+    if (state.how === 'timeout') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
     if (state.how === 'http') return new Response('{"error":true,"reason":"Too many requests"}', { status: 429 })
     if (state.how === 'error') return new Response('{"error":true,"reason":"Latitude must be in range of -90 to 90°."}')
     const answers = lats.map((la, i) => ({ latitude: la, longitude: lons[i], elevation: asks.length, hourly: { time: [HOUR_S], cloud_cover_700hPa: [COVER(la, lons[i])] } }))
@@ -152,6 +153,18 @@ function upstream() {
     return new Response(JSON.stringify(answers.length === 1 ? answers[0] : answers))
   }) as unknown as typeof fetch
   return { asks, state, fetchFn }
+}
+/** What the server warned (console.warn) while fn ran. */
+async function warned(fn: () => Promise<void>): Promise<string[]> {
+  const out: string[] = []
+  const warn = console.warn
+  console.warn = (...a: unknown[]) => void out.push(a.join(' '))
+  try {
+    await fn()
+  } finally {
+    console.warn = warn
+  }
+  return out
 }
 const gridPlaces = (g: { lat0: number; lon0: number; step: number; n: number }): [number, number][] => modelPlaces(g).map((p) => [p.lat, p.lon])
 const lattice = (lats: number[], lons: number[]): [number, number][] => lats.flatMap((la) => lons.map((lo): [number, number] => [la, lo]))
@@ -218,34 +231,152 @@ test('model: a place is kept 30 min from when it was fetched, on its own: a cell
   assert.deepEqual(up.asks[3].places, gridPlaces(north).slice(35), 'and 30 min after 25: the 14')
 })
 
-test('model: at most 8,000 weighted calls a UTC day (a place counts 3.2: 32 variables a place): 51 grids; then what is held is served as it is, a cell not held is a 503 with Retry-After until the day turns', async () => {
+test('model: at most 8,000 weighted calls a UTC day (a place counts 3.2: 32 variables a place): 51 grids; then what is held is served as it is, a cell not held is a 503 with Retry-After until the day turns, and one warning says so', async () => {
   let now = T0
   const up = upstream()
-  const wx = makeWx({ userAgent: 't', fetchFn: up.fetchFn, nowMs: () => now })
+  const wx = makeWx({ userAgent: 'test', fetchFn: up.fetchFn, nowMs: () => now })
   const cell = (k: number): [string, string] => [String(-62 + 2 * k), '10'] // 2° apart: no place in two cells
-  for (let k = 0; k < 51; k++) {
+  const said = await warned(async () => {
+    for (let k = 0; k < 51; k++) {
+      now += 3 * MIN // 20 grids an hour: the day's allowance is the one that stops it
+      await wx.model(...cell(k))
+    }
+    assert.equal(up.asks.length, 51, '51 × 49 × 3.2 = 7,996.8 calls')
+    now += 3 * MIN
+    await assert.rejects(wx.model(...cell(51)), (e: unknown) => {
+      const secondsToMidnight = Math.ceil((Date.UTC(2026, 9, 4) - now) / 1000)
+      return e instanceof WxError && e.status === 503 && e.retryAfterS === secondsToMidnight && /day's allowance/.test(e.message)
+    })
+    assert.equal(up.asks.length, 51, 'the 52nd would pass 8,000: not asked')
+    now += 31 * MIN
+    const stale = await wx.model(...cell(50))
+    assert.ok(stale.elevM.every((e) => e === 51) && up.asks.length === 51, 'a cell held, run out: served as it is, nothing asked')
+    await assert.rejects(wx.model(...cell(52)), (e: unknown) => e instanceof WxError && e.status === 503)
+    now = Date.UTC(2026, 9, 4, 0, 0, 1)
+    const fresh = await wx.model(...cell(51))
+    assert.equal(up.asks.length, 52, 'a new day: asked')
+    assert.ok(fresh.elevM.every((e) => e === 52))
     now += 21_000
-    await wx.model(...cell(k))
-  }
-  assert.equal(up.asks.length, 51, '51 × 49 × 3.2 = 7,996.8 calls')
-  now += 21_000
-  await assert.rejects(wx.model(...cell(51)), (e: unknown) => {
-    const secondsToMidnight = Math.ceil((Date.UTC(2026, 9, 4) - now) / 1000)
-    return e instanceof WxError && e.status === 503 && e.retryAfterS === secondsToMidnight && /allowance/.test(e.message)
+    const again = await wx.model(...cell(0))
+    assert.equal(up.asks.length, 53, 'and the cell that was held no more is fetched again')
+    assert.ok(again.elevM.every((e) => e === 53))
   })
-  assert.equal(up.asks.length, 51, 'the 52nd would pass 8,000: not asked')
-  now += 31 * MIN
-  const stale = await wx.model(...cell(0))
-  assert.ok(stale.elevM.every((e) => e === 1) && up.asks.length === 51, 'a cell held, run out: served as it is, nothing asked')
-  await assert.rejects(wx.model(...cell(52)), (e: unknown) => e instanceof WxError && e.status === 503)
-  now = Date.UTC(2026, 9, 4, 0, 0, 1)
-  const fresh = await wx.model(...cell(51))
-  assert.equal(up.asks.length, 52, 'a new day: asked')
-  assert.ok(fresh.elevM.every((e) => e === 52))
-  now += 21_000
-  const again = await wx.model(...cell(0))
-  assert.equal(up.asks.length, 53, 'and the cell that had run out is fetched again')
-  assert.ok(again.elevM.every((e) => e === 53))
+  assert.equal(said.length, 1, 'three requests met the allowance: one warning')
+  assert.match(said[0], /day's allowance of calls \(8000\) is used; not asked again before 2026-10-04T00:00:00\.000Z/)
+})
+
+test('model: at most 4,000 weighted calls in any 60 min: 25 grids, then a 503 whose Retry-After runs to when the oldest charge leaves the hour; a smaller ask that fits is not stopped; after the hour it is asked again', async () => {
+  let now = T0
+  const up = upstream()
+  const wx = makeWx({ userAgent: 'test', fetchFn: up.fetchFn, nowMs: () => now })
+  const cell = (k: number): [string, string] => [String(-62 + 2 * k), '10']
+  const first = T0 + 21_000 // the first charge
+  const hourBlock = (e: unknown): boolean => e instanceof WxError && e.status === 503 && e.retryAfterS === Math.ceil((first + 60 * MIN - now) / 1000) && /hour's allowance/.test(e.message)
+  const said = await warned(async () => {
+    for (let k = 0; k < 25; k++) {
+      now += 21_000
+      await wx.model(...cell(k))
+    }
+    assert.equal(up.asks.length, 25, '25 × 156.8 = 3,920 calls, in 8 min 45 s')
+    now += 21_000
+    await assert.rejects(wx.model(...cell(25)), hourBlock)
+    assert.equal(up.asks.length, 25, 'the 26th grid would pass 4,000: not asked')
+    await wx.model('-13.5', '10') // the cell north of the last: 14 places held by it, 14 asked: 44.8 calls, 3,964.8 in all
+    assert.equal(up.asks.length, 26, 'a smaller ask that fits is asked')
+    assert.equal(up.asks[25].places.length, 14)
+    now += 21_000
+    await assert.rejects(wx.model('-13', '10'), hourBlock, 'another 14 places would pass 4,000')
+    now = first + 60 * MIN - 1000
+    await assert.rejects(wx.model(...cell(25)), hourBlock)
+    assert.equal(up.asks.length, 26, '1 s before the first charge is an hour old')
+    now = first + 60 * MIN
+    const grid = await wx.model(...cell(25))
+    assert.equal(up.asks.length, 27, 'it is an hour old: the window has room')
+    assert.ok(grid.elevM.every((e) => e === 27))
+    now += 61 * MIN
+    await wx.model(...cell(26))
+    assert.equal(up.asks.length, 28, 'an hour of nothing: the window is empty')
+  })
+  assert.equal(said.length, 1, 'three requests met the hour\'s allowance in one window: one warning')
+  assert.match(said[0], new RegExp(`hour's allowance of calls \\(4000\\) is used; not asked again before ${new Date(first + 60 * MIN).toISOString()}`))
+})
+
+test('model: the warning is once for each window of an allowance that stops the ask: a second hour that fills up warns again', async () => {
+  let now = T0
+  const up = upstream()
+  const wx = makeWx({ userAgent: 'test', fetchFn: up.fetchFn, nowMs: () => now })
+  const said = await warned(async () => {
+    let k = 0
+    for (let window = 0; window < 2; window++) {
+      for (let i = 0; i < 25; i++) {
+        now += 21_000
+        await wx.model(String(-62 + 2 * k++), '10')
+      }
+      for (let i = 0; i < 3; i++) {
+        now += 21_000
+        await assert.rejects(wx.model('80', '10'), (e: unknown) => e instanceof WxError && e.status === 503 && /hour's allowance/.test(e.message))
+      }
+      now += 61 * MIN // the whole window has gone
+    }
+  })
+  assert.equal(up.asks.length, 50)
+  assert.equal(said.length, 2, 'three blocked requests in each window')
+  assert.ok(said.every((w) => /^wx: .*hour's allowance of calls \(4000\) is used; not asked again before 2026-10-03T1\d:/.test(w)), said.join('\n'))
+})
+
+test('model: a request that throws or times out is not charged (nothing reached Open-Meteo): after three of them 25 grids still fit the hour', async () => {
+  let now = T0
+  const up = upstream()
+  const wx = makeWx({ userAgent: 'test', fetchFn: up.fetchFn, nowMs: () => now })
+  await warned(async () => {
+    for (const how of ['down', 'timeout', 'down'] as const) {
+      up.state.how = how
+      now += 61_000 // past the 60 s it is not asked after a failure
+      await assert.rejects(wx.model('10', '10'), (e: unknown) => e instanceof WxError && e.status === 502)
+    }
+    assert.equal(up.asks.length, 3)
+    up.state.how = 'ok'
+    now += 61_000
+    for (let k = 0; k < 25; k++) {
+      now += 21_000
+      await wx.model(String(-62 + 2 * k), '10')
+    }
+    assert.equal(up.asks.length, 28, 'the three that did not come back cost nothing: 25 grids still fit the hour (charged, 3,920 + 470.4 would not)')
+    now += 21_000
+    await assert.rejects(wx.model('60', '10'), (e: unknown) => e instanceof WxError && e.status === 503 && /hour's allowance/.test(e.message))
+  })
+})
+
+test('model: the day\'s count has the answered requests (HTTP 429, an error object, a place short) and not the ones that threw or timed out: 48 grids fit after 2 of those and 3 of these', async () => {
+  let now = T0
+  const up = upstream()
+  const wx = makeWx({ userAgent: 'test', fetchFn: up.fetchFn, nowMs: () => now })
+  await warned(async () => {
+    for (const how of ['down', 'timeout', 'http', 'error', 'short'] as const) {
+      up.state.how = how
+      now += 61_000
+      await assert.rejects(wx.model('80', '10'), (e: unknown) => e instanceof WxError && e.status === 502, how)
+    }
+    up.state.how = 'ok'
+    for (let k = 0; k < 48; k++) {
+      now += 3 * MIN
+      await wx.model(String(-62 + 2 * k), '10')
+    }
+    assert.equal(up.asks.length, 53)
+    now += 3 * MIN
+    await assert.rejects(wx.model(String(-62 + 2 * 48), '10'), (e: unknown) => e instanceof WxError && e.status === 503 && /day's allowance/.test(e.message))
+    assert.equal(up.asks.length, 53, '(3 + 48) × 156.8 = 7,996.8: the 49th grid would pass 8,000')
+  })
+})
+
+test('model: a request whose run rejects fails alone: the ones after it are not left waiting behind it', async () => {
+  const up = upstream()
+  let reads = 0
+  const wx = makeWx({ userAgent: 't', fetchFn: up.fetchFn, nowMs: () => { if (++reads === 2) throw new Error('clock'); return T0 } }) // the 2nd read is the run's own
+  await assert.rejects(wx.model('10', '10'), /clock/)
+  const grid = await wx.model('10', '10')
+  assert.equal(up.asks.length, 1)
+  assert.equal(grid.n, 7)
 })
 
 test('model: a jet\'s cells, 0.5° on at each step, cost 14 places (44.8 calls) each after the first: 176 of them in a day, not 51', async () => {
@@ -254,15 +385,17 @@ test('model: a jet\'s cells, 0.5° on at each step, cost 14 places (44.8 calls) 
   const wx = makeWx({ userAgent: 't', fetchFn: up.fetchFn, nowMs: () => now })
   // 156.8 for the first cell, 44.8 for each of the next 175: 7,996.8 calls
   let asked = 0
-  for (let k = 0; k < 176; k++) {
-    now += 21_000
-    await wx.model(String(0.1 + 0.5 * k), '10')
-    asked = up.asks.length
-  }
-  assert.equal(asked, 176, 'every step asked, every one within the day\'s calls (156.8 + 175 × 44.8 = 7,996.8)')
-  assert.ok(up.asks.slice(1).every((a) => a.places.length === 14))
-  now += 21_000
-  await assert.rejects(wx.model(String(0.1 + 0.5 * 176), '10'), (e: unknown) => e instanceof WxError && e.status === 503)
+  await warned(async () => {
+    for (let k = 0; k < 176; k++) {
+      now += MIN // 2,688 calls an hour at most
+      await wx.model(String(0.1 + 0.5 * k), '10')
+      asked = up.asks.length
+    }
+    assert.equal(asked, 176, 'every step asked, every one within the day\'s calls (156.8 + 175 × 44.8 = 7,996.8)')
+    assert.ok(up.asks.slice(1).every((a) => a.places.length === 14))
+    now += MIN
+    await assert.rejects(wx.model(String(0.1 + 0.5 * 176), '10'), (e: unknown) => e instanceof WxError && e.status === 503)
+  })
 })
 
 test('model: at least 20 s between requests to Open-Meteo: a cell that needs one sooner is served from what is held (old is fine), else it is a 503 with Retry-After for the rest of the 20 s', async () => {

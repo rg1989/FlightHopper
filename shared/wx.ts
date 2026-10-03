@@ -7,8 +7,9 @@
 // and the height of each pressure level, and the wind at some. Upstream: Open-Meteo's forecast API
 // (https://open-meteo.com/en/docs, checked 2026-10-03; CC BY 4.0, keyless, non-commercial): asked for many places at once, it
 // answers an array of one object per place in the order asked, each with the model's own nearest point (a few km from the
-// one asked for), its ground height, and `hourly` arrays of the hours asked for; a value it has none for is null. slimModel cuts
-// that to arrays by level. This is a forecast, not an observation: the chase draws it only where no report says otherwise.
+// one asked for), its ground height, and `hourly` arrays of the hours asked for; a value it has none for is null. slimPlaces cuts
+// each place to arrays by level, and assembleModel joins the places of a grid. This is a forecast, not an observation: the chase draws
+// it only where no report says otherwise.
 
 export type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR'
 
@@ -160,6 +161,9 @@ export const MODEL_VARIABLES: readonly string[] = [
   ...MODEL_WIND_HPA.map((p) => `wind_direction_${p}hPa`),
 ]
 
+/** The width (degrees) of the cell a place snaps to: the server gives the grid of the cell that holds the place, so places in one cell ask for one grid. */
+export const MODEL_CELL_DEG = 0.5
+
 /** Where a model grid stands: its south-west place (degrees), the spacing, and the places a side: n × n, row by row from the south-west (index = row × n + column; rows go north, columns east). */
 export interface ModelGeo {
   lat0: number
@@ -252,9 +256,4 @@ export function assembleModel(geo: ModelGeo, places: readonly ModelPlace[]): Mod
     clouds: MODEL_CLOUD_HPA.map((hPa, l) => ({ hPa, cover: places.map((p) => p.cover[l]), zM: places.map((p) => p.zM[l]) })),
     winds: MODEL_WIND_HPA.map((hPa, l) => ({ hPa, kt: places.map((p) => p.kt[l]), deg: places.map((p) => p.deg[l]) })),
   }
-}
-
-/** Open-Meteo's answer for all the places of geo (in the order asked) as a ModelGrid: slimPlaces, assembled. */
-export function slimModel(json: unknown, geo: ModelGeo): ModelGrid {
-  return assembleModel(geo, slimPlaces(json, geo.n * geo.n))
 }

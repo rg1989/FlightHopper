@@ -7,29 +7,32 @@
 // own (30 min fresh, 2 h held), so the grids of cells next to each other share places and a grid asks Open-Meteo, in one request,
 // only for the places it lacks: 14 of 49 for the cell next to one held. Open-Meteo weighs a request by its places and variables
 // (https://open-meteo.com/en/pricing, checked 2026-10-03: free up to 600 calls a minute, 5,000 an hour and 10,000 a day): a place
-// with 32 variables is 3.2 calls, so 8,000 a UTC day (the most this server asks) is 2,500 places. Past that, within 20 s of the last
-// request, or within 60 s of a failure, it is not asked: the places held are served as they are, a grid that lacks one is a 503
-// with Retry-After.
-// ponytail: the day's count is in memory (a restart forgets it) and counts only what this server asks: other users of the same
+// with 32 variables is 3.2 calls, so 8,000 a UTC day and 4,000 in any hour (the most this server asks) are 2,500 and 1,250 places.
+// Past that, within 20 s of the last request, or within 60 s of a failure, it is not asked: the places held are served as they are,
+// a grid that lacks one is a 503 with Retry-After (and retryAfterS in its body, for the client's own wait). A request that throws or
+// times out is not counted (nothing came back to count); an answer of any status is. An allowance that stops the ask is one warning
+// for the whole window, not one for each request that meets it.
+// ponytail: the counts are in memory (a restart forgets them) and count only what this server asks: other users of the same
 // address share the allowance unseen. A jet at 450 kt crosses a cell about every 4 min and needs 14 to 24 new places for it, so
-// 8,000 calls last 6 to 12 h of one chase. Upgrade: keep the count in a file; fetch the cell ahead; a key and a paid plan.
-import { MODEL_VARIABLES, assembleModel, slimMetars, slimPlaces, slimSigmets, type Metar, type ModelGeo, type ModelGrid, type ModelPlace, type Sigmet } from '../shared/wx.ts'
+// 8,000 calls last 6 to 12 h of one chase. Upgrade: keep the counts in a file; fetch the cell ahead; a key and a paid plan.
+import { MODEL_CELL_DEG, MODEL_VARIABLES, assembleModel, slimMetars, slimPlaces, slimSigmets, type Metar, type ModelGeo, type ModelGrid, type ModelPlace, type Sigmet } from '../shared/wx.ts'
 
 const API = 'https://aviationweather.gov/api/data'
 const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
 const METAR_TTL_MS = 5 * 60_000 // METARs come every 30–60 min; SPECIs sooner
 const SIGMET_TTL_MS = 10 * 60_000
-const MODEL_CELL_DEG = 0.5 // lat, lon snap to a cell this wide
 const MODEL_STEP_DEG = 0.25
 const MODEL_N = 7
 const DAY_MS = 86_400_000
+const HOUR_MS = 3_600_000
 /** What the model's places are kept for and what Open-Meteo may be asked (the budget guard): see the header. */
 export const MODEL_LIMITS = {
   freshMs: 30 * 60_000, // a place is as good as new this long (the model's values are hourly)
   keepMs: 2 * 60 * 60_000, // and held this long, to serve when Open-Meteo is not asked: the client drops a grid whose hour is 3 h old, and a place's hour is up to an hour older than when it was fetched
   dailyCalls: 8_000, // weighted calls a UTC day, of the free 10,000
+  hourlyCalls: 4_000, // and in any rolling 60 min, of the free 5,000: the 1,000 left are for other users of this address and a request that timed out and was counted anyway
   callsPerPlace: Math.max(1, MODEL_VARIABLES.length / 10) * Math.max(1, 1 / 24 / 14), // Open-Meteo's weight of a place: a call for each 10 variables, and for each 14 days (an hour is never more than one)
-  gapMs: 20_000, // at least this between requests to Open-Meteo for the model
+  gapMs: 20_000, // at least this between requests to Open-Meteo for the model: three of the biggest (157 calls) in a minute are 471, under the free 600 a minute, so no window of its own
   failureMs: 60_000, // after a failure it is not asked for this long
 } as const
 const MAX_SPAN_DEG = 40 // wider views get no stations (thousands of dots, megabytes of JSON)
@@ -132,6 +135,8 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
   const places = new Map<string, { ms: number; place: ModelPlace }>() // by key, the oldest fetched first (a place fetched again is moved to the end)
   const host = new URL(OPEN_METEO).hostname
   const day = { n: -1, calls: 0 } // the UTC day and the calls asked in it
+  const hour: { ms: number; calls: number }[] = [] // the calls asked in the last 60 min, a charge for each request, the oldest first
+  const warnedUntil = { day: 0, hour: 0 } // each allowance's one warning is given until then
   let lastAskMs = -Infinity // the last request to Open-Meteo for the model
   let failedUntilMs = 0
   let flight: Promise<WxError | null> = Promise.resolve(null) // requests for the model go one at a time: one that waits then finds what the one before it fetched
@@ -147,12 +152,34 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
   }
   const isFresh = (h: { ms: number } | undefined, now: number): boolean => h !== undefined && now - h.ms < MODEL_LIMITS.freshMs
 
+  /** The 503 for an allowance that is used up until untilMs, and its one warning for the whole window (not one for each request that meets it). */
+  function allowanceUsed(limit: 'day' | 'hour', now: number, untilMs: number): WxError {
+    const message = `${host}: the ${limit}'s allowance of calls (${MODEL_LIMITS[limit === 'day' ? 'dailyCalls' : 'hourlyCalls']}) is used; not asked again before ${new Date(untilMs).toISOString()}`
+    if (now >= warnedUntil[limit]) {
+      warnedUntil[limit] = untilMs
+      console.warn(`wx: ${message}`)
+    }
+    return new WxError(message, 503, Math.ceil((untilMs - now) / 1000))
+  }
+
   /** Why Open-Meteo may not be asked for this many places now, or null. */
   function blocked(now: number, count: number): WxError | null {
+    const calls = count * MODEL_LIMITS.callsPerPlace
     const today = Math.floor(now / DAY_MS)
     if (day.n !== today) [day.n, day.calls] = [today, 0]
-    if (day.calls + count * MODEL_LIMITS.callsPerPlace > MODEL_LIMITS.dailyCalls) {
-      return new WxError(`${host}: the day's allowance of calls (${MODEL_LIMITS.dailyCalls}) is used; not asked again before the day turns`, 503, Math.ceil(((today + 1) * DAY_MS - now) / 1000))
+    if (day.calls + calls > MODEL_LIMITS.dailyCalls) return allowanceUsed('day', now, (today + 1) * DAY_MS)
+    while (hour.length > 0 && now - hour[0].ms >= HOUR_MS) hour.shift() // a rolling window: what is older than 60 min no longer counts
+    let over = hour.reduce((n, c) => n + c.calls, calls) - MODEL_LIMITS.hourlyCalls // the calls that must leave the window for this ask to fit
+    if (over > 0) {
+      let until = now + HOUR_MS
+      for (const c of hour) {
+        over -= c.calls
+        if (over <= 0) {
+          until = c.ms + HOUR_MS // when the charge that makes room leaves it
+          break
+        }
+      }
+      return allowanceUsed('hour', now, until)
     }
     if (now < failedUntilMs) {
       const s = Math.ceil((failedUntilMs - now) / 1000)
@@ -173,9 +200,13 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
     const why = blocked(now, lacking.length)
     if (why !== null) return why
     lastAskMs = now
-    day.calls += lacking.length * MODEL_LIMITS.callsPerPlace // counted when asked: a request that fails may be counted upstream too
+    const charge = { ms: now, calls: lacking.length * MODEL_LIMITS.callsPerPlace } // counted when asked: an answer of any status was counted upstream too
+    hour.push(charge)
+    day.calls += charge.calls
+    let answered = false
     try {
       const r = await fetchFn(modelUrl(lacking), { headers: { 'user-agent': o.userAgent }, signal: AbortSignal.timeout(15_000) })
+      answered = true
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const got = slimPlaces(await r.json(), lacking.length)
       const at = nowMs()
@@ -186,6 +217,11 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
       failedUntilMs = 0
       return null
     } catch (e) {
+      if (!answered) { // it threw or timed out: nothing reached Open-Meteo's meter, so the calls are not charged
+        const i = hour.indexOf(charge)
+        if (i >= 0) hour.splice(i, 1)
+        if (day.n === Math.floor(charge.ms / DAY_MS)) day.calls -= charge.calls // (not of a day that has turned since)
+      }
       failedUntilMs = nowMs() + MODEL_LIMITS.failureMs
       return new WxError(`${host}: ${(e as Error).message}`, 502)
     }
@@ -197,7 +233,7 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
     const before = nowMs()
     if (wanted.some((p) => !isFresh(held(p.key, before), before))) {
       const run = flight.then(() => fetchLacking(wanted))
-      flight = run
+      flight = run.catch(() => null) // a run that rejects fails its own request, and never the ones after it
       why = await run
     }
     const now = nowMs()

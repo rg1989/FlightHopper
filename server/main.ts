@@ -12,8 +12,9 @@
 //   POST /api/events?on=1|0             switch the worldwide watch on or off (kept across restarts) → EventsReply
 //                                       (every POST from a page on another site is refused: 403, by its Sec-Fetch-Site header)
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
-//   GET /api/wx/model?lat&lon           Open-Meteo's forecast for a 7 × 7 grid (0.25°) round the 0.5° cell of the place; 503 + Retry-After: not asked
-//                                       now (its day's calls, 20 s since the last, 60 s after a failure) and a place of the grid not held (wx.ts)
+//   GET /api/wx/model?lat&lon           Open-Meteo's forecast for a 7 × 7 grid (0.25°) round the 0.5° cell of the place; 503 + Retry-After (and
+//                                       retryAfterS in its body): not asked now (its day's or hour's calls, 20 s since the last, 60 s after a
+//                                       failure) and a place of the grid not held (wx.ts)
 //   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
 //                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
 //                                       oldest day it keeps); 503 + Retry-After: 15: it cannot be had now
@@ -550,7 +551,7 @@ export function createServer(
       else if (url.pathname === '/api/events') [status, body] = events(url.searchParams, post)
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
-      if (e instanceof WxError) [status, body, retryAfterS] = [e.status, { error: e.message }, e.retryAfterS ?? RETRY_AFTER_S]
+      if (e instanceof WxError) [status, body, retryAfterS] = [e.status, { error: e.message, retryAfterS: e.retryAfterS }, e.retryAfterS ?? RETRY_AFTER_S] // (a 400 or 502 has none: JSON leaves it out)
       else if (!(e instanceof BadRequest)) throw e
       else [status, body] = [400, { error: e.message }]
     }
