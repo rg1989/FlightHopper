@@ -6,7 +6,8 @@
 //   satellite imagery, with the card. The other aircraft within 10 nm show as 3-D models framed by corner brackets
 //   (scene/traffic.ts); chase shows no flat icons. The sun lights the chase view, and
 //   the relief can sink into the map and grow back (the Scene panel's switches, keys T and L). A frame of flight data
-//   hugs the chased aircraft (scene/flightFrame.ts); the flight card stays.
+//   hugs the chased aircraft (scene/flightFrame.ts); the flight card stays. Roads and Borders & places are drawn for
+//   3-D there: roads on near terrain only, thin borders, place names upright over the view (scene/placeLabels.ts).
 // - Scenario (the Scenarios panel's Play, or ?scenario=<id>&t=<s>): a recorded flight played from static files
 //   (scenario/run.ts) in the chase view: only its aircraft, no polls, no card (the frame carries the data), no 3-D
 //   buildings (they are modern), its era imagery, the sun at its instant. Esc or exit goes back to the map over it.
@@ -40,6 +41,7 @@ import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
 import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './scene/flightFrame.ts'
 import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
+import { PlaceLabels } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
@@ -144,6 +146,7 @@ const MAP_KEY_COVER = '.fh-mapkey'
 const SAFE_EVERY_MS = 100
 const TRAFFIC_CLEAR_PX = 48 // round a clicked traffic aircraft, its card keeps clear of: its square and labels, mostly
 const NO_ROOM: Room = { safe: { x: 0, y: 0, w: 0, h: 0 }, covers: [] }
+const NO_RECTS: readonly Rect[] = []
 // History (history/): the past from adsb.lol's half-hour files, replayed through the live pipeline.
 // What exists until the server's status says (it reports the oldest day adsb.lol keeps, ~42): 30 days back, as the time
 // bar guesses too. A time asked for further back (a ?hist= link, a reload) waits in the clock (HistoryClock.asked), the
@@ -629,8 +632,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)
   // Airports, cities, countries, the flights in view, recordings and scenarios (ui/searchBox.ts): top centre, / to focus.
+  const placesUrl = `${base}search/places.json` // the chase's place names read it too: one download, the browser's cache shares it
   searchBox = mountSearchBox(ui, {
-    placesUrl: `${base}search/places.json`,
+    placesUrl,
     flights: () => onScreen,
     recordings: () => api.recordings().then((r) => r ?? []),
     scenarios: () => listScenarios(base),
@@ -719,20 +723,25 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // VITE_MAP_URL: another tile server ({z}/{x}/{y}.png is appended), as the OpenStreetMap tile policy asks to allow.
   const mapUrl: string | undefined = import.meta.env.VITE_MAP_URL?.trim() || undefined
   const map = makeMapLayer(viewer, mapUrl)
-  const { roads, places } = makeReferenceLayers(viewer) // over the map, the satellite and the night lights
+  const reference = makeReferenceLayers(viewer, `${base}map/borders.json`) // over the map, the satellite and the night lights
+  // The chase's place names, upright over the 3-D view (Esri's places raster lays them on the ground): under the traffic brackets.
+  const placesLayer = div('fh-places', root)
+  const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, seasUrl: `${base}map/seas.json` })
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
-   * satellite, weather top-down and live only (it is today's: it says nothing of the past), its rain in the colours for
-   * the top-down map's base (the satellite is dark under the rain) and under the map's names (lift) or the satellite's
-   * roads and places.
+   * satellite (the chase's own in the chase, its names upright), weather top-down and live only (it is today's: it says
+   * nothing of the past), its rain in the colours for the top-down map's base (the satellite is dark under the rain) and
+   * under the map's names (lift) or the satellite's roads and places.
    */
   const applyLayers = (): void => {
     const onMap = prefs[baseKey(chasing)]
     map.show = onMap
     map.dark = prefs.dark
-    roads.show = prefs.roads && !onMap
-    places.show = prefs.places && !onMap
+    reference.chase = chasing
+    reference.roads.show = prefs.roads && !onMap
+    reference.places.show = prefs.places && !onMap
+    placeLabels.show = chasing && prefs.places && !onMap
     weather.theme = rainTheme(prefs)
     weather.show = prefs.wx && !chasing && hist === null
     map.lift = weather.show
@@ -1704,6 +1713,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     runways.update(tf)
     airfield?.update(tf)
     buildings.update(chasing && sf === null ? chased : null, tf) // around the chased aircraft; hidden in browse and scenarios
+    // The names over the 3-D view, after the camera moved; none over the flight-data frame (its cards, the chased aircraft).
+    placeLabels.update(tf, now, chasing && placeLabels.active ? flightFrame.occupied() : NO_RECTS)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
     runways.setLight(chasing && prefs.light && st !== null ? st : null) // the light as set: the Moon's too
@@ -2088,8 +2099,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       pendingLayer.destroy()
       routeLine.destroy()
       map.destroy()
-      roads.destroy()
-      places.destroy()
+      reference.roads.destroy()
+      reference.places.destroy()
+      placeLabels.destroy()
+      placesLayer.remove()
       weather.destroy()
       viewer.imageryLayers.remove(night) // and destroys it
       runways.destroy()

@@ -8,8 +8,9 @@
 // (2) never bulk-download or prefetch. Cesium requests only the tiles in view, and a hidden layer loads none, so chase
 // mode costs OSM nothing. Do not set a no-referrer Referrer-Policy on the page. Access is best-effort and can be
 // withdrawn: pass another tile server's URL (the policy asks that the URL can be changed without a code change).
-import { Credit, OpenStreetMapImageryProvider, RequestState, UrlTemplateImageryProvider } from 'cesium'
-import type { ImageryLayer, Request, Scene, Viewer } from 'cesium'
+import { Credit, ImageryLayer, OpenStreetMapImageryProvider, RequestState, UrlTemplateImageryProvider } from 'cesium'
+import type { ImageryProvider, Request, Scene, Viewer } from 'cesium'
+import { BordersProvider } from './borders.ts'
 import { queueDraw } from './drawQueue.ts'
 
 export const OSM_URL = 'https://tile.openstreetmap.org/'
@@ -365,35 +366,90 @@ export function makeMapLayer(viewer: Viewer, url: string = OSM_URL): StreetMap {
 // with CORS * (checked 2026-09-30; the keyed ibasemaps endpoint has no reference layers). Their detail follows the zoom:
 // motorways and countries far out, every street and neighbourhood up close.
 // Copyright (their MapServer?f=json): Esri, HERE, Garmin, (c) OpenStreetMap contributors. No credit on screen (the user's call).
+// In the chase (ReferenceLayers.chase) each switch shows a version made for a 3-D view. Esri's rasters are drawn for
+// top-down zooms: on the far, low-detail terrain tiles their roads are wide bands, and their names lie on the ground, blurred
+// and turned with the map. So the chase's roads are the same raster on near terrain tiles only, its borders our own thin
+// lines (borders.ts), and its names upright screen text (placeLabels.ts, shown by app.ts).
 export const ROADS_URL = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'
 export const PLACES_URL = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 const REFERENCE_MAX_ZOOM = 19 // street detail ends here; Cesium upsamples past it
+// The chase's roads lie on terrain tiles at least this detailed (a level-12 tile is ~5 km a side): near the camera. Tuned by eye.
+export const CHASE_ROADS_MIN_TERRAIN_LEVEL = 12
 
 /** The two overlays, apart. */
 export interface ReferenceLayers {
   roads: MapLayer
   places: MapLayer
+  /** The chase's versions in place of the top-down ones (app.ts sets it from the view): near roads, our borders, no places raster. */
+  chase: boolean
 }
 
 /**
- * The reference overlays on top of every imagery layer added before them, the places above the roads (names over the
- * streets). Each starts hidden (a hidden layer loads nothing).
+ * The reference overlays on top of every imagery layer added before them: the roads (top-down, then the chase's), and the
+ * places raster and the chase's borders above them (lines and names over the streets). Each starts hidden (a hidden layer
+ * loads nothing). bordersUrl: public/map/borders.json, fetched at the borders' first show.
  */
-export function makeReferenceLayers(viewer: Viewer): ReferenceLayers {
-  const overlay = (url: string): MapLayer => {
-    const l = viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({ url, maximumLevel: REFERENCE_MAX_ZOOM }))
+export function makeReferenceLayers(viewer: Viewer, bordersUrl: string): ReferenceLayers {
+  const layers = viewer.imageryLayers
+  const add = (provider: ImageryProvider, options?: ImageryLayer.ConstructorOptions): ImageryLayer => {
+    const l = new ImageryLayer(provider, options)
     l.show = false
-    return {
+    layers.add(l)
+    return l
+  }
+  const esri = (url: string): UrlTemplateImageryProvider => new UrlTemplateImageryProvider({ url, maximumLevel: REFERENCE_MAX_ZOOM })
+  const roads = add(esri(ROADS_URL))
+  const chaseRoads = add(esri(ROADS_URL), { minimumTerrainLevel: CHASE_ROADS_MIN_TERRAIN_LEVEL })
+  const places = add(esri(PLACES_URL))
+  // A tile still waiting to be drawn when the borders hide or go is dropped.
+  const drawn = new BordersProvider(bordersUrl, () => borders.show && !borders.isDestroyed())
+  const borders = add(drawn)
+  let chase = false
+  let wantRoads = false
+  let wantPlaces = false
+  const show = (l: ImageryLayer, v: boolean): void => {
+    if (!l.isDestroyed()) l.show = v
+  }
+  const apply = (): void => {
+    show(roads, wantRoads && !chase)
+    show(chaseRoads, wantRoads && chase)
+    show(places, wantPlaces && !chase)
+    show(borders, wantPlaces && chase)
+    if (wantPlaces && chase && !borders.isDestroyed()) void drawn.load() // the data at the first show; a no-op after
+  }
+  return {
+    roads: {
       get show(): boolean {
-        return l.show
+        return wantRoads
       },
       set show(v: boolean) {
-        l.show = v
+        wantRoads = v
+        apply()
       },
       destroy(): void {
-        viewer.imageryLayers.remove(l, true) // a second call finds nothing to remove
+        layers.remove(roads, true) // a second call finds nothing to remove
+        layers.remove(chaseRoads, true)
       },
-    }
+    },
+    places: {
+      get show(): boolean {
+        return wantPlaces
+      },
+      set show(v: boolean) {
+        wantPlaces = v
+        apply()
+      },
+      destroy(): void {
+        layers.remove(places, true)
+        layers.remove(borders, true)
+      },
+    },
+    get chase(): boolean {
+      return chase
+    },
+    set chase(v: boolean) {
+      chase = v
+      apply()
+    },
   }
-  return { roads: overlay(ROADS_URL), places: overlay(PLACES_URL) }
 }
