@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { radarPixel } from './precip.ts'
 import { NONE, type SourceTile } from './radar.ts'
-import { radarCells, thin, type RadarCell } from './radarCells.ts'
+import { radarCells, thin, tilesAcross, type RadarCell } from './radarCells.ts'
 
 const WORLD = 256 * 128 // zoom-7 pixels round the world
 const lonAt = (gx: number): number => (gx / WORLD) * 360 - 180
@@ -224,4 +224,83 @@ test('thin: strength decides before distance: a core is kept, the cells round it
   assert.ok(kept.some((c) => c.dbz === 60), 'the core stays, however far')
   assert.ok(kept.length <= 12)
   assert.equal(thin(cells, () => 6, 0, 4).kept.length, 0)
+})
+
+/** The spacings thin may end at: 1.25 ** k, then grow itself. */
+const stepsTo = (grow: number): number[] => {
+  const s: number[] = []
+  for (let k = 0; 1.25 ** k < grow - 1e-9; k++) s.push(1.25 ** k)
+  return [...s, grow]
+}
+const wobble = (i: number, j: number): number => 35 + ((i * 7 + j * 13) % 11) // strengths 35 … 45, not in rows
+/** n × n cells 3 km apart, the aircraft in the middle, but those `drop` says. */
+const field = (n: number, drop: (i: number, j: number) => boolean = () => false): RadarCell[] => grid(n, 3, wobble).filter((_, k) => !drop(k % n, Math.floor(k / n)))
+
+test('thin: the spacing takes steps (1.25 ×, up to grow), so a window that changes a little as the aircraft flies leaves it, and the size of every cloud it sets, as it was', () => {
+  for (const grow of [4, 2, 1.25]) {
+    for (const [n, reach] of [[20, 3], [24, 2.7], [30, 2.25], [14, 3.1], [9, 2]]) {
+      const { m } = thin(field(n), () => reach, 40, grow)
+      assert.ok(stepsTo(grow).some((s) => near(s, m, 1e-9)), `${n} × ${n}, reach ${reach}, grow ${grow}: m = ${m} is a step`)
+    }
+  }
+  let same = 0
+  let tried = 0
+  for (const [n, reach] of [[20, 3], [24, 2.7], [30, 2.25], [26, 3], [22, 3.4]]) {
+    const whole = thin(field(n), () => reach, 40, 4)
+    for (const drop of [(i: number) => i === n - 1, (_i: number, j: number) => j === 0, (i: number, j: number) => (i * 31 + j * 17) % 10 === 0, (i: number, j: number) => i < 3 && j < 3]) {
+      tried++
+      if (thin(field(n, drop), () => reach, 40, 4).m === whole.m) same++
+    }
+  }
+  assert.ok(same >= 0.8 * tried, `${same} of ${tried} slightly changed windows keep the spacing`)
+  const strict = thin(field(20), () => 3, 2, 1.25)
+  assert.equal(strict.m, 1.25, 'grow itself is the last step')
+})
+
+test('thin: cells beyond innerKm (the ring a rebuild reads past what is drawn) are kept on top, at the spacing the inner ones got: they take no place from them and change none of their picks', () => {
+  const inner = grid(20, 3, wobble).filter((c) => c.fromKm <= 30) // a dense disc of 30 km: more than 40 stay at m = 1
+  const ring = [cell(40, 0, 50, 9001), cell(-44, 10, 41, 9002), cell(0, 52, 38, 9003), cell(0, -47, 44, 9004), cell(41, 3, 36, 9005), cell(60, 60, 55, 9006)]
+  assert.ok(inner.length > 200 && ring.every((c) => c.fromKm > 30))
+  const alone = thin(inner, () => 3, 40, 4, 30)
+  const both = thin([...ring, ...inner], () => 3, 40, 4, 30)
+  assert.equal(both.m, alone.m, 'the ring does not change the spacing')
+  assert.deepEqual(both.kept.filter((c) => c.fromKm <= 30), alone.kept, 'nor one pick within')
+  assert.ok(alone.kept.length <= 40 && alone.m > 1)
+  const rim = both.kept.filter((c) => c.fromKm > 30)
+  assert.ok(rim.length >= 4, `${rim.length} ring cells kept on top of the ${alone.kept.length}: none of the 40 places is theirs`)
+  assert.equal(both.kept.length, alone.kept.length + rim.length)
+  for (const a of both.kept) for (const b of both.kept) if (a !== b) assert.ok(apart(a, b) >= both.m * 3 - 1e-9, `${apart(a, b)} km apart at m = ${both.m}`)
+  assert.deepEqual(both.kept, [...both.kept].sort((a, b) => a.fromKm - b.fromKm), 'nearest first: the ring comes last')
+  assert.ok(thin([...ring, ...inner], () => 3, 40, 4).kept.length <= 40, 'without innerKm everything is inside: at most max')
+  const alonering = thin(ring, () => 3, 40, 4, 30)
+  assert.equal(alonering.kept.length, ring.length, 'a ring alone: every cell that has room')
+  assert.equal(alonering.m, 1)
+  const tiny = thin([cell(0, 0, 40, 1), cell(31, 0, 60, 2), cell(33, 0, 50, 3), cell(40, 0, 45, 4)], () => 4, 10, 4, 30)
+  assert.deepEqual(tiny.kept.map((c) => c.dbz), [40, 60, 45], 'the 50 is 2 km from the stronger 60 of the ring: given way; the 45 is 9 km: kept')
+  const edge = thin([cell(28, 0, 40, 1), cell(31, 0, 60, 2)], () => 4, 10, 4, 30)
+  assert.deepEqual(edge.kept.map((c) => c.dbz), [40], 'a ring cell, however strong, gives way to an inner one 3 km off: what is drawn keeps its place')
+})
+
+test('thin: past the last step (more than max still stay inside) the nearest max of those inside stay, and the ring is kept on top, at that spacing', () => {
+  const inner = grid(24, 3, () => 40).filter((c) => c.fromKm <= 30)
+  const ring = Array.from({ length: 60 }, (_, k) => cell(35 + (k % 10) * 1.5, (Math.floor(k / 10) - 3) * 1.5, 42, 7000 + k)) // a thick clump beyond 30 km
+  const t = thin([...inner, ...ring], () => 3, 6, 1.25, 30) // 6 places: even at 1.25 × more stay
+  assert.equal(t.m, 1.25)
+  const inside = t.kept.filter((c) => c.fromKm <= 30)
+  assert.equal(inside.length, 6)
+  assert.ok(inside.every((c) => c.fromKm < 8), 'the nearest six')
+  const rim = t.kept.filter((c) => c.fromKm > 30)
+  assert.ok(rim.length >= 1 && rim.length < ring.length, `${rim.length} of the clump`)
+  for (const a of t.kept) for (const b of t.kept) if (a !== b) assert.ok(apart(a, b) >= 1.25 * 3 - 1e-9, `${apart(a, b)} km apart`)
+})
+
+test('tilesAcross: the zoom-7 tiles a box of a radius each way can touch, along one side (a tile is 313 km × cos latitude)', () => {
+  assert.equal(tilesAcross(32, 130), 2, '265 km tiles: the 260 km box straddles two')
+  assert.equal(tilesAcross(0, 130), 2)
+  assert.equal(tilesAcross(70, 130), 4, '107 km tiles: 4 × 4 = 16 tiles')
+  assert.equal(tilesAcross(70, 100), 3, 'the old radius: 9 tiles')
+  assert.equal(tilesAcross(75, 130), 5, '81 km tiles: 25')
+  assert.equal(tilesAcross(-75, 130), 5, 'south as north')
+  assert.equal(tilesAcross(80, 130), 6, '54 km tiles: 36')
+  assert.equal(tilesAcross(89, 130), 6, 'no radar past 80°: the same as at 80°')
 })

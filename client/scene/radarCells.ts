@@ -9,7 +9,9 @@
 // 1.8 km at 60° N.
 // thin() keeps the strongest cells apart from each other. Heavy rain is often one continuous region of hundreds of blocks and
 // the sky has room for a few dozen clouds, so the spacing, and with it the size of the cloud drawn at each cell, grows until
-// they fit (cloudField.ts radarClouds, rainShafts.ts pickShafts).
+// they fit (cloudField.ts radarClouds, rainShafts.ts pickShafts), in steps of 1.25 (so a window that changes a little as the
+// aircraft flies leaves it, and the cloud sizes, as they were). Cells past the radius that is drawn (a ring the rebuild reads, so
+// that a storm is built before it fades in) are kept on top, at the same spacing, and take no place from the cells within.
 // ponytail: the blocks are read in the aircraft's own frame; a radar mosaic's edges and gaps (RainViewer draws none beyond a
 // radar's reach) show as no echo. A tile of the newest frame that has not come yet reads as none.
 import type { SourceTile } from './radar.ts'
@@ -24,9 +26,7 @@ const WORLD = SIZE * TILES // pixels round the world
 const BLOCK = 3 // pixels a block
 const BLOCKS = Math.floor(SIZE / BLOCK) // blocks each way in a tile: the last takes the pixels left over
 const MAX_LAT = 80 // no radar nearer the poles (and Mercator's pixels there are a tenth of a kilometre)
-const MIN_STEP = 1.1 // thin: the spacing grows by at least this much a pass, at most MAX_STEP, aiming a little short of the count that fits (AIM)
-const MAX_STEP = 2
-const AIM = 0.92
+const SPACING_STEP = 1.25 // thin: the spacing is 1, then this, this squared, … up to its grow: a few steps
 
 /** A block of the radar's frame with an echo, where it is drawn. */
 export interface RadarCell {
@@ -144,21 +144,46 @@ function spread(east: Float64Array, north: Float64Array, reach: Float64Array, m:
   return kept
 }
 
+const stepOf = (k: number, grow: number): number => Math.min(grow, SPACING_STEP ** k)
+
 /**
  * The strongest cells, each at least m × its reach (km) from every stronger one kept: m is 1 when at most max stay, else the
- * spacing grows until at most max do, each step by what the count says (it falls about as the square of m) and not past grow.
- * If still more stay at grow, the nearest max of them. Nearest first. Equal strengths go to the nearer cell, then by seed,
- * so the same cells give the same answer in any order.
+ * spacing grows, in steps of 1.25 up to grow, until at most max do (each pass aims for the step the count says: it falls about as
+ * the square of m). If still more stay at grow, the nearest max of them. Nearest first. Equal strengths go to the nearer cell,
+ * then by seed, so the same cells give the same answer in any order.
+ * Cells farther than innerKm from the aircraft (the ring read beyond what is drawn) are not counted against max and do not set m:
+ * they are kept after the inner ones, strongest first, wherever no cell kept is within m × its reach, so the inner cells' picks
+ * are the same with or without them.
  */
-export function thin(cells: readonly RadarCell[], reachKm: (c: RadarCell) => number, max: number, grow = 4): { kept: RadarCell[]; m: number } {
+export function thin(cells: readonly RadarCell[], reachKm: (c: RadarCell) => number, max: number, grow = 4, innerKm = Infinity): { kept: RadarCell[]; m: number } {
   if (cells.length === 0) return { kept: [], m: 1 }
-  const order = cells.toSorted((a, b) => b.dbz - a.dbz || a.fromKm - b.fromKm || a.seed - b.seed)
+  const strongest = (a: RadarCell, b: RadarCell): number => b.dbz - a.dbz || a.fromKm - b.fromKm || a.seed - b.seed
+  const nearest = (a: RadarCell, b: RadarCell): number => a.fromKm - b.fromKm || a.seed - b.seed
+  const inner = cells.filter((c) => c.fromKm <= innerKm).sort(strongest)
+  const order = inner.concat(cells.filter((c) => c.fromKm > innerKm).sort(strongest))
   const [east, north, reach] = [Float64Array.from(order, (c) => c.east), Float64Array.from(order, (c) => c.north), Float64Array.from(order, reachKm)]
   const widest = reach.reduce((w, r) => Math.max(w, r), 0)
-  let m = 1
-  for (;;) {
-    const kept = spread(east, north, reach, m, m * widest)
-    if (kept.length <= max || m >= grow) return { kept: kept.map((i) => order[i]).sort((a, b) => a.fromKm - b.fromKm || a.seed - b.seed).slice(0, max), m }
-    m = Math.min(grow, m * Math.min(MAX_STEP, Math.max(MIN_STEP, AIM * Math.sqrt(kept.length / Math.max(1, max)))))
+  for (let k = 0; ; ) {
+    const m = stepOf(k, grow)
+    const kept = spread(east, north, reach, m, m * widest) // ascending: the inner ones first
+    let inside = kept.findIndex((i) => i >= inner.length) // those inside: the kept are in the order of `order`
+    if (inside < 0) inside = kept.length
+    if (inside <= max || m >= grow) {
+      const got = kept.map((i) => order[i])
+      return { kept: got.slice(0, inside).sort(nearest).slice(0, max).concat(got.slice(inside).sort(nearest)), m }
+    }
+    const want = m * Math.sqrt(inside / Math.max(1, max)) // the count falls about as the square of m: the step that would just fit
+    k++
+    while (stepOf(k, grow) < want && stepOf(k, grow) < grow) k++
   }
+}
+
+/**
+ * The zoom-7 tiles along one side of a box of radiusKm each way round a place at lat, at most (a tile is 313 km × cos latitude wide,
+ * and as tall: Mercator): the box can straddle one tile more than its width in tiles. No radar past MAX_LAT, so none is counted
+ * there.
+ */
+export function tilesAcross(lat: number, radiusKm: number): number {
+  const tileKm = ((360 * KM_PER_DEG) / TILES) * Math.cos(Math.min(Math.abs(lat), MAX_LAT) * RAD)
+  return Math.floor((2 * radiusKm) / tileKm) + 2
 }

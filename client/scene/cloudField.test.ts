@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
 import type { Cloud, Metar } from '../../shared/wx.ts'
 import {
-  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, RADAR_LOOK, REBUILD_KM, STATION_CAP, ceilingM, fadeAlpha, metarClouds, nearestClouds, observedClouds, overcastShade,
-  radarBases, radarClouds, reportsSky, sunBrightness, type CloudSpec, type RadarBase,
+  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, PUFF_SEEN, RADAR_LOOK, REBUILD_KM, STATION_CAP, ceilingM, fadeAlpha, metarClouds, nearestClouds, observedClouds, overcastShade,
+  radarBases, radarClouds, reportsSky, sunBrightness, towerRiseM, type CloudSpec, type RadarBase,
 } from './cloudField.ts'
+import { EDGE_ALPHA, edgeAlpha, staysInside } from './cloudQuad.ts'
 import type { RadarCell } from './radarCells.ts'
 
 const FT = 0.3048
@@ -171,7 +172,7 @@ test('metarClouds: CB adds 2 to 4 towers 4 to 9 km tall, TCU 3 to 6 towers 2 to 
         const upper = t.filter((c) => c.heightM - base > height / 2)
         assert.ok(upper.length > 0 && upper.every((c) => c.tint <= 0.05 && c.brightness >= 0.95), `${type}: white above halfway`)
         for (let j = 1; j < t.length; j++) assert.ok(t[j].tint <= t[j - 1].tint + 1e-12, 'no lighter puff under a darker one')
-        for (const c of t) assert.ok(c.slice <= 0.32, `dense puffs: slice ${c.slice}`)
+        for (const c of t) assert.ok(c.slice >= 0.18 && c.slice <= 0.45, `dense puffs: slice ${c.slice} (0.18 to 0.26 as asked, raised where the edge needs it)`)
         if (type === 'CB') {
           const crown = t.filter((c) => c.heightM === t.at(-1)!.heightM)
           assert.ok(Math.max(...crown.map((c) => c.scale[0])) > Math.max(...lowest.map((c) => c.scale[0])) && crown.every((c) => c.scale[1] < c.scale[0] / 3), 'an anvil: wide flat puffs on top')
@@ -365,6 +366,10 @@ test('RADAR_LOOK: the values the plan gives, each named', () => {
   assert.deepEqual(RADAR_LOOK.width, [3000, 6000])
   assert.equal(RADAR_LOOK.shaft.max, 40)
   assert.deepEqual(RADAR_LOOK.shaft.width, [2000, 4000])
+  const S = RADAR_LOOK.shaft
+  assert.ok(S.variants >= 3 && Number.isInteger(S.variants), 'a few images of rain, so shafts side by side differ')
+  assert.ok(S.widthJitter > 0 && S.widthJitter < 0.5 && S.alphaJitter > 0 && S.alphaJitter < 0.5, 'a little variation per shaft')
+  assert.ok(S.overlapM >= 200, 'a shaft reaches well up into its cloud: the cloud\'s drawn bottom is soft')
 })
 
 test('ceilingM: the base of the lowest broken or overcast layer, or of a hidden sky; few and scattered are no ceiling; none when the height is unknown', () => {
@@ -379,7 +384,7 @@ test('ceilingM: the base of the lowest broken or overcast layer, or of a hidden 
   assert.equal(ceilingM(metar()), null)
 })
 
-test('radarBases: the nearest station\'s ceiling within 60 km; else 1,200 m above the ground, which is the nearest station\'s height', () => {
+test('radarBases: the nearest station\'s ceiling within 60 km; else 1,200 m above the ground, which is the nearest station\'s height if that is within 60 km, else sea level', () => {
   const at = (east: number, north: number, o: Partial<Metar>): Metar => metar({ lat: 32 + north / KM_PER_DEG, lon: 34.9 + east / KM_PER_LON, ...o })
   const clear = at(5, 0, { id: 'CLEAR', elevM: 20, clouds: [layer('FEW', 3000)] }) // nearest, but no ceiling
   const wet = at(30, 0, { id: 'WET', elevM: 200, clouds: [layer('SCT', 1000), layer('OVC', 800)] })
@@ -390,20 +395,25 @@ test('radarBases: the nearest station\'s ceiling within 60 km; else 1,200 m abov
   assert.ok(near(a.baseM, 200 + 800 * FT, 1e-9) && a.groundM === 200, 'the nearest station that has a ceiling')
   const b = bases(32 - 20 / KM_PER_DEG, 34.9 - 50 / KM_PER_LON) // 22 km from WETTER, 82 from WET
   assert.ok(near(b.baseM, 90 + 500 * FT, 1e-9) && b.groundM === 90)
-  const c = bases(32 + 155 / KM_PER_DEG, 34.9) // 65 km north of FAR: no ceiling within 60 km
-  assert.ok(near(c.baseM, 700 + 1200, 1e-9) && c.groundM === 700, 'else 1,200 m over the nearest station\'s height')
+  const c = bases(32 + 155 / KM_PER_DEG, 34.9 + 70 / KM_PER_LON) // 95 km from FAR, farther from the others: no station within 60 km
+  assert.deepEqual(c, { baseM: 1200, groundM: 0 }, 'a station too far to say what the ground is: sea level, not its height')
+  const d = bases(32, 34.9 + 100 / KM_PER_LON) // 70 km from WET, 100 from the others
+  assert.deepEqual(d, { baseM: 1200, groundM: 0 })
+  assert.deepEqual(radarBases([clear])(32, 34.9 + 20 / KM_PER_LON), { baseM: 20 + 1200, groundM: 20 }, 'a station with no ceiling, but within 60 km: 1,200 m over its height')
+  assert.deepEqual(radarBases([clear])(32, 34.9 + 70 / KM_PER_LON), { baseM: 1200, groundM: 0 }, 'beyond 60 km its height is not borrowed (the sea may lie between)')
+  assert.deepEqual(radarBases([clear, far])(32 + 100 / KM_PER_DEG, 34.9 + 20 / KM_PER_LON), { baseM: 700 + 400 * FT, groundM: 700 }, 'a station with a ceiling 22 km off: its ceiling')
   assert.deepEqual(radarBases([])(32, 34.9), { baseM: 1200, groundM: 0 }, 'no station: over sea level')
   const noElev = at(1, 0, { id: 'NOELEV', elevM: null, clouds: [layer('OVC', 300)] })
   assert.deepEqual(radarBases([noElev])(32, 34.9), { baseM: 1200, groundM: 0 }, 'a station of unknown height tells nothing')
   assert.ok(near(radarBases([wet])(32, 34.9 + 89 / KM_PER_LON).baseM, 200 + 800 * FT, 1e-9), '59 km from it: in reach')
-  assert.ok(near(radarBases([wet])(32, 34.9 + 91 / KM_PER_LON).baseM, 200 + 1200, 1e-9), '61 km: out of reach')
+  assert.deepEqual(radarBases([wet])(32, 34.9 + 91 / KM_PER_LON), { baseM: 1200, groundM: 0 }, '61 km: out of reach, and too far to say what the ground is')
 })
 
 test('radarBases: distances are on the ground: east-west degrees are shorter at 60°N, and a station across the antimeridian is as near as it is', () => {
   const north = metar({ id: 'BERGEN', lat: 60, lon: 5, elevM: 50, clouds: [layer('OVC', 700)] })
   const at = (km: number): number => 5 + km / (KM_PER_DEG * Math.cos((60 * Math.PI) / 180))
   assert.ok(near(radarBases([north])(60, at(50)).baseM, 50 + 700 * FT, 1e-9), '50 km east of it: in reach (0.9° of longitude)')
-  assert.ok(near(radarBases([north])(60, at(70)).baseM, 50 + 1200, 1e-9), '70 km: not')
+  assert.deepEqual(radarBases([north])(60, at(70)), { baseM: 1200, groundM: 0 }, '70 km: not')
   const fiji = metar({ id: 'NFFN', lat: -17.7, lon: -179.9, elevM: 18, clouds: [layer('BKN', 1500)] })
   assert.ok(near(radarBases([fiji])(-17.7, 179.9).baseM, 18 + 1500 * FT, 1e-9), '0.2° across the antimeridian: 21 km')
 })
@@ -456,7 +466,7 @@ test('radarClouds: a column 3 to 6 km wide, wider the heavier; its base dark gre
     const half = Math.min(...t.map(bottom)) + heightOf(t) / 2
     assert.ok(t.filter((c) => c.heightM > half).every((c) => c.tint <= 0.05), `${dbz}: white above halfway`)
     for (let j = 1; j < t.length; j++) assert.ok(t[j].tint <= t[j - 1].tint + 1e-12, 'no lighter puff under a darker one')
-    assert.ok(t.every((c) => c.slice <= 0.32 && c.brightness >= 0.95), 'dense, bright puffs')
+    assert.ok(t.every((c) => c.slice >= 0.18 && c.slice <= 0.45 && c.brightness >= 0.95), 'dense, bright puffs')
   }
 })
 
@@ -548,11 +558,88 @@ test('radarClouds: an anvil is as wide as 2.5 to 3.5 columns, but no wider than 
 })
 
 test('radarClouds: more towers than 40 even at the widest spacing: the nearest 40', () => {
-  const field = Array.from({ length: 100 }, (_, k) => cell(((k % 10) - 5) * 20 + 7, (Math.floor(k / 10) - 5) * 20 + 13, 40, { seed: k + 1 })) // 100 cells 20 km apart, none as far as another
+  const field = Array.from({ length: 100 }, (_, k) => cell(((k % 10) - 5) * 15 + 7, (Math.floor(k / 10) - 5) * 15 + 4, 40, { seed: k + 1 })) // 100 cells 15 km apart, all within 100 km, none as far as another
   const towers = towersOf(radarClouds(field, base1500))
   assert.equal(towers.length, 40)
   const want = field.toSorted((a, b) => a.fromKm - b.fromKm).slice(0, 40).map(placeOf).sort()
   assert.deepEqual(towers.map(axisOf).sort(), want, 'the 40 nearest')
+})
+
+test('radarClouds: cells past the radius the clouds fade out by (the ring a rebuild reads) are built too, hidden where they stand and fading in as the aircraft comes: none pops in at the next build', () => {
+  const ring = radarClouds([cell(115, 0, 50), cell(0, 118, 20)], base1500)
+  assert.equal(towersOf(ring).length, 1, 'a tower 115 km out')
+  assert.equal(decksOf(ring).length, 1, 'a deck 118 km out')
+  for (const c of ring) assert.ok(c.farKm === 100 && fadeAlpha(c, km(c, { lat: 32, lon: 34.9 })) === 0, `hidden where it stands: ${km(c, { lat: 32, lon: 34.9 })} km`)
+  const [tower] = towersOf(ring)
+  const closer = (c: CloudSpec): number => km(c, { lat: 32, lon: 34.9 + 28 / KM_PER_LON }) // the aircraft has flown 28 km east: no rebuild yet
+  assert.ok(tower.every((c) => fadeAlpha(c, closer(c)) > 0.2), 'showing, part way through its fade')
+  assert.ok(tower.some((c) => fadeAlpha(c, closer(c)) < 1), 'fading in, not there at once')
+  assert.equal(nearestClouds([ring], 32, 34.9).length, ring.length, 'and the sky\'s cull keeps them (nothing beyond what has faded out + 30 km)')
+  assert.deepEqual(radarClouds([cell(150, 0, 50)], base1500), radarClouds([cell(150, 0, 50)], base1500), 'any cell the caller gives is built: it reads no farther than it likes')
+})
+
+test('radarClouds: the ring takes no tower and no deck from those within the radius: they are the same with or without it, the ring\'s on top at the same size', () => {
+  const dense = Array.from({ length: 400 }, (_, k) => cell(((k % 20) - 10) * 3, (Math.floor(k / 20) - 10) * 3, 40, { seed: k + 1 })) // 400 blocks 3 km apart: thinned
+  const light = Array.from({ length: 900 }, (_, k) => cell(((k % 30) - 15) * 3, (Math.floor(k / 30) - 15) * 3, 20, { seed: 5000 + k })) // 900 light blocks: thinned
+  const outer = [cell(104, 5, 52, { seed: 9001 }), cell(-110, -12, 44, { seed: 9002 }), cell(20, 121, 47, { seed: 9003 }), cell(-8, -126, 36, { seed: 9004 }), cell(70, 90, 18, { seed: 9005 }), cell(-100, 60, 25, { seed: 9006 })]
+  assert.ok(outer.every((c) => c.fromKm > 100 && c.fromKm <= 130))
+  const without = radarClouds([...dense, ...light], base1500)
+  const withRing = radarClouds([...outer, ...dense, ...light], base1500)
+  const inside = (cs: CloudSpec[]): CloudSpec[] => cs.filter((c) => km(c, { lat: 32, lon: 34.9 }) < 60)
+  assert.deepEqual(inside(withRing), inside(without), 'what is drawn is as it was')
+  assert.equal(towersOf(withRing).length, towersOf(without).length + 4, 'the four rain cells of the ring (30 dBZ and more) on top of the towers within')
+  assert.equal(decksOf(withRing).length, decksOf(without).length + 2, 'the two light ones: decks')
+  assert.ok(towersOf(without).length >= RADAR_LOOK.towers * 0.6 && towersOf(without).length <= RADAR_LOOK.towers, 'a full sky within, at most 40')
+  const wide = (cs: CloudSpec[]): number[] => towersOf(cs).map(columnOf)
+  assert.ok(Math.min(...wide(withRing)) > 6000, 'the ring\'s towers as wide as the thinned ones within')
+})
+
+test('radarClouds: with the places full within the radius (a small cap here) the ring still stands on top: its cells are not counted against the 40 towers or the 80 deck puffs', () => {
+  const was = [RADAR_LOOK.towers, RADAR_LOOK.deck.max] as const
+  try {
+    ;(RADAR_LOOK as { towers: number }).towers = 6
+    ;(RADAR_LOOK.deck as { max: number }).max = 4
+    const field = (dbz: number, seed: number): RadarCell[] => Array.from({ length: 12 }, (_, i) => cell(((i % 4) - 1.5) * 40, (Math.floor(i / 4) - 1) * 40, dbz, { seed: seed + i })) // 12 cells 40 km apart, all within 100 km
+    const ring = (dbz: number, seed: number): RadarCell[] => [cell(110, 20, dbz, { seed }), cell(-115, -30, dbz, { seed: seed + 1 }), cell(10, 125, dbz, { seed: seed + 2 })]
+    const towers = (cs: RadarCell[]): number => towersOf(radarClouds(cs, base1500)).length
+    const decks = (cs: RadarCell[]): number => decksOf(radarClouds(cs, base1500)).length
+    assert.equal(towers(field(45, 100)), 6, 'full: the nearest 6')
+    assert.equal(towers([...field(45, 100), ...ring(45, 900)]), 9, 'and three on top')
+    assert.equal(decks(field(20, 300)), 4)
+    assert.equal(decks([...field(20, 300), ...ring(20, 800)]), 7, 'four decks within, three in the ring')
+  } finally {
+    ;(RADAR_LOOK as { towers: number }).towers = was[0]
+    ;(RADAR_LOOK.deck as { max: number }).max = was[1]
+  }
+})
+
+test('towerRiseM: follows the levels of the tower (a narrow tower has more, each lower, so its lowest puff and its drawn bottom are lower)', () => {
+  const was = RADAR_LOOK.width
+  try {
+    ;(RADAR_LOOK as { width: readonly [number, number] }).width = [1500, 2000]
+    for (const dbz of [35, 45, 55]) {
+      const lowest = towersOf(radarClouds([cell(0, 0, dbz, { seed: 4 })], base1500))[0][0]
+      assert.ok(lowest.scale[1] < 2400, `${dbz} dBZ: narrow, so many levels (a lowest puff ${lowest.scale[1].toFixed(0)} m tall)`)
+      assert.ok(near(towerRiseM(dbz), (lowest.scale[1] * (PUFF_FILL - PUFF_SEEN)) / 2, 0.15 * towerRiseM(dbz)), `${dbz} dBZ: ${towerRiseM(dbz)}`)
+    }
+    assert.ok(towerRiseM(55) < 450, 'less than for a wide tower')
+  } finally {
+    ;(RADAR_LOOK as { width: readonly [number, number] }).width = was
+  }
+})
+
+test('towerRiseM: how far over its base the drawn bottom of a radar tower stands (a puff\'s lump is about 45 % of its billboard, the base is placed by 75 %): by its echo, as the render of the shader found', () => {
+  assert.ok(PUFF_SEEN < PUFF_FILL && PUFF_SEEN > 0.3)
+  assert.ok(near(towerRiseM(35), 455, 20) && near(towerRiseM(45), 735, 25) && near(towerRiseM(55), 1050, 30), `${towerRiseM(35)}, ${towerRiseM(45)}, ${towerRiseM(55)}`)
+  for (let dbz = 30; dbz < 70; dbz += 2.5) assert.ok(towerRiseM(dbz + 2.5) >= towerRiseM(dbz), 'higher for a heavier echo')
+  for (const dbz of [30, 35, 40, 45, 50, 55, 70]) {
+    for (let seed = 1; seed <= 8; seed++) {
+      const t = towersOf(radarClouds([cell(0, 0, dbz, { seed })], base1500))[0]
+      const lowest = t[0] // lowest first
+      const drawn = (lowest.scale[1] * (PUFF_FILL - PUFF_SEEN)) / 2
+      assert.ok(Math.abs(drawn - towerRiseM(dbz)) <= 0.12 * drawn, `${dbz} dBZ seed ${seed}: the tower's drawn bottom is ${drawn.toFixed(0)} m up, the estimate ${towerRiseM(dbz).toFixed(0)}`)
+    }
+  }
 })
 
 test('radarClouds: a broad light-rain area is a few flat decks, wider and thicker the more there is of it, at most 80', () => {
@@ -573,5 +660,68 @@ test('radarClouds: the look constants are read as the clouds are made (the conso
     assert.ok(near(heightOf(towersOf(radarClouds([cell(0, 0, 45)], base1500))[0]), 2000, 1e-6))
   } finally {
     ;(RADAR_LOOK as { tops: readonly (readonly [number, number])[] }).tops = was
+  }
+})
+
+// ---- puffs that end inside their quad ----------------------------------------------------------------------------------------
+
+/** Every puff of every source of clouds, over many reports and cells: the observed layers, a CB's and a TCU's towers and anvils, the radar's towers and decks. */
+function generatedSkies(): { name: string; cs: CloudSpec[] }[] {
+  const layers: [string, Cloud[]][] = [
+    ['FEW', [layer('FEW', 2000)]], ['SCT', [layer('SCT', 3000)]], ['BKN', [layer('BKN', 2500)]], ['OVC', [layer('OVC', 1500)]], ['CB', [layer('FEW', 3000, 'CB')]],
+    ['TCU', [layer('SCT', 4000, 'TCU')]], ['BKN+CB, OVC', [layer('BKN', 2000, 'CB'), layer('OVC', 9000)]], ['all', [layer('FEW', 1500), layer('SCT', 3000, 'TCU'), layer('BKN', 6000), layer('OVC', 12000)]],
+  ]
+  const skies = layers.map(([name, clouds]) => ({ name, cs: Array.from({ length: 24 }, (_, i) => metarClouds(metar({ id: `ST${i}`, lat: 20 + (i % 40), lon: -30 + i * 2, elevM: (i * 37) % 800, clouds }), i % 3)).flat() }))
+  const heavy = Array.from({ length: 400 }, (_, k) => cell(((k % 20) - 10) * 3, (Math.floor(k / 20) - 10) * 3, 30 + (k % 26), { seed: k + 1 }))
+  const alone = Array.from({ length: 8 }, (_, i) => cell(30 * i - 105, 0, 31 + 3 * i, { seed: 500 + i }))
+  const light = Array.from({ length: 900 }, (_, k) => cell(((k % 30) - 15) * 3, (Math.floor(k / 30) - 15) * 3, 15 + (k % 14), { seed: 900 + k }))
+  const snow = Array.from({ length: 60 }, (_, k) => cell(((k % 10) - 5) * 8, (Math.floor(k / 10) - 3) * 8, 20 + (k % 30), { seed: 2000 + k, snow: true }))
+  skies.push(
+    { name: 'radar: heavy region', cs: radarClouds(heavy, base1500) }, { name: 'radar: isolated cells', cs: radarClouds(alone, base1500) },
+    { name: 'radar: light rain', cs: radarClouds(light, base1500) }, { name: 'radar: snow', cs: radarClouds(snow, base1500) },
+  )
+  return skies
+}
+
+test('every puff of every source stays inside its quad: whatever the noise, the most it can draw at its end (its cut, or the quad\'s edge) is EDGE_ALPHA', () => {
+  const skies = generatedSkies()
+  let n = 0
+  for (const { name, cs } of skies) {
+    assert.ok(cs.length >= 40, `${name}: ${cs.length} puffs`)
+    for (const c of cs) {
+      assert.ok(staysInside(c), `${name}: ${c.maxSize.map((v) => v.toFixed(1))} slice ${c.slice.toFixed(3)} can draw ${edgeAlpha(c.maxSize, c.slice).toFixed(3)} at its end`)
+      n++
+    }
+  }
+  assert.ok(n > 8000, `${n} puffs checked`)
+})
+
+test('the slices are the looks\' own where those end soft already, and are raised, no further than the edge needs, where they do not (towers, anvils; the odd narrow cumulus)', () => {
+  const sky = Object.fromEntries(generatedSkies().map((s) => [s.name, s.cs]))
+  const raised = (cs: CloudSpec[], max: number): number => cs.filter((c) => c.slice > max + 1e-12).length / cs.length
+  for (const [name, [lo, hi]] of [['FEW', LOOKS.FEW.slice], ['SCT', LOOKS.SCT.slice], ['BKN', LOOKS.BKN.slice], ['OVC', LOOKS.OVC.slice]] as const) {
+    const cs = sky[name]
+    assert.ok(cs.every((c) => c.slice >= lo - 1e-12 && c.slice <= 0.5), `${name}: never lowered, never far up`)
+    assert.ok(raised(cs, hi) < 0.25, `${name}: ${(100 * raised(cs, hi)).toFixed(0)} % raised past ${hi}`)
+  }
+  const towers = sky.CB.filter((c) => c.tower !== undefined)
+  assert.ok(towers.every((c) => c.slice >= 0.18 && c.slice <= 0.5))
+  assert.ok(raised(towers, 0.32) > 0, 'an anvil is cut low and narrow: raised')
+  assert.ok(sky.CB.some((c) => c.slice > 0.26 && c.scale[1] > c.scale[0] / 3), 'a tower\'s puff cut at 0.18 to 0.26 would end in a hard rim: raised')
+  assert.equal(staysInside({ maxSize: [17, 16, 16], slice: 0.2 }), false, 'as asked, a tower puff ends in a rim a noise-free sky would show')
+  assert.equal(staysInside({ maxSize: [46, 9, 8], slice: 0.26 }), false, 'as asked, an anvil puff too')
+  assert.ok(EDGE_ALPHA <= 0.03)
+})
+
+test('the slices keep the draws as they were: raising a slice moves no cloud and changes no size or shade', () => {
+  const m = metar({ id: 'KDOV', clouds: [layer('BKN', 2500, 'CB'), layer('OVC', 8000)] })
+  const a = metarClouds(m)
+  const was = LOOKS.OVC.slice
+  try {
+    ;(LOOKS.OVC as { slice: readonly [number, number] }).slice = [0.5, 0.5]
+    const b = metarClouds(m)
+    assert.deepEqual(b.map((c) => [c.lon, c.lat, c.heightM, c.scale, c.maxSize, c.brightness, c.tint, c.tower]), a.map((c) => [c.lon, c.lat, c.heightM, c.scale, c.maxSize, c.brightness, c.tint, c.tower]))
+  } finally {
+    ;(LOOKS.OVC as { slice: readonly [number, number] }).slice = was
   }
 })
