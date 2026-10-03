@@ -30,6 +30,19 @@ make replay                  # the same, replaying the newest recording
 - A live server keeps the newest hour of the past in memory (two half-hour files, ~25 MB per 30 min while it runs); older
   half hours are fetched when the replay needs them and dropped again. Nothing is written to disk.
 
+## The weather in the chase
+
+- **Weather** (the Layers panel's switch, or `W`): in the chase the clouds, rain and storms are volumes round the aircraft, from airport
+  reports, the rain radar and the weather model: it flies into them and fades out of sight in thick ones. A line at the top says what is
+  on its heading ("In light rain", "Clear air · a thunderstorm in 3 min") and a red frame shows it is inside a hazard area. Live only:
+  History and scenarios draw none.
+- **The Weather menu** (a square of its own under Layers, there while the chase's weather is drawn; it opens when you turn Weather on in
+  a live chase, not at load). **Clouds:** natural, severity colours (cloud white, light rain blue, heavy rain amber, thunderstorm red) or
+  blocks. **Hazard areas:** a curtain, a fence or a box. **Looking ahead:** three switches, the track line (the next six minutes on this
+  heading), the level slice (the weather at the aircraft's own altitude) and the ahead strip (a side view of the next 80 km). A choice
+  applies at once and is kept in this browser; `?wxlook=natural|severity|blocks`, `?wxhaz=curtain|fence|box` and `?wxtrack`, `?wxslice`,
+  `?wxstrip` (`=0` or `=1`) set them for one load.
+
 ## Data sources
 
 - Live aircraft: [adsb.fi](https://adsb.fi) open data (personal, non-commercial use), the default; [adsb.lol](https://adsb.lol) — data © adsb.lol contributors, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) — for recordings and `LIVE_SOURCE=adsblol`. Later: the author's own receiver.

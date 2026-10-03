@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
 import type { Metar, ModelGrid, Sigmet } from '../../shared/wx.ts'
-import { hazardsNear, inRing, ringCentre, ringDistanceKm, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon } from './wxGeo.ts'
+import { hazardsNear, inRing, ringCentre, ringContains, ringDistanceKm, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon } from './wxGeo.ts'
 
 type Ring = [number, number][]
 const FT = 0.3048
@@ -51,6 +51,21 @@ test('ringDistanceKm: 0 inside a ring, else the distance to its nearest edge or 
   const corner = ringDistanceKm(r, 2, 2) // past the north-east corner: the corner is nearest
   assert.ok(near(corner, distanceNm(2, 2, 1, 1) * 1.852, 1), String(corner))
   assert.ok(near(ringDistanceKm(r, 2, 1), KM_PER_DEG, 0.5), 'straight north of the corner: a degree')
+})
+
+test('ringContains: inside a ring, as ringDistanceKm says (0 km), and for a ring across the antimeridian too, where the ring\'s own longitudes jump', () => {
+  const r = box(0, 0, 1, 1)
+  assert.equal(ringContains(r, 0.5, 0.5), true)
+  assert.equal(ringContains(r, 0.5, 2), false)
+  assert.equal(ringContains(r, 2, 0.5), false)
+  assert.equal(ringContains(across, 0, 180), true, 'on the antimeridian')
+  assert.equal(ringContains(across, 0.5, -179.5), true, 'west of it')
+  assert.equal(ringContains(across, -0.5, 179.5), true, 'east of it')
+  assert.equal(ringContains(across, 0, -170), false)
+  assert.equal(ringContains(across, 0, 170), false)
+  assert.equal(ringContains(across, 2, 180), false, 'north of it')
+  assert.equal(ringContains([[0, 0], [1, 1]], 0.5, 0.5), false, 'two corners are no area')
+  for (const [lat, lon] of [[0.5, 0.5], [0.5, 2], [3, 0.5], [-0.2, 0.9]]) assert.equal(ringContains(r, lat, lon), ringDistanceKm(r, lat, lon) === 0, `${lat}, ${lon}`)
 })
 
 test('ringDistanceKm: an edge is a great circle, as Cesium draws it: a long one along 60° N bulges to 73.9° N at its middle', () => {

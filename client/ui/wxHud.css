@@ -1,0 +1,198 @@
+/* client/ui/wxHud.css */
+/* The chase weather's HUD (wxHud.ts): the status line and the ahead strip at the top centre under the search box, and a red frame
+   round the whole view while the aircraft is inside a hazard area. The glass is the cards' (theme.css .fh-glass). The overlay layer
+   never takes the pointer, and neither does the HUD: the map stays draggable under it.
+   Where it sits: the same free band as the search box and the alert toasts (alerts.css), clear of the flight card on the left (--l)
+   and the rail and an open panel on the right (--rp, kept clear while there is room, else covered rather than narrower than 280 px),
+   so these rules are the toasts' (alerts.css), and the toasts stand under the HUD (the last rules here). A phone has no search box: the
+   HUD runs across the top, under the notch (and under the live-data pill, as the toasts do). Over the traffic brackets and the flight-data
+   frame (the frame keeps off it: app.ts FRAME_COVERS), under the outage card (17), the flight card (18), the panels (19) and the rail (20). */
+.fh-wxhud {
+  --w: 400px;
+  --l: 0px;
+  --r: calc(58px + var(--fh-right));
+  --rp: var(--r);
+  --sw: min(100% - var(--l) - var(--r) - 24px, max(280px, min(var(--w), 100% - var(--l) - var(--rp) - 24px)));
+  position: absolute;
+  z-index: 16;
+  top: calc(var(--fh-top) + 54px); /* under the search box (42 px tall, 12 px under the top) */
+  left: clamp(calc(var(--l) + 12px), calc(50% - var(--sw) / 2), calc(100% - var(--rp) - 12px - var(--sw)));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: var(--sw);
+  pointer-events: none;
+  transition: top 200ms var(--fh-ease);
+}
+
+.fh-wxhud[hidden],
+.fh-wxhud [hidden],
+.fh-wxhud-veil[hidden] {
+  display: none !important;
+}
+
+.fh-ui:has(> .fh-card:not(.fh-tcard):not([hidden])) .fh-wxhud {
+  --l: calc(var(--fh-left) + 320px);
+}
+
+.fh-ui:has(> .fh-panel:not([hidden])) .fh-wxhud {
+  --rp: calc(64px + 320px + var(--fh-right));
+}
+
+.fh-ui:has(> .fh-panel.fh-wide:not([hidden])) .fh-wxhud {
+  --rp: calc(64px + 440px + var(--fh-right));
+}
+
+/* A traffic aircraft's card at the top right (the chase), unless a panel is open: that hides it (flightCard.css). */
+.fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)):not(:has(> .fh-panel:not([hidden]))) .fh-wxhud {
+  --rp: calc(70px + 320px + var(--fh-right));
+}
+
+/* The live-data pill (outage.css) is under the search box too: the HUD goes under it. */
+@media (min-width: 641px) {
+  .fh-ui:has(> .fh-outage-pill:not([hidden])) .fh-wxhud {
+    top: calc(var(--fh-top) + 98px);
+  }
+}
+
+/* Touch screens beside the side rail: its 44 px buttons and the wider card (rail.css, flightCard.css). */
+@media (pointer: coarse) and (min-width: 641px) {
+  .fh-wxhud {
+    --r: calc(66px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-card:not(.fh-tcard):not([hidden])) .fh-wxhud {
+    --l: calc(var(--fh-left) + 336px);
+  }
+
+  .fh-ui:has(> .fh-panel:not([hidden])) .fh-wxhud {
+    --rp: calc(72px + 320px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-panel.fh-wide:not([hidden])) .fh-wxhud {
+    --rp: calc(72px + 440px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)):not(:has(> .fh-panel:not([hidden]))) .fh-wxhud {
+    --rp: calc(78px + 336px + var(--fh-right));
+  }
+}
+
+/* Narrow screens: an open panel hides the flight card (flightCard.css), so its corner is free. */
+@media (max-width: 860px) {
+  .fh-ui:has(> .fh-panel:not([hidden])):has(> .fh-card:not(.fh-tcard)) .fh-wxhud {
+    --l: 0px;
+  }
+}
+
+/* The status line: a chip for the weather, the severity's colour in its dot (clear air is green), and under it one for a hazard area,
+   edged in red. Over a bright sky or sea the glass keeps the text legible. */
+.fh-wxhud-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.fh-wxhud-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 13px;
+  border-radius: 16px;
+  color: var(--fh-text);
+  font: 600 13px/1.3 var(--fh-font);
+  text-align: center;
+}
+
+.fh-wxhud-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c, var(--fh-ok));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.fh-wxhud-hazard {
+  border-color: rgb(255 90 90 / 0.6);
+  box-shadow: var(--fh-shadow), 0 0 0 1px rgb(255 90 90 / 0.18);
+  color: #ffd9d6;
+}
+
+/* The ahead strip: its title, and the canvas (wxHud.ts draws it at the width it is laid out at: its height keeps the 25 : 7 shape). */
+.fh-wxhud-strip {
+  padding: 6px 8px 5px;
+}
+
+.fh-wxhud-strip-h {
+  padding: 0 0 4px 2px;
+  color: var(--fh-faint);
+  font: 700 10px/1 var(--fh-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fh-wxhud-cv {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Inside a hazard area: a red frame inset round the view, and a glow just inside it. Under the HUD and every panel. */
+.fh-wxhud-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px #ff5a5a, inset 0 0 46px rgb(255 90 90 / 0.34);
+}
+
+/* The alert toasts (alerts.css) stand under the HUD, one gap below it: --fh-wxhud-h is its height (wxHud.ts). These beat the toasts'
+   own, which stand where the HUD is. */
+@media (min-width: 641px) {
+  .fh-ui:has(> .fh-wxhud:not([hidden])) .fh-toasts {
+    top: calc(var(--fh-top) + 54px + var(--fh-wxhud-h, 0px) + 8px);
+  }
+
+  .fh-ui:has(> .fh-wxhud:not([hidden])):has(> .fh-outage-pill:not([hidden])) .fh-toasts {
+    top: calc(var(--fh-top) + 98px + var(--fh-wxhud-h, 0px) + 8px);
+  }
+}
+
+/* Phones: no search box; across the top under the notch, wider type as the other overlays have. */
+@media (max-width: 640px) {
+  .fh-wxhud {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    width: auto;
+  }
+
+  .fh-ui:has(> .fh-outage-pill:not([hidden])) .fh-wxhud {
+    top: calc(52px + env(safe-area-inset-top, 0px));
+  }
+
+  .fh-wxhud-chip {
+    font-size: 14px;
+  }
+
+  .fh-wxhud-strip-h {
+    font-size: 11px;
+  }
+
+  .fh-ui:has(> .fh-wxhud:not([hidden])) .fh-toasts {
+    top: calc(8px + env(safe-area-inset-top, 0px) + var(--fh-wxhud-h, 0px) + 8px);
+  }
+
+  .fh-ui:has(> .fh-wxhud:not([hidden])):has(> .fh-outage-pill:not([hidden])) .fh-toasts {
+    top: calc(52px + env(safe-area-inset-top, 0px) + var(--fh-wxhud-h, 0px) + 8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-wxhud {
+    transition: none;
+  }
+}

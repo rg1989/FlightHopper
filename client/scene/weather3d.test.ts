@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { isDeepStrictEqual } from 'node:util'
 import v8 from 'node:v8'
 import vm from 'node:vm'
-import { Cartesian3, Cartographic, Color, JulianDate, Math as CesiumMath } from 'cesium'
-import type { ColorMaterialProperty, CustomDataSource, Entity, Viewer } from 'cesium'
+import { Cartesian3, Cartographic, ClassificationType, Color, JulianDate, Math as CesiumMath, StripeMaterialProperty } from 'cesium'
+import type { CustomDataSource, Entity, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
 import { MODEL_CLOUD_HPA, MODEL_WIND_HPA, type Cloud, type Metar, type ModelGeo, type ModelGrid, type Sigmet } from '../../shared/wx.ts'
@@ -18,8 +18,12 @@ import { radarPixel, windOf, type Fall } from './precip.ts'
 import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { modelWindAt } from './modelWind.ts'
-import { pickShafts, type RainShaft } from './rainShafts.ts'
-import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
+import { REACH_KM, type CloudLook, type HazardStyle } from './cloudVolume.ts'
+import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, parseWxDemo, statusText3d } from './weather3d.ts'
+import { aheadPath, type AheadPath } from './wxAhead.ts'
+import { demoSky } from './wxDemo.ts'
+import { buildField, type WxField } from './wxField.ts'
+import type { Hazard } from './wxGeo.ts'
 import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
 
 type Ring = [number, number][]
@@ -39,6 +43,14 @@ test('parseWxAt: ?wxat=lat,lon, in degrees; anything else is none', () => {
   for (const bad of ['', '?hex=4b1805', '?wxat=', '?wxat=abc', '?wxat=47', '?wxat=47,8,1', '?wxat=,8', '?wxat=47,', '?wxat=91,0', '?wxat=0,181', '?wxat=NaN,1', '?wxat=1e999,1']) {
     assert.equal(parseWxAt(bad), null, bad)
   }
+})
+
+test('parseWxDemo: ?wxdemo=1 is the demo sky from its start, ?wxdemo=60 the aircraft 60 km along it; absent or not a number: the real weather', () => {
+  assert.equal(parseWxDemo('?wxdemo=1'), 0)
+  assert.equal(parseWxDemo('?hex=a831b2&chase=1&wx=1&wxdemo=60&cam=0,-12,600'), 60)
+  assert.equal(parseWxDemo('?wxdemo=98'), 98)
+  assert.equal(parseWxDemo('?wxdemo=12.5'), 12.5)
+  for (const off of ['', '?wx=1', '?wxdemo=', '?wxdemo=on', '?wxdemo=NaN', '?wxdemo=1e999', '?wxdemo=6km']) assert.equal(parseWxDemo(off), null, off)
 })
 
 test('statusText3d: clouds from the airports held, the hazard areas, the forecast model\'s credit while a grid is held, a note; singular for one', () => {
@@ -79,8 +91,12 @@ interface LabelCall { key: string; rank: number; labels: LayerLabel[] }
 function fakeSky() {
   return {
     clouds: {
-      show: false, draws: [] as CloudSpec[][], frames: [] as [TerrainFrame, number][], fades: [] as Cartesian3[], destroyed: false,
-      draw(specs: readonly CloudSpec[]) { this.draws.push([...specs]) },
+      show: false, draws: [] as CloudSpec[][], ats: [] as { lat: number; lon: number }[], frames: [] as [TerrainFrame, number][], fades: [] as Cartesian3[], destroyed: false,
+      look: 'severity' as CloudLook, field: null as WxField | null, failed: false,
+      hazardSets: [] as { hazards: Hazard[]; style: HazardStyle; color: (h: Hazard) => string }[], aheads: [] as { path: AheadPath | null; show: { track: boolean; slice: boolean } }[],
+      draw(specs: readonly CloudSpec[], at: { lat: number; lon: number }) { this.draws.push([...specs]); this.ats.push({ ...at }) },
+      setHazards(hazards: readonly Hazard[], style: HazardStyle, color: (h: Hazard) => string) { this.hazardSets.push({ hazards: [...hazards], style, color }) },
+      setAhead(path: AheadPath | null, show: { track: boolean; slice: boolean }) { this.aheads.push({ path, show: { ...show } }) },
       frame(tf: TerrainFrame, night: number) { this.frames.push([{ ...tf }, night]) },
       fade(from: Cartesian3) { this.fades.push(Cartesian3.clone(from)) },
       destroy() { this.destroyed = true },
@@ -95,13 +111,6 @@ function fakeSky() {
       sets: [] as (Fall | null)[], aims: [] as number[], destroyed: false,
       set(f: Fall | null) { this.sets.push(f) },
       aim(headingRad: number) { this.aims.push(headingRad) },
-      destroy() { this.destroyed = true },
-    },
-    shafts: {
-      show: false, draws: [] as RainShaft[][], frames: [] as [TerrainFrame, number][], fades: [] as Cartesian3[], destroyed: false,
-      draw(shafts: readonly RainShaft[]) { this.draws.push([...shafts]) },
-      frame(tf: TerrainFrame, night: number) { this.frames.push([{ ...tf }, night]) },
-      fade(from: Cartesian3) { this.fades.push(Cartesian3.clone(from)) },
       destroy() { this.destroyed = true },
     },
   }
@@ -135,9 +144,9 @@ function geoOf(url: string): ModelGeo {
 /**
  * A Weather3D over a fake viewer (its camera at the aircraft until moved), names overlay, sky, radar tiles and network: what
  * was asked, answered from `answers` (or failed, or held until release()). The model is asked at the first look (no dwell) unless
- * `dwell` asks for the real 10 s; `network` has it use its own getJson, over the global fetch.
+ * `dwell` asks for the real 10 s; `network` has it use its own getJson, over the global fetch; `demo`: ?wxdemo's km.
  */
-function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: boolean } = {}) {
+function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: boolean; demo?: number } = {}) {
   const asked: string[] = []
   const answers: Record<'metar' | 'sigmet' | 'radar', unknown> = { metar: [], sigmet: [], radar: INDEX }
   const failing = new Set<Kind>()
@@ -184,7 +193,7 @@ function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: 
   const shades: number[] = [] // what the sky's grey was handed on as
   const w = new Weather3D(viewer, {
     apiBase: '/api', labels, getJson: o.network ? undefined : getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile, epochMs: () => epoch.now,
-    onShade: (s) => shades.push(s), dwellMs: o.dwell ? undefined : 0,
+    onShade: (s) => shades.push(s), dwellMs: o.dwell ? undefined : 0, demo: o.demo,
   })
   return {
     w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, shades, sky, tiles, tileAsks, tileHold, frameTiles,
@@ -196,7 +205,9 @@ function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: 
     setHeading: (rad: number): void => void (camera.heading = rad),
     destroyViewer: (): void => void (gone = true),
     release: () => held.splice(0).forEach((f) => f()),
-    volumes: (): Entity[] => [...sources[0].entities.values], // a copy: the collection's own array changes as it does
+    areas: (): Hazard[] => sky.clouds.hazardSets.at(-1)?.hazards ?? [], // the hazard areas the cloud pass holds now: it draws their edges
+    handed: (): number => sky.clouds.hazardSets.length, // how often it was given them
+    footprints: (): Entity[] => [...sources[0].entities.values], // a copy: the collection's own array changes as it does
     shown: (): LayerLabel[] => labelCalls.at(-1)?.labels ?? [], // the labels the overlay holds for the layer now
     asks: (what: 'metar' | 'sigmet' | 'weather-maps' | 'model'): string[] => asked.filter((u) => u.includes(what === 'metar' ? '/wx/metar' : what === 'sigmet' ? '/wx/sigmet' : what === 'model' ? '/wx/model' : 'weather-maps')),
     setUnits: (u: Units): void => void (units = u),
@@ -212,15 +223,21 @@ async function open(r: Rig, at: { lat: number; lon: number; altM: number } = AC,
   await flush()
 }
 
-const polygon = (e: Entity): { baseM: number; topM: number; fill: Color; line: Color; outlined: boolean; ring: [number, number][] } => {
+/** A footprint's two entities for a ring: its striped fill, and its outline. */
+const fill = (e: Entity): { ring: [number, number][]; even: Color; odd: Color; repeat: number; across: boolean; onGround: boolean; turned: number; terrainOnly: boolean } => {
   const g = e.polygon!
+  const m = (g.material as StripeMaterialProperty).getValue(NOW) as { evenColor: Color; oddColor: Color; repeat: number; horizontal: boolean }
   return {
-    baseM: g.height!.getValue(NOW) as number,
-    topM: g.extrudedHeight!.getValue(NOW) as number,
-    fill: (g.material as ColorMaterialProperty).color!.getValue(NOW) as Color,
-    line: g.outlineColor!.getValue(NOW) as Color,
-    outlined: g.outline!.getValue(NOW) as boolean,
-    ring: (g.hierarchy!.getValue(NOW) as { positions: Cartesian3[] }).positions.map(lonlat),
+    ring: (g.hierarchy!.getValue(NOW) as { positions: Cartesian3[] }).positions.map(lonlat), even: m.evenColor, odd: m.oddColor, repeat: m.repeat, across: m.horizontal,
+    onGround: g.height === undefined && g.extrudedHeight === undefined, turned: g.stRotation!.getValue(NOW) as number,
+    terrainOnly: g.classificationType!.getValue(NOW) === ClassificationType.TERRAIN,
+  }
+}
+const outline = (e: Entity): { ring: [number, number][]; color: Color; width: number; clamped: boolean } => {
+  const g = e.polyline!
+  return {
+    ring: (g.positions!.getValue(NOW) as Cartesian3[]).map(lonlat), color: (g.material.getValue(NOW) as { color: Color }).color,
+    width: g.width!.getValue(NOW) as number, clamped: g.clampToGround!.getValue(NOW) as boolean,
   }
 }
 
@@ -231,7 +248,7 @@ test('Weather3D: hidden it asks for nothing and draws nothing, however often it 
   for (let t = 0; t < 20 * MIN; t += 1000) r.w.update(AC, t)
   await flush()
   assert.deepEqual(r.asked, [])
-  assert.equal(r.volumes().length, 0)
+  assert.deepEqual([r.handed(), r.footprints().length], [0, 0])
   assert.deepEqual(r.labelCalls, [])
   assert.deepEqual(r.lines, [])
   assert.equal(r.sources[0].show, false, 'its data source is in the viewer, hidden')
@@ -271,14 +288,14 @@ test('Weather3D: update() runs every frame and looks once a second: the frames b
   const r = rig()
   r.answers.sigmet = [sigmet({ rings: [northOf(100)] })]
   await open(r)
-  const [asked, calls, entities] = [r.asked.length, r.labelCalls.length, r.volumes().length]
-  assert.ok(asked > 0 && calls > 0 && entities > 0)
+  const [asked, calls, handed] = [r.asked.length, r.labelCalls.length, r.handed()]
+  assert.ok(asked > 0 && calls > 0 && handed > 0 && r.areas().length === 1)
   r.answers.sigmet = []
   const last = { ...AC, lat: AC.lat + 0.0999 }
   for (let t = 1; t < 1000; t++) r.w.update({ ...AC, lat: AC.lat + t * 1e-4 }, t) // 999 frames
   r.w.update(last, 999)
   await flush()
-  assert.deepEqual([r.asked.length, r.labelCalls.length, r.volumes().length], [asked, calls, entities])
+  assert.deepEqual([r.asked.length, r.labelCalls.length, r.handed()], [asked, calls, handed])
   assert.deepEqual(r.w.aircraft, last, 'the aircraft it holds is the newest frame\'s')
   r.w.update(AC, 5 * MIN - 500) // a look: nothing due yet
   r.w.update(AC, 5 * MIN) // the METARs are due, but half a second after a look is not a look
@@ -355,25 +372,79 @@ test('Weather3D: what it keeps for the pieces that draw: the METARs, the SIGMETs
   assert.match(r.w.radar!.url, /\/v2\/radar\/newer\//)
 })
 
-test('Weather3D: hazard areas within 800 km are translucent volumes from base to top: 0.10 fill, 0.3 outline, the hazard\'s colour', async () => {
+test('Weather3D: the hazard areas within 800 km are handed to the cloud pass, which draws their edges: each with its base and top, the hazard\'s colour, the style (the box until another is set)', async () => {
   const r = rig()
   const ts = sigmet({ rings: [northOf(300, 2)], base: 18000, top: 35000 })
   const turb = sigmet({ hazard: 'TURB', qualifier: 'SEV', rings: [northOf(500, 2), northOf(2000, 2)] }) // base none: from the ground
   r.answers.sigmet = [ts, turb, sigmet({ rings: [northOf(900)] }), sigmet({ rings: [northOf(200)], top: null })]
   await open(r)
-  const got = r.volumes().map(polygon)
-  assert.equal(got.length, 2, 'the ring at 2,000 km, the area at 900 and the one without a top are not drawn')
-  const [a, b] = got
+  assert.equal(r.handed(), 1)
+  const got = r.sky.clouds.hazardSets[0]
+  assert.equal(got.hazards.length, 2, 'the ring at 2,000 km, the area at 900 and the one without a top are not handed on')
+  const [a, b] = got.hazards
   assert.deepEqual([a.baseM, a.topM, b.baseM, b.topM], [18000 * FT, 35000 * FT, 0, 35000 * FT])
-  const red = Color.fromCssColorString(sigmetColor('TS'))
-  const amber = Color.fromCssColorString(sigmetColor('TURB'))
-  assert.ok(a.fill.equals(red.withAlpha(0.1)), String(a.fill))
-  assert.ok(a.line.equals(red.withAlpha(0.3)), String(a.line))
-  assert.ok(b.fill.equals(amber.withAlpha(0.1)) && b.line.equals(amber.withAlpha(0.3)))
-  assert.deepEqual([a.outlined, b.outlined], [true, true])
-  assert.ok(a.ring.some(([lon, lat]) => near(lon, AC.lon - 1, 1e-6) && near(lat, AC.lat + 300 / KM_PER_DEG, 1e-6)), 'the ring as the SIGMET gives it')
-  assert.equal(r.w.hazards.length, 2)
+  assert.deepEqual([a.rings.length, b.rings.length], [1, 1])
+  assert.deepEqual([got.color(a), got.color(b)], [sigmetColor('TS'), sigmetColor('TURB')])
+  assert.ok(a.rings[0].some(([lon, lat]) => near(lon, AC.lon - 1, 1e-6) && near(lat, AC.lat + 300 / KM_PER_DEG, 1e-6)), 'the ring as the SIGMET gives it')
+  assert.equal(got.style, 'box')
+  assert.deepEqual(got.hazards, r.w.hazards)
+  assert.equal(r.footprints().length, 0, 'a box has no footprint, and no volume of Cesium\'s is drawn any more')
   assert.equal(r.sources[0].show, true)
+})
+
+test('Weather3D: the style is handed to the cloud pass when it is set, with the areas it holds; a curtain and a fence have each ring\'s footprint on the ground (its outline clamped to it, and a fill in stripes 3 km wide whatever the ring\'s size, at low alpha), a box none', async () => {
+  const r = rig()
+  r.w.hazardStyle = 'curtain'
+  assert.deepEqual(r.sky.clouds.hazardSets.map((x) => [x.hazards.length, x.style]), [[0, 'curtain']], 'set before any area is known')
+  const small = northOf(300, 1) // 2 degrees of longitude by 1 of latitude: 188 km by 111
+  r.answers.sigmet = [sigmet({ rings: [small] }), sigmet({ hazard: 'ICE', qualifier: 'MOD', rings: [northOf(450, 2), northOf(700, 0.5)] })]
+  await open(r)
+  assert.deepEqual([r.handed(), r.areas().length, r.sky.clouds.hazardSets.at(-1)!.style], [2, 2, 'curtain'])
+  const foot = r.footprints()
+  assert.equal(foot.length, 6, 'a fill and an outline for each of the three rings')
+  const fills = foot.filter((e) => e.polygon !== undefined).map(fill)
+  const lines = foot.filter((e) => e.polyline !== undefined).map(outline)
+  assert.deepEqual([fills.length, lines.length], [3, 3])
+  const [red, blue] = [Color.fromCssColorString(sigmetColor('TS')), Color.fromCssColorString(sigmetColor('ICE'))]
+  assert.ok(fills[0].even.equals(red.withAlpha(0.26)) && fills[0].odd.equals(red.withAlpha(0.09)), `${fills[0].even} ${fills[0].odd}`)
+  assert.ok(fills[1].even.equals(blue.withAlpha(0.26)) && fills[2].odd.equals(blue.withAlpha(0.09)))
+  assert.ok(fills.every((f) => f.onGround && f.terrainOnly && f.across && near(f.turned, Math.PI / 4, 1e-12)), 'on the ground; the stripes across the texture\'s upward axis, which is turned to the north-east: a diagonal hatch')
+  assert.deepEqual(fills[0].ring.map(([lon, lat]) => [+lon.toFixed(6), +lat.toFixed(6)]), small.map(([lon, lat]) => [+lon.toFixed(6), +lat.toFixed(6)]))
+  // the stripes are counted over the ring's extent north-eastward, each 3 km wide
+  const diagonal = (ring: Ring): number => {
+    const km = ring.map(([lon, lat]) => ((lon - ring[0][0]) * KM_PER_DEG * Math.cos((ring[0][1] * Math.PI) / 180) + (lat - ring[0][1]) * KM_PER_DEG) / Math.SQRT2)
+    return Math.max(...km) - Math.min(...km)
+  }
+  assert.ok(near(diagonal(small), 207, 4), `${diagonal(small)} km`)
+  assert.ok(near(fills[0].repeat, diagonal(small) / 3, 1e-9) && near(fills[1].repeat, diagonal(northOf(450, 2)) / 3, 1e-9) && near(fills[2].repeat, diagonal(northOf(700, 0.5)) / 3, 1e-9), `${fills.map((f) => f.repeat)}`)
+  assert.ok(fills[1].repeat > 1.3 * fills[0].repeat && fills[2].repeat < fills[0].repeat, 'more stripes on a larger ring, not wider ones')
+  assert.ok(lines.every((l) => l.clamped && l.width === 2.5))
+  assert.ok(lines[0].color.equals(red.withAlpha(0.9)) && lines[1].color.equals(blue.withAlpha(0.9)))
+  assert.deepEqual(lines[0].ring.length, small.length, 'closed, as the ring is')
+  r.w.hazardStyle = 'fence'
+  assert.deepEqual([r.handed(), r.areas().length, r.sky.clouds.hazardSets.at(-1)!.style], [3, 2, 'fence'], 'the same areas, the new style')
+  assert.equal(r.footprints().length, 6)
+  r.w.hazardStyle = 'fence'
+  assert.equal(r.handed(), 3, 'the same style again: nothing handed')
+  r.w.hazardStyle = 'box'
+  assert.deepEqual([r.handed(), r.sky.clouds.hazardSets.at(-1)!.style, r.footprints().length], [4, 'box', 0])
+  r.w.hazardStyle = 'curtain'
+  assert.equal(r.footprints().length, 6)
+  r.w.show = false
+  assert.equal(r.sources[0].show, false, 'hidden with the weather')
+  r.w.hazardStyle = 'fence'
+  r.w.show = true
+  assert.deepEqual([r.sources[0].show, r.footprints().length, r.sky.clouds.hazardSets.at(-1)!.style], [true, 6, 'fence'])
+})
+
+test('Weather3D: a ring given open is closed in its footprint\'s outline', async () => {
+  const r = rig()
+  r.w.hazardStyle = 'fence'
+  r.answers.sigmet = [sigmet({ rings: [northOf(300, 1).slice(0, 4)] })]
+  await open(r)
+  const line = outline(r.footprints().find((e) => e.polyline !== undefined)!)
+  assert.equal(line.ring.length, 5)
+  assert.ok(near(line.ring[4][0], line.ring[0][0], 1e-9) && near(line.ring[4][1], line.ring[0][1], 1e-9))
 })
 
 test('Weather3D: the reach is 800 km from the aircraft, and a ring across the far meridian is not in it (it was "inside")', async () => {
@@ -381,16 +452,16 @@ test('Weather3D: the reach is 800 km from the aircraft, and a ring across the fa
   const r = rig()
   r.answers.sigmet = [sigmet({ rings: [northOf(790)] }), sigmet({ rings: [northOf(810)] }), sigmet({ rings: [box(25, -150, 40, -140)] })] // the last is 150°W to 140°W
   await open(r) // over Tel Aviv
-  assert.deepEqual([r.w.hazards.length, r.volumes().length, r.shown().length], [1, 1, 1])
+  assert.deepEqual([r.w.hazards.length, r.areas().length, r.shown().length], [1, 1, 1])
   const across: Ring = [[179, -1], [-179, -1], [-179, 1], [179, 1], [179, -1]]
   const far = rig()
   far.answers.sigmet = [sigmet({ rings: [across] })]
   await open(far, { lat: 0, lon: 0, altM: 0 })
-  assert.deepEqual([far.w.hazards.length, far.volumes().length, far.shown().length], [0, 0, 0])
+  assert.deepEqual([far.w.hazards.length, far.areas().length, far.shown().length], [0, 0, 0])
   const inside = rig()
   inside.answers.sigmet = [sigmet({ rings: [across] })]
   await open(inside, { lat: 0, lon: 179.6, altM: 0 })
-  assert.deepEqual([inside.w.hazards.length, inside.volumes().length, inside.shown().length], [1, 1, 1])
+  assert.deepEqual([inside.w.hazards.length, inside.areas().length, inside.shown().length], [1, 1, 1])
 })
 
 test('Weather3D: each hazard area\'s name and levels is a label at its ring\'s middle, at the top height, through the names overlay (a rank above the cities)', async () => {
@@ -414,60 +485,57 @@ test('Weather3D: each hazard area\'s name and levels is a label at its ring\'s m
   assert.ok(near(lonlat(b.position)[1], AC.lat + 100 / KM_PER_DEG + 0.5, 0.05), 'an area with two rings in reach: the label is at the nearer')
 })
 
-test('Weather3D: the volumes and labels are drawn again only when what they show changes; picked again once the aircraft has moved 10 km', async () => {
+test('Weather3D: the hazard areas are handed to the cloud pass, the footprints drawn and the labels given again only when what they show changes; picked again once the aircraft has moved 10 km', async () => {
   const r = rig()
+  r.w.hazardStyle = 'curtain'
   r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] }), sigmet({ rings: [northOf(797, 2)] })] // the second is 3 km from out of reach
   await open(r)
-  const first = r.volumes()
-  const calls = r.labelCalls.length
-  assert.equal(first.length, 2)
+  const first = r.footprints()
+  const [calls, handed] = [r.labelCalls.length, r.handed()]
+  assert.deepEqual([r.areas().length, first.length], [2, 4])
   r.w.update({ ...AC, lat: AC.lat + 0.05 }, 2000) // 5.6 km on, nearer the second: the same picks, nothing drawn again
-  assert.ok(r.volumes().length === 2 && r.volumes().every((e, i) => e === first[i]), 'the same entities, not new ones')
+  assert.ok(r.handed() === handed && r.footprints().every((e, i) => e === first[i]), 'not handed again; the same entities, not new ones')
   assert.equal(r.labelCalls.length, calls, 'no new labels for the same picks')
   r.w.update({ ...AC, lat: AC.lat - 0.05 }, 3000) // 5.6 km south, so the second is 803 km off; but less than 10 km from where it was picked
-  assert.equal(r.volumes().length, 2, 'not picked again yet')
+  assert.equal(r.handed(), handed, 'not picked again yet')
   r.w.update({ ...AC, lat: AC.lat - 0.1 }, 4000) // 11 km south of that place: picked again, and the second is out of reach
-  assert.equal(r.volumes().length, 1)
+  assert.deepEqual([r.handed(), r.areas().length, r.footprints().length], [handed + 1, 1, 2])
   assert.equal(r.shown().length, 1)
   assert.equal(r.labelCalls.length, calls + 1)
-  const [volumes, labelCalls] = [r.volumes(), r.labelCalls.length]
+  const [foot, labelCalls] = [r.footprints(), r.labelCalls.length]
   r.w.update({ ...AC, lat: AC.lat - 0.1 }, 10 * MIN + 1000) // a new list of SIGMETs with the same two areas: nothing drawn again
   await flush()
   assert.equal(r.asks('sigmet').length, 2)
-  assert.ok(r.volumes().length === 1 && r.volumes()[0] === volumes[0], 'the same entity')
+  assert.ok(r.handed() === handed + 1 && r.footprints()[0] === foot[0], 'the same entity')
   assert.equal(r.labelCalls.length, labelCalls)
   r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)], top: 36000 }), sigmet({ rings: [northOf(797, 2)] })] // the next list: one top has changed
   r.w.update({ ...AC, lat: AC.lat - 0.1 }, 20 * MIN + 2000)
   await flush()
   assert.equal(r.asks('sigmet').length, 3)
-  assert.ok(r.volumes().length === 1 && r.volumes()[0] !== volumes[0], 'drawn again')
+  assert.ok(r.handed() === handed + 2 && near(r.areas()[0].topM, 36000 * FT, 1e-9) && r.footprints()[0] !== foot[0], 'handed and drawn again')
   assert.equal(r.labelCalls.length, labelCalls + 1)
   assert.match(r.shown()[0].text, /up to 36,000 ft/)
-  assert.ok(!first.includes(r.volumes()[0]))
 })
 
-test('Weather3D: a new list that changes a corner, a base, a word or the hazard is drawn again; one that changes what is not drawn is not', async () => {
+test('Weather3D: a new list that changes a corner, a base, a word or the hazard is handed to the cloud pass again; one that changes what is not drawn is not', async () => {
   const area = (o: Partial<Sigmet> = {}, ring: Ring = northOf(300, 2)): Sigmet => sigmet({ rings: [ring], ...o })
   const r = rig()
   r.answers.sigmet = [area()]
   await open(r)
-  const first = r.volumes()[0]
   let t = 0
-  const next = async (list: Sigmet[]): Promise<Entity> => {
+  const next = async (list: Sigmet[]): Promise<number> => {
     r.answers.sigmet = list
     t += 10 * MIN
     r.w.update(AC, t)
     await flush()
-    return r.volumes()[0]
+    return r.handed()
   }
-  assert.equal(await next([area({ raw: 'another text', until: '2026-10-04T00:00:00Z' })]), first, 'what is not drawn')
-  for (const o of [{ base: 5000 }, { qualifier: 'SEV' }, { hazard: 'TURB' }]) {
-    const was = r.volumes()[0]
-    assert.notEqual(await next([area(o)]), was, JSON.stringify(o))
-  }
-  const was = r.volumes()[0]
+  assert.equal(await next([area({ raw: 'another text', until: '2026-10-04T00:00:00Z' })]), 1, 'what is not drawn')
+  let n = 1
+  for (const o of [{ base: 5000 }, { qualifier: 'SEV' }, { hazard: 'TURB' }]) assert.equal(await next([area(o)]), ++n, JSON.stringify(o))
   const moved = northOf(300, 2).map(([x, y], i) => (i === 2 ? [x + 0.05, y] : [x, y])) as Ring // a corner that is not the first
-  assert.notEqual(await next([area({ hazard: 'TURB', qualifier: 'SEV', base: 5000 }, moved)]), was, 'a corner moved')
+  assert.equal(await next([area({ hazard: 'TURB', qualifier: 'SEV', base: 5000 }, moved)]), ++n, 'a corner moved')
+  assert.ok(r.areas()[0].rings[0].some(([lon]) => near(lon, AC.lon + 1.05, 1e-9)))
 })
 
 test('Weather3D: a failure that comes late, for a box the aircraft has left, does not put the note up; nor a late answer take it down', async () => {
@@ -524,24 +592,26 @@ test('Weather3D: the labels are worded in the frame\'s units, and again when the
   r.w.update(AC, 1000)
   assert.equal(r.shown()[0].text, 'Embedded thunderstorms · up to 10,650 m')
   const calls = r.labelCalls.length
-  const volume = r.volumes()[0]
+  const handed = r.handed()
   r.setUnits({ alt: 'm', speed: 'kmh', vs: 'ms' }) // a speed changes no height
   r.w.update(AC, 2000)
   assert.equal(r.labelCalls.length, calls)
   r.setUnits(DEFAULT_UNITS)
   r.w.update(AC, 3000)
   assert.equal(r.shown()[0].text, 'Embedded thunderstorms · up to 35,000 ft')
-  assert.equal(r.volumes()[0], volume, 'the volume is not drawn again for words')
+  assert.equal(r.handed(), handed, 'the areas are not handed to the cloud pass again for words')
 })
 
-test('Weather3D: hiding takes the volumes and the labels away and asks no more; showing again has them back at once, asking only what is due', async () => {
+test('Weather3D: hiding takes the cloud pass, the footprints and the labels away and asks no more; showing again has them back at once, asking only what is due', async () => {
   const r = rig()
+  r.w.hazardStyle = 'curtain'
   r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] })]
   await open(r)
-  const first = r.volumes()
+  const first = r.footprints()
+  const handed = r.handed()
   assert.equal(r.shown().length, 1)
   r.w.show = false
-  assert.equal(r.sources[0].show, false)
+  assert.deepEqual([r.sources[0].show, r.sky.clouds.show], [false, false])
   assert.deepEqual(r.shown(), [], 'its labels are taken out of the overlay')
   assert.equal(r.labelCalls.at(-1)!.key, 'hazards')
   const asked = r.asked.length
@@ -550,9 +620,9 @@ test('Weather3D: hiding takes the volumes and the labels away and asks no more; 
   await flush()
   assert.equal(r.asked.length, asked, 'hidden: nothing asked, however late')
   r.w.show = true
-  assert.equal(r.sources[0].show, true)
+  assert.deepEqual([r.sources[0].show, r.sky.clouds.show], [true, true])
   assert.equal(r.shown().length, 1, 'the labels are back with it, from what it holds')
-  assert.ok(r.volumes().length === 1 && r.volumes()[0] === first[0], 'its volumes were kept')
+  assert.ok(r.handed() === handed && r.areas().length === 1 && r.footprints().length === 2 && r.footprints()[0] === first[0], 'the pass kept its areas, the footprints were kept')
   r.w.update(AC, 30 * MIN)
   await flush()
   assert.equal(r.asks('metar').length, 2, 'asked again at the first update after: it is due')
@@ -572,9 +642,9 @@ test('Weather3D: an answer that lands while it is hidden is kept, not drawn or w
   r.release()
   await flush()
   assert.deepEqual([r.w.metars.length, r.w.sigmets.length], [1, 1], 'kept')
-  assert.deepEqual([r.lines.length, r.labelCalls.length, r.volumes().length], [lines, calls, 0], 'not drawn or written')
+  assert.deepEqual([r.lines.length, r.labelCalls.length, r.handed()], [lines, calls, 0], 'not drawn or written')
   r.w.show = true
-  assert.equal(r.volumes().length, 1)
+  assert.equal(r.areas().length, 1)
   assert.equal(r.shown().length, 1)
   assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT}`)
 })
@@ -614,7 +684,7 @@ test('Weather3D: a failed ask is one warning (one for a whole outage: its retrie
     assert.equal(warned.length, 1)
     assert.match(String(warned[0][0]), /FlightHopper: 3-D weather .*wx\/metar/)
     assert.equal(r.lines.at(-1), `Clouds from the forecast · 1 hazard area${CREDIT} · some weather unavailable`)
-    assert.equal(r.volumes().length, 1, 'the hazard areas came')
+    assert.equal(r.areas().length, 1, 'the hazard areas came')
     r.w.update(AC, 29_000)
     await flush()
     assert.equal(r.asks('metar').length, 1)
@@ -636,7 +706,7 @@ test('Weather3D: a failed ask is one warning (one for a whole outage: its retrie
     r.w.update(AC, 10 * MIN + 1000)
     await flush()
     assert.match(String(r.lines.at(-1)), /some weather unavailable$/)
-    assert.equal(r.volumes().length, 1, 'the hazard areas it had stay')
+    assert.equal(r.areas().length, 1, 'the hazard areas it had stay')
     assert.equal(r.asks('sigmet').length, 2)
     r.w.update(AC, 10 * MIN + 31_000)
     await flush()
@@ -700,7 +770,7 @@ test('Weather3D: ?wxat takes its weather from round that place and shifts it ont
   assert.equal(r.w.sigmets.length, 2)
   assert.ok(r.w.sigmets[0].rings[0].every(([lon, lat]) => near(lat, 32.1, 1) && near(lon, 34.9, 1)), 'the ring over Zurich is over the aircraft')
   assert.equal(r.w.hazards.length, 2, 'both within 800 km of the aircraft, as they are of Zurich')
-  assert.ok(r.volumes().map(polygon)[0].ring.every(([lon, lat]) => near(lat, 32.1, 1) && near(lon, 34.9, 1)), 'drawn over the aircraft')
+  assert.ok(r.areas()[0].rings[0].every(([lon, lat]) => near(lat, 32.1, 1) && near(lon, 34.9, 1)), 'drawn over the aircraft')
   const [llon, llat] = lonlat(r.shown()[0].position)
   assert.ok(near(llat, 32.2, 0.05) && near(llon, 34.9, 0.05), `${llon}, ${llat}: the label is in the shifted sky too`)
   assert.equal(r.w.radar!.url, `${HOST}/v2/radar/new/256/{z}/{x}/{y}/2/0_1.png`, 'the radar is RainViewer\'s, unshifted: it is sampled at the place less the shift')
@@ -746,7 +816,7 @@ test('Weather3D: destroy hides it, takes its labels and its data source away, en
   late.w.destroy() // the answers are still on their way
   late.release()
   await flush()
-  assert.deepEqual(late.volumes(), [])
+  assert.deepEqual([late.areas(), late.footprints()], [[], []])
   assert.deepEqual(late.w.metars, [])
   assert.deepEqual(late.w.sigmets, [])
   assert.deepEqual(late.shown(), [])
@@ -903,7 +973,7 @@ test('Weather3D: destroy destroys the sky\'s parts', async () => {
   const r = rig()
   await open(r)
   r.w.destroy()
-  assert.deepEqual([r.sky.clouds.destroyed, r.sky.fog.destroyed, r.sky.precip.destroyed, r.sky.shafts.destroyed], [true, true, true, true])
+  assert.deepEqual([r.sky.clouds.destroyed, r.sky.fog.destroyed, r.sky.precip.destroyed], [true, true, true])
 })
 
 test('Weather3D: destroyed after the viewer, it touches nothing of Cesium\'s (no fog set, nothing hidden or destroyed there), but takes its overlay away', async () => {
@@ -914,7 +984,7 @@ test('Weather3D: destroyed after the viewer, it touches nothing of Cesium\'s (no
   r.w.destroy()
   assert.equal(r.sky.fog.sets.length, fogSets)
   assert.equal(r.removed.length, removed)
-  assert.deepEqual([r.sky.clouds.destroyed, r.sky.fog.destroyed, r.sky.shafts.destroyed, r.sky.clouds.show, r.sky.shafts.show, r.sky.precip.destroyed], [false, false, false, true, true, true])
+  assert.deepEqual([r.sky.clouds.destroyed, r.sky.fog.destroyed, r.sky.clouds.show, r.sky.precip.destroyed], [false, false, true, true])
   assert.equal(r.w.show, false)
 })
 
@@ -1030,7 +1100,7 @@ test('Weather3D: the sky\'s grey is handed on as it is written (the Sun dims by 
 })
 
 
-// ---- the radar's clouds and rain shafts ---------------------------------------------------------------------------------------
+// ---- the radar's clouds (their rain is the volume pass's: cloudVolume.ts) ----------------------------------------------------------
 
 /** Radar tiles (zoom 7, keyed 'z/x/y') with one pixel of echo for each place given: km east and north of `at`, dBZ, snow. */
 function echoTiles(at: { lat: number; lon: number }, echoes: [number, number, number, boolean?][]): Map<string, SourceTile> {
@@ -1047,14 +1117,14 @@ function echoTiles(at: { lat: number; lon: number }, echoes: [number, number, nu
 const giveTiles = (r: Rig, tiles: Map<string, SourceTile>): void => tiles.forEach((t, k) => r.tiles.set(k, t))
 const tileGetter = (r: Rig) => (x: number, y: number): SourceTile | null => r.tiles.get(`7/${x}/${y}`) ?? null
 const towerPuffs = (cs: readonly CloudSpec[]): CloudSpec[] => cs.filter((c) => c.tower !== undefined)
-/** The radar is read this far from the aircraft: where its clouds have faded out, and the ring a rebuild reads past that. */
-const READ_KM = RADAR_LOOK.radiusKm + REBUILD_KM
+/** The radar is read this far from the aircraft: as far as the cloud pass shows a cloud, and the way to the next build past that. */
+const READ_KM = REACH_KM[1] + REBUILD_KM
 /** What a look builds, as the frames after it draw it: the look builds the observed clouds, the next frame the radar's part, the one after draws them. */
 const drawn = (r: Rig, at: typeof AC, t: number): void => [0, 16, 32, 48].forEach((d) => r.w.update(at, t + d)) // a fourth frame in case a draw of the last build came first
 /** A tower's height from its base to its top, by its puffs. */
 const towerHeight = (cs: readonly CloudSpec[]): number => Math.max(...cs.map((c) => c.heightM + (PUFF_FILL * c.scale[1]) / 2)) - Math.min(...cs.map((c) => c.heightM - (PUFF_FILL * c.scale[1]) / 2))
 
-test('Weather3D: rain clouds and shafts from the radar within 100 km of the aircraft: its tiles asked for once each, built when they have come, drawn the frame after, on the nearest station\'s ceiling', async () => {
+test('Weather3D: rain clouds from the radar within 100 km of the aircraft: its tiles asked for once each, built when they have come, drawn the frame after, on the nearest station\'s ceiling', async () => {
   const r = rig()
   giveTiles(r, echoTiles(AC, [[20, 0, 50], [-15, 10, 42], [0, 30, 22], [40, 0, 60, true]])) // heavy rain 20 km east, rain 15 west, light rain 30 north, snow 40 east
   r.answers.metar = [metar('LLBG', 32.01, 34.89, { elevM: 30, clouds: [layer('BKN', 2000)] })]
@@ -1081,11 +1151,7 @@ test('Weather3D: rain clouds and shafts from the radar within 100 km of the airc
   assert.ok(near(Math.min(...towerPuffs(sky).map((c) => c.heightM - (PUFF_FILL * c.scale[1]) / 2)), ceiling, 1e-6), 'on LLBG\'s ceiling')
   assert.equal(expected.filter((c) => c.tower === undefined).length, 2, 'the 22 dBZ rain and the snow: two decks')
   assert.ok(expected.filter((c) => c.tower === undefined).every((c) => near(c.heightM - (PUFF_FILL * c.scale[1]) / 2, ceiling, 1e-6) && c.groundM === 30), 'at the ceiling')
-  assert.equal(r.sky.shafts.show, true)
-  assert.equal(r.sky.shafts.draws.length, 2, 'drawn with the clouds')
-  assert.deepEqual(r.sky.shafts.draws.at(-1), pickShafts(cells, base))
-  assert.equal(r.sky.shafts.draws.at(-1)!.length, 2, 'under the two rain blocks of 35 dBZ and more')
-  assert.ok(r.sky.shafts.draws.at(-1)!.every((s) => near(s.baseM, ceiling, 1e-9) && s.groundM === 30))
+  assert.deepEqual(r.sky.clouds.ats.at(-1), { lat: AC.lat, lon: AC.lon }, 'drawn round the aircraft')
 })
 
 test('Weather3D: without the radar\'s tiles yet it builds without its clouds, and builds again when they come (not at every look)', async () => {
@@ -1096,7 +1162,6 @@ test('Weather3D: without the radar\'s tiles yet it builds without its clouds, an
   for (const t of [16, 1000, 1016, 2000, 2016]) r.w.update(AC, t)
   assert.ok(r.sky.clouds.draws.length >= 1 && r.sky.clouds.draws.every((d) => towerPuffs(d).length === 0))
   const waiting = r.sky.clouds.draws.length
-  assert.equal(r.sky.shafts.draws.at(-1)!.length, 0)
   assert.equal(new Set(r.tileAsks).size, r.tileAsks.length, 'asked once while it waits')
   assert.equal(waiting, r.sky.clouds.draws.length, 'nothing to build while it waits')
   r.tileHold.on = false
@@ -1104,10 +1169,9 @@ test('Weather3D: without the radar\'s tiles yet it builds without its clouds, an
   await flush()
   drawn(r, AC, 3000)
   assert.ok(towerPuffs(r.sky.clouds.draws.at(-1)!).length > 0, 'built when the tile came')
-  assert.equal(r.sky.shafts.draws.at(-1)!.length, 1)
-  const [clouds, shafts] = [r.sky.clouds.draws.length, r.sky.shafts.draws.length]
+  const clouds = r.sky.clouds.draws.length
   for (const t of [4000, 4016, 5000, 5016, 6000, 6016]) r.w.update(AC, t)
-  assert.deepEqual([r.sky.clouds.draws.length, r.sky.shafts.draws.length], [clouds, shafts], 'nothing new, nothing built')
+  assert.equal(r.sky.clouds.draws.length, clouds, 'nothing new, nothing built')
 })
 
 test('Weather3D: a newer radar frame keeps drawing the old frame\'s clouds until its own tiles come, then swaps (no gap)', async () => {
@@ -1190,31 +1254,18 @@ test('Weather3D: rebuildSky builds the radar\'s clouds again as RADAR_LOOK says 
   }
 })
 
-test('Weather3D: every frame the shafts follow the relief drawn and the Sun\'s night, at each look they are faded from the aircraft; hidden, they are hidden and nothing of the radar is asked', async () => {
+test('Weather3D: hidden, nothing of the radar is asked', async () => {
   const r = rig()
   giveTiles(r, echoTiles(AC, [[20, 0, 50]]))
   await open(r)
-  const flat = { fSampled: 0, fNow: 0, relHM: 120 }
-  r.w.setNight(0.6)
-  r.w.update(AC, 10, flat)
-  assert.deepEqual(r.sky.shafts.frames.at(-1), [flat, 0.6])
-  r.w.update(null, 20, TRUE)
-  assert.deepEqual(r.sky.shafts.frames.at(-1), [TRUE, 0.6], 'with no aircraft too')
-  assert.ok(Cartesian3.equalsEpsilon(r.sky.shafts.fades.at(-1)!, Cartesian3.fromDegrees(AC.lon, AC.lat, AC.altM), 0, 1e-6))
-  const n = r.sky.shafts.fades.length
-  r.w.update(north(5), 500)
-  assert.equal(r.sky.shafts.fades.length, n, 'between looks: no fade')
-  r.w.update(north(5), 1000)
-  assert.ok(Cartesian3.equalsEpsilon(r.sky.shafts.fades.at(-1)!, Cartesian3.fromDegrees(AC.lon, north(5).lat, AC.altM), 0, 1e-6))
   r.w.show = false
-  assert.equal(r.sky.shafts.show, false)
-  const [frames, asks] = [r.sky.shafts.frames.length, r.tileAsks.length]
-  r.w.update(north(40), 5 * MIN, flat)
+  const [frames, asks] = [r.sky.clouds.frames.length, r.tileAsks.length]
+  r.w.update(north(40), 5 * MIN, { fSampled: 0, fNow: 0, relHM: 120 })
   await flush()
-  assert.equal(r.sky.shafts.frames.length, frames)
+  assert.equal(r.sky.clouds.frames.length, frames)
   assert.equal(r.tileAsks.length, asks, 'hidden: nothing asked')
   r.w.show = true
-  assert.equal(r.sky.shafts.show, true)
+  assert.equal(r.sky.clouds.show, true)
 })
 
 test('Weather3D: the radar\'s clouds are built again once the aircraft has moved 30 km, from the tiles it has', async () => {
@@ -1228,7 +1279,8 @@ test('Weather3D: the radar\'s clouds are built again once the aircraft has moved
   assert.equal(draws(), n, '29 km: not yet')
   drawn(r, north(30.5), 3000)
   assert.equal(draws(), n + 1)
-  assert.deepEqual(r.sky.shafts.draws.at(-1)!.length, 1, 'the cell is still within 100 km')
+  assert.ok(towerPuffs(r.sky.clouds.draws.at(-1)!).length > 0, 'the cell is still within 100 km')
+  assert.ok(near(r.sky.clouds.ats.at(-1)!.lat, north(30.5).lat, 1e-9), 'drawn round where the aircraft is now')
 })
 
 test('Weather3D: the radar frame answered after the reports: the next look builds the radar\'s clouds from its tiles (here in the tile below the camera\'s, which only the clouds read)', async () => {
@@ -1293,33 +1345,29 @@ test('Weather3D: a late tile of an older frame does not replace the newest frame
   assert.ok(near(towerHeight(towerPuffs(r.sky.clouds.draws.at(-1)!)), 10_000, 1e-6), 'the newer frame\'s tile stands')
 })
 
-test('Weather3D: the radar is read REBUILD_KM past where its clouds fade out: a storm 115 km off is built, hidden by the fade, and fades in as the aircraft closes (it does not pop in at the next build)', async () => {
+test('Weather3D: the radar is read as far as the cloud pass shows a cloud (150 km) and the way to the next build past that (30 km): a storm 165 km off is in the sky that is built, out of the pass\'s reach, so it comes in through the reach\'s fade as the aircraft closes; what the next build adds is out of reach too (nothing appears at once, at full strength)', async () => {
   const r = rig()
   const east = (km: number): typeof AC => ({ ...AC, lon: AC.lon + km / (KM_PER_DEG * Math.cos((AC.lat * Math.PI) / 180)) })
-  giveTiles(r, echoTiles(AC, [[115, 0, 50], [-112, 15, 42], [0, 20, 40]])) // two storms in the ring, one near
+  assert.deepEqual([REACH_KM, REBUILD_KM, READ_KM], [[130, 150], 30, 180])
+  giveTiles(r, echoTiles(AC, [[165, 0, 50], [-112, 15, 42], [0, 20, 40], [195, 0, 50]])) // a storm past the reach, one in it, one near, one past what is read
   await open(r)
   drawn(r, AC, 1000)
-  const sky = r.sky.clouds.draws.at(-1)!
-  const puffs = towerPuffs(sky)
-  assert.equal(new Set(puffs.map((c) => c.tower)).size, 3, 'all three storms are built')
-  const outer = puffs.filter((c) => kmFrom(c, AC) > 100)
-  assert.ok(outer.length >= 8, `${outer.length} puffs of the two storms in the ring`)
-  for (const c of outer) assert.ok(c.farKm <= 100 && fadeAlpha(c, kmFrom(c, AC)) === 0, `hidden where it stands (${kmFrom(c, AC).toFixed(0)} km)`)
-  assert.ok(puffs.filter((c) => kmFrom(c, AC) < 25).every((c) => fadeAlpha(c, kmFrom(c, AC)) === 1), 'the near one is all there')
-  const shafts = r.sky.shafts.draws.at(-1)!
-  assert.equal(shafts.length, 3)
-  const km = (s: { lat: number; lon: number }, a: typeof AC): number => kmFrom(s, a)
-  assert.equal(shafts.filter((s) => km(s, AC) > 100).length, 2)
-  for (const s of shafts.filter((s) => km(s, AC) > 100)) assert.equal(fadeAlpha(s, km(s, AC)), 0, 'a shaft in the ring is hidden too')
+  const puffs = towerPuffs(r.sky.clouds.draws.at(-1)!)
+  assert.equal(new Set(puffs.map((c) => c.tower)).size, 3, 'three storms are built: the one 195 km off is not read yet')
+  const outer = puffs.filter((c) => kmFrom(c, AC) > REACH_KM[1])
+  assert.ok(outer.length >= 5 && outer.every((c) => c.lon > AC.lon + 1 && kmFrom(c, AC) < READ_KM), `${outer.length} puffs of the storm 165 km east: built, where the pass shows nothing yet`)
+  assert.ok(puffs.some((c) => kmFrom(c, AC) > 100 && kmFrom(c, AC) < REACH_KM[0]), 'the storm 113 km west is built too: whatever its puffs\' own fade (100 km), the pass shows it')
   const draws = r.sky.clouds.draws.length
-  drawn(r, east(28), 2000) // flown 28 km toward the east storm: not far enough for a build
+  drawn(r, east(28), 2000) // flown 28 km toward the east storm: not far enough for a build; it is 137 km off, in the reach's fade
   assert.equal(r.sky.clouds.draws.length, draws, 'no new build')
-  const east50 = puffs.filter((c) => c.lon > AC.lon + 0.5)
-  assert.ok(east50.length >= 4)
-  assert.ok(east50.every((c) => fadeAlpha(c, kmFrom(c, east(28))) > 0), 'showing now')
-  assert.ok(east50.some((c) => fadeAlpha(c, kmFrom(c, east(28))) > 0.2) && east50.every((c) => fadeAlpha(c, kmFrom(c, east(28))) < 1), 'and part way through its fade, not at full strength at once')
-  const shaft = shafts.find((s) => s.lon > AC.lon + 0.5)!
-  assert.ok(fadeAlpha(shaft, km(shaft, east(28))) > 0, 'its shaft too')
+  drawn(r, east(31), 3000)
+  assert.equal(r.sky.clouds.draws.length, draws + 1, 'a build')
+  const next = towerPuffs(r.sky.clouds.draws.at(-1)!)
+  const same = (a: CloudSpec, b: CloudSpec): boolean => a.lat === b.lat && a.lon === b.lon && a.heightM === b.heightM
+  const shown = next.filter((c) => kmFrom(c, east(31)) <= REACH_KM[1])
+  assert.ok(shown.some((c) => c.lon > AC.lon + 1) && shown.every((c) => puffs.some((p) => same(p, c))), 'every puff the pass shows after the build was in the sky before it: the east storm, 134 km off, does not appear with the build')
+  const added = next.filter((c) => !puffs.some((p) => same(p, c)))
+  assert.ok(added.length >= 5 && added.every((c) => kmFrom(c, east(31)) > REACH_KM[1]), `${added.length} puffs of the storm that was 195 km off: what the build adds is out of the pass's reach`)
 })
 
 test('Weather3D: tiles that come one by one are built from once, when the last has come; one that is slow is not waited for past 3 s', async () => {
@@ -1367,7 +1415,7 @@ test('Weather3D: tiles that come one by one are built from once, when the last h
   assert.ok(towerPuffs(slow.sky.clouds.draws.at(-1)!).length > 0)
 })
 
-test('Weather3D: the box the radar is read in is kept in memory whatever the latitude: at 78°N its 6 tiles across are held, none asked for again, no build at every look', async () => {
+test('Weather3D: the box the radar is read in is kept in memory whatever the latitude: at 78°N its 7 tiles across are held, none asked for again, no build at every look', async () => {
   const r = rig()
   const at = { lat: 78, lon: 20, altM: 10_000 }
   const echoes: [number, number, number][] = []
@@ -1470,7 +1518,7 @@ test('Weather3D: a failed model ask is one warning and a note on the line, asked
     assert.match(String(warned[0][0]), /FlightHopper: 3-D weather .*wx\/model/)
     assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area · some weather unavailable')
     assert.equal(r.w.model, null)
-    assert.equal(r.volumes().length, 1, 'the rest came')
+    assert.equal(r.areas().length, 1, 'the rest came')
     r.w.update(AC, 29_000)
     await flush()
     assert.equal(r.asks('model').length, 1)
@@ -1983,4 +2031,140 @@ test('Weather3D: a grid too old that the server keeps serving is asked for no mo
   await flush()
   assert.deepEqual(r.asks('model').length, 4, 'at 0, 30, 60 and 90 s')
   assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null)
+})
+
+// ---- the demo sky (?wxdemo) and the cloud volume's look -------------------------------------------------------------------------
+
+test('Weather3D: ?wxdemo asks for no weather at all: the demo sky, laid out once from the aircraft\'s first place, track and height, is drawn round the aircraft, with its hazard area', async () => {
+  const r = rig({ demo: 60 })
+  r.w.show = true
+  r.w.update({ ...AC, trackDeg: 285 }, 0)
+  await flush()
+  for (const t of [16, 32, 1000, 1016, 61_000, 61_016, 11 * MIN, 11 * MIN + 16, 31 * MIN, 31 * MIN + 16]) r.w.update({ ...AC, trackDeg: 10 }, t) // the track it turns to later changes nothing
+  await flush()
+  assert.deepEqual(r.asked, [], 'no report, no hazard list, no radar frame, no forecast')
+  assert.deepEqual(r.tileAsks, [])
+  const sky = demoSky(AC.lat, AC.lon, 285, { altM: AC.altM - geoidN(AC.lat, AC.lon), startKm: 60 })
+  assert.equal(r.sky.clouds.draws.length, 1, 'built once while the aircraft stays')
+  assert.deepEqual(r.sky.clouds.draws[0], sky.specs)
+  assert.deepEqual(r.sky.clouds.ats[0], { lat: AC.lat, lon: AC.lon })
+  const inIt = (c: CloudSpec): boolean => (c.sev ?? 0) === 1 && c.heightM - (PUFF_FILL * c.scale[1]) / 2 < AC.altM && c.heightM + (PUFF_FILL * c.scale[1]) / 2 > AC.altM
+  assert.ok(r.sky.clouds.draws[0].filter(inIt).length >= 40, 'the rain layer is round the aircraft\'s height (10 km, less the geoid)')
+  assert.deepEqual(r.w.sigmets, sky.sigmets)
+  assert.equal(r.w.hazards.length, 1)
+  assert.equal(r.areas().length, 1, 'its hazard area is handed to the cloud pass')
+  assert.equal(r.shown().length, 1)
+  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area')
+  assert.equal(r.sky.fog.sets.at(-1), null)
+  assert.equal(r.sky.precip.sets.at(-1), null)
+  // 31 km on, the field is built round the aircraft again: the same sky, where it was laid
+  r.w.update({ ...north(31), trackDeg: 10 }, 32 * MIN)
+  r.w.update({ ...north(31), trackDeg: 10 }, 32 * MIN + 16)
+  r.w.update({ ...north(31), trackDeg: 10 }, 32 * MIN + 32)
+  assert.equal(r.sky.clouds.draws.length, 2)
+  assert.deepEqual(r.sky.clouds.draws[1], sky.specs)
+  assert.deepEqual(r.sky.clouds.ats[1], { lat: north(31).lat, lon: AC.lon })
+  assert.deepEqual(r.asked, [])
+})
+
+test('Weather3D: ?wxdemo=1 lays the sky from its start, due north when the aircraft has no track; hidden and shown again it is the same sky', async () => {
+  const r = rig({ demo: 0 })
+  await open(r)
+  r.w.update(AC, 16)
+  const sky = demoSky(AC.lat, AC.lon, 0, { altM: AC.altM - geoidN(AC.lat, AC.lon), startKm: 0 })
+  assert.deepEqual(r.sky.clouds.draws[0], sky.specs)
+  assert.ok(sky.specs.filter((c) => c.sev === 3).every((c) => c.lat > AC.lat + 0.5), 'the storm is ahead: north')
+  r.w.show = false
+  r.w.update(north(50), 5000)
+  r.w.show = true
+  r.w.update(north(50), 6000)
+  r.w.update(north(50), 6016)
+  r.w.update(north(50), 6032)
+  assert.deepEqual(r.sky.clouds.draws.at(-1), sky.specs, 'not laid again from where it is shown')
+  assert.deepEqual(r.sky.clouds.ats.at(-1), { lat: north(50).lat, lon: AC.lon })
+  assert.deepEqual(r.asked, [])
+})
+
+test('Weather3D: without ?wxdemo the clouds are drawn round the aircraft\'s place when they were built', async () => {
+  const r = rig()
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('FEW', 3000)] })]
+  await open(r)
+  r.w.update(AC, 16)
+  assert.deepEqual(r.sky.clouds.ats, [{ lat: AC.lat, lon: AC.lon }])
+  assert.ok(r.asked.length >= 3, 'and the weather is asked for')
+})
+
+test('Weather3D: the look is the cloud volume\'s, set on the fly and kept; the weather field is the one the volume built', async () => {
+  const r = rig()
+  assert.equal(r.w.look, 'severity')
+  r.w.look = 'blocks'
+  assert.deepEqual([r.w.look, r.sky.clouds.look], ['blocks', 'blocks'])
+  r.w.look = 'natural'
+  assert.deepEqual([r.w.look, r.sky.clouds.look], ['natural', 'natural'])
+  assert.equal(r.w.field, null)
+  const f = buildField([], AC.lat, AC.lon)
+  r.sky.clouds.field = f
+  assert.equal(r.w.field, f)
+})
+
+test('Weather3D: the hazard areas\' style (the box until set) is kept as given; the way ahead and its two aids are kept, and while the weather shows handed to the cloud pass at every call; hidden, nothing is handed on, and the pass is told once that there is no way ahead; the flags are copied', () => {
+  const r = rig()
+  assert.equal(r.w.hazardStyle, 'box')
+  for (const style of ['curtain', 'fence', 'box'] as HazardStyle[]) {
+    r.w.hazardStyle = style
+    assert.equal(r.w.hazardStyle, style)
+  }
+  assert.equal(r.w.ahead, null)
+  assert.deepEqual(r.w.aheadShow, { track: false, slice: false }, 'nothing is asked for until told')
+  const path = aheadPath(AC, 90, 400, 0)!
+  r.w.setAhead(path, { track: true, slice: false })
+  assert.equal(r.w.ahead, path)
+  assert.deepEqual(r.w.aheadShow, { track: true, slice: false })
+  r.w.setAhead(null, { track: false, slice: true })
+  assert.equal(r.w.ahead, null)
+  assert.deepEqual(r.w.aheadShow, { track: false, slice: true })
+  const flags = { track: true, slice: true }
+  r.w.setAhead(path, flags)
+  flags.track = false
+  assert.deepEqual(r.w.aheadShow, { track: true, slice: true }, 'the caller\'s object is not kept')
+  assert.equal(r.sky.clouds.aheads.length, 0, 'hidden: the pass is given nothing (nothing runs for a hidden weather, frame by frame)')
+  r.w.show = true
+  r.w.setAhead(path, { track: true, slice: false })
+  r.w.setAhead(null, { track: false, slice: true })
+  r.w.setAhead(path, { track: true, slice: true })
+  assert.deepEqual(r.sky.clouds.aheads, [{ path, show: { track: true, slice: false } }, { path: null, show: { track: false, slice: true } }, { path, show: { track: true, slice: true } }])
+  assert.equal(r.sky.clouds.aheads[0].path, path, 'the path itself, not a copy: it is given every frame')
+  r.w.show = false
+  assert.deepEqual(r.sky.clouds.aheads.slice(3), [{ path: null, show: { track: true, slice: true } }], 'hidden: no way ahead is left with the pass')
+  r.w.setAhead(path, { track: true, slice: true })
+  assert.equal(r.sky.clouds.aheads.length, 4)
+  assert.equal(r.labelCalls.some((c) => c.key === 'ahead'), false, 'the minute labels are the app\'s, not Weather3D\'s')
+})
+
+test('Weather3D: when the cloud pass has failed (a render error took it out for good) the line says so, after a note of a source that is down; the rest of the weather goes on', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    const r = rig()
+    r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('BKN', 3000)] })]
+    r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] })]
+    await open(r)
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT}`)
+    const [fog, rain] = [r.sky.fog.sets.length, r.sky.precip.sets.length]
+    r.sky.clouds.failed = true
+    r.w.update(AC, 1000) // the next look
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · 3-D clouds unavailable on this graphics card`)
+    assert.deepEqual([r.shown().length, r.sky.fog.sets.length, r.sky.precip.sets.length], [1, fog + 1, rain + 1], 'the labels stay, and the fog and the rain are looked at as before')
+    const draws = r.sky.clouds.draws.length
+    r.w.update(north(31), 2000)
+    r.w.update(north(31), 2016)
+    r.w.update(north(31), 2032)
+    assert.equal(r.sky.clouds.draws.length, draws + 1, 'the field is still built: the status line and the ahead strip ask it')
+    r.failing.add('sigmet')
+    r.w.update(north(31), 10 * MIN + 3000)
+    await flush()
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · some weather unavailable · 3-D clouds unavailable on this graphics card`)
+  } finally {
+    console.warn = warn
+  }
 })

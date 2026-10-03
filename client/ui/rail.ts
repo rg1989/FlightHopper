@@ -7,7 +7,8 @@
 // a button of its own, in a glass square, at that spot (rail.css): 'under' just under the rail, 'corner' at the bottom
 // right, 'bottom' at the bottom centre; 'phone' nowhere (the thing it opens has its own place there, e.g. the search box at
 // the top centre). On phones there is no room for them: every button is a tab in the one bottom strip, in item order (it
-// scrolls sideways when they do not fit).
+// scrolls sideways when they do not fit). The app can take a button away while what it opens has nothing to show (setHidden):
+// its square on a wide screen, its tab on a phone; its panel closes with it.
 import { icon, type IconName } from './icons.ts'
 import './rail.css'
 
@@ -30,6 +31,7 @@ export interface RailHandle {
   button(id: string): HTMLButtonElement
   setBadge(id: string, text: string | null): void
   setBusy(id: string, busy: boolean): void
+  setHidden(id: string, hidden: boolean): void // the button gone (its square, its tab); an open panel of it closes
   setDot(id: string, state: 'live' | 'replay' | 'trouble' | 'wait' | null): void
   destroy(): void
 }
@@ -225,6 +227,14 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
     },
     setBusy(id, busy) {
       api.button(id).classList.toggle('fh-busy', busy)
+    },
+    setHidden(id, hidden) {
+      const b = api.button(id)
+      if (b.hidden === hidden) return
+      b.hidden = hidden
+      const own = owned.find((o) => o.b === b)
+      if (own) own.square.hidden = hidden // on a phone the square is empty and not shown at all (rail.css)
+      if (hidden && openId === id) api.open(null)
     },
     setDot(id, state) {
       const b = api.button(id)

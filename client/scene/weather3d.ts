@@ -12,17 +12,21 @@
 //   A forecast, not an observation: it draws only what nothing else says, and the wind it gives is an estimate. A grid whose hour is
 //   more than 3 h old is not used (its server serves the places it holds when Open-Meteo cannot be asked), and is asked for again.
 //   While one is held the panel's line carries Open-Meteo's credit (CC BY 4.0).
-// It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft (wxGeo.ts picks them): each
-// ring a translucent volume from the area's base (none: the ground) to its top, and the area's name and heights a label at
-// the ring's middle at the top height, placed with the place names (placeLabels.ts keeps them clear of each other and of the
+// It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft (wxGeo.ts picks them): the cloud
+// volume draws each ring's edge from the area's base (none: the ground) to its top, in the style chosen (hazardStyle: a curtain, a
+// fence or a box), so that the edge sorts with the cloud; under a curtain or a fence the ring's footprint lies on the ground (its
+// outline and a striped fill, Cesium's: the ground has depth, so cloud covers it rightly); and the area's name and heights are a label
+// at the ring's middle at the top height, placed with the place names (placeLabels.ts keeps them clear of each other and of the
 // flight-data frame). A list of SIGMETs that brings the same areas draws nothing again.
 // And the sky a pilot would see (a Sky: Cesium's parts in the app):
 // - clouds from the airports' reports (cloudField.ts) within 150 km, built when new reports come or the aircraft has moved
-//   30 km, and drawn the frame after (the work spread over two frames) by the one cloud layer (cloudLayer.ts). Clouds of
+//   30 km, and drawn the frame after (the work spread over two frames) by the one cloud volume (cloudVolume.ts: it lays every
+//   source's cloud specs into a weather field round the aircraft and draws that as volumes, in the look chosen). Clouds of
 //   other sources join the same list after the observed ones (#buildClouds);
-// - rain clouds and rain shafts from the radar's newest frame: towers where it rains hard, flat decks where it rains lightly
-//   (cloudField.ts radarClouds), shafts of rain under the heaviest (rainShafts.ts). They fade out by 100 km; the frame is read
-//   30 km farther (the ring stands at alpha 0 and fades in as the aircraft comes, so none pops in at a rebuild). Built from the
+// - rain clouds from the radar's newest frame: towers where it rains hard, flat decks where it rains lightly (cloudField.ts
+//   radarClouds); the volume draws the rain under them. The frame is read to 180 km (RADAR_READ_KM): as far as the volume shows a
+//   cloud (150 km: its reach, which fades over the last 20) and the 30 km to the next build past that, so that what a build adds is
+//   out of reach and comes in through the fade as the aircraft closes, not at once at full strength. Built from the
 //   frame's zoom-7 tiles (radarCells.ts) at the same time as the observed clouds (the look builds those; where the tiles hold an
 //   echo the radar's part, the heavier, is built the frame after, and both are drawn the frame after that), and again when
 //   the aircraft has moved 30 km, or when a tile or a newer frame has come (the tiles that come one by one are waited for: one
@@ -36,22 +40,28 @@
 // - ground fog round a station near the aircraft that sees little (groundFog.ts);
 // - rain or snow round the camera, from the radar under it or the nearest station's weather, below the cloud: a light
 //   screen overlay (precip.ts), leaned with the wind across the camera's view a few times a second.
-// Every frame the clouds, the shafts and the fog follow the relief drawn and the Sun's night (setNight); the rest is looked at
-// once a second, when the clouds and the shafts are also faded by their distance from the aircraft.
+// Every frame the clouds and the fog are given the relief drawn and the Sun's night (setNight); the rest is looked at
+// once a second, when the clouds' reach is also centred on the aircraft.
+// It also hands the cloud volume the way ahead of the chased aircraft (wxAhead.ts aheadPath, given every frame by app.ts: setAhead)
+// with which of its two aids show, the track line and the level slice: the volume draws them.
+// Should the volume's pass fail on this graphics card (cloudVolume.ts: a render error takes it out for good), the rest goes on, and
+// the panel's line says "3-D clouds unavailable on this graphics card".
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
 // draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
 // weather is taken from round that place and moved by the one shift that puts the place under the aircraft's first position.
 // From then on the aircraft flies through that sky. Everything it holds is where it is drawn (shifted); the radar's tiles are
 // RainViewer's own, so a sample at a drawn place is taken at that place less the shift.
-import { Cartesian3, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, type Cartographic, type Viewer } from 'cesium'
+// ?wxdemo=<km> is another (parseWxDemo): no weather is asked for at all; the sky is wxDemo.ts's made-up one (cumulus, a rain layer, two
+// storms in a hazard area), laid out once along the aircraft's track from its first place, the aircraft that many km into it.
+import { Cartesian3, ClassificationType, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, StripeMaterialProperty, StripeOrientation, type Cartographic, type Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
 import { MODEL_CELL_DEG, type Metar, type ModelGrid, type Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
-import { CloudLayer } from './cloudLayer.ts'
+import { CloudVolume, REACH_KM, resumeRendering, type CloudLook, type HazardStyle } from './cloudVolume.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
 import { inInnerHalf, modelWindAt, type ModelWind } from './modelWind.ts'
@@ -59,8 +69,10 @@ import type { LayerLabel, PlaceLabels } from './placeLabels.ts'
 import { Precipitation, cloudBaseM, nearestStation, precipFromDbz, precipFromWx, radarPixel, radarSample, windOf, type Fall } from './precip.ts'
 import { RADAR_INDEX, RADAR_SRC_MAX, RadarSource, type RadarIndex, type SourceTile } from './radar.ts'
 import { radarCells, tilesAcross } from './radarCells.ts'
-import { RainShafts, pickShafts, type RainShaft } from './rainShafts.ts'
 import { hazardsNear, ringCentre, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
+import type { AheadPath } from './wxAhead.ts'
+import { demoSky } from './wxDemo.ts'
+import type { WxField } from './wxField.ts'
 import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
 
 const BOX_DEG = 2 // the METAR box reaches this far from the aircraft each way, rounded out to whole degrees
@@ -75,12 +87,27 @@ const RETRY_MS = 30_000 // a failed ask is made again after this
 const LOOK_MS = 1000 // update() looks at its clocks and the aircraft this often
 export const HAZARD_KM = 800 // hazard areas are drawn when their ring passes this near the aircraft
 const PICK_KM = 10 // the hazard areas are picked again once the aircraft has moved this far
-const FILL_ALPHA = 0.1
-const LINE_ALPHA = 0.3
+// A hazard area's footprint on the ground, under a curtain or a fence (the mock's hatch): its fill's stripes, alike wide whatever
+// the ring's size, their two alphas, and its outline.
+const STRIPE_KM = 3
+const STRIPE_ALPHA: readonly [number, number] = [0.26, 0.09]
+const STRIPE_TURN = Math.PI / 4 // the fill's texture is turned so that its upward axis points north-east: the stripes, laid across that axis, are a diagonal hatch (the mock's)
+const OUTLINE_ALPHA = 0.9
+const OUTLINE_PX = 2.5
 const LABEL_KEY = 'hazards' // this layer in the names overlay
 const LABEL_RANK = 1.5 // after the seas (1), before every city (2)
 const NOTE = 'some weather unavailable'
+const NO_CLOUDS = '3-D clouds unavailable on this graphics card' // the cloud volume's pass failed (cloudVolume.ts)
 const KM_PER_NM = 1.852
+const KM_PER_DEG = 111.195 // of latitude, on a sphere of 6,371 km
+/**
+ * The radar is read this far from the aircraft: as far as the cloud volume shows a cloud, and the way to the next build past that.
+ * What a build adds then stands out of the volume's reach and comes in through its fade as the aircraft closes. (The field is a square
+ * of 160 km each way, so due east, west, north and south of a build's place it holds only 10 km of that way.)
+ */
+const RADAR_READ_KM = REACH_KM[1] + REBUILD_KM
+/** A hazard area's colour: its edges', its footprint's and its label's. */
+const hazardColor = (h: Hazard): string => sigmetColor(h.sigmet.hazard)
 const PRECIP_OVER_BASE_M = 300 // rain or snow shows round a camera up to this far over its cloud's base,
 const PRECIP_OVER_GROUND_M = 3000 // or this far over the ground when no base is known
 const TRUE_RELIEF: TerrainFrame = { fSampled: 1, fNow: 1, relHM: 0 }
@@ -95,11 +122,12 @@ const SHADE_EASE_S = 2
 /** How grey rain on the radar over the camera makes the sky: none under 15 dBZ, light rain 0.5, heavy 0.9 (an estimate, by eye). */
 export const echoShade = (dbz: number): number => (dbz < 15 ? 0 : dbz >= 40 ? 0.9 : dbz >= 30 ? 0.75 : 0.5)
 
-/** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn. */
+/** The chased aircraft: degrees, and metres above the ellipsoid as it is drawn; the way it flies, degrees true (the demo sky is laid along it). */
 export interface Aircraft {
   lat: number
   lon: number
   altM: number
+  trackDeg?: number
 }
 
 export interface WxAt {
@@ -122,25 +150,42 @@ export function statusText3d(s: { airports: number; areas: number; model: boolea
   return [`Clouds from ${from}`, count(s.areas, 'hazard area'), ...(s.model ? [MODEL_CREDIT] : []), ...(s.note ? [s.note] : [])].join(' · ')
 }
 
+/**
+ * ?wxdemo: the demo sky in place of the real weather (a check aid), and how many km along it the aircraft starts. ?wxdemo=1 is its
+ * start (0 km); ?wxdemo=60 starts in its rain layer, ?wxdemo=98 at its storm. None when absent or not a number.
+ */
+export function parseWxDemo(search: string): number | null {
+  const m = /^\s*(-?\d+(?:\.\d+)?)\s*$/.exec(new URLSearchParams(search).get('wxdemo') ?? '')
+  if (m === null) return null
+  const km = Number(m[1])
+  return km === 1 ? 0 : km
+}
+
 type Box = readonly [south: number, west: number, north: number, east: number]
 type Feed = 'metar' | 'sigmet' | 'radar' | 'model'
 
 /** What draws the sky round the aircraft: Cesium's parts in the app (cesiumSky), fakes in tests. */
 export interface Sky {
-  clouds: Pick<CloudLayer, 'show' | 'draw' | 'frame' | 'fade' | 'destroy'>
-  shafts: Pick<RainShafts, 'show' | 'draw' | 'frame' | 'fade' | 'destroy'>
+  clouds: Pick<CloudVolume, 'show' | 'draw' | 'frame' | 'fade' | 'destroy' | 'setHazards' | 'setAhead'> & Partial<Pick<CloudVolume, 'look' | 'field' | 'failed'>>
   fog: Pick<GroundFog, 'set' | 'frame' | 'destroy'>
   precip: Pick<Precipitation, 'set' | 'aim' | 'destroy'>
 }
 
 /**
- * The sky's parts in the viewer: the shafts, the clouds and the fog in its scene, the rain or snow overlay in its element (the
- * globe's). The shafts are added before the clouds, so that where translucent primitives are drawn in the order they were added
- * the clouds, which hide a shaft's top, are drawn over the shafts (unchecked: Cesium may blend them without order).
+ * The sky's parts in the viewer: the cloud volume and the fog in its scene, the rain or snow overlay in its element (the globe's).
+ * Should the volume's pass fail (a render error while it is in the scene: Cesium has then stopped rendering), the viewer's render
+ * loop is started again without it, and onCloudsFailed is told.
+ * ponytail: cloudLayer.ts (the clouds as Cesium's puffs) and rainShafts.ts stay in the tree, unused, until the user has accepted the
+ * volumes. Upgrade: delete them, their tests, and what of cloudField.ts only they read.
  */
-const cesiumSky = (viewer: Viewer): Sky => ({
-  shafts: new RainShafts(viewer.scene.primitives), clouds: new CloudLayer(viewer.scene.primitives), fog: new GroundFog(viewer.scene),
-  precip: new Precipitation(viewer.container as HTMLElement),
+const cesiumSky = (viewer: Viewer, onCloudsFailed: () => void): Sky => ({
+  clouds: new CloudVolume(viewer.scene, {
+    onFailed: () => {
+      resumeRendering(viewer)
+      onCloudsFailed()
+    },
+  }),
+  fog: new GroundFog(viewer.scene), precip: new Precipitation(viewer.container as HTMLElement),
 })
 
 export interface Weather3DOptions {
@@ -155,6 +200,7 @@ export interface Weather3DOptions {
   epochMs?: () => number // the wall clock the model's grid is dated by; default Date.now
   onShade?: (shade: number) => void // the sky's grey (0 … 1) as it is written, 0 when hidden: the Sun dims its light by it
   dwellMs?: number // how long the aircraft stays before the model is asked for; default MODEL_DWELL_MS
+  demo?: number | null // ?wxdemo: the km along the demo sky the aircraft starts at; null or absent: the real weather
 }
 
 /** A non-OK answer: its status, and the seconds the server said to wait (a 503's retryAfterS), if it did. */
@@ -224,7 +270,13 @@ export class Weather3D {
   readonly #epochMs: () => number
   readonly #onShade: (shade: number) => void
   readonly #dwellMs: number
-  readonly #volumes = new CustomDataSource('hazard-volumes')
+  readonly #demo: number | null
+  #demoSpecs: CloudSpec[] | null = null // the demo sky's clouds, once it is laid out
+  #look: CloudLook
+  #hazardStyle: HazardStyle = 'box'
+  #ahead: AheadPath | null = null
+  readonly #aheadShow = { track: false, slice: false }
+  readonly #footprints = new CustomDataSource('hazard-footprints') // each ring's outline and striped fill on the ground, under a curtain or a fence
   readonly #here: Aircraft = { lat: 0, lon: 0, altM: 0 }
   readonly #hereWC = new Cartesian3()
   readonly #shift = { dLat: 0, dLon: 0 }
@@ -245,7 +297,7 @@ export class Weather3D {
   #pickedGen = -1
   #pickedLat = Number.NaN // where the aircraft was when the hazards were last picked
   #pickedLon = Number.NaN
-  #volumeKey = ''
+  #hazardKey = '' // the hazard areas the cloud volume and the footprints were last given
   #labelKey = ''
   #line: string | null = null // the last summary written
   #model: ModelGrid | null = null // the model's grid, as drawn (shifted by ?wxat)
@@ -265,7 +317,7 @@ export class Weather3D {
   #builtLat = Number.NaN // where the aircraft was when the clouds were built
   #builtLon = Number.NaN
   #stations = 0 // the stations the clouds were built from
-  #pending: { clouds: CloudSpec[]; shafts: RainShaft[] } | null = null // built, drawn at the next frame
+  #pending: { clouds: CloudSpec[]; at: { lat: number; lon: number } } | null = null // built round a place, drawn at the next frame
   #staged: CloudSpec[] | null = null // the observed clouds built at a look, to be joined by the radar's, which are built at the next frame
   #radarGen = 0 // the radar data held (its newest frame, its tiles): the radar's clouds are built again from it when it changes
   #builtRadar = -1
@@ -294,13 +346,15 @@ export class Weather3D {
     this.#units = opts.units ?? (() => DEFAULT_UNITS)
     this.#getJson = opts.getJson ?? getJson
     this.#at = opts.at ?? null
-    this.#sky = opts.sky ?? cesiumSky(viewer)
+    this.#sky = opts.sky ?? cesiumSky(viewer, () => this.#status())
     this.#tile = opts.tile ?? ((radar, z, x, y) => radar.get(z, x, y))
     this.#epochMs = opts.epochMs ?? Date.now
     this.#onShade = opts.onShade ?? (() => {})
     this.#dwellMs = opts.dwellMs ?? MODEL_DWELL_MS
-    this.#volumes.show = false
-    void viewer.dataSources.add(this.#volumes)
+    this.#demo = opts.demo ?? null
+    this.#look = this.#sky.clouds.look ?? 'severity'
+    this.#footprints.show = false
+    void viewer.dataSources.add(this.#footprints)
   }
 
   get show(): boolean {
@@ -310,9 +364,8 @@ export class Weather3D {
   set show(on: boolean) {
     if (this.#destroyed || on === this.#show) return
     this.#show = on
-    this.#volumes.show = on
+    this.#footprints.show = on
     this.#sky.clouds.show = on
-    this.#sky.shafts.show = on
     if (on) {
       this.#cell = '' // the first look after it starts the dwell again
       this.#refresh() // its labels, its sky and the line again, from what it holds
@@ -321,6 +374,7 @@ export class Weather3D {
       this.#labelKey = ''
       this.#line = null
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, [])
+      this.#sky.clouds.setAhead(null, this.#aheadShow) // the app gives the way ahead again at the first frame it shows
       this.#sky.fog.set(null)
       this.#sky.precip.set(null)
       this.#falling = false
@@ -361,6 +415,58 @@ export class Weather3D {
   /** The hazard areas drawn. */
   get hazards(): readonly Hazard[] {
     return this.#hazards
+  }
+
+  /** The clouds' look: natural, severity colours or blocks (cloudVolume.ts). Changed on the fly. */
+  get look(): CloudLook {
+    return this.#look
+  }
+
+  set look(l: CloudLook) {
+    this.#look = l
+    this.#sky.clouds.look = l
+  }
+
+  /**
+   * How the hazard areas' edges are drawn: curtain, fence or box (cloudVolume.ts draws them); the box until set. Changed on the fly:
+   * the cloud volume is told, and the footprints are drawn under a curtain or a fence and taken away for a box.
+   */
+  get hazardStyle(): HazardStyle {
+    return this.#hazardStyle
+  }
+
+  set hazardStyle(s: HazardStyle) {
+    if (this.#destroyed || s === this.#hazardStyle) return
+    this.#hazardStyle = s
+    this.#drawHazards()
+  }
+
+  /**
+   * The way ahead of the chased aircraft (wxAhead.ts aheadPath: heights above mean sea level) and which of the two aids drawn from it show:
+   * the track line along it, and the level slice at its height. Every frame, from the app; null: no way ahead (the aircraft is slow).
+   * Kept, and while the weather shows handed to the cloud volume, which draws them; hidden, nothing is handed on (the volume was told
+   * that there is no way ahead when the weather was hidden).
+   */
+  setAhead(path: AheadPath | null, show: { track: boolean; slice: boolean }): void {
+    this.#ahead = path
+    this.#aheadShow.track = show.track
+    this.#aheadShow.slice = show.slice
+    if (this.#show) this.#sky.clouds.setAhead(path, this.#aheadShow)
+  }
+
+  /** The way ahead as last given to setAhead; null before the first, or when there is none. */
+  get ahead(): AheadPath | null {
+    return this.#ahead
+  }
+
+  /** Which aids setAhead asked for: the track line, the level slice. Nothing until told. */
+  get aheadShow(): Readonly<{ track: boolean; slice: boolean }> {
+    return this.#aheadShow
+  }
+
+  /** The weather field the clouds are drawn from (wxField.ts): built round the aircraft at the last draw; null before the first. */
+  get field(): WxField | null {
+    return this.#sky.clouds.field ?? null
   }
 
   /** What draws the sky (for checks in the console). */
@@ -410,12 +516,10 @@ export class Weather3D {
     this.#fNow = tf.fNow
     this.#relHM = tf.relHM
     if (this.#pending !== null) {
-      this.#sky.clouds.draw(this.#pending.clouds)
-      this.#sky.shafts.draw(this.#pending.shafts)
+      this.#sky.clouds.draw(this.#pending.clouds, this.#pending.at)
       this.#pending = null
     } else if (this.#staged !== null) this.#buildRadar() // one heavy piece of work a frame: the look, this, the draw
     this.#sky.clouds.frame(tf, this.#night)
-    this.#sky.shafts.frame(tf, this.#night)
     this.#sky.fog.frame(tf, this.#night)
     this.#easeShade(nowMs)
     if (this.#falling && nowMs - this.#aimedMs >= AIM_MS) {
@@ -429,7 +533,8 @@ export class Weather3D {
     a.altM = aircraft.altM
     if (!this.#seen) {
       this.#seen = true
-      if (this.#at !== null) {
+      if (this.#demo !== null) this.#layDemo(aircraft.trackDeg)
+      else if (this.#at !== null) {
         this.#shift.dLat = a.lat - this.#at.lat
         this.#shift.dLon = a.lon - this.#at.lon
       }
@@ -449,14 +554,27 @@ export class Weather3D {
     this.#destroyed = true
     this.#sky.precip.destroy() // the overlay is the page's
     if (!alive) return
-    void this.#viewer.dataSources.remove(this.#volumes, true)
+    void this.#viewer.dataSources.remove(this.#footprints, true)
     this.#sky.clouds.destroy()
-    this.#sky.shafts.destroy()
     this.#sky.fog.destroy()
   }
 
-  /** Asks for what is due: the SIGMETs and the radar frame by the clock, the METARs by the clock or when the aircraft is out of its box. */
+  /**
+   * ?wxdemo: the demo sky laid out from where the aircraft is now, along its track (none known: north), the aircraft #demo km into it
+   * and its rain layer round the aircraft's height above the sea; its clouds are kept to be drawn, its hazard area is held as the
+   * SIGMETs are.
+   */
+  #layDemo(trackDeg: number | undefined): void {
+    const a = this.#here
+    const sky = demoSky(a.lat, a.lon, Number.isFinite(trackDeg) ? trackDeg! : 0, { altM: a.altM - geoidN(a.lat, a.lon), startKm: this.#demo! })
+    this.#demoSpecs = sky.specs
+    this.#sigmets = sky.sigmets
+    this.#gen++
+  }
+
+  /** Asks for what is due: the SIGMETs and the radar frame by the clock, the METARs by the clock or when the aircraft is out of its box. With ?wxdemo, nothing. */
   #ask(nowMs: number): void {
+    if (this.#demo !== null) return
     if (nowMs >= this.#sigmetsDue) {
       this.#sigmetsDue = nowMs + SLOW_EVERY_MS
       void this.#loadSigmets(nowMs)
@@ -586,13 +704,13 @@ export class Weather3D {
       this.#pickedLat = a.lat
       this.#pickedLon = a.lon
     }
-    const volumes = this.#hazards.map((h) => h.key).join('|') // '': nothing to draw
-    if (volumes !== this.#volumeKey) {
-      this.#volumeKey = volumes
-      this.#drawVolumes()
+    const areas = this.#hazards.map((h) => h.key).join('|') // '': nothing to draw
+    if (areas !== this.#hazardKey) {
+      this.#hazardKey = areas
+      this.#drawHazards()
     }
     const u = this.#units()
-    const labels = volumes === '' ? '' : `${volumes}:${u.alt}`
+    const labels = areas === '' ? '' : `${areas}:${u.alt}`
     if (labels !== this.#labelKey) {
       this.#labelKey = labels
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, this.#hazards.map((h) => this.#label(h, u)))
@@ -605,7 +723,6 @@ export class Weather3D {
     if (this.#builtGen !== this.#metarGen || this.#builtRadar !== this.#radarGen || this.#builtModel !== this.#modelGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
     const from = Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC)
     this.#sky.clouds.fade(from)
-    this.#sky.shafts.fade(from)
     this.#sky.fog.set(fogNear(this.#metars, a.lat, a.lon))
     const fall = this.#fall()
     this.#sky.precip.set(fall)
@@ -616,13 +733,23 @@ export class Weather3D {
   }
 
   /**
-   * The clouds and rain shafts round the aircraft: the observed clouds built now, then the radar's, then the model's, within one cap;
+   * The clouds round the aircraft: the observed clouds built now, then the radar's, then the model's, within one cap;
    * the radar's keep RADAR_LOOK.reserve of it when it has so many, the observed ones giving way, the farthest first; the model's
    * come last, a forecast: they fill what is left. Where the tiles held have an echo the radar's part (the heavier) is built at the
-   * next frame (#buildRadar), else it is nothing but the asking for its tiles and is done here. Drawn at the frame after.
+   * next frame (#buildRadar), else it is nothing but the asking for its tiles and is done here. Drawn at the frame after, round where
+   * the aircraft is now. With ?wxdemo they are the demo sky's, every time.
    */
   #buildClouds(): void {
     const a = this.#here
+    if (this.#demoSpecs !== null) {
+      this.#builtGen = this.#metarGen
+      this.#builtRadar = this.#radarGen
+      this.#builtModel = this.#modelGen
+      this.#builtLat = a.lat
+      this.#builtLon = a.lon
+      this.#pending = { clouds: this.#demoSpecs, at: { lat: a.lat, lon: a.lon } }
+      return
+    }
     const observed = observedClouds(this.#metars, a.lat, a.lon, { cache: this.#made })
     this.#stations = observed.stations
     this.#builtGen = this.#metarGen
@@ -639,9 +766,13 @@ export class Weather3D {
     this.#staged = null
     const radar = this.#radarSky()
     // The observed clouds first, giving way to the radar's reserve; then the radar's; then the model's: a forecast, the lowest priority,
-    // it fills what is left of the 700.
-    const room = radar.clouds.length === 0 ? MAX_CLOUDS : MAX_CLOUDS - Math.min(radar.clouds.length, RADAR_LOOK.reserve)
-    this.#pending = { clouds: nearestClouds([nearestClouds([observed], a.lat, a.lon, room), radar.clouds, this.#modelSky()], a.lat, a.lon), shafts: radar.shafts }
+    // it fills what is left of the 700. The radar's are kept as far as they were read, whatever their puffs' own fade (100 km): the
+    // volume fades every cloud by its one reach.
+    const room = radar.length === 0 ? MAX_CLOUDS : MAX_CLOUDS - Math.min(radar.length, RADAR_LOOK.reserve)
+    const clouds = nearestClouds([observed], a.lat, a.lon, room)
+    clouds.push(...nearestClouds([radar], a.lat, a.lon, MAX_CLOUDS - clouds.length, RADAR_READ_KM, () => REACH_KM[1]))
+    clouds.push(...nearestClouds([this.#modelSky()], a.lat, a.lon, MAX_CLOUDS - clouds.length))
+    this.#pending = { clouds, at: { lat: a.lat, lon: a.lon } }
     this.#builtRadar = this.#radarGen
     this.#builtModel = this.#modelGen
   }
@@ -667,18 +798,16 @@ export class Weather3D {
   }
 
   /**
-   * The radar's clouds and rain shafts within RADAR_LOOK.radiusKm of the aircraft, and the ring beyond it that a rebuild reads
-   * (REBUILD_KM: it stands hidden and fades in as the aircraft comes), from the frame's tiles that have come (a tile not come is
-   * asked for, and the clouds are built again when it has), on the bases the nearest stations' reports give. The radar is read at
-   * the aircraft's place less the ?wxat shift, and the cells come out at their place plus it.
+   * The radar's clouds within RADAR_READ_KM of the aircraft (its towers and deck puffs counted to their caps within RADAR_LOOK.radiusKm,
+   * those of the ring beyond it on top), from the
+   * frame's tiles that have come (a tile not come is asked for, and the clouds are built again when it has), on the bases the nearest
+   * stations' reports give. The radar is read at the aircraft's place less the ?wxat shift, and the cells come out at their place plus it.
    */
-  #radarSky(): { clouds: CloudSpec[]; shafts: RainShaft[] } {
+  #radarSky(): CloudSpec[] {
     const a = this.#here
     const { dLat, dLon } = this.#shift
-    const cells = radarCells((x, y) => this.#tileAt(x, y), a.lat - dLat, wrapLon(a.lon - dLon), this.#shift, RADAR_LOOK.radiusKm + REBUILD_KM)
-    if (cells.length === 0) return { clouds: [], shafts: [] }
-    const base = radarBases(this.#metars)
-    return { clouds: radarClouds(cells, base), shafts: pickShafts(cells, base) }
+    const cells = radarCells((x, y) => this.#tileAt(x, y), a.lat - dLat, wrapLon(a.lon - dLon), this.#shift, RADAR_READ_KM)
+    return cells.length === 0 ? [] : radarClouds(cells, radarBases(this.#metars))
   }
 
   /** The overcast's grey over the camera: the nearest station's (within its 30 km) broken or overcast layer above it. */
@@ -789,7 +918,7 @@ export class Weather3D {
 
   /** How many decoded tiles to keep: those the box the radar is read in can touch, and a row and a column more for the way on (never fewer than TILES_FLOOR). */
   #held(): number {
-    const n = tilesAcross(this.#here.lat - this.#shift.dLat, RADAR_LOOK.radiusKm + REBUILD_KM) + 1
+    const n = tilesAcross(this.#here.lat - this.#shift.dLat, RADAR_READ_KM) + 1
     return Math.max(TILES_FLOOR, n * n)
   }
 
@@ -804,19 +933,41 @@ export class Weather3D {
     }
   }
 
-  #drawVolumes(): void {
-    const ents = this.#volumes.entities
+  /**
+   * The hazard areas picked, drawn: their edges by the cloud volume, in the style chosen; and under a curtain or a fence each ring's
+   * footprint on the ground, by Cesium (a box has none): the outline clamped to the ground, and a fill in stripes STRIPE_KM wide that
+   * follow each other north-eastward. The stripes are counted over the ring's extent that way: the texture Cesium gives a polygon on
+   * the ground spans the ring as it is turned (Cesium's Geometry.js, _textureCoordinateRotationPoints: read, not seen drawn).
+   */
+  #drawHazards(): void {
+    this.#sky.clouds.setHazards(this.#hazards, this.#hazardStyle, hazardColor)
+    const ents = this.#footprints.entities
     ents.suspendEvents()
     ents.removeAll()
-    for (const h of this.#hazards) {
-      const color = Color.fromCssColorString(sigmetColor(h.sigmet.hazard))
-      for (const ring of h.rings) {
-        ents.add({
-          polygon: {
-            hierarchy: Cartesian3.fromDegreesArray(ring.flat()), height: h.baseM, extrudedHeight: h.topM,
-            material: color.withAlpha(FILL_ALPHA), outline: true, outlineColor: color.withAlpha(LINE_ALPHA),
-          },
-        })
+    if (this.#hazardStyle !== 'box') {
+      for (const h of this.#hazards) {
+        const color = Color.fromCssColorString(hazardColor(h))
+        for (const ring of h.rings) {
+          const [lon0, lat0] = ring[0]
+          const along = ring.map(([lon, lat]) => (wrapLon(lon - lon0) * KM_PER_DEG * Math.cos(lat0 * CesiumMath.RADIANS_PER_DEGREE) + (lat - lat0) * KM_PER_DEG) / Math.SQRT2)
+          const positions = Cartesian3.fromDegreesArray(ring.flat())
+          ents.add({
+            polygon: {
+              hierarchy: positions, stRotation: STRIPE_TURN, classificationType: ClassificationType.TERRAIN,
+              material: new StripeMaterialProperty({
+                evenColor: color.withAlpha(STRIPE_ALPHA[0]), oddColor: color.withAlpha(STRIPE_ALPHA[1]), orientation: StripeOrientation.HORIZONTAL,
+                repeat: (Math.max(...along) - Math.min(...along)) / STRIPE_KM,
+              }),
+            },
+          })
+          const closed = Cartesian3.equals(positions[0], positions[positions.length - 1])
+          ents.add({
+            polyline: {
+              positions: closed ? positions : [...positions, positions[0]], clampToGround: true, classificationType: ClassificationType.TERRAIN, width: OUTLINE_PX,
+              material: color.withAlpha(OUTLINE_ALPHA),
+            },
+          })
+        }
       }
     }
     ents.resumeEvents()
@@ -830,7 +981,8 @@ export class Weather3D {
   /** The panel's line, written when it changes; hidden, the app owns it. */
   #status(): void {
     if (!this.#show) return
-    const text = statusText3d({ airports: this.#stations, areas: this.#hazards.length, model: this.#grid() !== null, note: this.#down.size > 0 ? NOTE : '' })
+    const note = [this.#down.size > 0 ? NOTE : '', this.#sky.clouds.failed ? NO_CLOUDS : ''].filter((n) => n !== '').join(' · ')
+    const text = statusText3d({ airports: this.#stations, areas: this.#hazards.length, model: this.#grid() !== null, note })
     if (text === this.#line) return
     this.#line = text
     this.#onStatus(text)

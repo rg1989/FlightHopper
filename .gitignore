@@ -12,3 +12,6 @@ public/scenarios/*/local/
 
 # Livery reference photos (copyrighted; only their URLs and credits are committed): livery-pipeline-design.md §9
 data/livery-refs/
+
+# Subagent-driven development scratch (briefs, reports, the progress ledger)
+.superpowers/

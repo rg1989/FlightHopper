@@ -107,6 +107,11 @@ export class BenchRecorder {
     return this.#build(this.#frameMs)
   }
 
+  /** The report over the last ~2 s of frames only (what the overlay shows): the frame times now, not the whole run's. */
+  recent(): BenchReport {
+    return this.#build(this.#frameMs.slice(-RECENT_FRAMES))
+  }
+
   /** Save report() as JSON through a Blob and a temporary <a download>. Throws outside a DOM. */
   download(filename?: string): void {
     if (typeof document === 'undefined') throw new Error('BenchRecorder.download() needs a DOM')
@@ -130,7 +135,7 @@ export class BenchRecorder {
     root.append(el)
     const tick = (): void => {
       const c = this.#viewer.canvas
-      el.textContent = overlayText(this.#build(this.#frameMs.slice(-RECENT_FRAMES)), this.#state, { width: c.width, height: c.height })
+      el.textContent = overlayText(this.recent(), this.#state, { width: c.width, height: c.height })
     }
     tick()
     this.#overlay = el
