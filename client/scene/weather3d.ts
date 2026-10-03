@@ -5,7 +5,10 @@
 // - the hazard areas (SIGMETs) and RainViewer's newest radar frame (a RadarSource: its tiles are fetched when something
 //   samples them, as the top-down map's radar does), each every 10 min;
 // - a weather model's forecast (Open-Meteo, through the server): a grid of 7 × 7 places 0.25° apart round the 0.5° cell the aircraft
-//   is in, asked again every 30 min and when the aircraft leaves the inner half of the grid held (not within 30 s of the last ask).
+//   is in, asked again every 30 min and when the aircraft leaves the inner half of the grid held (not within 30 s of the last ask),
+//   and not before the aircraft has stayed MODEL_DWELL_MS in its place: a hop or an auto-follow to a distant aircraft that moves on
+//   within seconds costs nothing, and the grid held goes on drawing. A failed ask is made again in 30 s, or, when the server says
+//   when it will ask Open-Meteo again (a 503's retryAfterS), then, at most 30 min on: one warning for a whole outage.
 //   A forecast, not an observation: it draws only what nothing else says, and the wind it gives is an estimate. A grid whose hour is
 //   more than 3 h old is not used (its server serves the places it holds when Open-Meteo cannot be asked), and is asked for again.
 //   While one is held the panel's line carries Open-Meteo's credit (CC BY 4.0).
@@ -44,7 +47,7 @@
 import { Cartesian3, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, type Cartographic, type Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
-import type { Metar, ModelGrid, Sigmet } from '../../shared/wx.ts'
+import { MODEL_CELL_DEG, type Metar, type ModelGrid, type Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
@@ -58,7 +61,7 @@ import { RADAR_INDEX, RADAR_SRC_MAX, RadarSource, type RadarIndex, type SourceTi
 import { radarCells, tilesAcross } from './radarCells.ts'
 import { RainShafts, pickShafts, type RainShaft } from './rainShafts.ts'
 import { hazardsNear, ringCentre, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
-import { sigmetColor, sigmetLabel } from './wxText.ts'
+import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
 
 const BOX_DEG = 2 // the METAR box reaches this far from the aircraft each way, rounded out to whole degrees
 const METAR_EVERY_MS = 5 * 60_000
@@ -66,8 +69,8 @@ const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and the radar frame
 const MODEL_EVERY_MS = 30 * 60_000 // the model's values are hourly; the server keeps a place this long
 const MODEL_N_MAX = 15 // a grid of more places a side than this is not the server's
 const MODEL_MAX_AGE_MS = 3 * 60 * 60_000 // a grid whose hour is older than this is not used
-/** What Open-Meteo's licence (CC BY 4.0) asks to be credited with, as it words it: on the panel's line while a grid is held. */
-export const MODEL_CREDIT = 'Weather data by Open-Meteo.com'
+/** The model is asked for once the aircraft has stayed this long: a grid is up to 157 of Open-Meteo's calls, and a hop that moves on within seconds should cost none. */
+export const MODEL_DWELL_MS = 10_000
 const RETRY_MS = 30_000 // a failed ask is made again after this
 const LOOK_MS = 1000 // update() looks at its clocks and the aircraft this often
 export const HAZARD_KM = 800 // hazard areas are drawn when their ring passes this near the aircraft
@@ -150,11 +153,33 @@ export interface Weather3DOptions {
   sky?: Sky // default: Cesium's, in the viewer's scene
   tile?: (radar: RadarSource, z: number, x: number, y: number) => Promise<SourceTile | null> // a decoded radar tile; default the source's own
   epochMs?: () => number // the wall clock the model's grid is dated by; default Date.now
+  onShade?: (shade: number) => void // the sky's grey (0 … 1) as it is written, 0 when hidden: the Sun dims its light by it
+  dwellMs?: number // how long the aircraft stays before the model is asked for; default MODEL_DWELL_MS
+}
+
+/** A non-OK answer: its status, and the seconds the server said to wait (a 503's retryAfterS), if it did. */
+export class HttpError extends Error {
+  readonly status: number
+  readonly retryAfterS: number | undefined
+  constructor(status: number, retryAfterS?: unknown) {
+    super(`HTTP ${status}`)
+    this.status = status
+    this.retryAfterS = typeof retryAfterS === 'number' && retryAfterS > 0 && Number.isFinite(retryAfterS) ? retryAfterS : undefined
+  }
+}
+
+/** The wait after a failed model ask: 30 s, or what a 503 says if that is longer, but never more than the usual 30 min. */
+function retryAfterMs(why: unknown): number {
+  const asked = why instanceof HttpError && why.retryAfterS !== undefined ? why.retryAfterS * 1000 : 0
+  return Math.min(MODEL_EVERY_MS, Math.max(RETRY_MS, asked))
 }
 
 async function getJson(url: string): Promise<unknown> {
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { retryAfterS?: unknown } | null // a 503 of the model's says how long to wait
+    throw new HttpError(res.status, body?.retryAfterS)
+  }
   return res.json()
 }
 
@@ -197,6 +222,8 @@ export class Weather3D {
   readonly #sky: Sky
   readonly #tile: (radar: RadarSource, z: number, x: number, y: number) => Promise<SourceTile | null>
   readonly #epochMs: () => number
+  readonly #onShade: (shade: number) => void
+  readonly #dwellMs: number
   readonly #volumes = new CustomDataSource('hazard-volumes')
   readonly #here: Aircraft = { lat: 0, lon: 0, altM: 0 }
   readonly #hereWC = new Cartesian3()
@@ -224,6 +251,10 @@ export class Weather3D {
   #model: ModelGrid | null = null // the model's grid, as drawn (shifted by ?wxat)
   #modelDue = -Infinity
   #modelAskedMs = -Infinity // when the grid was last asked for
+  #modelRetryMs = RETRY_MS // how soon after an ask a grid that is wanted is asked for again: 30 s, after a failure what a 503 says if longer
+  #cell = '' // the 0.5° cell the aircraft was in at the last look ('' before the first, and again when the weather is shown)
+  #wanted = false // the grid held did not serve the aircraft at the last look
+  #stoodMs = -Infinity // the dwell's clock: since the weather was shown, the aircraft came into its cell, or the grid held stopped serving it
   #modelAsk = 0 // the ask in hand: an answer to an earlier one is not heard
   #modelGen = 0 // the grid held: the clouds are built again from it when it changes (or when it grows too old to use)
   #modelOld = false // the grid held was too old to use at the last look
@@ -266,6 +297,8 @@ export class Weather3D {
     this.#sky = opts.sky ?? cesiumSky(viewer)
     this.#tile = opts.tile ?? ((radar, z, x, y) => radar.get(z, x, y))
     this.#epochMs = opts.epochMs ?? Date.now
+    this.#onShade = opts.onShade ?? (() => {})
+    this.#dwellMs = opts.dwellMs ?? MODEL_DWELL_MS
     this.#volumes.show = false
     void viewer.dataSources.add(this.#volumes)
   }
@@ -281,6 +314,7 @@ export class Weather3D {
     this.#sky.clouds.show = on
     this.#sky.shafts.show = on
     if (on) {
+      this.#cell = '' // the first look after it starts the dwell again
       this.#refresh() // its labels, its sky and the line again, from what it holds
       this.#status()
     } else {
@@ -448,34 +482,45 @@ export class Weather3D {
 
   /**
    * The model's grid when it is due (every 30 min), or when the aircraft is out of the inner half of the grid held or the grid is
-   * too old, but not within 30 s of the last ask: a grid the server cannot centre on the aircraft (near a pole), or has no newer
-   * than 3 h to give, would be asked for at every look.
+   * too old, but not within 30 s of the last ask (a 503's wait, if longer, after a failure: #modelRetryMs): a grid the server cannot
+   * centre on the aircraft (near a pole), or has no newer than 3 h to give, would be asked for at every look. And not before the
+   * aircraft has stayed MODEL_DWELL_MS: the clock restarts when the weather is shown, when the aircraft is in another cell (the
+   * server's) and when the grid held stops serving it. So a hop that moves on within seconds asks nothing, and a jet that crosses
+   * into the next cell is asked for that long after it leaves the inner half, the grid held drawing meanwhile.
    */
   #askModel(nowMs: number, lat: number, lon: number): void {
     const grid = this.#model
     const wanted = grid !== null && (!inInnerHalf(grid, this.#here.lat, this.#here.lon) || this.#tooOld(grid)) // out of its inner half, or too old
-    if (nowMs < this.#modelDue && !(wanted && nowMs - this.#modelAskedMs >= RETRY_MS)) return
+    const cell = `${Math.floor(lat / MODEL_CELL_DEG)},${Math.floor(lon / MODEL_CELL_DEG)}`
+    if (cell !== this.#cell || (wanted && !this.#wanted)) this.#stoodMs = nowMs
+    this.#cell = cell
+    this.#wanted = wanted
+    if (nowMs < this.#modelDue && !(wanted && nowMs - this.#modelAskedMs >= this.#modelRetryMs)) return
+    if (nowMs - this.#stoodMs < this.#dwellMs) return
     this.#modelDue = nowMs + MODEL_EVERY_MS
     this.#modelAskedMs = nowMs
     void this.#loadModel(`${this.#apiBase}/wx/model?lat=${+lat.toFixed(3)}&lon=${+lon.toFixed(3)}`, ++this.#modelAsk, nowMs)
   }
 
   /**
-   * One source's ask: the answer read (a failure is one warning), then, unless it is out of date by now (`current`: the app is
-   * gone, or another ask has taken its place), the source noted down or up and the answer (null: it failed) handed on. An answer
-   * out of date is not heard at all: a late failure cannot put the note up over an ask that has since been answered.
+   * One source's ask: the answer read (a failure is a warning, one for a whole outage: the source is down until an ask of it is
+   * answered), then, unless it is out of date by now (`current`: the app is gone, or another ask has taken its place), the source
+   * noted down or up and the answer (null: it failed, and why) handed on. An answer out of date is not heard at all: a late failure
+   * cannot put the note up over an ask that has since been answered.
    */
-  async #fetch<T>(feed: Feed, url: string, read: (json: unknown) => T, current: () => boolean, apply: (got: T | null) => void): Promise<void> {
+  async #fetch<T>(feed: Feed, url: string, read: (json: unknown) => T, current: () => boolean, apply: (got: T | null, why?: unknown) => void): Promise<void> {
     let got: T | null = null
+    let why: unknown
     try {
       got = read(await this.#getJson(url))
     } catch (e) {
-      if (current()) console.warn(`FlightHopper: 3-D weather ${url}:`, e)
+      why = e
+      if (current() && !this.#down.has(feed)) console.warn(`FlightHopper: 3-D weather ${url}:`, e)
     }
     if (!current()) return
     if (got === null) this.#down.add(feed)
     else this.#down.delete(feed)
-    apply(got)
+    apply(got, why)
   }
 
   #loadMetars(box: Box, askedMs: number): Promise<void> {
@@ -490,9 +535,12 @@ export class Weather3D {
   }
 
   #loadModel(url: string, ask: number, askedMs: number): Promise<void> {
-    return this.#fetch('model', url, modelOf, () => !this.#destroyed && ask === this.#modelAsk, (grid) => {
-      if (grid === null) this.#modelDue = Math.min(this.#modelDue, askedMs + RETRY_MS)
-      else {
+    return this.#fetch('model', url, modelOf, () => !this.#destroyed && ask === this.#modelAsk, (grid, why) => {
+      if (grid === null) {
+        this.#modelRetryMs = retryAfterMs(why)
+        this.#modelDue = Math.min(this.#modelDue, askedMs + this.#modelRetryMs)
+      } else {
+        this.#modelRetryMs = RETRY_MS
         this.#model = shiftModel(grid, this.#shift.dLat, this.#shift.dLon)
         this.#modelGen++
       }
@@ -662,6 +710,7 @@ export class Weather3D {
 
   #writeSky(shade: number): void {
     this.#written = shade
+    this.#onShade(shade)
     const sky = this.#viewer.isDestroyed?.() ? undefined : this.#viewer.scene?.skyAtmosphere
     if (sky === undefined) return
     sky.saturationShift = -SKY_DESATURATE * shade

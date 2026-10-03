@@ -19,8 +19,8 @@ import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { modelWindAt } from './modelWind.ts'
 import { pickShafts, type RainShaft } from './rainShafts.ts'
-import { HAZARD_KM, MODEL_CREDIT, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
-import { sigmetColor, sigmetLabel } from './wxText.ts'
+import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
+import { MODEL_CREDIT, sigmetColor, sigmetLabel } from './wxText.ts'
 
 type Ring = [number, number][]
 const FT = 0.3048
@@ -134,21 +134,22 @@ function geoOf(url: string): ModelGeo {
 
 /**
  * A Weather3D over a fake viewer (its camera at the aircraft until moved), names overlay, sky, radar tiles and network: what
- * was asked, answered from `answers` (or failed, or held until release()).
+ * was asked, answered from `answers` (or failed, or held until release()). The model is asked at the first look (no dwell) unless
+ * `dwell` asks for the real 10 s; `network` has it use its own getJson, over the global fetch.
  */
-function rig(o: { at?: { lat: number; lon: number } } = {}) {
+function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: boolean } = {}) {
   const asked: string[] = []
   const answers: Record<'metar' | 'sigmet' | 'radar', unknown> = { metar: [], sigmet: [], radar: INDEX }
   const failing = new Set<Kind>()
   const hold = new Set<Kind>()
   const held: (() => void)[] = []
-  const model = { make: (geo: ModelGeo): unknown => gridFor(geo) } // what the server would answer for a grid: nothing in the sky, by default
+  const model = { make: (geo: ModelGeo): unknown => gridFor(geo), retryAfterS: undefined as number | undefined } // what the server would answer for a grid: nothing in the sky, by default; and the wait a failing ask's 503 names
   const getJson = async (url: string): Promise<unknown> => {
     asked.push(url)
     const kind: Kind = url.includes('/wx/metar') ? 'metar' : url.includes('/wx/sigmet') ? 'sigmet' : url.includes('/wx/model') ? 'model' : 'radar'
     const answer = kind === 'model' ? model.make(geoOf(url)) : structuredClone(answers[kind]) // as it is when asked
     if (hold.has(kind)) await new Promise<void>((resolve) => held.push(resolve)) // until release(), when it is answered or fails as `failing` then says
-    if (failing.has(kind)) throw new Error(`${kind} down`)
+    if (failing.has(kind)) throw kind === 'model' && model.retryAfterS !== undefined ? new HttpError(503, model.retryAfterS) : new Error(`${kind} down`)
     return answer
   }
   const sources: CustomDataSource[] = []
@@ -180,9 +181,13 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     return own?.get(key) ?? tiles.get(key) ?? null // as it is when answered
   }
   const epoch = { now: GRID_HOUR_MS + 30 * MIN } // the wall clock: half an hour into the hour the grids are for
-  const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile, epochMs: () => epoch.now })
+  const shades: number[] = [] // what the sky's grey was handed on as
+  const w = new Weather3D(viewer, {
+    apiBase: '/api', labels, getJson: o.network ? undefined : getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile, epochMs: () => epoch.now,
+    onShade: (s) => shades.push(s), dwellMs: o.dwell ? undefined : 0,
+  })
   return {
-    w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks, tileHold, frameTiles,
+    w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, shades, sky, tiles, tileAsks, tileHold, frameTiles,
     releaseTiles: (newestFirst = false) => (newestFirst ? tileHeld.splice(0).reverse() : tileHeld.splice(0)).forEach((f) => f()),
     releaseSome: (n: number) => tileHeld.splice(0, n).forEach((f) => f()), // the first n tiles held
     held: () => tileHeld.length,
@@ -232,8 +237,8 @@ test('Weather3D: hidden it asks for nothing and draws nothing, however often it 
   assert.equal(r.sources[0].show, false, 'its data source is in the viewer, hidden')
 })
 
-test('Weather3D: shown it asks at the first update with an aircraft: METARs of a whole-degree box 2° round it, SIGMETs, RainViewer\'s index, the model\'s grid', async () => {
-  const r = rig()
+test('Weather3D: shown it asks at the first update with an aircraft: METARs of a whole-degree box 2° round it, SIGMETs, RainViewer\'s index; the model\'s grid once the aircraft has stayed 10 s', async () => {
+  const r = rig({ dwell: true })
   r.w.show = true
   assert.deepEqual(r.asked, [], 'showing asks nothing: the aircraft is not known yet')
   r.w.update(null, 0)
@@ -245,6 +250,10 @@ test('Weather3D: shown it asks at the first update with an aircraft: METARs of a
   assert.deepEqual(r.asks('metar'), ['/api/wx/metar?bbox=30,32,35,37']) // 30.1 → 30, 32.9 → 32, 34.1 → 35, 36.9 → 37
   assert.deepEqual(r.asks('sigmet'), ['/api/wx/sigmet'])
   assert.deepEqual(r.asks('weather-maps'), ['https://api.rainviewer.com/public/weather-maps.json'])
+  assert.equal(r.asked.length, 3, 'the forecast is not asked at once: a grid is a lot of Open-Meteo\'s calls')
+  r.w.update(AC, MODEL_DWELL_MS - 1000)
+  r.w.update(AC, MODEL_DWELL_MS)
+  await flush()
   assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=32.1&lon=34.9'], 'the place the aircraft is at: the server snaps it to its cell')
   assert.equal(r.asked.length, 4)
 })
@@ -592,7 +601,7 @@ test('Weather3D: the panel\'s line: the counts as they come, a note while a sour
   assert.equal(r.lines.at(-1), `Clouds from 3 airports · 2 hazard areas${CREDIT}`, 'again when shown, from what it holds')
 })
 
-test('Weather3D: a failed ask is one warning, a note on the line, the rest still drawn, and asked again in 30 s', async () => {
+test('Weather3D: a failed ask is one warning (one for a whole outage: its retries are quiet), a note on the line, the rest still drawn, and asked again in 30 s', async () => {
   const warned: unknown[][] = []
   const warn = console.warn
   console.warn = (...a: unknown[]) => void warned.push(a)
@@ -612,7 +621,7 @@ test('Weather3D: a failed ask is one warning, a note on the line, the rest still
     r.w.update(AC, 30_000)
     await flush()
     assert.equal(r.asks('metar').length, 2, 'asked again after 30 s, not 5 min')
-    assert.equal(warned.length, 2)
+    assert.equal(warned.length, 1, 'the same outage: no second warning')
     r.failing.clear()
     r.answers.metar = [metar('LLBG', 32.01, 34.89)]
     r.w.update(AC, 61_000)
@@ -633,6 +642,7 @@ test('Weather3D: a failed ask is one warning, a note on the line, the rest still
     await flush()
     assert.equal(r.asks('sigmet').length, 3, 'the SIGMETs and the radar are asked again after 30 s too')
     assert.equal(r.asks('weather-maps').length, 3)
+    assert.equal(warned.length, 3, 'they went down for the first time: a warning each, none for their retry')
   } finally {
     console.warn = warn
   }
@@ -992,6 +1002,31 @@ test('Weather3D: under a nearby station’s overcast the sky greys, easing in; a
   r.w.show = false // hidden: the sky's own colours at once
   assert.equal(r.skyShift().saturationShift, -0)
   assert.equal(r.skyShift().brightnessShift, -0)
+})
+
+test('Weather3D: the sky\'s grey is handed on as it is written (the Sun dims by it too): eased in, in steps up to the target, and 0 as soon as it is hidden', async () => {
+  const r = rig()
+  r.answers.metar = [metar('LLBG', AC.lat, AC.lon, { elevM: 30, clouds: [{ cover: 'OVC', baseFt: 2000, type: null }] })]
+  r.setCamera(AC.lat, AC.lon, 200) // under the deck
+  await open(r)
+  assert.deepEqual(r.shades, [], 'a clear sky: nothing written, nothing handed on')
+  for (let t = 1000; t <= 12_000; t += 100) r.w.update(AC, t)
+  const eased = [...r.shades]
+  assert.ok(eased.length > 5 && eased.every((v, i) => v > (eased[i - 1] ?? 0) && v <= 1), `rising: ${eased}`)
+  const grey = eased.at(-1)!
+  assert.ok(grey > 0.8, `${grey}: at the target`)
+  assert.equal(r.skyShift().saturationShift, -0.75 * grey, 'the value the sky was written with')
+  assert.equal(r.skyShift().brightnessShift, -0.3 * grey)
+  r.setCamera(AC.lat, AC.lon, 3000) // above the deck: back to the sky's own
+  for (let t = 12_100; t <= 30_000; t += 100) r.w.update(AC, t)
+  assert.equal(r.shades.at(-1), 0)
+  assert.ok(r.shades.length > eased.length && r.shades.every((v) => v >= 0 && v <= 1))
+  r.setCamera(AC.lat, AC.lon, 200)
+  for (let t = 30_100; t <= 45_000; t += 100) r.w.update(AC, t)
+  assert.ok(r.shades.at(-1)! > 0.8)
+  r.w.show = false // hidden, grey as it is: the Sun is told at once
+  assert.equal(r.shades.at(-1), 0)
+  assert.equal(r.skyShift().saturationShift, -0)
 })
 
 
@@ -1393,7 +1428,7 @@ const keysOf = (cs: readonly CloudSpec[]): Set<string> => new Set(cs.map(cloudKe
 /** A grid of mid and high cloud everywhere. */
 const CLOUDY = (geo: ModelGeo): ModelGrid => gridFor(geo, { cover: (hPa) => (hPa === 600 || hPa === 250 ? 70 : 0) })
 
-test('Weather3D: the model\'s grid is asked for at the first look with an aircraft, again after 30 min, and when the aircraft leaves the inner half of the grid it holds, not within 30 s of the last ask', async () => {
+test('Weather3D: the model\'s grid is asked for at the first look with an aircraft (the 10 s dwell off), again after 30 min, and when the aircraft leaves the inner half of the grid it holds, not within 30 s of the last ask', async () => {
   const r = rig()
   await open(r)
   assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=32.1&lon=34.9'])
@@ -1442,6 +1477,7 @@ test('Weather3D: a failed model ask is one warning and a note on the line, asked
     r.w.update(AC, 30_000)
     await flush()
     assert.equal(r.asks('model').length, 2, 'asked again after 30 s, not 30 min')
+    assert.equal(warned.length, 1, 'the retry is the same outage: no second warning')
     r.failing.clear()
     r.w.update(AC, 61_000)
     await flush()
@@ -1466,6 +1502,187 @@ test('Weather3D: a failed model ask is one warning and a note on the line, asked
   } finally {
     console.warn = warn
   }
+})
+
+test('Weather3D: after a 503 that says when the server will ask Open-Meteo again, the model is not asked before then (30 min at most), the grid held drawing meanwhile; one warning for the outage, which the next answer ends', async () => {
+  const warned: unknown[][] = []
+  const warn = console.warn
+  console.warn = (...a: unknown[]) => void warned.push(a)
+  try {
+    const r = rig()
+    r.model.make = CLOUDY
+    await open(r) // the grid from 31.5°N
+    const first = r.w.model!
+    const out = { ...AC, lat: 32.63 } // out of its inner half: the grid north of it is wanted
+    r.failing.add('model')
+    r.model.retryAfterS = 600
+    r.w.update(out, 40_000)
+    await flush()
+    assert.equal(r.asks('model').length, 2)
+    assert.equal(warned.length, 1)
+    assert.match(String(warned[0][1]), /HTTP 503/)
+    assert.match(String(r.lines.at(-1)), /Open-Meteo.* · some weather unavailable$/, 'a note, and the grid held is still in use')
+    for (let t = 45_000; t < 640_000; t += 5000) r.w.update(out, t) // a look every 5 s
+    await flush()
+    assert.equal(r.asks('model').length, 2, 'not asked in the 600 s it said, though a grid is wanted and its usual 30 s have gone by twenty times')
+    assert.equal(r.w.model, first, 'the grid held is kept')
+    assert.ok(r.sky.clouds.draws.at(-1)!.length > 100, 'and its clouds are drawn (built again, 59 km on, at the first look after the failure)')
+    r.model.retryAfterS = 2400 // 40 min: a wait is never longer than the usual 30
+    r.w.update(out, 640_000)
+    await flush()
+    assert.equal(r.asks('model').length, 3, 'asked when the 600 s are up')
+    assert.equal(warned.length, 1, 'the same outage: no second warning')
+    r.w.update(out, 640_000 + 30 * MIN - 1000)
+    await flush()
+    assert.equal(r.asks('model').length, 3, 'not yet')
+    r.failing.clear()
+    r.w.update(out, 640_000 + 30 * MIN)
+    await flush()
+    assert.equal(r.asks('model').length, 4, 'after 30 min, not 40')
+    assert.equal(r.w.model!.lat0, 32, 'answered: the cell north')
+    assert.equal(r.lines.at(-1), `Clouds from the forecast · 0 hazard areas${CREDIT}`, 'the outage is over: no note')
+    r.failing.add('model') // the next failure is another outage
+    r.model.retryAfterS = undefined
+    r.w.update(out, 640_000 + 60 * MIN)
+    await flush()
+    assert.equal(warned.length, 2)
+    r.w.update(out, 640_000 + 60 * MIN + 29_000)
+    await flush()
+    assert.equal(r.asks('model').length, 5)
+    r.w.update(out, 640_000 + 60 * MIN + 30_000)
+    await flush()
+    assert.equal(r.asks('model').length, 6, 'no wait named: the usual 30 s')
+    assert.equal(warned.length, 2)
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('Weather3D: its own getJson reads a 503\'s retryAfterS from the server\'s JSON body into the model\'s wait; a body with no number, or that is no JSON, leaves the usual 30 s', async () => {
+  const asked: string[] = []
+  const body = { text: '{"error":"the hour\'s allowance of calls is used","retryAfterS":900}' }
+  const fetched = globalThis.fetch
+  const warn = console.warn
+  globalThis.fetch = (async (url: string) => {
+    asked.push(url)
+    if (url.includes('/wx/model')) return new Response(body.text, { status: 503 })
+    return new Response(JSON.stringify(url.includes('/wx/') ? [] : INDEX))
+  }) as unknown as typeof fetch
+  console.warn = () => {}
+  try {
+    const r = rig({ network: true })
+    const models = async (): Promise<number> => {
+      await flush()
+      await flush() // a Response's body takes a tick more
+      return asked.filter((u) => u.includes('/wx/model')).length
+    }
+    r.w.show = true
+    r.w.update(AC, 0)
+    assert.equal(await models(), 1)
+    r.w.update(AC, 30_000)
+    r.w.update(AC, 899_000)
+    assert.equal(await models(), 1, 'its body said 900 s')
+    body.text = '<html>bad gateway</html>' // no JSON: the usual wait
+    r.w.update(AC, 900_000)
+    assert.equal(await models(), 2, 'asked at 900 s')
+    r.w.update(AC, 929_000)
+    assert.equal(await models(), 2)
+    body.text = '{"error":"x"}' // JSON, no number
+    r.w.update(AC, 930_000)
+    assert.equal(await models(), 3)
+    body.text = '{"error":"x","retryAfterS":"soon"}' // not a number
+    r.w.update(AC, 960_000)
+    assert.equal(await models(), 4, '30 s on')
+    r.w.update(AC, 989_000)
+    assert.equal(await models(), 4)
+    r.w.update(AC, 990_000)
+    assert.equal(await models(), 5, 'and 30 s on again')
+  } finally {
+    globalThis.fetch = fetched
+    console.warn = warn
+  }
+})
+
+test('HttpError: the status, and a retryAfterS only when it is a number above zero', () => {
+  const e = new HttpError(503, 900)
+  assert.deepEqual([e.message, e.status, e.retryAfterS, e instanceof Error], ['HTTP 503', 503, 900, true])
+  for (const bad of [undefined, null, 0, -3, Number.NaN, Number.POSITIVE_INFINITY, '900', {}]) assert.equal(new HttpError(502, bad).retryAfterS, undefined, String(bad))
+})
+
+test('Weather3D: the model is asked for once the aircraft has stayed 10 s: hops to other cells, each within 10 s of the one before, ask nothing; staying 10 s asks once', async () => {
+  assert.equal(MODEL_DWELL_MS, 10_000)
+  const r = rig({ dwell: true })
+  const at = (lat: number, lon: number): typeof AC => ({ lat, lon, altM: 10_000 })
+  r.w.show = true
+  r.w.update(AC, 0) // Haifa
+  r.w.update(AC, MODEL_DWELL_MS - 1000)
+  await flush()
+  assert.deepEqual(r.asks('model'), [], 'not before the 10 s')
+  r.w.update(at(47.4, 8.5), MODEL_DWELL_MS) // a hop, just when they would have been up: Zurich
+  r.w.update(at(-33.9, 151.2), 18_000) // 8 s on, another: Sydney
+  r.w.update(at(40.6, -73.8), 26_000) // and another: New York
+  r.w.update(at(40.6, -73.8), 35_000)
+  await flush()
+  assert.deepEqual(r.asks('model'), [], 'three hops, none of them stayed 10 s')
+  assert.equal(r.w.model, null)
+  r.w.update(at(40.6, -73.8), 36_000)
+  await flush()
+  assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=40.6&lon=-73.8'], 'it has stayed 10 s: asked, once, for where it is')
+  for (let t = 37_000; t < 120_000; t += 1000) r.w.update(at(40.6, -73.8), t)
+  await flush()
+  assert.equal(r.asks('model').length, 1, 'and no more')
+  assert.notEqual(r.w.model, null)
+})
+
+test('Weather3D: the first ask after the weather is shown waits 10 s too, even for a grid held that is due: hiding and showing starts the 10 s over', async () => {
+  const r = rig({ dwell: true })
+  r.w.show = true
+  r.w.update(AC, 0)
+  r.w.update(AC, MODEL_DWELL_MS)
+  await flush()
+  assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=32.1&lon=34.9'], 'staying 10 s: asked')
+  r.w.show = false
+  const back = 30 * MIN + 60_000 // its grid is due again
+  r.w.show = true
+  r.w.update(AC, back)
+  r.w.update(AC, back + MODEL_DWELL_MS - 1000)
+  await flush()
+  assert.equal(r.asks('model').length, 1, 'shown again: the 10 s begin again')
+  r.w.update(AC, back + MODEL_DWELL_MS)
+  await flush()
+  assert.equal(r.asks('model').length, 2)
+})
+
+test('Weather3D: a jet that crosses into the next cell is asked for 10 s after it leaves the inner half of its grid, which draws meanwhile; one that turns back inside before then is not', async () => {
+  const r = rig({ dwell: true })
+  r.model.make = CLOUDY
+  r.w.show = true
+  r.w.update(AC, 0)
+  r.w.update(AC, MODEL_DWELL_MS)
+  await flush()
+  const first = r.w.model!
+  assert.equal(first.lat0, 31.5, 'the cell 32 to 32.5°N: its inner half reaches 32.625')
+  const jet = (lat: number): typeof AC => ({ ...AC, lat })
+  r.w.update(jet(32.5), 90_000) // 80 s on, flying north inside it
+  r.w.update(jet(32.6), 95_000)
+  r.w.update(jet(32.63), 100_000) // out of the inner half, in the next cell
+  drawn(r, jet(32.64), 105_000)
+  assert.equal(r.asks('model').length, 1, '5 s after the crossing: not asked, though the last ask is 95 s ago')
+  assert.equal(r.w.model, first, 'the grid held is in use')
+  assert.ok(r.w.windAt(32.64, AC.lon, 30_000) !== null && r.sky.clouds.draws.at(-1)!.length > 100, 'its wind and its clouds')
+  r.w.update(jet(32.65), 109_000)
+  await flush()
+  assert.equal(r.asks('model').length, 1, '9 s')
+  r.w.update(jet(32.66), 110_000)
+  await flush()
+  assert.deepEqual(r.asks('model').slice(1), ['/api/wx/model?lat=32.66&lon=34.9'], '10 s after the crossing: asked once, for where it is now')
+  assert.equal(r.w.model!.lat0, 32, 'the grid of the cell north')
+  // The new grid reaches 33.125: out of it at 33.13, and back inside it 5 s on
+  r.w.update(jet(33.13), 200_000)
+  r.w.update(jet(33.1), 205_000)
+  r.w.update(jet(33.1), 215_000)
+  await flush()
+  assert.equal(r.asks('model').length, 2, 'it turned back: the grid held serves it again, nothing asked')
 })
 
 test('Weather3D: an answer to an ask that has been replaced by a later one is not heard; destroyed, none is', async () => {

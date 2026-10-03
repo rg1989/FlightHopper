@@ -122,6 +122,10 @@ export const CONDITION: Record<FlightCategory, string> = { VFR: 'Good', MVFR: 'M
 /** A flight category's colour: the marker's ring, the card's dot, the Layers panel's legend. */
 export const CATEGORY_COLOR: Record<FlightCategory, string> = { VFR: '#3ddc84', MVFR: '#4f9dff', IFR: '#ff5a5a', LIFR: '#e05cff' }
 
+/** What Open-Meteo's licence (CC BY 4.0) asks to be credited with, as it words it, and the link it asks for: the Layers panel's line carries both while a model grid is held. */
+export const MODEL_CREDIT = 'Weather data by Open-Meteo.com'
+export const MODEL_CREDIT_URL = 'https://open-meteo.com/'
+
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 /** Local HH:MM. */
 export function hhmm(ms: number): string {

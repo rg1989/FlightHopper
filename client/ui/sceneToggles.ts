@@ -8,10 +8,11 @@
 // nothing itself; update() only re-renders. A view or base change hides and shows rows (none is rebuilt, so the focus
 // stays put). setBusy(true) shows a spinner on the terrain row while the relief grows or sinks. Under Weather: the rain
 // scale in the radar's colours and the airports legend, for the top-down map only, and setWeather()'s line on what the
-// weather layer holds, in both views. The app owns the keys, the stored prefs and the panel.
+// weather layer holds, in both views (Open-Meteo's credit in it is a link to its site, as its licence asks). The app owns the
+// keys, the stored prefs and the panel.
 import { icon, type IconName } from './icons.ts'
 import { RAIN_PALETTE } from '../scene/radar.ts'
-import { CATEGORY_COLOR } from '../scene/wxText.ts'
+import { CATEGORY_COLOR, MODEL_CREDIT, MODEL_CREDIT_URL } from '../scene/wxText.ts'
 import type { ScenePrefs } from '../types.ts'
 import './sceneToggles.css'
 
@@ -50,6 +51,20 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, tex
   el.className = className
   if (text !== '') el.textContent = text
   return el
+}
+
+/** The weather line's text, Open-Meteo's credit in it (if it is there) a link to its site: CC BY 4.0 asks for one. */
+function writeLine(el: HTMLElement, text: string): void {
+  const at = text.indexOf(MODEL_CREDIT)
+  if (at < 0) {
+    el.textContent = text
+    return
+  }
+  const link = h('a', 'fh-wx-credit', MODEL_CREDIT)
+  link.href = MODEL_CREDIT_URL
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  el.replaceChildren(text.slice(0, at), link, text.slice(at + MODEL_CREDIT.length))
 }
 
 /** The base-map pref the view on screen uses. */
@@ -149,6 +164,7 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
   }
   const wxLine = h('p', 'fh-wx-line')
   wxLine.hidden = true
+  let line = '' // what it holds
   wxMore.append(rain, legend, wxLine)
   layers.append(baseHead, seg, theme, roadsRow, placesRow, wxRow, wxMore)
 
@@ -199,7 +215,9 @@ export function mountSceneToggles(root: HTMLElement, opts: SceneTogglesOpts): Sc
     },
     setWeather(text) {
       if (wxLine.hidden !== (text === null)) wxLine.hidden = text === null
-      if (text !== null && wxLine.textContent !== text) wxLine.textContent = text
+      if (text === null || text === line) return
+      line = text
+      writeLine(wxLine, text)
     },
     destroy() {
       layers.remove()

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { RAIN_PALETTE } from '../scene/radar.ts'
-import { CATEGORY_COLOR } from '../scene/wxText.ts'
+import { CATEGORY_COLOR, MODEL_CREDIT } from '../scene/wxText.ts'
 import type { ScenePrefs } from '../types.ts'
 
 // sceneToggles.ts imports its CSS for Vite. Node cannot load CSS, so this test process loads every .css as an empty module.
@@ -24,6 +24,9 @@ class El {
   textWrites = 0
   title = ''
   type = ''
+  href = ''
+  target = ''
+  rel = ''
   #hidden = false
   classList = { add: (): void => {} } // icons.ts marks its svg
   vars: Record<string, string> = {}
@@ -46,6 +49,7 @@ class El {
   }
   set textContent(v: string) {
     this.textWrites++
+    this.#clear() // as in the DOM: the text replaces what the element held
     this.#text = v
   }
   get hidden(): boolean {
@@ -60,6 +64,15 @@ class El {
       c.parent = this
       this.children.push(c)
     }
+  }
+  replaceChildren(...cs: (El | string)[]): void {
+    this.#clear()
+    this.append(...cs.map((c) => (typeof c === 'string' ? Object.assign(new El('#text'), { textContent: c }) : c)))
+  }
+  #clear(): void {
+    this.#text = ''
+    for (const c of this.children) c.parent = null
+    this.children = []
   }
   remove(): void {
     if (!this.parent) return
@@ -313,6 +326,38 @@ test('weather: its legend shows while on, and setWeather writes the status line'
   assert.deepEqual([wxLine.hidden, wxLine.textContent], [false, 'Radar 12:00 · 3 airports'])
   t.setWeather(null)
   assert.equal(wxLine.hidden, true)
+})
+
+test('weather: Open-Meteo\'s credit in the line is a link to its site (its licence asks for one) while the credit is in the line; the rest of the line is text', () => {
+  const { wxLine, t } = mount({ ...DEFAULT_PREFS, wx: true })
+  const links = (): El[] => all(wxLine).filter((e) => e.tag === 'a')
+  t.setWeather('Clouds from 3 airports · 2 hazard areas')
+  assert.deepEqual(links(), [], 'no credit, no link')
+  assert.equal(text(wxLine), 'Clouds from 3 airports · 2 hazard areas')
+  const line = `Clouds from the forecast · 1 hazard area · ${MODEL_CREDIT} · some weather unavailable`
+  t.setWeather(line)
+  const [link] = links()
+  assert.equal(links().length, 1)
+  assert.deepEqual([link.href, link.target, link.rel, link.className, link.textContent], ['https://open-meteo.com/', '_blank', 'noopener noreferrer', 'fh-wx-credit', 'Weather data by Open-Meteo.com'])
+  assert.deepEqual(wxLine.children.map((c) => [c.tag, c.textContent]), [['#text', 'Clouds from the forecast · 1 hazard area · '], ['a', 'Weather data by Open-Meteo.com'], ['#text', ' · some weather unavailable']])
+  assert.equal(text(wxLine), line, 'it reads as the one line')
+  t.setWeather(line)
+  assert.equal(links()[0], link, 'the same line again writes nothing')
+  t.setWeather('Clouds from 3 airports · 2 hazard areas · some weather unavailable') // the grid is gone, and its credit
+  assert.deepEqual(links(), [])
+  assert.equal(text(wxLine), 'Clouds from 3 airports · 2 hazard areas · some weather unavailable')
+  t.setWeather(MODEL_CREDIT)
+  assert.deepEqual(links().map((l) => [l.href, l.textContent]), [['https://open-meteo.com/', 'Weather data by Open-Meteo.com']], 'the credit alone is the link')
+  assert.equal(text(wxLine), 'Weather data by Open-Meteo.com')
+  t.setWeather(null)
+  assert.deepEqual(visible(wxLine), [], 'no line: no link on screen')
+})
+
+// The class the link carries (checked above) is styled in the panel's CSS, so checked as text, as the [hidden] rule is.
+test('the credit link looks like the rest of the line: its colour, underlined on hover only', () => {
+  const css = readFileSync(new URL('./sceneToggles.css', import.meta.url), 'utf8')
+  assert.match(css, /\.fh-wx-credit \{\s*color: inherit;\s*text-decoration: none;\s*\}/)
+  assert.match(css, /\.fh-wx-credit:hover \{\s*text-decoration: underline;\s*\}/)
 })
 
 test('weather legend: the word Airports, then how the flight rules read, each in its colour', () => {

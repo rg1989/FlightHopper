@@ -197,6 +197,16 @@
   font-size: 12px;
 }
 
+/* Open-Meteo's credit in that line is a link (its licence asks for one): the line's own look, underlined on hover. */
+.fh-wx-credit {
+  color: inherit;
+  text-decoration: none;
+}
+
+.fh-wx-credit:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 640px) {
   .fh-seg-b {
     height: 40px;

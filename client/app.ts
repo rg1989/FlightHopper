@@ -788,9 +788,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const placesLayer = div('fh-places', root)
   const placeLabels = new PlaceLabels(viewer, placesLayer, { placesUrl, countriesUrl: `${base}map/countries.json`, seasUrl: `${base}map/seas.json` })
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
-  // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. ?wxat= is a check aid.
+  // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. Its overcast greys the sky and
+  // dims the Sun's light too (0 when it is hidden). ?wxat= is a check aid.
   const weather3d = new Weather3D(viewer, {
     apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
+    onShade: (shade) => sun.setOvercast(shade),
   })
   // The flight-data frame's wind where the aircraft sends none: the weather model's (a forecast, drawn as an estimate). It has one
   // only while the 3-D weather is shown, which is a live chase with the Weather switch on.
