@@ -9,7 +9,7 @@ import { normalizeAdsblol, normalizeReadsb } from '../shared/readsb.ts'
 import { TokenBucket } from './budget.ts'
 import { distanceNm } from '../shared/geo.ts'
 import { cellsForView } from './cells.ts'
-import { Poller, viewPeriodMs, type PollerOpts } from './poller.ts'
+import { Poller, SWEEP_SHARE, viewPeriodMs, type PollerOpts } from './poller.ts'
 import { Recorder } from './recorder.ts'
 import { readRecording } from './recording.ts'
 import { SampleStore } from './store.ts'
@@ -33,7 +33,7 @@ const HEXES_NOW_MS = normalizeAdsblol(BODIES.hexes).nowMs // 1_790_081_641_500
 
 interface Call {
   t: number
-  m: Method
+  m: Method | 'squawk' // 'squawk': a sweep request (sweepSetup), which has no golden body of its own
   args: unknown[]
 }
 
@@ -63,11 +63,11 @@ function fakeSource(clock: { t: number }, fullSnapshot: boolean, liveHexes = fal
 
 const T0 = 1_000_000
 
-function setup(o: { fullSnapshot?: boolean; maxRps?: number; hideFlagged?: boolean; recorder?: Recorder; liveHexes?: boolean; opts?: Partial<PollerOpts> } = {}) {
+function setup(o: { fullSnapshot?: boolean; maxRps?: number; burst?: number; hideFlagged?: boolean; recorder?: Recorder; liveHexes?: boolean; opts?: Partial<PollerOpts> } = {}) {
   const clock = { t: T0 }
   const f = fakeSource(clock, o.fullSnapshot ?? false, o.liveHexes ?? false)
   const store = new SampleStore()
-  const bucket = new TokenBucket(o.maxRps ?? 100, () => clock.t, () => 0)
+  const bucket = new TokenBucket(o.maxRps ?? 100, () => clock.t, () => 0, o.burst)
   const poller = new Poller(f.source, store, bucket, {
     cellPeriodMs: 3000,
     chasePeriodMs: 1000,
@@ -90,7 +90,7 @@ async function runUntil(s: ReturnType<typeof setup>, untilMs: number, each?: () 
   }
 }
 
-const rel = (calls: Call[], m?: Method): number[] => calls.filter((c) => m === undefined || c.m === m).map((c) => c.t - T0)
+const rel = (calls: Call[], m?: Call['m']): number[] => calls.filter((c) => m === undefined || c.m === m).map((c) => c.t - T0)
 
 test('touchView: a view up to 250 nm is one circle of its own; a wider one, the grid cells covering it', () => {
   const s = setup()
@@ -520,4 +520,226 @@ test('watched (recorded) aircraft outside every view get a hex request once thei
   ])
   assert.ok(seen.includes('a1c7e4'), 'onSample gets every sample the store took')
   assert.ok(rel(s.calls, 'circle').length >= 3, 'the view is still asked in between')
+})
+
+/**
+ * setup() with a source that also answers squawk(code) with one aircraft on that code (or with the next queued reply's
+ * status, like the other methods). `bucket` sets the real TokenBucket's rate and burst (adsb.fi: 0.9 req/s, burst 1).
+ */
+function sweepSetup(codes: string[], opts: Partial<PollerOpts> = {}, bucket: { maxRps?: number; burst?: number } = {}) {
+  const seen: { hex: string; squawk?: string }[] = []
+  const s = setup({ ...bucket, opts: { squawks: () => codes, onAircraft: (ac) => seen.push({ hex: ac.hex, squawk: ac.squawk }), ...opts } })
+  s.source.squawk = (code: string) => {
+    s.calls.push({ t: s.clock.t, m: 'squawk', args: [code] })
+    const { status, retryAfterS } = s.replies.shift() ?? { status: 200 }
+    const body = status !== 200 ? '' : JSON.stringify({ ac: [{ hex: '89645a', squawk: code, lat: 29.9, lon: 38.1, seen_pos: 1, alt_baro: 30_000 }], msg: 'No error', now: HEXES_NOW_MS, total: 1 })
+    const snapshot = status === 200 ? normalizeAdsblol(body) : null
+    return Promise.resolve({ url: `fake:sqk/${code}`, status, tSendMs: s.clock.t, tRecvMs: s.clock.t, bytes: body.length || 100, body, retryAfterS: retryAfterS ?? null, snapshot })
+  }
+  return { ...s, seen }
+}
+
+/** The squawk codes asked for, in order. */
+const sweepCodes = (calls: Call[]): string[] => calls.filter((c) => c.m === 'squawk').map((c) => c.args[0] as string)
+
+test('the sweep: one code every 30 s / codes, in turn, with no view or chase asked; its aircraft go to the store and onAircraft', async () => {
+  const s = sweepSetup(['7700', '7600', '7500'])
+  await runUntil(s, 60_000)
+  const sweeps = s.calls.filter((c) => c.m === 'squawk')
+  assert.deepEqual(sweeps.map((c) => c.args[0]), ['7700', '7600', '7500', '7700', '7600', '7500', '7700'])
+  assert.deepEqual(sweeps.map((c) => c.t - T0), [0, 10_000, 20_000, 30_000, 40_000, 50_000, 60_000])
+  assert.ok(s.store.latest('89645a') !== null)
+  assert.deepEqual(s.seen[0], { hex: '89645a', squawk: '7700' })
+})
+
+test('the sweep: none while no code is asked for, or when the source has no squawk()', async () => {
+  const off = sweepSetup([])
+  await runUntil(off, 30_000)
+  assert.equal(off.calls.filter((c) => c.m === 'squawk').length, 0)
+  const none = setup({ opts: { squawks: () => ['7700'] } })
+  await runUntil(none, 30_000)
+  assert.equal(none.calls.length, 0)
+})
+
+test('the sweep: a due chase goes first; the sweep takes the next token', async () => {
+  const s = sweepSetup(['7700'])
+  s.poller.touchChase('a448f2') // not stored: a hex request
+  await s.poller.tick()
+  assert.equal(s.calls[0].m, 'hexes')
+  await s.poller.tick()
+  assert.equal(s.calls[1].m, 'squawk')
+})
+
+test('onAircraft: every aircraft of a circle answer too, the hidden ones not', async () => {
+  const seen: string[] = []
+  const s = setup({ opts: { onAircraft: (ac) => seen.push(ac.hex) } })
+  s.poller.touchView(KSFO[0], KSFO[1], 40)
+  await s.poller.tick()
+  assert.ok(seen.length >= 5)
+  assert.equal(seen.includes('000001'), false, 'dbFlags 8 (LADD) is hidden')
+})
+
+test('the sweep: each code every 30 s whatever the list: one code every 30 s, two every 15 s', async () => {
+  const one = sweepSetup(['7700'])
+  await runUntil(one, 60_000)
+  assert.deepEqual(rel(one.calls, 'squawk'), [0, 30_000, 60_000])
+  const two = sweepSetup(['7700', '7600'])
+  await runUntil(two, 45_000)
+  assert.deepEqual(rel(two.calls, 'squawk'), [0, 15_000, 30_000, 45_000])
+})
+
+test('the sweep: after a due chase, before the watched hexes and the areas', async () => {
+  const s = sweepSetup(['7700'], { watched: () => ['abcdef'] }) // abcdef is not in the golden hex answer: always due
+  s.poller.touchView(LLBG[0], LLBG[1], 5)
+  s.poller.touchChase('a448f2')
+  for (let i = 0; i < 4; i++) {
+    await s.poller.tick() // each tick takes the next request in line
+    s.clock.t += 100
+  }
+  assert.deepEqual(s.calls.map((c) => (c.m === 'hexes' ? `hexes ${(c.args[0] as string[]).join()}` : c.m)), ['hexes a448f2', 'squawk', 'hexes abcdef', 'circle'])
+})
+
+test('onAircraft: one that throws on the first aircraft still lets every aircraft of the answer reach the store', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const seen: string[] = []
+  const s = setup({
+    opts: {
+      onAircraft: (ac) => {
+        seen.push(ac.hex)
+        if (seen.length === 1) throw new Error('boom')
+      },
+    },
+  })
+  s.poller.touchView(KSFO[0], KSFO[1], 40)
+  assert.equal(await s.poller.tick(), true, 'the tick goes on')
+  assert.equal(seen.length, 6, 'the other aircraft are offered to the hook too')
+  assert.equal(s.store.size, 6, 'and stored, the one that threw as well')
+  assert.equal(err.mock.callCount(), 1)
+  assert.equal(err.mock.calls[0].arguments[0], 'poller: onAircraft failed:')
+  assert.match(String(err.mock.calls[0].arguments[1]), /boom/)
+})
+
+test('onAircraft: one that keeps throwing is logged once a minute, not once per aircraft', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const s = setup({
+    opts: {
+      onAircraft: () => {
+        throw new Error('boom')
+      },
+    },
+  })
+  await runUntil(s, 125_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchView(KSFO[0], KSFO[1], 40) // a circle answer every 5 s, 6 throws each
+  })
+  assert.equal(err.mock.callCount(), 3, 'at 0, 60 s and 120 s')
+  assert.equal(s.store.size, 6, 'the answers were ingested all the same')
+})
+
+// The sweep keeps to its share of the request budget (1/8). A view circle touched every tick is always due, so at a low rate
+// every token is spent and the requests sent are the budget: whatever the sweep takes, the map loses.
+for (const rps of [0.1, 0.04]) {
+  test(`the sweep at ${rps} req/s takes at most an eighth of the requests, and the view still gets the rest`, async () => {
+    const s = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: rps, burst: 1 })
+    await runUntil(s, 20 * 60_000, () => s.poller.touchView(KSFO[0], KSFO[1], 40))
+    const sweeps = rel(s.calls, 'squawk').length
+    const views = rel(s.calls, 'circle').length
+    const budget = rps * 20 * 60 // the tokens the bucket made in the 20 minutes
+    assert.ok(sweeps + views >= budget, `every token went to a request: ${sweeps} + ${views} of ${budget}`)
+    assert.ok(sweeps <= (sweeps + views) / 8 + 1, `the sweep's share, one over for the first request: ${sweeps} of ${sweeps + views}`)
+    assert.ok(views >= (budget * 7) / 8 - 1, `the view's seven eighths of the budget: ${views} of ${budget}`)
+  })
+}
+
+test("the sweep at adsb.fi's 0.9 req/s is as it was: 3 codes, exactly 10 s apart, and the view keeps its own 5 s", async () => {
+  const s = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.9, burst: 1 })
+  await runUntil(s, 60_000, () => s.poller.touchView(KSFO[0], KSFO[1], 40))
+  assert.deepEqual(rel(s.calls, 'squawk'), [0, 10_000, 20_000, 30_000, 40_000, 50_000, 60_000])
+  assert.deepEqual(sweepCodes(s.calls), ['7700', '7600', '7500', '7700', '7600', '7500', '7700'])
+  const circles = rel(s.calls, 'circle')
+  assert.ok(circles.length >= 12, `${circles}`)
+  assert.ok(circles.every((t, i) => i === 0 || t - circles[i - 1] === 5000), `no view request is held back by the sweep: ${circles}`)
+})
+
+test('a 429 halves the bucket for good, and the sweep slows with it, also after `degraded` has cleared', async () => {
+  const s = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.9, burst: 1 })
+  s.replies.push({ status: 429, retryAfterS: 5 }) // the first sweep answer: 0.9 → 0.45 req/s, one sweep request per 1000 / (0.45 / 8) = 17.8 s
+  await runUntil(s, 120_000)
+  assert.deepEqual(rel(s.calls, 'squawk'), [0, 17_800, 35_600, 53_400, 71_200, 89_000, 106_800])
+  assert.deepEqual(sweepCodes(s.calls), ['7700', '7600', '7500', '7700', '7600', '7500', '7700'], 'the failed one is not asked again')
+  assert.equal(s.poller.brief().degraded, null, 'a 429 is 60 s old: `degraded` is no longer set…')
+  assert.equal(s.bucket.state().rps, 0.45, '…but the rate stays halved, and the sweep goes by the rate')
+})
+
+test('the sweep: with no token when it is due, its code and its time stay put; the first code goes out when a token comes', async () => {
+  const s = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.9, burst: 1 })
+  assert.equal(s.bucket.tryTake(), true) // the bucket's one token is spent: the first sweep is due, but cannot go
+  for (let i = 0; i < 5; i++) {
+    assert.equal(await s.poller.tick(), false)
+    s.clock.t += 100
+  }
+  assert.equal(s.calls.length, 0, 'nothing is asked without a token')
+  s.clock.t += 5000 // a token has come
+  assert.equal(await s.poller.tick(), true)
+  assert.deepEqual(s.calls.map((c) => [c.t - T0, c.args[0]]), [[5500, '7700']], 'the first code, at once: not the next one, not a gap later')
+  await runUntil(s, 40_000)
+  assert.deepEqual(rel(s.calls, 'squawk'), [5500, 15_500, 25_500, 35_500], 'and from there one every 10 s')
+  assert.deepEqual(sweepCodes(s.calls), ['7700', '7600', '7500', '7700'])
+})
+
+test('brief: while the sweep runs, the view\'s token-limited period counts the sweep\'s share of the tokens', () => {
+  // One circle, at 0.1 req/s: a token every 10 s, longer than its own 5 s period.
+  const sweeping = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.1, burst: 1 })
+  const none = sweepSetup([], {}, { maxRps: 0.1, burst: 1 }) // the switch off: no codes
+  const cannot = setup({ maxRps: 0.1, burst: 1, opts: { squawks: () => ['7700'] } }) // codes, but a source without squawk()
+  for (const s of [sweeping, none, cannot]) s.poller.touchView(KSFO[0], KSFO[1], 40)
+  assert.equal(none.poller.brief().viewEveryS, 10)
+  assert.equal(cannot.poller.brief().viewEveryS, 10)
+  const got = sweeping.poller.brief().viewEveryS ?? NaN
+  assert.ok(Math.abs(got - 10 / (1 - SWEEP_SHARE)) < 1e-9, `${got} s: the view gets 7 tokens in 8`)
+})
+
+test('the sweep: a failed answer (503) is not asked again; the next code goes out after the gap, and the bucket has seen the status', async () => {
+  const s = sweepSetup(['7700', '7600', '7500'], {}, { maxRps: 0.9, burst: 1 })
+  s.replies.push({ status: 503 })
+  await runUntil(s, 25_000)
+  assert.deepEqual(s.calls.map((c) => [c.t - T0, c.args[0]]), [[0, '7700'], [10_000, '7600'], [20_000, '7500']])
+  assert.equal(s.bucket.state().counts.r5xx, 1, 'the 503 was reported to the bucket')
+  assert.equal(s.bucket.state().counts.ok, 2)
+  assert.equal(s.poller.report().requestsTotal, 3)
+  assert.deepEqual(s.seen.map((a) => a.squawk), ['7600', '7500'], 'a failed answer holds no aircraft')
+})
+
+test('onSample: one that throws on the first sample still lets every sample of the answer reach the store', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  let offered = 0
+  const s = setup({
+    opts: {
+      onSample: () => {
+        if (++offered === 1) throw new Error('boom')
+      },
+    },
+  })
+  s.poller.touchView(KSFO[0], KSFO[1], 40)
+  assert.equal(await s.poller.tick(), true, 'the tick goes on')
+  assert.equal(offered, 6, 'the other samples are offered to the hook too')
+  assert.equal(s.store.size, 6, 'and stored, the one that threw as well')
+  assert.equal(err.mock.callCount(), 1)
+  assert.equal(err.mock.calls[0].arguments[0], 'poller: onSample failed:')
+  assert.match(String(err.mock.calls[0].arguments[1]), /boom/)
+})
+
+test('onSample and onAircraft that keep throwing: each is logged once a minute, under its own message', async (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const boom = (): void => {
+    throw new Error('boom')
+  }
+  const s = setup({ liveHexes: true, opts: { onAircraft: boom, onSample: boom } }) // every hex answer holds fresh samples
+  await runUntil(s, 125_000, () => {
+    if ((s.clock.t - T0) % 1000 === 0) s.poller.touchChase('a1c7e4')
+  })
+  const logged = err.mock.calls.map((c) => c.arguments[0])
+  assert.equal(logged.filter((m) => m === 'poller: onAircraft failed:').length, 3, 'at 0, 60 s and 120 s')
+  assert.equal(logged.filter((m) => m === 'poller: onSample failed:').length, 3, "its own minute, not the other hook's")
+  assert.equal(logged.length, 6)
+  assert.equal(s.store.size, 3 * s.calls.length, 'every sample of every answer (3 aircraft each) was stored all the same')
 })

@@ -2,7 +2,7 @@
 // readSlot and encodeHeatmap on files built in memory, and on records copied from a real adsb.lol file. No network.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HEAT_MAGIC, encodeHeatmap, hasSliceHeader, readSlot, type HeatIdentIn, type HeatRecordIn, type HeatSliceIn } from './heatmap.ts'
+import { HEAT_MAGIC, encodeHeatmap, hasSliceHeader, readSlot, scanSlot, type HeatIdentIn, type HeatRecordIn, type HeatSliceIn } from './heatmap.ts'
 import { destination, distanceNm } from '../shared/geo.ts'
 import { geoidN } from '../shared/geoid.ts'
 import { SLOT_MS } from '../shared/history.ts'
@@ -394,4 +394,108 @@ test("real records: readsb's empty ident @@@@@@@@ is no callsign, and the squawk
     { hex: '7c6deb', callsign: null, squawk: '0251', type: null, nM: 22.2, t: [0], lat: [-33.94622], lon: [151.17823], alt: [-250], gs: [19.4] },
     { hex: 'c00638', callsign: null, squawk: '6574', type: null, nM: -34.1, t: [0], lat: [45.27155], lon: [-76.16507], alt: [40000], gs: [440.2] },
   ])
+})
+
+test('scanSlot: airborne altitudes, the newest position and callsign, and emergency idents sent while airborne', () => {
+  const slot = Date.UTC(2026, 8, 30, 5, 0)
+  const buf = encodeHeatmap([
+    { tMs: slot - 10_000, records: [{ hex: 'aaaaaa', lat: 1, lon: 1, alt: 9000, gs: 400 }] }, // before the slot: skipped
+    { tMs: slot, records: [
+      { hex: '89645a', callsign: 'FDB1073', squawk: '7700' }, // no position yet: not known airborne, not counted
+      { hex: '89645a', lat: 29.9, lon: 38.1, alt: 35_000, gs: 450 },
+      { hex: '4ca7b1', lat: 25.2, lon: 55.3, alt: 'g', gs: 0 },
+      { hex: '4ca7b1', callsign: 'TUG1', squawk: '7700' }, // on the ground: not counted
+    ] },
+    { tMs: slot + 10_000, records: [
+      { hex: '89645a', lat: 29.95, lon: 38.12, alt: 34_000, gs: 450 },
+      { hex: '89645a', callsign: 'FDB1073', squawk: '7700' },
+      { hex: '89645a', callsign: 'FDB1073', squawk: '1000' }, // not a code asked for
+      { hex: '~abc123', lat: 30, lon: 30, alt: null, gs: null }, // unknown altitude: no point
+    ] },
+  ])
+  const r = scanSlot(buf, slot, new Set(['7700', '7600', '7500']))
+  assert.ok(r !== null)
+  assert.equal(r.endS, 10)
+  assert.equal(r.aircraft.has('aaaaaa'), false)
+  const a = r.aircraft.get('89645a')!
+  assert.deepEqual(a.alt, { t: [0, 10], ft: [35_000, 34_000] })
+  assert.deepEqual([a.lat, a.lon, a.tS], [29.95, 38.12, 10])
+  assert.equal(a.callsign, 'FDB1073')
+  assert.deepEqual(a.squawks, [{ tS: 10, squawk: '7700' }])
+  assert.deepEqual(r.aircraft.get('4ca7b1')!.squawks, [])
+  assert.deepEqual(r.aircraft.get('~abc123')!.alt, { t: [], ft: [] })
+  assert.equal(scanSlot(new Uint8Array(32), slot, new Set(['7700'])), null)
+})
+
+// ---- scanSlot: what counts ----
+
+const CODES = new Set(['7700', '7600', '7500'])
+const scan = (...slices: HeatSliceIn[]) => scanSlot(encodeHeatmap(slices), SLOT, CODES)
+
+test('scanSlot: an aircraft with ident records only is not in the result', () => {
+  const r = scan(at(0, ident('89645a', 'FDB1073', '7700'), pos('4ca7b1', 25.2, 55.3, 35_000, 450)), at(10, ident('89645a', 'FDB1073', '7700')))
+  assert.ok(r !== null)
+  assert.deepEqual([...r.aircraft.keys()], ['4ca7b1'])
+})
+
+test('scanSlot: the airborne state carries across slices: an ident in a later slice with no new position still counts, until a position on the ground', () => {
+  const r = scan(
+    at(0, pos('89645a', 29.9, 38.1, 35_000, 450)),
+    at(10, ident('89645a', 'FDB1073', '7700')),
+    at(20, ident('89645a', 'FDB1073', '7700')),
+    at(30, pos('89645a', 29.95, 38.12, 'g', 10)),
+    at(40, ident('89645a', 'FDB1073', '7700')),
+  )
+  assert.deepEqual(r?.aircraft.get('89645a')?.squawks, [{ tS: 10, squawk: '7700' }, { tS: 20, squawk: '7700' }])
+})
+
+test('scanSlot: a slice stamped at 1800 s is not read, nor one before the slot, and endS is the last slice kept', () => {
+  const r = scan(
+    at(-10, pos('aaaaaa', 1, 1, 9_000, 400)),
+    at(0, pos('89645a', 29.9, 38.1, 35_000, 450)),
+    at(1790, pos('89645a', 29.95, 38.12, 34_000, 450)),
+    at(1800, ident('89645a', 'FDB1073', '7700'), pos('89645a', 30, 38.2, 33_000, 450), pos('bbbbbb', 2, 2, 9_000, 400)),
+  )
+  assert.ok(r !== null)
+  assert.equal(r.endS, 1790)
+  assert.deepEqual([...r.aircraft.keys()], ['89645a'])
+  const a = r.aircraft.get('89645a')!
+  assert.deepEqual([a.alt, a.tS, a.squawks], [{ t: [0, 1790], ft: [35_000, 34_000] }, 1790, []])
+})
+
+test('scanSlot: airborne for an ident is a known altitude off the ground and a ground speed that is unknown or 50 kt or more', () => {
+  const counted = (alt: HeatRecordIn['alt'], gs: number | null): number => scan(at(0, pos('89645a', 29.9, 38.1, alt, gs), ident('89645a', 'FDB1073', '7700')))?.aircraft.get('89645a')?.squawks.length ?? -1
+  assert.equal(counted(35_000, 450), 1)
+  assert.equal(counted(35_000, 50), 1, '50 kt')
+  assert.equal(counted(35_000, 49.9), 0, '49.9 kt')
+  assert.equal(counted(35_000, 0), 0, 'stopped')
+  assert.equal(counted(35_000, null), 1, 'speed unknown')
+  assert.equal(counted(-250, 19.4), 0, 'taxiing at -250 ft, not flagged ground')
+  assert.equal(counted('g', 450), 0, 'the ground flag')
+  assert.equal(counted(null, 450), 0, 'altitude unknown: nothing known')
+})
+
+test('scanSlot: a taxiing aircraft (-250 ft, 19 kt) with two 7700 idents has no squawks, and its altitudes are still collected', () => {
+  const r = scan(
+    at(0, pos('7c6deb', -33.94622, 151.17823, -250, 19.4), ident('7c6deb', 'QFA1', '7700')),
+    at(10, pos('7c6deb', -33.94622, 151.17823, -250, 19.4), ident('7c6deb', 'QFA1', '7700')),
+  )
+  const a = r?.aircraft.get('7c6deb')
+  assert.deepEqual(a?.squawks, [])
+  assert.deepEqual(a?.alt, { t: [0, 10], ft: [-250, -250] })
+})
+
+test('scanSlot: a position with an unknown altitude leaves the airborne state as it was', () => {
+  const counted = (first: HeatRecordIn): number => scan(at(0, first), at(10, pos('89645a', 29.95, 38.12, null, 5)), at(20, ident('89645a', 'FDB1073', '7700')))?.aircraft.get('89645a')?.squawks.length ?? -1
+  assert.equal(counted(pos('89645a', 29.9, 38.1, 35_000, 450)), 1, 'airborne before, still')
+  assert.equal(counted(pos('89645a', 29.9, 38.1, 'g', 450)), 0, 'on the ground before, still')
+})
+
+// The real record of 7c6deb taxiing at Sydney (REAL_EMPTY.posAu, from adsb.lol's 08.bin.ttf), and its ident record with the squawk 7700
+// written in place of 251 (1 << 30 | 7700 is 141e0040 as little-endian bytes).
+test('real records: 7c6deb taxiing at Sydney at -250 ft and 19.4 kt is not airborne for its two 7700 idents', () => {
+  const ident7700 = 'eb6d7c00141e00404040404040404040'
+  const file = new Uint8Array(Buffer.from([REAL_EMPTY.index0, REAL_EMPTY.head0, REAL_EMPTY.posAu, ident7700, ident7700].join(''), 'hex'))
+  const a = scanSlot(file, SLOT, CODES)?.aircraft.get('7c6deb')
+  assert.deepEqual([a?.alt, a?.squawks, a?.callsign], [{ t: [0], ft: [-250] }, [], null])
 })

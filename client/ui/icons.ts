@@ -80,6 +80,8 @@ const P: Record<string, string> = {
   external: 'M13.5 4.5h6v6M19.5 4.5 11 13M17 14v4.5a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H10',
   // A triangle with an exclamation mark: a warning.
   alert: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4.5M12 17h.01',
+  // A bell and its clapper: the events worldwide (the Events panel), and their desktop notifications.
+  bell: 'M6 16.5V11a6 6 0 1 1 12 0v5.5l1.5 2h-15L6 16.5ZM10 20.5a2 2 0 0 0 4 0',
   // A speaker with its sound, and silenced.
   volume: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM15.5 9.2a4 4 0 0 1 0 5.6M18.3 6.5a7.8 7.8 0 0 1 0 11',
   muted: 'M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5ZM16 9.5l5 5M21 9.5l-5 5',

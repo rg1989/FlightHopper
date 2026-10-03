@@ -1,0 +1,567 @@
+/* client/ui/alerts.css */
+/* The Events panel (alerts.ts): the switch rows are the Layers panel's (sceneToggles.css), with a line under the first on
+   what the server watches; then the week's events, one row each: a tag (the squawk, EMG, or an arrow for a fall) in red
+   or amber over the late mark, the aircraft over what happened, and on the right the time (and a live dot) over the other
+   action or when Replay opens; on phones those two are columns of their own. The toasts for new events: at the top centre
+   under the search box, clear of the flight card and the rail (an open panel too while there is room); on phones at the
+   top, under the notch. Theme tokens only. */
+.fh-alerts {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+}
+
+/* The rows are flex boxes, which would override `hidden`. */
+.fh-alerts [hidden],
+.fh-toasts [hidden] {
+  display: none !important;
+}
+
+/* A switch the server cannot take now (no alerts here, an answer awaited): the row is not a target either. */
+.fh-alerts .fh-switch:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.fh-alerts-row:has(> .fh-switch:disabled) {
+  cursor: default;
+}
+
+.fh-alerts-row:has(> .fh-switch:disabled):hover {
+  background: transparent;
+}
+
+/* What the server watches, under the switch: a dot, green while it watches. */
+.fh-alerts-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -4px 0 0;
+  padding: 0 14px 10px 58px; /* under the label, clear of the icon */
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fh-alerts-line::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--fh-faint);
+}
+
+.fh-alerts-line[data-state='on']::before {
+  background: var(--fh-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fh-ok) 20%, transparent);
+}
+
+.fh-alerts-line[data-state='error'] {
+  color: var(--fh-err);
+}
+
+.fh-alerts-line[data-state='error']::before {
+  background: var(--fh-err);
+}
+
+.fh-alerts-spin {
+  width: 14px;
+  height: 14px;
+  border-width: 1.75px;
+}
+
+/* The tone of a tag, a row and a toast: red for 7700, 7500 and falls; amber for 7600 and statuses. */
+.fh-alerts-item,
+.fh-alerts-toast {
+  --fh-alerts-tone: var(--fh-warn);
+}
+
+.fh-alerts-item[data-tone='danger'],
+.fh-alerts-toast[data-tone='danger'] {
+  --fh-alerts-tone: var(--fh-err);
+}
+
+.fh-alerts-section {
+  margin: 0;
+  padding: 12px 14px 4px;
+  border-top: 1px solid var(--fh-hairline);
+  color: var(--fh-faint);
+  font: 600 10px/1.2 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fh-alerts-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A row: its button on the left; the time over the other action (or when Replay opens) on the right, outside the button,
+   which cannot hold another. The whole row is one target: its hover and its focus ring are the row's. */
+.fh-alerts-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 1fr 1fr;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-alerts-item + .fh-alerts-item {
+  border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-alerts-item:hover {
+  background: var(--fh-hover);
+}
+
+.fh-alerts-item:has(> .fh-alerts-main:active) {
+  background: var(--fh-press);
+}
+
+.fh-alerts-item:has(> .fh-alerts-main:focus-visible) {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: -2px;
+}
+
+/* Listed only (a light aircraft's radio failure): dimmed. */
+.fh-alerts-item.fh-alerts-quiet {
+  opacity: 0.55;
+}
+
+/* The row's button: the tag over the late mark, then the aircraft over what happened. */
+.fh-alerts-main {
+  display: grid;
+  grid-row: 1 / 3;
+  grid-column: 1;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 4px 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--fh-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fh-alerts-main:focus-visible {
+  outline: none; /* the row's (above) */
+}
+
+.fh-alerts-lead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.fh-alerts-tag {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: 40px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--fh-alerts-tone) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fh-alerts-tone) 15%, transparent);
+  color: var(--fh-alerts-tone);
+  font: 700 11px/1 var(--fh-font);
+  letter-spacing: 0.04em;
+}
+
+.fh-alerts-late {
+  padding: 1px 5px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 5px;
+  color: var(--fh-muted);
+  font: 600 9.5px/1.4 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fh-alerts-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fh-alerts-who {
+  overflow: hidden;
+  font: 600 13px/1.3 var(--fh-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What happened: two lines at most (a fall reads "Dived 4,633 ft in 30 s, then lost · 7700"). */
+.fh-alerts-what {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* The right-hand column: the time (and a live dot) over the other action or when Replay opens. */
+.fh-alerts-when {
+  display: flex;
+  grid-row: 1;
+  grid-column: 2;
+  align-items: center;
+  align-self: end;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 12px 1px 0;
+  color: var(--fh-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.fh-alerts-alt,
+.fh-alerts-at {
+  grid-row: 2;
+  grid-column: 2;
+  align-self: start;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* The small text button: Replay, or Live. */
+.fh-alerts-alt {
+  margin: 1px 6px 6px 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fh-accent);
+  font: 600 12px/1.2 var(--fh-font);
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-alerts-alt:hover {
+  background: var(--fh-accent-soft);
+}
+
+.fh-alerts-alt:active {
+  background: var(--fh-press);
+}
+
+.fh-alerts-alt:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: -2px;
+}
+
+/* History does not have the event yet: when Replay opens, a note. */
+.fh-alerts-at {
+  padding: 4px 12px 0 0;
+  color: var(--fh-faint);
+  font-size: 11px;
+}
+
+.fh-alerts-empty {
+  margin: 0;
+  padding: 8px 14px 12px;
+  color: var(--fh-muted);
+  font-size: 12px;
+}
+
+/* Until the first answer: a row's shape in shimmer bars. */
+.fh-alerts-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px 12px 64px;
+}
+
+.fh-alerts-skel .fh-skel {
+  display: block;
+  height: 10px;
+}
+
+.fh-alerts-skel .fh-skel:nth-child(1) { width: 50%; height: 12px; }
+.fh-alerts-skel .fh-skel:nth-child(2) { width: 80%; }
+.fh-alerts-skel .fh-skel:nth-child(3) { width: 35%; }
+
+/* The bell's count: events not seen yet, in the danger colour (the list's is the accent). */
+.fh-ibtn[data-id='events'] .fh-badge {
+  background: var(--fh-err);
+}
+
+/* ---- the toasts ----
+   Wide screens: under the search box, which they line up with (searchBox.css): clear of the flight card on the left (--l)
+   and never over the rail (--r); an open panel (--rp) is kept clear while there is room, else covered rather than the
+   toast growing narrower than 280 px. */
+.fh-toasts {
+  --w: 380px;
+  --l: 0px;
+  --r: calc(58px + var(--fh-right));
+  --rp: var(--r);
+  --sw: min(100% - var(--l) - var(--r) - 24px, max(280px, min(var(--w), 100% - var(--l) - var(--rp) - 24px)));
+  position: absolute;
+  z-index: 24; /* over the rail, the panels and the cards; under the search's list (25), the outage pill and a scenario's ending (30) */
+  top: calc(var(--fh-top) + 54px);
+  left: clamp(calc(var(--l) + 12px), calc(50% - var(--sw) / 2), calc(100% - var(--rp) - 12px - var(--sw)));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: var(--sw);
+  pointer-events: none;
+  container: fh-toasts / inline-size;
+  transition: top 200ms var(--fh-ease);
+}
+
+.fh-ui:has(> .fh-card:not(.fh-tcard):not([hidden])) .fh-toasts {
+  --l: calc(var(--fh-left) + 320px);
+}
+
+.fh-ui:has(> .fh-panel:not([hidden])) .fh-toasts {
+  --rp: calc(64px + 320px + var(--fh-right));
+}
+
+.fh-ui:has(> .fh-panel.fh-wide:not([hidden])) .fh-toasts {
+  --rp: calc(64px + 440px + var(--fh-right));
+}
+
+/* A traffic aircraft's card at the top right (the chase), unless a panel is open: that hides it (flightCard.css). */
+.fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)):not(:has(> .fh-panel:not([hidden]))) .fh-toasts {
+  --rp: calc(70px + 320px + var(--fh-right));
+}
+
+/* Touch screens beside the side rail: its 44 px buttons and the wider card (rail.css, flightCard.css). */
+@media (pointer: coarse) and (min-width: 641px) {
+  .fh-toasts {
+    --r: calc(66px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-card:not(.fh-tcard):not([hidden])) .fh-toasts {
+    --l: calc(var(--fh-left) + 336px);
+  }
+
+  .fh-ui:has(> .fh-panel:not([hidden])) .fh-toasts {
+    --rp: calc(72px + 320px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-panel.fh-wide:not([hidden])) .fh-toasts {
+    --rp: calc(72px + 440px + var(--fh-right));
+  }
+
+  .fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)):not(:has(> .fh-panel:not([hidden]))) .fh-toasts {
+    --rp: calc(78px + 336px + var(--fh-right));
+  }
+}
+
+/* Narrow screens: an open panel hides the flight card (flightCard.css), so its corner is free. */
+@media (max-width: 860px) {
+  .fh-ui:has(> .fh-panel:not([hidden])):has(> .fh-card:not(.fh-tcard)) .fh-toasts {
+    --l: 0px;
+  }
+}
+
+/* The live-data pill sits under the search box too (searchBox.css): the toasts go under it. */
+@media (min-width: 641px) {
+  .fh-ui:not([data-scenario]):has(> .fh-outage-pill:not([hidden])) .fh-toasts {
+    top: calc(var(--fh-top) + 98px);
+  }
+}
+
+/* One toast: the tag, the aircraft over what happened, Follow or Replay, and ×; edged in the event's tone. */
+.fh-alerts-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 10px 8px 10px 12px;
+  border-color: color-mix(in srgb, var(--fh-alerts-tone) 38%, var(--fh-hairline));
+  color: var(--fh-text);
+  pointer-events: auto;
+  animation: fh-alerts-toast-in 240ms var(--fh-ease);
+}
+
+@keyframes fh-alerts-toast-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+}
+
+.fh-alerts-toast.fh-out {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 160ms var(--fh-ease), transform 160ms var(--fh-ease);
+}
+
+.fh-alerts-toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fh-alerts-toast-who {
+  overflow: hidden;
+  font: 600 13px/1.3 var(--fh-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fh-alerts-toast-what {
+  color: var(--fh-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fh-pill.fh-alerts-toast-go {
+  padding: 0 14px;
+}
+
+/* A narrow toast (a tablet with the flight card open, a small phone): the button under the words. */
+@container fh-toasts (max-width: 340px) {
+  .fh-alerts-toast {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 8px;
+  }
+
+  .fh-alerts-toast-go {
+    grid-row: 2;
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+}
+
+/* Phones: larger type, finger-sized targets; the toasts across the top, under the notch (and under the outage pill). */
+@media (max-width: 640px) {
+  .fh-alerts-line,
+  .fh-alerts-what,
+  .fh-alerts-empty {
+    font-size: 13px;
+  }
+
+  .fh-alerts-who {
+    font-size: 15px;
+  }
+
+  .fh-alerts-section,
+  .fh-alerts-late {
+    font-size: 11px;
+  }
+
+  /* The full-width sheet has the room: the time, then the other action as a column the row's height. */
+  .fh-alerts-item {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto;
+  }
+
+  .fh-alerts-main {
+    grid-row: 1;
+  }
+
+  .fh-alerts-when {
+    grid-row: 1;
+    align-self: center;
+    padding: 0 10px 0 0;
+    font-size: 12.5px;
+  }
+
+  .fh-alerts-alt,
+  .fh-alerts-at {
+    display: grid;
+    grid-row: 1;
+    grid-column: 3;
+    place-items: center;
+    align-self: stretch;
+    justify-self: stretch;
+    min-width: 72px;
+    margin: 0;
+    padding: 0 12px;
+    border-left: 1px solid var(--fh-hairline);
+    border-radius: 0;
+  }
+
+  .fh-alerts-alt {
+    font-size: 14px;
+  }
+
+  .fh-alerts-alt:hover {
+    background: var(--fh-hover);
+  }
+
+  .fh-alerts-at {
+    max-width: 96px;
+    font-size: 12px;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .fh-toasts {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    width: auto;
+  }
+
+  .fh-ui:has(> .fh-outage-pill:not([hidden])) .fh-toasts {
+    top: calc(52px + env(safe-area-inset-top, 0px));
+  }
+
+  .fh-alerts-toast-who {
+    font-size: 15px;
+  }
+
+  .fh-alerts-toast-what {
+    font-size: 13px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .fh-pill.fh-alerts-toast-go {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .fh-alerts-main {
+    min-height: 60px;
+  }
+
+  /* Live or Replay: a finger's target, 44 px tall like every touch control (theme.css). */
+  .fh-alerts-alt {
+    min-height: 44px;
+    padding: 4px 10px;
+  }
+
+  .fh-alerts-item,
+  .fh-alerts-main,
+  .fh-alerts-alt {
+    touch-action: manipulation; /* no double-tap zoom delay */
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Touch screens beside the side rail (tablets): the time over the 44 px button, each line as tall as it needs and no margin
+   round the button, so the row stays 60 px (with two lines of equal height it would grow to 88 px or more). */
+@media (pointer: coarse) and (min-width: 641px) {
+  .fh-alerts-item {
+    grid-template-rows: auto auto;
+  }
+
+  .fh-alerts-alt {
+    margin: 0 6px 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-toasts,
+  .fh-alerts-toast,
+  .fh-alerts-toast.fh-out {
+    animation: none;
+    transition: none;
+  }
+}

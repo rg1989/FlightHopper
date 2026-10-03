@@ -15,12 +15,17 @@ LIVE_RPS_adsblol = 0.04
 LIVE_RECORD_DIR ?=
 # Flights recorded with the flight card's Record button (one file each, server/flightLog.ts).
 FLIGHTS_DIR ?= data/flights
+# The alerts' switch and log (server/alerts.ts). make live sets EVENTS_DIR=data/events (make live EVENTS_DIR=<dir> picks another).
+# The switch starts off. Turn it on from the app's Events panel, or with
+#   curl -X POST 'http://127.0.0.1:8787/api/events?on=1'
+# (8787 is API_PORT; on=0 turns it off again). It then stays as it is across restarts.
+EVENTS_DIR ?= data/events
 
 .PHONY: live start replay run
 
 live:
 	@if [ "$(LIVE_SOURCE)" = adsblol ] && pgrep -f record-cells >/dev/null; then echo "The recorder is polling adsb.lol (one poller at a time): pkill -f record-cells first, or use adsb.fi (make live)."; exit 1; fi
-	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=$(LIVE_SOURCE) MAX_RPS=$(LIVE_RPS_$(LIVE_SOURCE)) RECORD_DIR=$(LIVE_RECORD_DIR) FLIGHTS_DIR=$(FLIGHTS_DIR)"
+	@$(MAKE) --no-print-directory run SRC="ADSB_SOURCE=$(LIVE_SOURCE) MAX_RPS=$(LIVE_RPS_$(LIVE_SOURCE)) RECORD_DIR=$(LIVE_RECORD_DIR) FLIGHTS_DIR=$(FLIGHTS_DIR) EVENTS_DIR=$(EVENTS_DIR)"
 
 start: live
 

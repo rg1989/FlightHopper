@@ -3,7 +3,7 @@
 // altitude in 1,000 ft bands with the icons' palette, dotted grey across the holes no receiver heard, and dotted from its
 // origin airport when it was first heard far from there ("First heard HH:MM" at that first point). Ahead of it, a dashed
 // great circle to its destination airport (the route's last airport, when the server knows where it is), with a dot and
-// the airport's code there. Flightradar24-style: the line ahead is the shortest way, not the filed route (airways and
+// the airport's code there. As flight trackers draw it: the line ahead is the shortest way, not the filed route (airways and
 // procedures bend it, most near the airports); so is the lead-in from the origin.
 import { Cartesian2, Cartesian3, Cartographic, Color, HorizontalOrigin, LabelCollection, LabelStyle, Material, NearFarScalar, PointPrimitiveCollection, PolylineCollection, VerticalOrigin } from 'cesium'
 import type { Label, PointPrimitive, Polyline, Viewer } from 'cesium'

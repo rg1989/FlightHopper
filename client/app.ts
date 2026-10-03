@@ -16,7 +16,8 @@
 //   files, every aircraft in view at a replay clock's time, played through the same Fleet, track, card and chase as live;
 //   a time bar at the bottom (play, scrub over the day, speed, Go to, Live). Live polls wait meanwhile.
 // A selected aircraft's flown path (its trace from adsb.lol, then its live samples) shows behind it on the map.
-// The tools (status, aircraft list, scene, altitude colours, scenarios, about) sit behind a rail of icon buttons (ui/rail.ts);
+// The tools (status, aircraft list, scene, altitude colours, scenarios, events worldwide, about) sit behind a rail of icon
+// buttons (ui/rail.ts);
 // the search (places, flights in view, recordings, scenarios) is a box at the top centre (ui/searchBox.ts).
 // With ?tv=1 a TV remote (arrows, OK, Back, Menu) drives all of it (ui/remote.ts), with preset views for the chase
 // camera (ui/chasePresets.ts); without it nothing of that runs.
@@ -25,6 +26,7 @@
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, SceneTransforms, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import type { Viewer } from 'cesium'
+import type { AlertEvent } from '../shared/alerts.ts'
 import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
 import type { ChaseResponse, HistoryStatus, StatusBrief, TraceReply } from '../shared/api.ts'
@@ -80,11 +82,12 @@ import { MAX_DELAY_S, MIN_DELAY_S, RenderClock, p90 } from './track/delay.ts'
 import { TrackRegistry } from './track/registry.ts'
 import type { ClientConfig, FleetEntry, ModelManifest, RenderState, ScenePrefs, TerrainFrame } from './types.ts'
 import { FAILS_DOWN, mountOutage, outageFor } from './ui/outage.ts'
+import { followTarget, mayAutoFollow, mountAlerts, type AlertsHandle } from './ui/alerts.ts'
 import type { Lookup } from './ui/detail.ts'
 import { FOCUS_ASK_MS, entryState, mountFlightCard } from './ui/flightCard.ts'
 import { icon } from './ui/icons.ts'
 import { mountMapKey } from './ui/mapKey.ts'
-import { mountRail } from './ui/rail.ts'
+import { SHEET_MEDIA, mountRail } from './ui/rail.ts'
 import { PICK_PX, cameraStep, mountRemote, tvMode } from './ui/remote.ts'
 import { mountChasePresets } from './ui/chasePresets.ts'
 import { PhotoCache } from './ui/photo.ts'
@@ -478,6 +481,12 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let mapHover: string | null = null
   let status = NO_STATUS
   let failedPolls = 0
+  // The events worldwide (ui/alerts.ts asks for them): at start, and when the server says they changed (the status's
+  // alertsRev, last acted on here). Follow automatically gives way to the person (ui/alerts.ts mayAutoFollow): when they
+  // last moved the map, and last picked an aircraft by hand (performance.now()).
+  let alertsRev: number | undefined
+  let mapMovedMs = -Infinity
+  let handPickMs = -Infinity
   let stopped = false
   let lastFrameMs: number | null = null
   const carto = new Cartographic()
@@ -574,6 +583,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   let table!: TableHandle
   let statusPanel!: StatusPanelHandle
   let scenarioPanel!: ScenarioPanelHandle
+  let alertsUi!: AlertsHandle
   let searchBox!: SearchBoxHandle
   // The Scenarios panel asks for its list at mount; it gets it once the panel is first opened, not at start.
   let openedScenarios!: () => void
@@ -606,6 +616,33 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     } },
     // The map in the past (history/): a time bar over the days adsb.lol keeps. Pressed again (or the bar's Live): back to now.
     { id: 'history', icon: 'history', label: 'History: the map in the past', short: 'History', action: () => (hist === null ? enterHistory(null) : exitHistory()) },
+    // Emergencies and steep descents worldwide (ui/alerts.ts): the server's watch, the week's events, toasts for new ones;
+    // the bell counts those not seen. An event's aircraft is followed live (followEvent) or replayed in History (replayEvent).
+    { id: 'events', icon: 'bell', label: 'Events worldwide: emergencies and steep descents', short: 'Events', panel: {
+      title: 'Events',
+      mount: (b) => (alertsUi = mountAlerts(b, ui, {
+        store,
+        nowMs: () => (api.ready ? api.serverNowMs() : Date.now()),
+        // The first answer stands for its count: the first status that says the same asks nothing more.
+        get: () => api.events().then((r) => {
+          alertsRev ??= r?.rev
+          return r
+        }),
+        onSwitch: (on) => api.setAlerts(on),
+        onFollow: (e) => followEvent(e, false),
+        onReplay: replayEvent,
+        onAuto: (e) => {
+          const now = performance.now()
+          const may = mayAutoFollow({
+            history: hist !== null, scenario: run !== null || loadingScenario !== null,
+            mapMovedAgoMs: now - mapMovedMs, handPickAgoMs: now - handPickMs, chasing,
+            otherSheet: rail.openId !== null && rail.openId !== 'events' && matchMedia(SHEET_MEDIA).matches,
+          })
+          if (may) followEvent(e, true) // else the toast alone
+        },
+        onBadge: (t) => rail.setBadge('events', t),
+      })),
+    } },
     // A square of its own under the rail: map or satellite, roads, weather, and the 3-D scene's switches.
     { id: 'scene', icon: 'layers', label: 'Layers: map, roads, weather, 3-D scene', short: 'Layers', spot: 'under', panel: {
       title: 'Layers', mount: (b) => (toggles = mountSceneToggles(b, { prefs, onChange: (next) => setPrefs(next) })),
@@ -622,6 +659,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     ...(document.fullscreenEnabled ? [{ id: 'fullscreen', icon: 'maximize', label: 'Full screen', short: 'Full', spot: 'corner', action: () => toggleFullscreen() } as const] : []),
   ], (id) => {
     if (id === 'aircraft') table.refresh() // opening the list shows it fresh
+    if (id === 'events') alertsUi.opened() // what it lists counts as seen; asked afresh
     if (id === 'scenarios') {
       // The first opening lets the mount's asks go; each later one asks for the recordings again (new ones, ended ones).
       if (scenariosSeen) scenarioPanel.refresh('recordings')
@@ -655,7 +693,15 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   })
   const photos = new PhotoCache() // shared: a traffic aircraft's photo is there when it is chased
   const card = mountFlightCard(ui, {
-    onClose: () => select(null), onChase: (on) => setChase(on), photos, lookup: lookupFor,
+    onClose: () => {
+      byHand()
+      select(null)
+    },
+    onChase: (on) => {
+      byHand()
+      setChase(on)
+    },
+    photos, lookup: lookupFor,
     onRecord: (hex, on) => api.record(hex, on).then((r) => r.rec),
   })
   // A click in a traffic aircraft's brackets opens its card: live from the fleet, its full object asked for as a focused
@@ -669,7 +715,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const chaseTraffic = (): void => {
     const hex = traffic?.openHex ?? null
     traffic?.close()
-    if (hex !== null) select(hex)
+    if (hex === null) return
+    byHand()
+    select(hex)
   }
   // Live data stopped (offline, our server, the source): a card over the greyed map, or a pill (outage.ts).
   const outage = mountOutage(ui)
@@ -1369,11 +1417,50 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    * the card and the panel do not fit side by side (flightCard.css), the list closes so the card shows.
    */
   function pickFromList(hex: string): void {
+    byHand()
     exitScenario() // the list is live traffic
     select(hex)
     if (matchMedia('(max-width: 860px)').matches) rail.close()
     const e = fleet.get(hex)
     if (!chasing && e !== undefined) enterBrowse(viewer, e, { heightM: viewer.camera.positionCartographic.height })
+  }
+
+  /** The person picked an aircraft by hand (or let it go): Follow automatically waits a while (ui/alerts.ts mayAutoFollow). */
+  function byHand(): void {
+    handPickMs = performance.now()
+  }
+
+  /**
+   * An event's aircraft, live: by hand (an event's row, toast or notification) or by itself (Follow automatically, let
+   * through only when mayAutoFollow says so). History and a scenario end, a traffic card closes, and the aircraft is
+   * selected; in the chase the chase moves to it, on the map the map flies over it (followTarget: the live map's position or
+   * the event's, whichever is newer: the map's can be from before History). By hand, where the card and the panel do not fit
+   * side by side (flightCard.css), the panel closes; by itself, an open panel stays: it never takes what the person uses.
+   */
+  function followEvent(e: AlertEvent, auto: boolean): void {
+    if (!auto) byHand()
+    exitHistory()
+    exitScenario()
+    traffic?.close()
+    select(e.hex)
+    const s = fleet.newest(e.hex)
+    const entry = fleet.get(e.hex) // dead-reckoned at the last frame
+    const at = followTarget(e, s === undefined ? null : { tMs: s.tMs, lat: entry?.lat ?? s.lat, lon: entry?.lon ?? s.lon })
+    if (!chasing && at !== null) enterBrowse(viewer, at, { heightM: BROWSE_HEIGHT_M })
+    if (!auto && matchMedia('(max-width: 860px)').matches) rail.close()
+  }
+
+  /**
+   * An event in History: a minute before it opened, its aircraft selected (the panel offers it once History has it:
+   * ui/alerts.ts replayableAt). History brings the selected aircraft into view whether select() changes it or not:
+   * entering selects it there afresh (selectedInHistory), a seek in History is a jump (jumped), and either sets bring.
+   */
+  function replayEvent(e: AlertEvent): void {
+    byHand()
+    traffic?.close()
+    enterHistory(e.openedMs - 60_000)
+    select(e.hex)
+    if (matchMedia('(max-width: 860px)').matches) rail.close()
   }
 
   /**
@@ -1384,6 +1471,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const g = item.go
     if (g.to === 'play') return void startScenario(g.id, { play: true })
     if (g.to === 'flight') return pickFromList(g.hex)
+    byHand() // a place: the person takes the map there
     exitScenario()
     traffic?.close()
     select(null)
@@ -1401,15 +1489,19 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
    */
   function mapPressed(e: PointerEvent): void {
     if (e.target !== viewer.canvas) return
-    moves.down(e.pointerId, performance.now())
+    mapMovedMs = performance.now()
+    moves.down(e.pointerId, mapMovedMs)
     if (hist !== null) hist.bring = false
   }
   function mapReleased(e: PointerEvent): void {
-    moves.up(e.pointerId, performance.now())
+    const now = performance.now()
+    if (moves.recent(now)) mapMovedMs = now // the end of a drag on the map
+    moves.up(e.pointerId, now)
   }
   function mapWheeled(e: WheelEvent): void {
     if (e.target !== viewer.canvas) return
-    moves.wheel(performance.now())
+    mapMovedMs = performance.now()
+    moves.wheel(mapMovedMs)
     if (hist !== null) hist.bring = false
   }
   function mapLetGo(): void {
@@ -1845,6 +1937,17 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     return { lat: round(CesiumMath.toDegrees(g.latitude)), lon: round(CesiumMath.toDegrees(g.longitude)), nm }
   }
 
+  /**
+   * A poll's status: the events again when the server says they changed (its alertsRev), or its alerts came or went. The
+   * panel asks (one request at a time) and asks by itself as it opens, in History, in a scenario and in a hidden tab
+   * (ui/alerts.ts).
+   */
+  function noteAlertsRev(): void {
+    if (status.alertsRev === alertsRev) return
+    alertsRev = status.alertsRev
+    alertsUi.refresh()
+  }
+
   async function poll(): Promise<void> {
     const hex = selected
     const v = viewCircle()
@@ -1877,6 +1980,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (chasing && chased !== null) trafficTracks.ingestNear(r.samples, chased.lat, chased.lon, TRAFFIC_TRACK_NM, hex)
       else if (!chasing) trafficTracks = new TrackRegistry({ pollPeriodS: POLL_MS / 1000 })
       status = r.status
+      noteAlertsRev()
       ok = true
     }
     let chased0 = false // this is the selection's first chase reply
@@ -1905,6 +2009,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         }
       }
       status = r.status
+      noteAlertsRev()
       ok = true
     }
     if (trafficChase.status === 'fulfilled' && trafficChase.value !== null) {
@@ -1951,9 +2056,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
   }
 
+  alertsUi.refresh() // the panel's first answer: the switch, and the week's events counted on the bell
+
   void (async () => {
     while (!stopped) {
       const t0 = performance.now()
+      // No live polls in History or a scenario, so no status says the events changed: the Events panel asks for them itself.
+      alertsUi.setLivePolling(hist === null && run === null && loadingScenario === null)
       // A hidden tab asks for nothing: the server's interest in its view lapses 15 s later and it stops polling upstream.
       // A scenario (playing or loading) needs no live data either.
       if (document.hidden || run !== null || loadingScenario !== null) {
@@ -1994,8 +2103,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const hex = fleetLayer.pick(e.position, tapPx)
     // A runway end spells itself out (a tap on a phone, where nothing hovers) until the next click elsewhere.
     const onRunway = runways.hover(hex === null ? e.position : null, tapPx)
-    if (hex !== null) select(hex)
-    else if (!onRunway && !chasing && selected !== null) select(null) // a click on the empty map clears the focus
+    if (hex !== null) {
+      byHand()
+      select(hex)
+    } else if (!onRunway && !chasing && selected !== null) {
+      byHand()
+      select(null) // a click on the empty map clears the focus
+    }
   }, ScreenSpaceEventType.LEFT_CLICK)
   // Hover over an icon: its callsign label and a pointer cursor; over a traffic bracket, the pointer; over a runway end's
   // arrow or number, its words (runways.hover) and the pointer. Picks at most every HOVER_PICK_MS, at the newest position.
@@ -2035,9 +2149,13 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (hist?.bar.closeGoTo() || rail.close() || traffic?.close()) return
     if (flightFrame.editing) flightFrame.edit(false)
     else if (run !== null || loadingScenario !== null) exitScenario()
-    else if (chasing) setChase(false)
-    else if (selected !== null || hist === null) select(null)
-    else exitHistory() // nothing else open: History closes too
+    else if (chasing) {
+      byHand()
+      setChase(false)
+    } else if (selected !== null || hist === null) {
+      byHand()
+      select(null)
+    } else exitHistory() // nothing else open: History closes too
   }
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') back()
@@ -2072,7 +2190,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       }
       if (s.zoom !== 1) browsePinch(viewer, s.zoom, c.clientWidth / 2, c.clientHeight / 2)
       else browseDrag(viewer, -s.dx, -s.dy) // the map follows a drag: the view goes the other way
-      moves.wheel(performance.now()) // the person moves the map (History does not follow its aircraft meanwhile)
+      mapMovedMs = performance.now()
+      moves.wheel(mapMovedMs) // the person moves the map (History does not follow its aircraft meanwhile)
       if (hist !== null) hist.bring = false
     },
     pick: () => {
@@ -2080,6 +2199,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (openTrafficAt(at)) return true
       const hex = fleetLayer.pick(at, PICK_PX)
       if (hex === null || hex === selected) return false
+      byHand()
       select(hex)
       return true
     },
@@ -2113,6 +2233,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       flightFrame.destroy()
       frameLayer.remove()
       scenarioPanel.destroy()
+      alertsUi.destroy()
       searchBox.destroy()
       toggles.destroy()
       outage.destroy()

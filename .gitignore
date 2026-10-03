@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/recordings/
 data/flights/
+data/events/
 .env.local
 *.log
 .DS_Store

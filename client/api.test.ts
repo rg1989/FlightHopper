@@ -1,6 +1,7 @@
 // client/api.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import type { EventsReply } from '../shared/alerts.ts'
 import type { StatusBrief } from '../shared/api.ts'
 import type { Sample } from '../shared/types.ts'
 import { ApiClient } from './api.ts'
@@ -202,4 +203,34 @@ test('traceDay asks the legs of a span in whole ms, given 30 s; a 404 is null, a
   await api.traceDay('x&to=1', 1, 2)
   assert.equal(urls[3], 'http://host/api/trace?hex=x%26to%3D1&from=1&to=2', 'the hex cannot add a parameter')
   assert.equal(api.ready, false, 'it does not set the server clock')
+})
+
+test('events asks GET /events (a 404, no alerts on this server, is null); setAlerts POSTs on=1|0 and returns the reply', async () => {
+  const urls: string[] = []
+  const inits: (RequestInit | undefined)[] = []
+  const answers: Response[] = []
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    urls.push(String(input))
+    inits.push(init)
+    return answers.shift()!
+  }) as typeof fetch
+  const api = new ApiClient('http://host/api', fetchFn, () => 0)
+  const reply: EventsReply = { on: true, sweep: true, rev: 3, events: [] }
+  answers.push(new Response('{"error":"no alerts on this server"}', { status: 404 }), new Response(JSON.stringify(reply)))
+  assert.equal(await api.events(), null)
+  assert.deepEqual(await api.events(), reply)
+  assert.equal(urls[0], 'http://host/api/events')
+  assert.equal(inits[0]?.method, undefined, 'a GET')
+  assert.ok(inits[0]?.signal instanceof AbortSignal, 'a timeout signal')
+  answers.push(new Response(JSON.stringify(reply)), new Response(JSON.stringify({ ...reply, on: false, rev: 4 })))
+  assert.deepEqual(await api.setAlerts(true), reply)
+  assert.equal(urls[2], 'http://host/api/events?on=1')
+  assert.equal(inits[2]?.method, 'POST')
+  assert.ok(inits[2]?.signal instanceof AbortSignal, 'a timeout signal')
+  assert.deepEqual(await api.setAlerts(false), { ...reply, on: false, rev: 4 })
+  assert.equal(urls[3], 'http://host/api/events?on=0')
+  answers.push(new Response('', { status: 500 }), new Response('{"error":"no alerts on this server"}', { status: 404 }))
+  await assert.rejects(api.events(), { message: 'HTTP 500' })
+  await assert.rejects(api.setAlerts(true), { message: 'HTTP 404' }, 'the switch of a server without alerts is an error')
+  assert.equal(api.ready, false, 'they do not set the server clock')
 })

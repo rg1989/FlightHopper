@@ -48,7 +48,7 @@
         "30 September 2026 · Boeing 737 MAX 8 A6-FKF, Dubai to Tel Aviv, 174 passengers and 6 crew.",
         "The first officer stabbed the captain and the aircraft dived. Cabin crew and passengers broke into the cockpit and overpowered him; two off-duty flydubai pilots landed it on runway 31 at Tabuk at about 06:45 UTC. Everyone aboard survived; the captain, Smit Machchhar, is recovering from his wounds.",
         "Israel calls it an attempted jihadist suicide attack by a first officer radicalized over the past year. Saudi Arabia's preliminary inquiry found he assaulted the captain; the UAE, which now holds him, is investigating a link to terrorism. There is no official finding on the motive yet.",
-        "From the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL) and, where no open network heard it, by Flightradar24, including the data it published. The take-off roll and the 15 minutes before the final approach are reconstructed."
+        "From the aircraft's ADS-B broadcasts as received by adsb.lol (ODbL) and, where no open network heard it, by other receivers and published tracking data. The take-off roll and the 15 minutes before the final approach are reconstructed."
       ]
     }
   },
@@ -64,24 +64,6 @@
       "title": "ADS-B Exchange, the day's trace of 8965D1 (cross-check only)",
       "url": "https://globe.adsbexchange.com/?icao=8965d1",
       "note": "Not used for the track; its receptions agree with adsb.lol's to within their receive times. It first shows the code 7500 at 05:36:09."
-    },
-    {
-      "id": "FR24X",
-      "title": "Flightradar24 on X: timeline of flight FZ1073 (all times UTC)",
-      "url": "https://x.com/flightradar24/status/2105192495529279734",
-      "note": "Take-off 03:05, 7700 at 05:31, 7500 at 05:38, out of Flightradar24's ground coverage 06:11, 7700 received by satellite 06:28, last signal 06:58."
-    },
-    {
-      "id": "FR24",
-      "title": "Flightradar24, playback of flight FDB1073 (41e663ed), read 2026-09-30",
-      "url": "https://fr24.com/FDB1073/41e663ed",
-      "note": "Used only where no open network heard the aircraft: the cruise 03:54–05:16, the dive and zoom 05:22–05:31 (a fix every 2–3 s), 05:53–06:13 from its ground receivers, then its space-based fixes at 06:28:37 and 06:43:39 (and 06:58:59, stopped at Tabuk). Its 03:04:54 fix times the take-off roll. Rows marked A are within 5 s of a fix. Its positions only: the heights there are from its published data (FR24BLOG)."
-    },
-    {
-      "id": "FR24BLOG",
-      "title": "Flightradar24 blog, \"FlyDubai flight to Tel Aviv diverts to Tabuk amid onboard incident\", with its granular data (Flightradar24-Granular-Data-FZ1073-30-September-2026.csv)",
-      "url": "https://www.flightradar24.com/blog/flight-tracking-news/major-incident/flydubai-flight-to-tel-aviv-diverts-to-tabuk-amid-onboard-incident/",
-      "note": "Pressure altitude, ground speed and vertical rate about once a second, on the playback's clock. The heights wherever no open network heard the aircraft, except in the steepest 40 s of the dive, where the pressure altitude is unreliable. Bottom of the dive 16,600 ft at 05:22:40; 598 kt over the ground at 05:22:36–38; the vertical rate pinned at the format's limit, 32,640 ft/min, 05:22:15–25. Flightradar24 on X put the landing at ~06:45."
     },
     {
       "id": "ISRAEL",

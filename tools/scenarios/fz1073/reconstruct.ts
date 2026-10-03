@@ -3,20 +3,20 @@
 // diverted to Tabuk), take-off to landing, from the aircraft's own ADS-B broadcasts:
 //   - as adsb.lol's receivers heard them (its tar1090 trace of the day: GPS positions at ~1 Hz, pressure and GNSS
 //     altitude, airspeed, ground velocity; ODbL) wherever they did: the climb-out 03:05–03:54 and 05:16–05:53;
-//   - as Flightradar24's did (its playback of the flight) only where no open network heard it: the cruise 03:54–05:16,
+//   - as a commercial tracking network's playback of the flight has it only where no open network heard it: the cruise 03:54–05:16,
 //     05:22–05:31 through the dive and the zoom (its receivers followed it every 2–3 s: a hard right turn through
 //     north-east at ~595 kt over the ground at the bottom, up to 21,725 ft, down again, 13,675 ft at 05:27), 05:53–06:13,
 //     then its satellites' fixes at 06:28:37 and 06:43:39.
 // Smoothed by the scenario builders' physics (tools/scenarios/fuse.ts: each source with its own error; height tied to
 // airspeed by energy; the wind fitted). Stretches no one heard, built:
 //   - the take-off roll on Dubai's runway 30R (airport.json): lined up 120 m past the threshold, rolling from 03:04:32 at
-//     a steady 2.0 m/s², which puts it where Flightradar24's 03:04:54 fix has it (~600 m in, 86 kt), airborne at 177 kt
+//     a steady 2.0 m/s², which puts it where the playback's 03:04:54 fix has it (~600 m in, 86 kt), airborne at 177 kt
 //     over the ground (~165 kt through the air: adsb.lol's wind is a 7-kt tailwind) and ~100 ft up where adsb.lol first
 //     hears it (03:05:27);
 //   - 05:21:44–05:22:45, the dive and its pull-out: the positions are smooth, but the pressure altitude jumps by up to
 //     1,000 ft within a second (static-pressure errors in violent manoeuvres; the ground speed falls 441 → 377 kt in
 //     5 s): those altitudes count for little (ALT_SD_UPSET_FT);
-//   - 06:13:37–06:28:37, between Flightradar24's last ground-received fix (15,050 ft, 331 kt) and its first satellite
+//   - 06:13:37–06:28:37, between the playback's last ground-received fix (15,050 ft, 331 kt) and its first satellite
 //     fix (5,475 ft, 205 kt): the smoothest path, the gentlest descent;
 //   - 06:28:37–06:43:39: the two satellite fixes are 14 nm apart and 15 minutes apart, so the aircraft flew ~3 times
 //     that; how is not known. Drawn as an extended right-hand circuit for runway 31 at the first fix's height, onto the
@@ -26,10 +26,10 @@
 // The attitude is the app's flight-mechanics model (client/track/attitude.ts) on that path, with an upset's limits
 // around the dive: the recorded attitude is not published, and the aircraft certainly pitched more sharply than the path.
 //
-// Heights where no open network heard it: Flightradar24's granular data as its blog published it (pressure altitude about
+// Heights where no open network heard it: the granular data published for the flight (pressure altitude about
 // once a second, time-stamped to the millisecond on the playback's clock: the playback's rows are a subsample of it).
 //
-//   node tools/scenarios/fz1073/reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV> <Flightradar24 granular CSV>
+//   node tools/scenarios/fz1073/reconstruct.ts <adsb.lol trace_full_8965d1.json> <playback CSV> <granular CSV>
 import { readFileSync, writeFileSync } from 'node:fs'
 import { AttitudeFilter, NORMAL_LIMITS, UPSET_LIMITS, UPSET_RATES, aeroPitchRoll } from '../../../client/track/attitude.ts'
 import type { Knot3, Obs } from '../../../client/track/smoother.ts'
@@ -48,19 +48,19 @@ const HEARD_AGAIN = hms('05:31:26')
 const LAST_BEFORE_GAP = hms('05:22:13.4')
 const UPSET_TO = hms('05:23:00') // the pull-out
 const LOST = hms('05:53:32.9') // the open networks' last reception
-const SAT1 = hms('06:28:37') // Flightradar24's satellite fixes
+const SAT1 = hms('06:28:37') // the playback's satellite fixes
 const SAT2 = hms('06:43:39')
 const SAUDI = hms('05:00:00') // before: the Gulf's air (hot, QNH 1009); after: northern Saudi Arabia's
 const POS_SD_M = 15 // NACp 8–9: the aircraft's own GPS position, 95 % within 30–93 m
 const VEL_SD_MS = 2
 const ALT_SD_FT = 25
 const ALT_SD_UPSET_FT = 1000
-// The same GPS positions, but time-stamped as Flightradar24 received them: against adsb.lol's clock its fixes scatter
+// The same GPS positions, but time-stamped as the playback's network received them: against adsb.lol's clock its fixes scatter
 // −5…+6 s (p10–p90; median offset < 1 s). A fix counts for its timing error times the speed, ~1 km at 600 kt.
-const FR24_POS_SD_M = 100
-const FR24_SD_T = 3
-const FR24_VEL_SD_MS = 3
-const FR24_VEL_SD_UPSET_MS = 15 // a stale speed and direction in the pull-out's turn
+const NET_POS_SD_M = 100
+const NET_SD_T = 3
+const NET_VEL_SD_MS = 3
+const NET_VEL_SD_UPSET_MS = 15 // a stale speed and direction in the pull-out's turn
 
 function hms(s: string): number {
   const [h, m, sec] = s.split(':').map(Number)
@@ -107,24 +107,24 @@ const END = TD + 45
 // tar1090 trace rows: [dt, lat, lon, alt_baro | "ground", gs, track, flags, baro_rate, details | null, kind, alt_geom,
 // geom_rate, ias, roll]; flags & 1: a stale position. alt_geom is the GNSS height above the WGS84 ellipsoid.
 type Row = [number, number, number, number | 'ground', number | null, number | null, number, number | null, Record<string, unknown> | null, string, number | null, number | null, number | null, number | null]
-const [traceFile, fr24File, granularFile] = process.argv.slice(2)
-if (!traceFile || !fr24File || !granularFile) throw new Error('usage: reconstruct.ts <adsb.lol trace_full_8965d1.json> <Flightradar24 playback CSV> <Flightradar24 granular CSV>')
+const [traceFile, playbackFile, granularFile] = process.argv.slice(2)
+if (!traceFile || !playbackFile || !granularFile) throw new Error('usage: reconstruct.ts <adsb.lol trace_full_8965d1.json> <playback CSV> <granular CSV>')
 const trace = JSON.parse(readFileSync(traceFile, 'utf8')) as { icao: string; timestamp: number; trace: Row[] }
 const pts = trace.trace
   .map((r) => ({ t: trace.timestamp + r[0] - DAY0, r }))
   .filter(({ t, r }) => t >= START - 120 && t <= LOST + 10 && (r[6] & 1) === 0 && r[3] !== 'ground')
-// Flightradar24's playback rows: time_utc, lat, lon, alt_ft_baro, gs_kt, vs_fpm, heading_deg (its track), squawk.
-const fr24 = readFileSync(fr24File, 'utf8').trim().split('\n').slice(1).map((l) => {
+// The playback's rows: time_utc, lat, lon, alt_ft_baro, gs_kt, vs_fpm, heading_deg (its track), squawk.
+const playback = readFileSync(playbackFile, 'utf8').trim().split('\n').slice(1).map((l) => {
   const [time, lat, lon, baro, gs, , trk] = l.split(',')
   return { t: hms(time), lat: Number(lat), lon: Number(lon), baro: Number(baro), gs: Number(gs), trk: Number(trk) }
 })
-// Flightradar24's granular rows: "2026-09-30 05:22:36Z.049", alt_ft_baro, gs_kt, vs_fpm.
+// The granular rows: "2026-09-30 05:22:36Z.049", alt_ft_baro, gs_kt, vs_fpm.
 const granular = readFileSync(granularFile, 'utf8').trim().split('\n').slice(1).map((l) => {
   const [stamp, baro] = l.split(',')
   return { t: hms(stamp.slice(11, 19)) + Number(stamp.split('Z')[1] || 0), baro: baro === '' ? null : Number(baro) }
 }).filter((g): g is { t: number; baro: number } => g.baro !== null)
 const adsbTimes = pts.map((p) => p.t)
-/** Where no open network heard the aircraft for over a minute: Flightradar24 fills in. */
+/** Where no open network heard the aircraft for over a minute: the playback fills in. */
 const unheard = (t: number): boolean => {
   const i = adsbTimes.findIndex((x) => x > t)
   const [a, b] = [i <= 0 ? -Infinity : adsbTimes[i - 1], i < 0 ? Infinity : adsbTimes[i]]
@@ -188,30 +188,30 @@ function mslOf(baroFt: number, lat: number, lon: number, t: number): number {
   return (((baroFt + d) * FT) - geoidN(lat, lon)) / FT
 }
 // (mslOf's GNSS − pressure difference is ~+900 ft at FL150 and ~+2,000 ft at FL300: the day was warm.)
-// Flightradar24 where no open network heard the aircraft: the cruise, and 05:53–06:13 from its ground receivers; then its
+// The playback where no open network heard the aircraft: the cruise, and 05:53–06:13 from its ground receivers; then its
 // two satellite fixes, near the field.
-for (const f of fr24) {
+for (const f of playback) {
   const sat = f.t === SAT1 || f.t === SAT2
   if (!sat && !(unheard(f.t) && f.t > hms('03:10:00') && f.t <= hms('06:13:37'))) continue
   const [ve, vn] = dir(f.trk).map((c) => c * f.gs * KT)
   const upset = f.t > UPSET_FROM && f.t < UPSET_TO
-  hos.push({ t: f.t, lat: f.lat, lon: f.lon, sd: Math.hypot(FR24_POS_SD_M, FR24_SD_T * f.gs * KT), ve, vn, sdV: upset ? FR24_VEL_SD_UPSET_MS : FR24_VEL_SD_MS })
+  hos.push({ t: f.t, lat: f.lat, lon: f.lon, sd: Math.hypot(NET_POS_SD_M, NET_SD_T * f.gs * KT), ve, vn, sdV: upset ? NET_VEL_SD_UPSET_MS : NET_VEL_SD_MS })
   heard.push(f.t)
   // In the upset, only the playback's heights (one every 2–3 s): the granular data's second-by-second pressure altitudes
   // there (static-pressure errors: 27,950 → 19,350 ft in 10.6 s, ~49,000 ft/min) make the smoother jump.
-  if (sat) vObs.push({ t: f.t, hFt: tabukMsl(f.baro), sdFt: 50, sdT: FR24_SD_T })
-  else if (upset) vObs.push({ t: f.t, hFt: mslOf(f.baro, f.lat, f.lon, f.t), sdFt: ALT_SD_UPSET_FT, sdT: FR24_SD_T })
+  if (sat) vObs.push({ t: f.t, hFt: tabukMsl(f.baro), sdFt: 50, sdT: NET_SD_T })
+  else if (upset) vObs.push({ t: f.t, hFt: mslOf(f.baro, f.lat, f.lon, f.t), sdFt: ALT_SD_UPSET_FT, sdT: NET_SD_T })
 }
 for (const g of granular) {
   if (!(unheard(g.t) && g.t > hms('03:10:00') && g.t <= hms('06:13:37') + 1) || (g.t > UPSET_FROM && g.t < UPSET_TO)) continue
-  const f = fr24.reduce((a, b) => (Math.abs(b.t - g.t) < Math.abs(a.t - g.t) ? b : a)) // where, for the geoid and the air
-  vObs.push({ t: g.t, hFt: mslOf(g.baro, f.lat, f.lon, g.t), sdFt: 50, sdT: FR24_SD_T })
+  const f = playback.reduce((a, b) => (Math.abs(b.t - g.t) < Math.abs(a.t - g.t) ? b : a)) // where, for the geoid and the air
+  vObs.push({ t: g.t, hFt: mslOf(g.baro, f.lat, f.lon, g.t), sdFt: 50, sdT: NET_SD_T })
 }
 heard.sort((a, b) => a - b)
-// The dive between adsb.lol's last reception (27,950 ft at 05:22:13) and Flightradar24's 16,850 ft at 05:22:36: ~29,000 ft/min
-// down on average. Flightradar24's fixes in it are time-stamped a few seconds either way; the rate keeps the path on them.
+// The dive between adsb.lol's last reception (27,950 ft at 05:22:13) and the playback's 16,850 ft at 05:22:36: ~29,000 ft/min
+// down on average. The playback's fixes in it are time-stamped a few seconds either way; the rate keeps the path on them.
 rObs.push({ t: LAST_BEFORE_GAP, vFtS: -28_000 / 60, sdFtS: 60 }, { t: hms('05:22:25'), vFtS: -30_000 / 60, sdFtS: 80 })
-// Level where Flightradar24's ground receivers lose it and where the satellite first hears it: between, the gentlest
+// Level where the playback's ground receivers lose it and where the satellite first hears it: between, the gentlest
 // descent.
 for (const t of [hms('06:13:37'), SAT1]) rObs.push({ t, vFtS: 0, sdFtS: 3 })
 
@@ -236,8 +236,8 @@ const ll31 = (e: number, n: number): [number, number] => [THR31[0] + n / M_PER_D
 const out31 = dir(HDG31 - 180) // out along the approach
 const ne31 = dir(HDG31 - 270) // the circuit's side (north-east)
 const glideFt = (alongM: number): number => elev31(0) + 50 + (alongM / FT) * Math.tan(3 / DEG)
-const s1 = fr24.find((f) => f.t === SAT1)!
-const s2 = fr24.find((f) => f.t === SAT2)!
+const s1 = playback.find((f) => f.t === SAT1)!
+const s2 = playback.find((f) => f.t === SAT2)!
 const P1 = en31(s1.lat, s1.lon)
 const P2 = en31(s2.lat, s2.lon)
 const LEVEL_FT = tabukMsl(s1.baro)
@@ -341,7 +341,7 @@ function casAt(t: number): number | null {
 const Q_H = 1
 const Q_V = 1
 const LIM_H = { v: 400, a: 35 }
-const LIM_V = { v: 220, a: 40 } // ~43,000 ft/min: a 42° dive at 600 kt (Flightradar24's fixes need ~36,000 over 20 s); ~5 g
+const LIM_V = { v: 220, a: 40 } // ~43,000 ft/min: a 42° dive at 600 kt (the playback's fixes need ~36,000 over 20 s); ~5 g
 const kv = fuseHeight(vObs, rObs, { q: Q_V, lim: LIM_V, casAt, energyFrom: LIFT_T + 10, energyTo: LOST })
 const onGround = (t: number): boolean => ground.some(([a, b]) => t >= a && t <= b)
 const airAt = (t: number): { air: number; hM: number } | null => {
@@ -438,7 +438,7 @@ for (let t = START; t <= END + 1e-9; t += SUB) {
   const measured = nearHeard(t)
   const hdg = (Math.round((((att.headingDeg % 360) + 360) % 360) * 10) / 10) % 360
   const hFt = gnd ? (t < TD ? elev30R(LINEUP_M + 0.5 * ROLL_ACC * Math.max(0, t - ROLL_T0) ** 2) : h.p / FT) : h.p / FT
-  const src = t > LOST || (t > LAST_BEFORE_GAP && t < HEARD_AGAIN) || (t > hms('03:54:22') && t < hms('05:16:12')) ? 'FR24' : 'ADSBLOL'
+  const src = t > LOST || (t > LAST_BEFORE_GAP && t < HEARD_AGAIN) || (t > hms('03:54:22') && t < hms('05:16:12')) ? '' : 'ADSBLOL'
   rows.push([
     clock(t), s.lat.toFixed(6), s.lon.toFixed(6), hFt.toFixed(0), hdg.toFixed(1), att.pitchDeg.toFixed(1), att.rollDeg.toFixed(1),
     gnd ? '1' : '', cas !== null ? cas.toFixed(0) : '',
