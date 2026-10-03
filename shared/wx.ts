@@ -184,44 +184,77 @@ export interface ModelWindLevel {
 
 /** The model's forecast of a grid of places for one hour, as the server sends it. */
 export interface ModelGrid extends ModelGeo {
-  timeMs: number | null // the hour the values are for
+  timeMs: number | null // the hour the values are for (the oldest place's: the places of a grid are fetched at different times)
   elevM: (number | null)[] // the model's own ground height at each place, metres above sea level
   clouds: ModelCloudLevel[] // MODEL_CLOUD_HPA's order
   winds: ModelWindLevel[] // MODEL_WIND_HPA's order
 }
 
 /**
- * Open-Meteo's answer for the places of geo (the order they were asked in) as a ModelGrid. The places stand where they were asked for
- * (a regular grid): the model answers from its own nearest point, up to a few km off, which the response says and this ignores. Whole
- * percent, metres and degrees, wind to 0.1 kt; a value the model lacks is null. Anything but one object a place is an error (the
- * caller serves the last good answer instead).
+ * One place of a grid as the server keeps it (a place is fetched and kept on its own: the grids of neighbouring cells share places):
+ * what the model says there, by level in MODEL_CLOUD_HPA's and MODEL_WIND_HPA's order; null for what it has none of.
  */
-export function slimModel(json: unknown, geo: ModelGeo): ModelGrid {
-  const count = geo.n * geo.n
-  if (!Array.isArray(json) || json.length !== count || !json.every((p) => typeof p === 'object' && p !== null)) throw new Error(`expected an object for each of ${count} places`)
-  const places = json as { elevation?: unknown; hourly?: Record<string, unknown> }[]
-  const hour = (p: (typeof places)[number], name: string): number | null => {
-    const values = p.hourly?.[name]
-    return Array.isArray(values) ? fin(values[0]) : null // the one hour asked for
+export interface ModelPlace {
+  timeMs: number | null // the hour the values are for
+  elevM: number | null
+  cover: (number | null)[]
+  zM: (number | null)[]
+  kt: (number | null)[]
+  deg: (number | null)[]
+}
+
+/**
+ * Open-Meteo's answer for `count` places (in the order they were asked) as one ModelPlace each. Many places come as an array of
+ * objects, one place as the object itself (or an array of one). Whole percent, metres and degrees, wind to 0.1 kt; a value the model
+ * lacks is null. Anything but an object with `hourly` for each place is an error (the caller serves what it holds instead).
+ */
+export function slimPlaces(json: unknown, count: number): ModelPlace[] {
+  const list = count === 1 && !Array.isArray(json) ? [json] : json
+  if (!Array.isArray(list) || list.length !== count || !list.every((p) => typeof p === 'object' && p !== null && typeof (p as { hourly?: unknown }).hourly === 'object' && (p as { hourly?: unknown }).hourly !== null)) {
+    throw new Error(`expected an object for each of ${count} places`)
   }
-  const column = (read: (p: (typeof places)[number]) => number | null, round: (v: number) => number): (number | null)[] =>
-    places.map((p) => {
-      const v = read(p)
-      return v === null ? null : round(v)
-    })
-  const hourly = (name: string, round: (v: number) => number): (number | null)[] => column((p) => hour(p, name), round)
   const whole = Math.round
   const tenth = (v: number): number => Math.round(v * 10) / 10
   const compass = (v: number): number => Math.round(v) % 360 // 359.6 is 0
-  const time = places.map((p) => hour(p, 'time')).find((t) => t !== null) ?? null
+  const round = (v: number | null, f: (v: number) => number): number | null => (v === null ? null : f(v))
+  return (list as { elevation?: unknown; hourly: Record<string, unknown> }[]).map((p) => {
+    const hour = (name: string): number | null => {
+      const values = p.hourly[name]
+      return Array.isArray(values) ? fin(values[0]) : null // the one hour asked for
+    }
+    const time = hour('time')
+    return {
+      timeMs: time === null ? null : time * 1000,
+      elevM: round(fin(p.elevation), whole),
+      cover: MODEL_CLOUD_HPA.map((hPa) => round(hour(`cloud_cover_${hPa}hPa`), whole)),
+      zM: MODEL_CLOUD_HPA.map((hPa) => round(hour(`geopotential_height_${hPa}hPa`), whole)),
+      kt: MODEL_WIND_HPA.map((hPa) => round(hour(`wind_speed_${hPa}hPa`), tenth)),
+      deg: MODEL_WIND_HPA.map((hPa) => round(hour(`wind_direction_${hPa}hPa`), compass)),
+    }
+  })
+}
+
+/**
+ * The places of a grid (geo.n × geo.n of them, row by row from its south-west) as a ModelGrid, arrays by level. The places stand where
+ * they were asked for (a regular grid): the model answers from its own nearest point, up to a few km off, which the response says
+ * and this ignores. Its hour is the oldest place's.
+ */
+export function assembleModel(geo: ModelGeo, places: readonly ModelPlace[]): ModelGrid {
+  if (places.length !== geo.n * geo.n) throw new Error(`expected ${geo.n * geo.n} places, got ${places.length}`)
+  const times = places.map((p) => p.timeMs).filter((t): t is number => t !== null)
   return {
     lat0: geo.lat0,
     lon0: geo.lon0,
     step: geo.step,
     n: geo.n,
-    timeMs: time === null ? null : time * 1000,
-    elevM: column((p) => fin(p.elevation), whole),
-    clouds: MODEL_CLOUD_HPA.map((hPa) => ({ hPa, cover: hourly(`cloud_cover_${hPa}hPa`, whole), zM: hourly(`geopotential_height_${hPa}hPa`, whole) })),
-    winds: MODEL_WIND_HPA.map((hPa) => ({ hPa, kt: hourly(`wind_speed_${hPa}hPa`, tenth), deg: hourly(`wind_direction_${hPa}hPa`, compass) })),
+    timeMs: times.length === 0 ? null : Math.min(...times),
+    elevM: places.map((p) => p.elevM),
+    clouds: MODEL_CLOUD_HPA.map((hPa, l) => ({ hPa, cover: places.map((p) => p.cover[l]), zM: places.map((p) => p.zM[l]) })),
+    winds: MODEL_WIND_HPA.map((hPa, l) => ({ hPa, kt: places.map((p) => p.kt[l]), deg: places.map((p) => p.deg[l]) })),
   }
+}
+
+/** Open-Meteo's answer for all the places of geo (in the order asked) as a ModelGrid: slimPlaces, assembled. */
+export function slimModel(json: unknown, geo: ModelGeo): ModelGrid {
+  return assembleModel(geo, slimPlaces(json, geo.n * geo.n))
 }

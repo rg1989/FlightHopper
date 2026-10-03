@@ -141,3 +141,45 @@ test('CloudLayer: fade by the distance from the place given (each look): all of 
   r.layer.draw([gone])
   assert.equal(r.clouds()[0].color.alpha, 1, 'faded from where it was given, not from what the caller\'s object holds later')
 })
+
+test('CloudLayer: a puff with clearKm is hidden while the aircraft is at the height it spans and within clearKm of it, back by twice that; one the aircraft is above or below, or far from, is not touched', () => {
+  const r = rig()
+  const kmNorth = (km: number): number => 32 + km / 111.2
+  const puff = (km: number, o: Partial<CloudSpec> = {}): CloudSpec => spec({ lat: kmNorth(km), heightM: 10_000, scale: [12_000, 800], farKm: 150, clearKm: 3, ...o }) // spans 9,700 to 10,300 m
+  const specs = [puff(2), puff(4.5), puff(6.5), puff(2, { clearKm: undefined }), puff(2, { clearKm: 5 }), puff(7, { clearKm: 5 }), puff(200, { farKm: 150 })]
+  r.layer.draw(specs)
+  const cs = r.clouds()
+  const at = (heightM: number): Cartesian3 => Cartesian3.fromDegrees(34.9, 32, heightM + geoidN(32, 34.9))
+  r.layer.fade(at(10_000))
+  assert.equal(cs[0].color.alpha, 0, '2 km off, at its height: hidden')
+  assert.equal(cs[0].show, false)
+  assert.ok(near(cs[1].color.alpha, 0.5, 0.06), `4.5 km: half way back, ${cs[1].color.alpha}`)
+  assert.equal(cs[2].color.alpha, 1, '6.5 km: back')
+  assert.equal(cs[3].color.alpha, 1, 'no clearKm: not touched')
+  assert.equal(cs[4].color.alpha, 0, 'its own clearKm: 5 km')
+  assert.ok(cs[5].color.alpha > 0 && cs[5].color.alpha < 1, `7 km of 5: ${cs[5].color.alpha} on its way back`)
+  assert.equal(cs[6].color.alpha, 0, 'and the distance fade still hides what is far')
+  r.layer.fade(at(10_000 + 650)) // 350 m over its span: within the margin (300 m) of the camera, and 50 more?
+  assert.equal(cs[0].color.alpha, 1, '650 m above the middle: beyond the span (300 m) and the margin (300 m): the aircraft is not at its height')
+  r.layer.fade(at(10_000 + 550))
+  assert.equal(cs[0].color.alpha, 0, '550 m above the middle: within the span and the margin of a camera that is not on the aircraft')
+  r.layer.fade(at(10_000 - 550))
+  assert.equal(cs[0].color.alpha, 0, 'and below')
+  r.layer.fade(at(1_000))
+  assert.deepEqual(cs.slice(0, 5).map((c) => c.color.alpha), [1, 1, 1, 1, 1], 'far under it: none is touched')
+  r.layer.fade(at(10_000))
+  assert.equal(cs[0].show, false)
+  r.layer.draw(specs) // a draw after the fade is hidden the same
+  assert.equal(r.clouds()[0].color.alpha, 0)
+})
+
+test('CloudLayer: the hide for the aircraft comes with the distance fade, not instead of it: a puff the distance has half faded and the aircraft is half way back from is both', () => {
+  const r = rig()
+  const kmNorth = (km: number): number => 32 + km / 111.2
+  const s = spec({ lat: kmNorth(4.5), heightM: 10_000, scale: [12_000, 800], farKm: 6, clearKm: 3 }) // faded by 6 km: the fade starts at 4.2 km
+  r.layer.draw([s])
+  r.layer.fade(Cartesian3.fromDegrees(34.9, 32, 10_000 + geoidN(32, 34.9)))
+  const both = fadeAlpha(s, 4.5) * 0.5
+  assert.ok(near(r.clouds()[0].color.alpha, both, 0.06), `${r.clouds()[0].color.alpha} for ${both}`)
+  assert.ok(both > 0 && both < 0.5)
+})

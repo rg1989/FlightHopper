@@ -9,7 +9,8 @@
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
-//   GET /api/wx/model?lat&lon           Open-Meteo's forecast for a 7 × 7 grid (0.25°) round the 0.5° cell of the place (wx.ts)
+//   GET /api/wx/model?lat&lon           Open-Meteo's forecast for a 7 × 7 grid (0.25°) round the 0.5° cell of the place; 503 + Retry-After: not asked
+//                                       now (its day's calls, 20 s since the last, 60 s after a failure) and a place of the grid not held (wx.ts)
 //   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
 //                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
 //                                       oldest day it keeps); 503 + Retry-After: 15: it cannot be had now
@@ -282,7 +283,7 @@ export function createServer(
   let flightTimer: ReturnType<typeof setInterval> | null = null
   let routeTimer: ReturnType<typeof setInterval> | null = null
   const root = resolve(cfg.staticDir)
-  const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch })
+  const wx = makeWx({ userAgent: userAgent(cfg.contact ?? 'personal use'), fetchFn: deps.wxFetch, nowMs })
   // The past (History mode, the flown path): adsb.lol's files, fetched when asked and held in memory only.
   const pastUa = userAgent(cfg.contact ?? 'personal use')
   const history = new HistoryStore({ userAgent: pastUa, fetchFn: deps.historyFetch, nowMs, maxSlots: HISTORY_SLOTS, oldestMs: deps.oldestSlotMs })
@@ -475,6 +476,7 @@ export function createServer(
     if (!isApi) return serveStatic(root, url.pathname, req.headers.range, res)
     let status = 200
     let body: unknown
+    let retryAfterS = RETRY_AFTER_S
     try {
       if (url.pathname === '/api/wx/metar') body = await wx.metars(url.searchParams.get('bbox'))
       else if (url.pathname === '/api/wx/sigmet') body = await wx.sigmets()
@@ -496,11 +498,11 @@ export function createServer(
       }
       else [status, body] = [404, { error: `no such endpoint: ${url.pathname}` }]
     } catch (e) {
-      if (e instanceof WxError) [status, body] = [e.status, { error: e.message }]
+      if (e instanceof WxError) [status, body, retryAfterS] = [e.status, { error: e.message }, e.retryAfterS ?? RETRY_AFTER_S]
       else if (!(e instanceof BadRequest)) throw e
       else [status, body] = [400, { error: e.message }]
     }
-    return sendJson(req, res, status, body, status === 503 ? { 'retry-after': String(RETRY_AFTER_S) } : {})
+    return sendJson(req, res, status, body, status === 503 ? { 'retry-after': String(retryAfterS) } : {})
   }
 
   const server = createHttpServer((req, res) => {

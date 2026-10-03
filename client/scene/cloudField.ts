@@ -29,12 +29,18 @@
 // from them.
 // From a weather model's forecast (modelClouds; Open-Meteo's grid of places 0.25° apart, shared/wx.ts ModelGrid), for the sky no report
 // or radar says anything of: at each place and pressure level where the model has 20 % cloud or more, puffs over the place's cell,
-// standing from the level's height (taken as the layer's base: an estimate), as many as its cover says (FEW, SCT, BKN or OVC as for a
-// report's, but at a share of the observed density for each kind of level: a forecast is not an observation). Low levels (1000 to 850
-// hPa) look like the observed layers, mid levels (700 to 400) are flat altocumulus, high levels (300 to 200) thin, flat, pale cirrus.
-// Observations win: no low level within 40 km of a station that reports the sky, cloudy or clear. 49 places and ten levels want far
-// more than 700 clouds, so what is wanted is thinned evenly to MODEL_LOOK.max, each cloud that stays made larger to cover as much (3 ×
-// at most). The model's clouds are the last group nearestClouds takes: they fill what the observed and the radar's leave of the 700.
+// standing from the level's height (taken as the layer's base: an estimate). A level's density follows its cover: sparse up to 40 %
+// (a share of the observed density for each kind of level), rising to nearly the observed look by 80 %; its puffs grow with the
+// cover too (none at 40 %, MODEL_LOOK.grow times as large from 80 %) and are that squared fewer, so a fuller deck covers as much with
+// larger puffs. Low
+// levels (1000 to 850 hPa) look like the observed layers, mid levels (700 to 400) are flat altocumulus, high levels (300 to 200)
+// thin, flat, pale cirrus. Observations win: no low level within 40 km of a station that reports the sky, cloudy or clear. The
+// grid's outer ring keeps a quarter of its puffs and the next three fifths, so the sky thins out at its edge instead of ending as a
+// wall. 49 places and ten levels want far more than the cap, so the puffs are thinned to MODEL_LOOK.max, evenly in the sky they
+// cover (a deck of large puffs keeps more than a few small cumulus): each place and level keeps the first puffs of its own sequence,
+// the same size they always are, so the next grid draws a place as it drew it (a puff's number changes a little with the thinning,
+// never its size or its spot). The model's clouds are the last group nearestClouds takes: they fill what the observed and the
+// radar's leave of the 700. Every puff carries clearKm, so that none is drawn round the aircraft that is at its height.
 // A puff must end inside its billboard: the shader draws the ellipsoid it ray-casts, sliced, and where that ends in the quad (its
 // cut, or the quad's edge) the alpha is whatever the geometry says, a hard straight edge for a low slice on a narrow puff (a tower's
 // or an anvil's). cloudQuad.ts knows where it ends; the slices drawn from the looks are raised just far enough that no puff of any
@@ -83,6 +89,7 @@ export interface CloudSpec {
   tint: number // 0 white … 1 dark grey
   farKm: number // where it has faded out, km from the aircraft (fadeAlpha)
   tower?: number // the tower it belongs to, numbered within its station; none: a layer's cloud
+  clearKm?: number // while the aircraft is at the height this puff spans and within this far of it, cloudLayer.ts hides it (the camera must not sit inside a billboard); it comes back over as far again
 }
 
 type Range = readonly [number, number]
@@ -636,7 +643,8 @@ export function radarClouds(cells: readonly RadarCell[], base: BaseOf): CloudSpe
 
 type ModelKind = 'low' | 'mid' | 'high'
 interface ModelClass {
-  density: number // the share of the observed looks' clouds a km² (LOOKS), by cover
+  density: number // the share of the observed looks' clouds a km² (LOOKS) at rampFrom % of cover and under …
+  full: number // … and at rampTo % and over, in between by the cover
   look?: Pick<Look, 'w' | 'h' | 'shape' | 'slice' | 'brightness' | 'tint'> // else the cover's own look (LOOKS)
 }
 interface ModelLook {
@@ -644,12 +652,16 @@ interface ModelLook {
   sct: number // from this cover (%) the clouds are SCT, from bkn BKN, from ovc OVC; from minCover to sct FEW: the oktas' edges, 2, 4 and 7 eighths
   bkn: number
   ovc: number
+  rampFrom: number // the density, and the size of a puff, follow the cover from this (%: the density, and the size, as they are at 40 % and under) …
+  rampTo: number // … to this (the class's full density, and a puff `grow` times as large)
   stationKm: number // no low level within this of a station that reports the sky (the plan's)
   lowHPa: number // a level at this pressure or more (850: 1000, 925, 850 hPa, the lowest 1.5 km) is low (the plan's) …
   highHPa: number // … at this or less (300: 300, 250, 200 hPa) high (the plan's); those between are mid
   aboveGroundM: number // a level lower than this over the model's ground is not drawn: its cloud is under the ground
-  max: number // clouds at most: what is wanted is thinned to this
-  grow: number // a cloud thinned to its share is made this much wider and taller at most
+  max: number // clouds at most: what is wanted is thinned to this (the 700 are shared with the observed and the radar's, which come first)
+  grow: number // a puff of a level at rampTo % cover and over is this much wider and taller than its look says (its number is that squared fewer)
+  ring: readonly number[] // the share of its puffs that the outer ring of the grid keeps, and the next ring: the sky thins out at the grid's edge
+  clearKm: number // a puff is hidden within this of an aircraft at the height it spans (cloudLayer.ts)
   low: ModelClass
   mid: ModelClass
   high: ModelClass
@@ -657,34 +669,44 @@ interface ModelLook {
 
 /**
  * The look of the model's clouds: the plan's numbers, and estimates (named, to be tuned by eye). Read as the clouds are made.
- * They are modest by design: densities under the observed looks', and the flat, pale puffs of altocumulus and cirrus.
+ * They are modest by design: densities under the observed looks', rising toward them as a level fills, and the flat, pale puffs
+ * of altocumulus and cirrus.
  */
 export const MODEL_LOOK: ModelLook = {
   minCover: 20,
   sct: 25,
   bkn: 50,
   ovc: 87.5,
+  rampFrom: 40,
+  rampTo: 80,
   stationKm: 40,
   lowHPa: 850,
   highHPa: 300,
   aboveGroundM: 100,
-  max: 300,
+  max: 500,
   grow: 3,
-  low: { density: 0.7 },
-  mid: { density: 0.4, look: { w: [3000, 7000], h: [450, 900], shape: [[30, 44], [8, 12], [9, 13]], slice: [0.3, 0.42], brightness: [0.82, 0.98], tint: [0, 0.08] } },
-  high: { density: 0.25, look: { w: [4000, 9000], h: [250, 500], shape: [[34, 50], [6, 9], [8, 11]], slice: [0.4, 0.55], brightness: [0.78, 0.92], tint: [0, 0.03] } },
+  ring: [0.25, 0.6],
+  clearKm: 3,
+  low: { density: 0.7, full: 0.95 },
+  mid: { density: 0.4, full: 0.8, look: { w: [3000, 7000], h: [450, 900], shape: [[30, 44], [8, 12], [9, 13]], slice: [0.3, 0.42], brightness: [0.82, 0.98], tint: [0, 0.08] } },
+  high: { density: 0.25, full: 0.6, look: { w: [4000, 9000], h: [250, 500], shape: [[34, 50], [6, 9], [8, 11]], slice: [0.4, 0.55], brightness: [0.78, 0.92], tint: [0, 0.03] } },
 }
 
 /**
  * The clouds of a model grid (a forecast round the aircraft): for each place and pressure level with MODEL_LOOK.minCover % of cloud or
- * more, puffs over the place's cell (0.25° square), standing from the level's height, as many as its cover says (the observed looks'
- * density by cover, times the share for its kind of level), at most MODEL_LOOK.max in all (thinned evenly, the rest made larger to
- * cover as much). A low level is left out at a place within MODEL_LOOK.stationKm of a report in metarsNear that says what the sky is
- * (observations win), and any level under the model's ground. Each place and level draws from a sequence of its own, not the grid's:
- * the next grid's overlapping places draw the puffs they drew.
+ * more, puffs over the place's cell (0.25° square), standing from the level's height: the observed looks' density for its cover,
+ * times the share of it for its kind of level and cover (MODEL_LOOK.density up to rampFrom %, full from rampTo %), in puffs larger
+ * by a growth that follows the same cover (1 to MODEL_LOOK.grow), so that many fewer of them cover as much; the outer rings of the grid
+ * keep MODEL_LOOK.ring of their puffs. At most MODEL_LOOK.max in all: thinned evenly in the sky they cover (a place and level's share
+ * is as the number of its puffs times their size squared), each keeping the first puffs of its own sequence (a count worked out from
+ * the place and the thinning alone, rounded by a dither of its own: it changes by a puff as the thinning does), their size untouched.
+ * A low level is left out at a place within MODEL_LOOK.stationKm of a report in metarsNear that says what the sky is (observations
+ * win), and any level under the model's ground. Each place and level draws from a sequence of its own, not the grid's: the next
+ * grid's overlapping places draw the puffs they drew.
  * ponytail: the thinning is even over the grid, not by distance, so where the observed clouds and the radar's leave the model little
- * of the 700 only its nearest are drawn; the model's ground is a smoothed relief, so a cloud over a ridge can stand inside it.
- * Upgrade: share by distance; the globe's height under the cloud.
+ * of the 700 only its nearest are drawn; the edge's thinning is by rings of places, 28 km wide, not by distance from the edge; the
+ * model's ground is a smoothed relief, so a cloud over a ridge can stand inside it. Upgrade: share by distance and by the
+ * aircraft's height; a fade by the distance to the grid's edge; the globe's height under the cloud.
  */
 export function modelClouds(grid: ModelGrid, metarsNear: readonly Metar[], seed = 0): CloudSpec[] {
   const M = MODEL_LOOK
@@ -698,15 +720,19 @@ export function modelClouds(grid: ModelGrid, metarsNear: readonly Metar[], seed 
     z: number
     kind: ModelKind
     cover: Cover
-    wanted: number
+    grow: number // by its level's cover alone
+    wanted: number // the puffs it wants, before the cap
+    dither: number // 0 … 1, its own: how its count is rounded
     eastKm: number
   }
   const groups: Group[] = []
   for (let p = 0; p < grid.n * grid.n; p++) {
-    const lat = grid.lat0 + Math.floor(p / grid.n) * grid.step
-    const lon = wrapLon(grid.lon0 + (p % grid.n) * grid.step)
+    const [row, col] = [Math.floor(p / grid.n), p % grid.n]
+    const lat = grid.lat0 + row * grid.step
+    const lon = wrapLon(grid.lon0 + col * grid.step)
     const ground = grid.elevM[p] ?? 0
     const eastKm = northKm * Math.cos(lat * RAD)
+    const edge = M.ring[Math.min(row, col, grid.n - 1 - row, grid.n - 1 - col)] ?? 1 // the grid's outer rings keep part of their puffs
     let observed: boolean | undefined // a station that reports the sky is within stationKm of the place (worked out when a low level asks)
     for (const level of grid.clouds) {
       const cover = level.cover[p]
@@ -718,26 +744,43 @@ export function modelClouds(grid: ModelGrid, metarsNear: readonly Metar[], seed 
         if (observed) continue // observations win; a place left out does not use up the cap
       }
       const by: Cover = cover >= M.ovc ? 'OVC' : cover >= M.bkn ? 'BKN' : cover >= M.sct ? 'SCT' : 'FEW'
-      const wanted = Math.round(LOOKS[by].perKm2 * M[kind].density * northKm * eastKm)
-      if (wanted > 0) groups.push({ lat, lon, ground, hPa: level.hPa, z, kind, cover: by, wanted, eastKm })
+      const t = ramp(cover, M.rampFrom, M.rampTo)
+      const grow = lerp([1, M.grow], t)
+      const wanted = Math.round((LOOKS[by].perKm2 * lerp([M[kind].density, M[kind].full], t) * northKm * eastKm * edge) / grow ** 2)
+      if (wanted > 0) groups.push({ lat, lon, ground, hPa: level.hPa, z, kind, cover: by, grow, wanted, dither: hash(`dither|${lat}|${lon}|${level.hPa}|${seed}`) / 4294967296, eastKm })
     }
   }
-  const kept = shares(groups.map((g) => g.wanted), M.max)
+  // Each group keeps floor(wanted × min(1, f × grow²) + its dither) puffs: f is the most that keeps the total within the cap (1 when all
+  // fit, then each keeps what it wants). A group's share is as the sky its puffs cover (their number times their size squared), so
+  // where the cap bites a deck of large puffs keeps more of its own than a few small cumulus do. Its count depends on f and on itself
+  // alone, and changes by a puff at a time as f does.
+  const keep = (g: Group, f: number): number => Math.floor(g.wanted * Math.min(1, f * g.grow ** 2) + g.dither)
+  const count = (f: number): number => groups.reduce((n, g) => n + keep(g, f), 0)
+  let f = 1
+  if (count(1) > M.max) {
+    let [lo, hi] = [0, 1]
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2
+      if (count(mid) <= M.max) lo = mid
+      else hi = mid
+    }
+    f = lo
+  }
   const out: CloudSpec[] = []
-  groups.forEach((g, i) => {
-    if (kept[i] === 0) return
+  for (const g of groups) {
+    const kept = keep(g, f)
+    if (kept === 0) continue
     const look = M[g.kind].look ?? LOOKS[g.cover]
     const r = sequence(hash(`model|${g.lat}|${g.lon}|${g.hPa}|${seed}`)) // by the place and the level, not the grid: a place in the next grid draws what it drew
-    const grow = Math.min(M.grow, Math.sqrt(g.wanted / kept[i]))
-    for (let k = 0; k < kept[i]; k++) {
+    for (let k = 0; k < kept; k++) {
       const [lon, lat] = at(g.lat, g.lon, (r() - 0.5) * g.eastKm, (r() - 0.5) * northKm)
-      const w = between(r, look.w) * grow
-      const h = between(r, look.h) * grow
+      const w = between(r, look.w) * g.grow
+      const h = between(r, look.h) * g.grow
       out.push({
         lon, lat, heightM: g.z + (PUFF_FILL * h) / 2, groundM: g.ground, scale: [w, h], ...shapeAndSlice(r, look.shape, look.slice),
-        brightness: between(r, look.brightness), tint: between(r, look.tint), farKm: farKmOf(Math.max(w, h)),
+        brightness: between(r, look.brightness), tint: between(r, look.tint), farKm: farKmOf(Math.max(w, h)), clearKm: M.clearKm,
       })
     }
-  })
+  }
   return out
 }

@@ -3,28 +3,45 @@
 // sends no CORS headers), slimmed (shared/wx.ts) and kept a few minutes, so every client and every pan in the same
 // whole-degree box costs one upstream request per TTL. A failing upstream serves the last good answer, else throws.
 // GET /api/wx/model?lat&lon: Open-Meteo's forecast (weather data by Open-Meteo.com, CC BY 4.0, keyless, non-commercial use) for a
-// grid of 7 × 7 places 0.25° apart round the 0.5° cell that holds lat, lon, the current hour: one request for the 49 places, kept
-// 30 min, so every client in the same cell shares it. Open-Meteo weighs a request by its places and variables
-// (https://open-meteo.com/en/pricing, checked 2026-10-03: free up to 600 calls a minute, 5,000 an hour and 10,000 a day): a grid of
-// 49 places with 32 variables is an estimated 49 × 3.2 = 157 calls, about 60 grids a day.
-import { MODEL_VARIABLES, slimMetars, slimModel, slimSigmets, type Metar, type ModelGeo, type ModelGrid, type Sigmet } from '../shared/wx.ts'
+// grid of 7 × 7 places 0.25° apart round the 0.5° cell that holds lat, lon, the current hour. Each place is fetched and kept on its
+// own (30 min fresh, 2 h held), so the grids of cells next to each other share places and a grid asks Open-Meteo, in one request,
+// only for the places it lacks: 14 of 49 for the cell next to one held. Open-Meteo weighs a request by its places and variables
+// (https://open-meteo.com/en/pricing, checked 2026-10-03: free up to 600 calls a minute, 5,000 an hour and 10,000 a day): a place
+// with 32 variables is 3.2 calls, so 8,000 a UTC day (the most this server asks) is 2,500 places. Past that, within 20 s of the last
+// request, or within 60 s of a failure, it is not asked: the places held are served as they are, a grid that lacks one is a 503
+// with Retry-After.
+// ponytail: the day's count is in memory (a restart forgets it) and counts only what this server asks: other users of the same
+// address share the allowance unseen. A jet at 450 kt crosses a cell about every 4 min and needs 14 to 24 new places for it, so
+// 8,000 calls last 6 to 12 h of one chase. Upgrade: keep the count in a file; fetch the cell ahead; a key and a paid plan.
+import { MODEL_VARIABLES, assembleModel, slimMetars, slimPlaces, slimSigmets, type Metar, type ModelGeo, type ModelGrid, type ModelPlace, type Sigmet } from '../shared/wx.ts'
 
 const API = 'https://aviationweather.gov/api/data'
 const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
 const METAR_TTL_MS = 5 * 60_000 // METARs come every 30–60 min; SPECIs sooner
 const SIGMET_TTL_MS = 10 * 60_000
-const MODEL_TTL_MS = 30 * 60_000 // the model's values are hourly
 const MODEL_CELL_DEG = 0.5 // lat, lon snap to a cell this wide
 const MODEL_STEP_DEG = 0.25
 const MODEL_N = 7
+const DAY_MS = 86_400_000
+/** What the model's places are kept for and what Open-Meteo may be asked (the budget guard): see the header. */
+export const MODEL_LIMITS = {
+  freshMs: 30 * 60_000, // a place is as good as new this long (the model's values are hourly)
+  keepMs: 2 * 60 * 60_000, // and held this long, to serve when Open-Meteo is not asked: the client drops a grid whose hour is 3 h old, and a place's hour is up to an hour older than when it was fetched
+  dailyCalls: 8_000, // weighted calls a UTC day, of the free 10,000
+  callsPerPlace: Math.max(1, MODEL_VARIABLES.length / 10) * Math.max(1, 1 / 24 / 14), // Open-Meteo's weight of a place: a call for each 10 variables, and for each 14 days (an hour is never more than one)
+  gapMs: 20_000, // at least this between requests to Open-Meteo for the model
+  failureMs: 60_000, // after a failure it is not asked for this long
+} as const
 const MAX_SPAN_DEG = 40 // wider views get no stations (thousands of dots, megabytes of JSON)
 const MAX_ENTRIES = 200 // ponytail: evicts the oldest past this; plenty for one user's pans
 
 export class WxError extends Error {
-  readonly status: 400 | 502
-  constructor(message: string, status: 400 | 502) {
+  readonly status: 400 | 502 | 503
+  readonly retryAfterS: number | undefined // a 503's Retry-After: when what stops the ask will have gone
+  constructor(message: string, status: 400 | 502 | 503, retryAfterS?: number) {
     super(message)
     this.status = status
+    this.retryAfterS = retryAfterS
   }
 }
 
@@ -55,17 +72,29 @@ export function modelGeo(lat: string | null, lon: string | null): ModelGeo {
   return { lat0: south, lon0: wrap(middle(lo) - half), step: MODEL_STEP_DEG, n: MODEL_N }
 }
 
-/** Open-Meteo's request for a grid: the places row by row (longitudes within −180 … 180), the current hour only, the wind in knots. */
-export function modelUrl(geo: ModelGeo): string {
-  const lats: number[] = []
-  const lons: number[] = []
+/** A place of a model grid: where it stands (longitudes within −180 … 180) and its key, the same for every grid that holds it. */
+export interface ModelPlaceAt {
+  lat: number
+  lon: number
+  key: string
+}
+
+/** The places of a grid, row by row from its south-west: the same lattice point is the same place (and key) in every grid. */
+export function modelPlaces(geo: ModelGeo): ModelPlaceAt[] {
+  const out: ModelPlaceAt[] = []
   for (let i = 0; i < geo.n; i++) {
     for (let j = 0; j < geo.n; j++) {
-      lats.push(geo.lat0 + i * geo.step)
-      lons.push(wrap(geo.lon0 + j * geo.step))
+      const lat = geo.lat0 + i * geo.step
+      const lon = wrap(geo.lon0 + j * geo.step)
+      out.push({ lat, lon, key: `${lat},${lon}` })
     }
   }
-  return `${OPEN_METEO}?latitude=${lats.join(',')}&longitude=${lons.join(',')}&hourly=${MODEL_VARIABLES.join(',')}&wind_speed_unit=kn&forecast_hours=1&timeformat=unixtime`
+  return out
+}
+
+/** Open-Meteo's request for these places (the answer comes in this order): the current hour only, the wind in knots. */
+export function modelUrl(places: readonly { lat: number; lon: number }[]): string {
+  return `${OPEN_METEO}?latitude=${places.map((p) => p.lat).join(',')}&longitude=${places.map((p) => p.lon).join(',')}&hourly=${MODEL_VARIABLES.join(',')}&wind_speed_unit=kn&forecast_hours=1&timeformat=unixtime`
 }
 
 export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: () => number }) {
@@ -99,6 +128,84 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
     return p
   }
 
+  // ---- the model: places kept one by one, asked for under a budget ----
+  const places = new Map<string, { ms: number; place: ModelPlace }>() // by key, the oldest fetched first (a place fetched again is moved to the end)
+  const host = new URL(OPEN_METEO).hostname
+  const day = { n: -1, calls: 0 } // the UTC day and the calls asked in it
+  let lastAskMs = -Infinity // the last request to Open-Meteo for the model
+  let failedUntilMs = 0
+  let flight: Promise<WxError | null> = Promise.resolve(null) // requests for the model go one at a time: one that waits then finds what the one before it fetched
+
+  /** The place if it is held (not older than keepMs); the places that are older are dropped (the oldest come first). */
+  function held(key: string, now: number): { ms: number; place: ModelPlace } | undefined {
+    for (const [k, h] of places) {
+      if (now - h.ms < MODEL_LIMITS.keepMs) break
+      places.delete(k)
+    }
+    const h = places.get(key)
+    return h !== undefined && now - h.ms < MODEL_LIMITS.keepMs ? h : undefined
+  }
+  const isFresh = (h: { ms: number } | undefined, now: number): boolean => h !== undefined && now - h.ms < MODEL_LIMITS.freshMs
+
+  /** Why Open-Meteo may not be asked for this many places now, or null. */
+  function blocked(now: number, count: number): WxError | null {
+    const today = Math.floor(now / DAY_MS)
+    if (day.n !== today) [day.n, day.calls] = [today, 0]
+    if (day.calls + count * MODEL_LIMITS.callsPerPlace > MODEL_LIMITS.dailyCalls) {
+      return new WxError(`${host}: the day's allowance of calls (${MODEL_LIMITS.dailyCalls}) is used; not asked again before the day turns`, 503, Math.ceil(((today + 1) * DAY_MS - now) / 1000))
+    }
+    if (now < failedUntilMs) {
+      const s = Math.ceil((failedUntilMs - now) / 1000)
+      return new WxError(`${host}: the last request failed; not asked again for ${s} s`, 503, s)
+    }
+    if (now - lastAskMs < MODEL_LIMITS.gapMs) {
+      const s = Math.ceil((lastAskMs + MODEL_LIMITS.gapMs - now) / 1000)
+      return new WxError(`${host}: asked less than ${MODEL_LIMITS.gapMs / 1000} s ago; not asked again for ${s} s`, 503, s)
+    }
+    return null
+  }
+
+  /** Asks Open-Meteo, in one request, for the places of `wanted` that are not fresh; null when it did or none was needed, else why it did not. */
+  async function fetchLacking(wanted: readonly ModelPlaceAt[]): Promise<WxError | null> {
+    const now = nowMs()
+    const lacking = wanted.filter((p) => !isFresh(held(p.key, now), now))
+    if (lacking.length === 0) return null
+    const why = blocked(now, lacking.length)
+    if (why !== null) return why
+    lastAskMs = now
+    day.calls += lacking.length * MODEL_LIMITS.callsPerPlace // counted when asked: a request that fails may be counted upstream too
+    try {
+      const r = await fetchFn(modelUrl(lacking), { headers: { 'user-agent': o.userAgent }, signal: AbortSignal.timeout(15_000) })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const got = slimPlaces(await r.json(), lacking.length)
+      const at = nowMs()
+      lacking.forEach((p, i) => {
+        places.delete(p.key)
+        places.set(p.key, { ms: at, place: got[i] })
+      })
+      failedUntilMs = 0
+      return null
+    } catch (e) {
+      failedUntilMs = nowMs() + MODEL_LIMITS.failureMs
+      return new WxError(`${host}: ${(e as Error).message}`, 502)
+    }
+  }
+
+  /** The grid of geo from the places held, fetching those it lacks first; a grid that lacks one still is the error that stopped the ask (never a grid with holes). */
+  async function modelGrid(geo: ModelGeo, wanted: readonly ModelPlaceAt[]): Promise<ModelGrid> {
+    let why: WxError | null = null
+    const before = nowMs()
+    if (wanted.some((p) => !isFresh(held(p.key, before), before))) {
+      const run = flight.then(() => fetchLacking(wanted))
+      flight = run
+      why = await run
+    }
+    const now = nowMs()
+    const got = wanted.map((p) => held(p.key, now))
+    if (got.some((h) => h === undefined)) throw why ?? new WxError(`${host}: no forecast held for this place`, 502)
+    return assembleModel(geo, got.map((h) => h!.place))
+  }
+
   return {
     metars(bbox: string | null): Promise<Metar[]> {
       return cached(`${API}/metar?bbox=${parseBbox(bbox).join(',')}&format=json`, METAR_TTL_MS, slimMetars)
@@ -108,7 +215,7 @@ export function makeWx(o: { userAgent: string; fetchFn?: typeof fetch; nowMs?: (
     },
     model(lat: string | null, lon: string | null): Promise<ModelGrid> {
       const geo = modelGeo(lat, lon)
-      return cached(modelUrl(geo), MODEL_TTL_MS, (json) => slimModel(json, geo))
+      return modelGrid(geo, modelPlaces(geo))
     },
   }
 }

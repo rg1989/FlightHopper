@@ -19,7 +19,7 @@ import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { modelWindAt } from './modelWind.ts'
 import { pickShafts, type RainShaft } from './rainShafts.ts'
-import { HAZARD_KM, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
+import { HAZARD_KM, MODEL_CREDIT, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 type Ring = [number, number][]
@@ -41,11 +41,14 @@ test('parseWxAt: ?wxat=lat,lon, in degrees; anything else is none', () => {
   }
 })
 
-test('statusText3d: clouds from the airports held, the hazard areas, a note; singular for one', () => {
-  assert.equal(statusText3d({ airports: 3, areas: 2, note: '' }), 'Clouds from 3 airports · 2 hazard areas')
-  assert.equal(statusText3d({ airports: 1, areas: 1, note: '' }), 'Clouds from 1 airport · 1 hazard area')
-  assert.equal(statusText3d({ airports: 0, areas: 0, note: '' }), 'Clouds from 0 airports · 0 hazard areas')
-  assert.equal(statusText3d({ airports: 3, areas: 0, note: 'some weather unavailable' }), 'Clouds from 3 airports · 0 hazard areas · some weather unavailable')
+test('statusText3d: clouds from the airports held, the hazard areas, the forecast model\'s credit while a grid is held, a note; singular for one', () => {
+  assert.equal(statusText3d({ airports: 3, areas: 2, model: false, note: '' }), 'Clouds from 3 airports · 2 hazard areas')
+  assert.equal(statusText3d({ airports: 1, areas: 1, model: false, note: '' }), 'Clouds from 1 airport · 1 hazard area')
+  assert.equal(statusText3d({ airports: 0, areas: 0, model: false, note: '' }), 'Clouds from 0 airports · 0 hazard areas')
+  assert.equal(statusText3d({ airports: 3, areas: 0, model: false, note: 'some weather unavailable' }), 'Clouds from 3 airports · 0 hazard areas · some weather unavailable')
+  assert.equal(MODEL_CREDIT, 'Weather data by Open-Meteo.com', 'the credit its licence (CC BY 4.0) asks for, as it words it')
+  assert.equal(statusText3d({ airports: 3, areas: 2, model: true, note: '' }), 'Clouds from 3 airports · 2 hazard areas · Weather data by Open-Meteo.com')
+  assert.equal(statusText3d({ airports: 1, areas: 0, model: true, note: 'some weather unavailable' }), 'Clouds from 1 airport · 0 hazard areas · Weather data by Open-Meteo.com · some weather unavailable')
 })
 
 /** The ring a lon/lat box makes, closed as GeoJSON closes it. */
@@ -103,6 +106,8 @@ function fakeSky() {
   }
 }
 
+const GRID_HOUR_MS = 1791014400_000 // 2026-10-03 08:00 UTC: the hour of every grid the rig gives
+const CREDIT = ' · Weather data by Open-Meteo.com' // on the line while a grid is held
 const ISA_Z: Readonly<Record<number, number>> = { 1000: 110, 925: 760, 850: 1460, 700: 3010, 600: 4200, 500: 5570, 400: 7180, 300: 9160, 250: 10360, 200: 11800 } // m
 const WIND_KT = [10, 20, 40, 80, 90, 100] // from the west at 850, 700, 500, 300, 250 and 200 hPa
 interface GridOptions {
@@ -114,7 +119,7 @@ function gridFor(geo: ModelGeo, o: GridOptions = {}): ModelGrid {
   const per = <T>(f: (p: number) => T): T[] => Array.from({ length: geo.n * geo.n }, (_, p) => f(p))
   const wind = o.wind ?? ((l: number): [number, number] => [270, WIND_KT[l]])
   return {
-    ...geo, timeMs: 1791014400_000, elevM: per(() => 0),
+    ...geo, timeMs: GRID_HOUR_MS, elevM: per(() => 0),
     clouds: MODEL_CLOUD_HPA.map((hPa) => ({ hPa, cover: per((p) => o.cover?.(hPa, p) ?? 0), zM: per(() => ISA_Z[hPa]) })),
     winds: MODEL_WIND_HPA.map((hPa, l) => ({ hPa, kt: per((p) => wind(l, p)[1]), deg: per((p) => wind(l, p)[0]) })),
   }
@@ -173,9 +178,10 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     const own = [...frameTiles].find(([path]) => radar.url.includes(path))?.[1]
     return own?.get(key) ?? tiles.get(key) ?? null // as it is when answered
   }
-  const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile })
+  const epoch = { now: GRID_HOUR_MS + 30 * MIN } // the wall clock: half an hour into the hour the grids are for
+  const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile, epochMs: () => epoch.now })
   return {
-    w, asked, answers, model, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks, tileHold, frameTiles,
+    w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks, tileHold, frameTiles,
     releaseTiles: (newestFirst = false) => (newestFirst ? tileHeld.splice(0).reverse() : tileHeld.splice(0)).forEach((f) => f()),
     releaseSome: (n: number) => tileHeld.splice(0, n).forEach((f) => f()), // the first n tiles held
     held: () => tileHeld.length,
@@ -467,14 +473,14 @@ test('Weather3D: a failure that comes late, for a box the aircraft has left, doe
     r.answers.metar = [metar('NEW', 36, 35)]
     r.w.update({ ...AC, lat: 36 }, 1000) // out of it by the north: another box, answered at once
     await flush()
-    assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas')
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 0 hazard areas${CREDIT}`)
     r.failing.add('metar')
     r.release() // the held ask for the box it left fails, late
     await flush()
     r.w.show = false // the line is written again from what is known: with no note
     r.w.show = true
     assert.ok(r.lines.every((line) => !/unavailable/.test(String(line))), 'no note, then or later')
-    assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas')
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 0 hazard areas${CREDIT}`)
     assert.equal(warned.length, 0, 'not even a warning')
     // and the other way round: the current ask fails, the late one for the box it left is answered
     const s = rig()
@@ -560,7 +566,7 @@ test('Weather3D: an answer that lands while it is hidden is kept, not drawn or w
   r.w.show = true
   assert.equal(r.volumes().length, 1)
   assert.equal(r.shown().length, 1)
-  assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 1 hazard area')
+  assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT}`)
 })
 
 test('Weather3D: the panel\'s line: the counts as they come, a note while a source is down, none written while hidden', async () => {
@@ -571,7 +577,7 @@ test('Weather3D: the panel\'s line: the counts as they come, a note while a sour
   r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] }), sigmet({ rings: [northOf(100)] })]
   r.w.update(AC, 0)
   await flush()
-  assert.equal(r.lines.at(-1), 'Clouds from 3 airports · 2 hazard areas')
+  assert.equal(r.lines.at(-1), `Clouds from 3 airports · 2 hazard areas${CREDIT}`)
   const n = r.lines.length
   r.w.update(AC, 1000)
   await flush()
@@ -582,7 +588,7 @@ test('Weather3D: the panel\'s line: the counts as they come, a note while a sour
   await flush()
   assert.equal(r.lines.length, n, 'hidden, the app owns the line')
   r.w.show = true
-  assert.equal(r.lines.at(-1), 'Clouds from 3 airports · 2 hazard areas', 'again when shown, from what it holds')
+  assert.equal(r.lines.at(-1), `Clouds from 3 airports · 2 hazard areas${CREDIT}`, 'again when shown, from what it holds')
 })
 
 test('Weather3D: a failed ask is one warning, a note on the line, the rest still drawn, and asked again in 30 s', async () => {
@@ -597,7 +603,7 @@ test('Weather3D: a failed ask is one warning, a note on the line, the rest still
     assert.equal(r.asks('metar').length, 1)
     assert.equal(warned.length, 1)
     assert.match(String(warned[0][0]), /FlightHopper: 3-D weather .*wx\/metar/)
-    assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area · some weather unavailable')
+    assert.equal(r.lines.at(-1), `Clouds from 0 airports · 1 hazard area${CREDIT} · some weather unavailable`)
     assert.equal(r.volumes().length, 1, 'the hazard areas came')
     r.w.update(AC, 29_000)
     await flush()
@@ -611,7 +617,7 @@ test('Weather3D: a failed ask is one warning, a note on the line, the rest still
     r.w.update(AC, 61_000)
     await flush()
     assert.equal(r.asks('metar').length, 3)
-    assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 1 hazard area', 'the note goes when it is answered')
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT}`, 'the note goes when it is answered')
     r.w.update(AC, 61_000 + 4 * MIN)
     await flush()
     assert.equal(r.asks('metar').length, 3, 'and then the usual 5 min')
@@ -759,7 +765,7 @@ test('Weather3D: clouds from the reports round the aircraft, built when they com
   const drawn = r.sky.clouds.draws[0]
   assert.deepEqual(drawn, nearestClouds([observedClouds(r.w.metars, AC.lat, AC.lon).specs], AC.lat, AC.lon))
   assert.ok(drawn.length > 0 && drawn.every((c) => kmFrom(c, AC) <= 150))
-  assert.equal(r.lines.at(-1), 'Clouds from 2 airports · 0 hazard areas', 'LLBG and LLHA; LLER is too far, SILENT says nothing of the sky')
+  assert.equal(r.lines.at(-1), `Clouds from 2 airports · 0 hazard areas${CREDIT}`, 'LLBG and LLHA; LLER is too far, SILENT says nothing of the sky')
   r.w.update(AC, 32)
   assert.equal(r.sky.clouds.draws.length, 1, 'drawn once')
 })
@@ -1439,7 +1445,7 @@ test('Weather3D: a failed model ask is one warning and a note on the line, asked
     r.w.update(AC, 61_000)
     await flush()
     assert.equal(r.asks('model').length, 3)
-    assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area', 'the note goes when it is answered')
+    assert.equal(r.lines.at(-1), `Clouds from 0 airports · 1 hazard area${CREDIT}`, 'the note goes when it is answered, and the credit comes with the grid')
     assert.notEqual(r.w.model, null)
     r.w.update(AC, 61_000 + 29 * MIN)
     await flush()
@@ -1510,13 +1516,13 @@ test('Weather3D: the model\'s clouds are built when the grid comes and drawn the
   assert.equal(r.sky.clouds.draws.length, 1)
   const observed = observedClouds(r.w.metars, AC.lat, AC.lon).specs
   const model = modelClouds(r.w.model!, r.w.metars)
-  assert.ok(observed.length > 0 && model.length === MODEL_LOOK.max)
+  assert.ok(observed.length > 0 && model.length > 300 && model.length <= MODEL_LOOK.max)
   const sky = r.sky.clouds.draws[0]
   assert.deepEqual(sky, nearestClouds([observed, model], AC.lat, AC.lon))
   const seen = nearestClouds([observed], AC.lat, AC.lon)
   assert.deepEqual(sky.slice(0, seen.length), seen, 'the observed first')
   assert.ok(sky.length === seen.length + model.length && sky.every((c) => kmFrom(c, AC) <= 150), 'then all of the model\'s that are within reach')
-  assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas', 'the line counts airports, as it did')
+  assert.equal(r.lines.at(-1), `Clouds from 1 airport · 0 hazard areas${CREDIT}`, 'the line counts airports, as it did')
   r.w.update(AC, 32)
   assert.equal(r.sky.clouds.draws.length, 1, 'drawn once')
 })
@@ -1567,7 +1573,7 @@ test('Weather3D: where the observed clouds fill the 700 the model\'s are not dra
   const sky = r.sky.clouds.draws.at(-1)!
   assert.equal(sky.length, MAX_CLOUDS)
   const model = keysOf(modelClouds(r.w.model!, r.w.metars))
-  assert.equal(model.size, MODEL_LOOK.max)
+  assert.ok(model.size > 300 && model.size <= MODEL_LOOK.max)
   assert.ok(!sky.some((c) => model.has(cloudKey(c))), 'none of the model\'s')
 })
 
@@ -1625,12 +1631,12 @@ test('Weather3D: the model\'s clouds are worked out once for a grid and the repo
 
 test('Weather3D: rebuildSky works the model\'s clouds out again from the grid, so a changed look shows (a check aid)', async () => {
   const r = rig()
-  r.model.make = (geo) => gridFor(geo, { cover: (hPa, p) => (hPa === 925 && p === 24 ? 100 : 0) }) // an overcast low deck over the middle place
+  r.model.make = (geo) => gridFor(geo, { cover: (hPa, p) => (hPa === 925 && p === 24 ? 30 : 0) }) // a scattered low layer over the middle place
   await open(r)
   r.w.update(AC, 16)
   const was = MODEL_LOOK.low.density
   const before = r.sky.clouds.draws[0].length
-  assert.ok(before > 100)
+  assert.ok(before > 20)
   try {
     ;(MODEL_LOOK.low as { density: number }).density = was / 2
     r.w.update(AC, 1000) // a look, no rebuild due
@@ -1686,4 +1692,77 @@ test('Weather3D: a grid that lands while it is hidden is kept, not drawn; shown 
   r.w.update(AC, 32)
   r.w.update(AC, 48)
   assert.ok(r.sky.clouds.draws.length > draws && r.sky.clouds.draws.at(-1)!.length > 100, 'shown: built from what it holds')
+})
+
+test('Weather3D: while a model grid is held the line carries Open-Meteo\'s credit, after the counts and before a note; not before the grid has come, nor if it never does', async () => {
+  const r = rig()
+  r.hold.add('model')
+  r.w.show = true
+  r.w.update(AC, 0)
+  await flush()
+  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas', 'asked, not here yet: no credit')
+  r.hold.clear()
+  r.release()
+  await flush()
+  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas · Weather data by Open-Meteo.com')
+  r.failing.add('sigmet')
+  r.w.update(AC, 10 * MIN + 1000)
+  await flush()
+  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas · Weather data by Open-Meteo.com · some weather unavailable', 'a note goes after it')
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    const down = rig()
+    down.failing.add('model')
+    await open(down)
+    assert.equal(down.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas · some weather unavailable', 'no grid: no credit')
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('Weather3D: a grid whose hour is more than 3 h old is no grid: no wind, no clouds, no credit, and it is asked for again at the next look; 3 h exactly, or no hour known, is kept', async () => {
+  const r = rig()
+  r.model.make = CLOUDY
+  await open(r)
+  drawn(r, AC, 1000)
+  const modelPuffs = (): number => r.sky.clouds.draws.at(-1)!.length
+  assert.ok(modelPuffs() > 100 && r.w.windAt(AC.lat, AC.lon, 30_000) !== null && /Open-Meteo/.test(String(r.lines.at(-1))))
+  r.epoch.now = GRID_HOUR_MS + 3 * 60 * MIN // 3 h exactly
+  drawn(r, AC, 40_000)
+  await flush()
+  assert.equal(r.asks('model').length, 1, 'not asked for again: it is not too old')
+  assert.ok(r.w.windAt(AC.lat, AC.lon, 30_000) !== null && modelPuffs() > 100)
+  r.epoch.now += 1
+  r.model.make = (geo) => ({ ...CLOUDY(geo), timeMs: r.epoch.now - 10 * MIN }) // the next answer is for a fresh hour
+  assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null, 'no wind from it, at once')
+  r.w.update(AC, 41_000) // a look: the clouds are built without it; it is asked for again
+  assert.equal(r.asks('model').length, 2, 'asked at the first look after, 40 s from the last ask')
+  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas', 'no credit while there is no grid in use')
+  r.w.update(AC, 41_016)
+  r.w.update(AC, 41_032)
+  assert.equal(modelPuffs(), 0, 'its clouds are gone')
+  await flush() // the new grid comes
+  assert.ok(r.w.windAt(AC.lat, AC.lon, 30_000) !== null)
+  drawn(r, AC, 42_000)
+  assert.ok(modelPuffs() > 100 && /Open-Meteo/.test(String(r.lines.at(-1))), 'the new grid is in use: its clouds, its credit')
+  // no hour known: kept however long
+  const open_ = rig()
+  open_.model.make = (geo) => ({ ...gridFor(geo), timeMs: null })
+  await open(open_)
+  open_.epoch.now = GRID_HOUR_MS + 100 * 60 * MIN
+  open_.w.update(AC, 40_000)
+  await flush()
+  assert.equal(open_.asks('model').length, 1)
+  assert.ok(open_.w.windAt(AC.lat, AC.lon, 30_000) !== null)
+})
+
+test('Weather3D: a grid too old that the server keeps serving is asked for no more than every 30 s', async () => {
+  const r = rig()
+  r.model.make = (geo) => ({ ...gridFor(geo), timeMs: GRID_HOUR_MS - 4 * 60 * MIN }) // 4 h 30 min old when it comes: the server holds nothing newer
+  await open(r)
+  for (let t = 1000; t < 100_000; t += 1000) r.w.update(AC, t)
+  await flush()
+  assert.deepEqual(r.asks('model').length, 4, 'at 0, 30, 60 and 90 s')
+  assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null)
 })

@@ -6,7 +6,9 @@
 //   samples them, as the top-down map's radar does), each every 10 min;
 // - a weather model's forecast (Open-Meteo, through the server): a grid of 7 × 7 places 0.25° apart round the 0.5° cell the aircraft
 //   is in, asked again every 30 min and when the aircraft leaves the inner half of the grid held (not within 30 s of the last ask).
-//   A forecast, not an observation: it draws only what nothing else says, and the wind it gives is an estimate.
+//   A forecast, not an observation: it draws only what nothing else says, and the wind it gives is an estimate. A grid whose hour is
+//   more than 3 h old is not used (its server serves the places it holds when Open-Meteo cannot be asked), and is asked for again.
+//   While one is held the panel's line carries Open-Meteo's credit (CC BY 4.0).
 // It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft (wxGeo.ts picks them): each
 // ring a translucent volume from the area's base (none: the ground) to its top, and the area's name and heights a label at
 // the ring's middle at the top height, placed with the place names (placeLabels.ts keeps them clear of each other and of the
@@ -61,8 +63,11 @@ import { sigmetColor, sigmetLabel } from './wxText.ts'
 const BOX_DEG = 2 // the METAR box reaches this far from the aircraft each way, rounded out to whole degrees
 const METAR_EVERY_MS = 5 * 60_000
 const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and the radar frame
-const MODEL_EVERY_MS = 30 * 60_000 // the model's values are hourly; the server keeps a cell this long
+const MODEL_EVERY_MS = 30 * 60_000 // the model's values are hourly; the server keeps a place this long
 const MODEL_N_MAX = 15 // a grid of more places a side than this is not the server's
+const MODEL_MAX_AGE_MS = 3 * 60 * 60_000 // a grid whose hour is older than this is not used
+/** What Open-Meteo's licence (CC BY 4.0) asks to be credited with, as it words it: on the panel's line while a grid is held. */
+export const MODEL_CREDIT = 'Weather data by Open-Meteo.com'
 const RETRY_MS = 30_000 // a failed ask is made again after this
 const LOOK_MS = 1000 // update() looks at its clocks and the aircraft this often
 export const HAZARD_KM = 800 // hazard areas are drawn when their ring passes this near the aircraft
@@ -107,10 +112,10 @@ export function parseWxAt(search: string): WxAt | null {
   return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : null
 }
 
-/** The panel's one-line summary: "Clouds from 3 airports · 2 hazard areas". */
-export function statusText3d(s: { airports: number; areas: number; note: string }): string {
+/** The panel's one-line summary: "Clouds from 3 airports · 2 hazard areas · Weather data by Open-Meteo.com" (the credit while the forecast model's grid is in use). */
+export function statusText3d(s: { airports: number; areas: number; model: boolean; note: string }): string {
   const count = (n: number, what: string): string => `${n} ${what}${n === 1 ? '' : 's'}`
-  return [`Clouds from ${count(s.airports, 'airport')}`, count(s.areas, 'hazard area'), ...(s.note ? [s.note] : [])].join(' · ')
+  return [`Clouds from ${count(s.airports, 'airport')}`, count(s.areas, 'hazard area'), ...(s.model ? [MODEL_CREDIT] : []), ...(s.note ? [s.note] : [])].join(' · ')
 }
 
 type Box = readonly [south: number, west: number, north: number, east: number]
@@ -143,6 +148,7 @@ export interface Weather3DOptions {
   getJson?: (url: string) => Promise<unknown>
   sky?: Sky // default: Cesium's, in the viewer's scene
   tile?: (radar: RadarSource, z: number, x: number, y: number) => Promise<SourceTile | null> // a decoded radar tile; default the source's own
+  epochMs?: () => number // the wall clock the model's grid is dated by; default Date.now
 }
 
 async function getJson(url: string): Promise<unknown> {
@@ -189,6 +195,7 @@ export class Weather3D {
   readonly #at: WxAt | null
   readonly #sky: Sky
   readonly #tile: (radar: RadarSource, z: number, x: number, y: number) => Promise<SourceTile | null>
+  readonly #epochMs: () => number
   readonly #volumes = new CustomDataSource('hazard-volumes')
   readonly #here: Aircraft = { lat: 0, lon: 0, altM: 0 }
   readonly #hereWC = new Cartesian3()
@@ -217,7 +224,8 @@ export class Weather3D {
   #modelDue = -Infinity
   #modelAskedMs = -Infinity // when the grid was last asked for
   #modelAsk = 0 // the ask in hand: an answer to an earlier one is not heard
-  #modelGen = 0 // the grid held: the clouds are built again from it when it changes
+  #modelGen = 0 // the grid held: the clouds are built again from it when it changes (or when it grows too old to use)
+  #modelOld = false // the grid held was too old to use at the last look
   #builtModel = -1
   #modelMade: { grid: ModelGrid; metars: readonly Metar[]; specs: CloudSpec[] } | null = null // the model's clouds, kept for the grid and the reports they were made from
   #metarGen = 0 // the METAR list held: the clouds are built again from it when it changes
@@ -256,6 +264,7 @@ export class Weather3D {
     this.#at = opts.at ?? null
     this.#sky = opts.sky ?? cesiumSky(viewer)
     this.#tile = opts.tile ?? ((radar, z, x, y) => radar.get(z, x, y))
+    this.#epochMs = opts.epochMs ?? Date.now
     this.#volumes.show = false
     void viewer.dataSources.add(this.#volumes)
   }
@@ -329,7 +338,18 @@ export class Weather3D {
    * none. Null when hidden (the grid is only asked for while shown), before it has come, or where it does not reach.
    */
   windAt(lat: number, lon: number, pressureAltFt: number): ModelWind | null {
-    return this.#show && this.#model !== null ? modelWindAt(this.#model, lat, lon, pressureAltFt) : null
+    const grid = this.#grid()
+    return this.#show && grid !== null ? modelWindAt(grid, lat, lon, pressureAltFt) : null
+  }
+
+  /** Whether the grid's hour is more than 3 h gone (none known: not): the grid is then used for nothing and asked for again. */
+  #tooOld(g: ModelGrid): boolean {
+    return g.timeMs !== null && this.#epochMs() - g.timeMs > MODEL_MAX_AGE_MS
+  }
+
+  /** The grid held, or null when there is none or it is too old to use. */
+  #grid(): ModelGrid | null {
+    return this.#model !== null && !this.#tooOld(this.#model) ? this.#model : null
   }
 
   /** The Sun's night (0 day … 1 night) the sky is lit by: app.ts gives it every frame, 0 while the Sun toggle is off. */
@@ -426,13 +446,14 @@ export class Weather3D {
   }
 
   /**
-   * The model's grid when it is due (every 30 min), or when the aircraft is out of the inner half of the grid held, but not within
-   * 30 s of the last ask: a grid the server cannot centre on the aircraft (near a pole) would be asked for at every look.
+   * The model's grid when it is due (every 30 min), or when the aircraft is out of the inner half of the grid held or the grid is
+   * too old, but not within 30 s of the last ask: a grid the server cannot centre on the aircraft (near a pole), or has no newer
+   * than 3 h to give, would be asked for at every look.
    */
   #askModel(nowMs: number, lat: number, lon: number): void {
     const grid = this.#model
-    const leaving = grid !== null && !inInnerHalf(grid, this.#here.lat, this.#here.lon)
-    if (nowMs < this.#modelDue && !(leaving && nowMs - this.#modelAskedMs >= RETRY_MS)) return
+    const wanted = grid !== null && (!inInnerHalf(grid, this.#here.lat, this.#here.lon) || this.#tooOld(grid)) // out of its inner half, or too old
+    if (nowMs < this.#modelDue && !(wanted && nowMs - this.#modelAskedMs >= RETRY_MS)) return
     this.#modelDue = nowMs + MODEL_EVERY_MS
     this.#modelAskedMs = nowMs
     void this.#loadModel(`${this.#apiBase}/wx/model?lat=${+lat.toFixed(3)}&lon=${+lon.toFixed(3)}`, ++this.#modelAsk, nowMs)
@@ -527,6 +548,11 @@ export class Weather3D {
       this.#labelKey = labels
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, this.#hazards.map((h) => this.#label(h, u)))
     }
+    const old = this.#model !== null && this.#tooOld(this.#model)
+    if (old !== this.#modelOld) {
+      this.#modelOld = old
+      this.#modelGen++ // the sky is built again without it, or with it
+    }
     if (this.#builtGen !== this.#metarGen || this.#builtRadar !== this.#radarGen || this.#builtModel !== this.#modelGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
     const from = Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC)
     this.#sky.clouds.fade(from)
@@ -576,7 +602,7 @@ export class Weather3D {
    * of flight finds them as they were. None before the grid has come.
    */
   #modelSky(): CloudSpec[] {
-    const grid = this.#model
+    const grid = this.#grid()
     if (grid === null) return []
     const made = this.#modelMade
     if (made !== null && made.grid === grid && made.metars === this.#metars) return made.specs
@@ -754,7 +780,7 @@ export class Weather3D {
   /** The panel's line, written when it changes; hidden, the app owns it. */
   #status(): void {
     if (!this.#show) return
-    const text = statusText3d({ airports: this.#stations, areas: this.#hazards.length, note: this.#down.size > 0 ? NOTE : '' })
+    const text = statusText3d({ airports: this.#stations, areas: this.#hazards.length, model: this.#grid() !== null, note: this.#down.size > 0 ? NOTE : '' })
     if (text === this.#line) return
     this.#line = text
     this.#onStatus(text)

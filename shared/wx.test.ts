@@ -1,7 +1,7 @@
 // shared/wx.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MODEL_CLOUD_HPA, MODEL_VARIABLES, MODEL_WIND_HPA, slimMetars, slimModel, type ModelGeo } from './wx.ts'
+import { MODEL_CLOUD_HPA, MODEL_VARIABLES, MODEL_WIND_HPA, assembleModel, slimMetars, slimModel, slimPlaces, type ModelGeo, type ModelPlace } from './wx.ts'
 
 const MI = 1.609344 // km in a statute mile
 const near = (a: number | null, b: number): boolean => a !== null && Math.abs(a - b) < 1e-9
@@ -184,8 +184,8 @@ test('slimModel: a value the model has none for is null, wherever it is; so is o
   assert.equal(g.winds[5].kt[8], null, 'a key left out')
   assert.equal(g.clouds[3].cover[1], 4, 'a neighbour is as it was')
   assert.equal(g.clouds[3].cover[3], 6)
-  const bare = slimModel(answer({ 0: { time: [] }, 1: { time: [null] }, 2: { time: [1791018000] } }), GEO)
-  assert.equal(bare.timeMs, 1791018000_000, 'the hour is the first place\'s that has one')
+  const bare = slimModel(answer({ 0: { time: [] }, 1: { time: [null] }, 2: { time: [1791010800] } }), GEO)
+  assert.equal(bare.timeMs, 1791010800_000, 'the hour is the oldest place\'s: a place without one counts for nothing')
   const none = slimModel(answer().map(() => ({ hourly: {} })), GEO)
   assert.equal(none.timeMs, null)
   assert.ok(none.elevM.every((v) => v === null) && none.clouds.every((l) => l.cover.every((v) => v === null)) && none.winds.every((l) => l.kt.every((v) => v === null)))
@@ -211,4 +211,59 @@ test('slimModel: anything but one object a place is an error: the server serves 
   }
   assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? null : p)), GEO), /expected an object for each of 49 places/, 'a place that is not an object')
   assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? 'x' : p)), GEO), /expected an object/)
+})
+
+test('slimPlaces: one ModelPlace for each place asked, by level; many places come as an array, one place as the object itself (or an array of one)', () => {
+  const [one] = slimPlaces(REAL_PLACE, 1)
+  assert.deepEqual(one, {
+    timeMs: 1791014400_000, elevM: 0, cover: [0, 0, 0, 5, 0, 0, 0, 0, 0, 0], zM: [158, 834, 1554, 3153, 4386, 5802, 7458, 9497, 10731, 12172],
+    kt: [17.1, 16.4, 42.4, 83.4, 82.5, 92], deg: [213, 231, 236, 237, 236, 233],
+  })
+  assert.deepEqual(slimPlaces([REAL_PLACE], 1), [one])
+  const many = slimPlaces(answer({}, 3), 3)
+  assert.equal(many.length, 3)
+  assert.deepEqual(many.map((p) => p.cover[0]), [0, 1, 2], 'in the order asked: place k, level 0')
+  assert.equal(many[2].zM[3], 302, 'whole metres: 100 × 3 + 2 + 0.4')
+  assert.equal(many[1].elevM, 11, '10 + 1 + 0.4')
+  assert.deepEqual(many[0].kt, [0.04, 10.04, 20.04, 30.04, 40.04, 50.04].map((v) => Math.round(v * 10) / 10))
+  const gaps = slimPlaces([{ hourly: { time: [1791014400], cloud_cover_925hPa: [null], wind_speed_850hPa: ['x'] }, elevation: 'high' }], 1)[0]
+  assert.deepEqual([gaps.elevM, gaps.cover[1], gaps.kt[0], gaps.zM[0], gaps.timeMs], [null, null, null, null, 1791014400_000], 'a value that is not a number, or not there, is null')
+})
+
+test('slimPlaces: anything but an object with hourly for each place asked is an error: a place that failed is never kept as a place with no values', () => {
+  const bad: [unknown, number][] = [
+    [null, 1], [{}, 1], [[], 1], [[REAL_PLACE, REAL_PLACE], 1], [{ error: true, reason: 'Latitude must be in range of -90 to 90°.' }, 1], ['x', 1], [{ hourly: null }, 1],
+    [answer({}, 48), 49], [answer({}, 50), 49], [REAL_PLACE, 2], [answer({}, 3).map((p, k) => (k === 1 ? { elevation: 3 } : p)), 3], [answer({}, 3).map((p, k) => (k === 1 ? null : p)), 3],
+  ]
+  for (const [json, count] of bad) assert.throws(() => slimPlaces(json, count), /expected an object for each of \d+ places/, JSON.stringify(json)?.slice(0, 50))
+})
+
+/** A place with this cover at level 0, this height at level 1, this wind at level 0, in this hour. */
+const place = (cover: number | null, z: number | null, kt: number | null, timeMs: number | null): ModelPlace => ({
+  timeMs, elevM: z, cover: MODEL_CLOUD_HPA.map((_, l) => (l === 0 ? cover : null)), zM: MODEL_CLOUD_HPA.map((_, l) => (l === 1 ? z : null)),
+  kt: MODEL_WIND_HPA.map((_, l) => (l === 0 ? kt : null)), deg: MODEL_WIND_HPA.map(() => 270),
+})
+
+test('assembleModel: places row by row become the grid\'s arrays by level; its hour is the oldest place\'s; the places themselves are not touched', () => {
+  const places = Array.from({ length: 49 }, (_, k) => place(k, 1000 + k, k / 10, 1791014400_000 + ((k + 3) % 5) * 600_000)) // the first is 30 min into the hour, the third is the oldest
+  const copy = structuredClone(places)
+  const g = assembleModel(GEO, places)
+  assert.deepEqual([g.lat0, g.lon0, g.step, g.n], [31.5, 34, 0.25, 7])
+  assert.equal(g.timeMs, 1791014400_000, 'the oldest')
+  assert.deepEqual(g.elevM, places.map((p) => p.elevM))
+  assert.deepEqual(g.clouds.map((l) => l.hPa), MODEL_CLOUD_HPA)
+  assert.deepEqual(g.clouds[0].cover, Array.from({ length: 49 }, (_, k) => k))
+  assert.equal(g.clouds[0].zM[5], null, 'level 0 has no height here')
+  assert.deepEqual(g.clouds[1].zM, Array.from({ length: 49 }, (_, k) => 1000 + k))
+  assert.deepEqual(g.winds[0].kt, Array.from({ length: 49 }, (_, k) => k / 10))
+  assert.deepEqual(g.winds[3].deg, Array.from({ length: 49 }, () => 270))
+  assert.deepEqual(places, copy)
+  assert.equal(assembleModel(GEO, places.map((p) => ({ ...p, timeMs: null }))).timeMs, null, 'no place knows its hour')
+  assert.throws(() => assembleModel(GEO, places.slice(1)), /expected 49 places, got 48/)
+  assert.throws(() => assembleModel(GEO, [...places, places[0]]), /expected 49 places, got 50/)
+})
+
+test('slimModel is slimPlaces assembled: the same grid, place for place', () => {
+  const json = answer({ 7: { cloud_cover_700hPa: [null] } })
+  assert.deepEqual(slimModel(json, GEO), assembleModel(GEO, slimPlaces(json, 49)))
 })

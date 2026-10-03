@@ -7,18 +7,23 @@
 // fade() at each look fades each cloud by its distance from the aircraft (cloudField.ts fadeAlpha), hiding those faded out.
 // Cesium's clouds are billboards that face the camera, each a puff ray-cast through a noise texture: they read best from the
 // side, as from a cockpit or the chase camera; straight from above or below, a deck shows as strips.
-// ponytail: a cloud is drawn whole at its middle's depth, so one the camera flies through fills the view until its middle
-// passes behind the camera, then goes at once. Upgrade: fade a cloud out as the camera comes within its size.
+// A cloud is drawn whole at its middle's depth, so one the camera flies through fills the view until its middle passes behind
+// the camera, then goes at once. A spec with clearKm (the model's puffs, 12 to 27 km wide at the aircraft's own height) is hidden
+// at each look while the aircraft is at a height its puff spans (and a margin: the camera is a little off the aircraft) and within
+// clearKm of it, and fades back in over as far again.
+// ponytail: a cloud without clearKm (a report's, the radar's) is not: one the camera flies through fills the view as above.
+// Upgrade: clearKm for every cloud, by its size.
 import { Cartesian2, Cartesian3, CloudCollection, Color, Ellipsoid, type CumulusCloud, type PrimitiveCollection } from 'cesium'
 import { geoidN } from '../../shared/geoid.ts'
 import type { TerrainFrame } from '../types.ts'
-import { fadeAlpha, sunBrightness, type CloudSpec } from './cloudField.ts'
-import { drawnHeightM } from './exaggeration.ts'
+import { PUFF_FILL, fadeAlpha, sunBrightness, type CloudSpec } from './cloudField.ts'
+import { drawnHeightM, smoothstep } from './exaggeration.ts'
 
 export const NOISE_DETAIL = 16 // Cesium's default: the detail of its cloud noise texture (a power of two, 8–32)
 const TINT_GREY = [0.55, 0.52, 0.48] // red, green and blue taken away at tint 1: a dark grey, a little blue
 const NIGHT_STEP = 0.02 // the brightness is written again when the night has changed by this
 const FADE_STEP = 0.05 // a cloud's fade is written again when it has changed by this
+const CLEAR_MARGIN_M = 300 // a puff with clearKm also hides for an aircraft this far over or under the height it spans: the camera is that far off it
 const STRIDE = 7 // per cloud in #at: its place at its true height (x, y, z), the ellipsoid's up there (x, y, z), its ground above the ellipsoid
 
 const scratch = new Cartesian3()
@@ -131,14 +136,21 @@ export class CloudLayer {
     this.#primitives.remove(this.#coll) // and destroys it
   }
 
-  /** How much of cloud i shows from where it is faded from, in steps (all of it before any fade). */
+  /** How much of cloud i shows from where it is faded from, in steps (all of it before any fade): by its distance, and, for a puff with clearKm, by how near the aircraft is at its height. */
   #alphaAt(i: number): number {
     const from = this.#from
     if (from === null) return 1
     const a = this.#at
     const k = i * STRIDE
-    const km = Math.hypot(a[k] - from.x, a[k + 1] - from.y, a[k + 2] - from.z) / 1000
-    return Math.round(fadeAlpha(this.#specs[i], km) / FADE_STEP) * FADE_STEP
+    const [dx, dy, dz] = [a[k] - from.x, a[k + 1] - from.y, a[k + 2] - from.z]
+    const m = Math.hypot(dx, dy, dz)
+    const s = this.#specs[i]
+    let alpha = fadeAlpha(s, m / 1000)
+    if (s.clearKm !== undefined && alpha > 0) {
+      const above = -(dx * a[k + 3] + dy * a[k + 4] + dz * a[k + 5]) // the aircraft's height over the puff's middle, along the up there
+      if (Math.abs(above) <= (PUFF_FILL * s.scale[1]) / 2 + CLEAR_MARGIN_M) alpha *= smoothstep((Math.sqrt(Math.max(0, m * m - above * above)) / 1000 / s.clearKm) - 1)
+    }
+    return Math.round(alpha / FADE_STEP) * FADE_STEP
   }
 
   /** Cloud i where it is drawn: its true place moved along up by as much as its ground is moved (scratch: read it at once). */
