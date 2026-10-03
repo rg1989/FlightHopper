@@ -204,13 +204,13 @@ function samples(f: (t: number) => number, toS: number, o: Partial<Sample> = {})
 
 test('sample: a live emergency descent opens a descent event (pushed); a military or light aircraft, or a slow one, does not', () => {
   const { a, pushed } = setup()
-  const fall = (t: number): number => (t < 50 ? 35_000 : Math.max(22_000, 35_000 - 110 * (t - 50)))
+  const fall = (t: number): number => (t < 50 ? 35_000 : Math.max(19_000, 35_000 - 140 * (t - 50)))
   const s = samples(fall, 200)
   for (let i = 0; i < s.length; i++) a.sample(s[i], () => s.slice(0, i + 1))
   const [e] = a.reply().events
   assert.equal(e.kind, 'descent')
   assert.equal(e.drop!.fromFt, 35_000)
-  assert.ok(e.drop!.fromFt - e.drop!.toFt >= 10_000)
+  assert.ok(e.drop!.fromFt - e.drop!.toFt >= 15_000)
   assert.equal(e.openedMs, T0 + 50_000)
   assert.equal(pushed.length, 1)
   const b = setup()
@@ -244,8 +244,8 @@ test('scanSlot: late events for two emergency idents, an emergency descent and a
     if (s === 600 || s === 660) records.push({ hex: 'a00001', callsign: 'AAL1', squawk: '7700' })
     // a dive from 34,700 ft to 30,000 ft in 30 s, at 1300 s, then nothing
     if (s <= 1300) records.push({ hex: 'a00002', lat: 41, lon: -71, alt: s < 1270 ? 34_700 : 34_700 - ((s - 1270) / 30) * 4700, gs: 450 })
-    // an emergency descent: 12,000 ft in 110 s from FL360 at 200 s, then level
-    records.push({ hex: 'a00003', lat: 42, lon: -72, alt: s < 200 ? 36_000 : Math.max(24_000, 36_000 - ((s - 200) / 110) * 12_000), gs: 450 })
+    // an emergency descent: 17,000 ft in 110 s from FL360 at 200 s, then level
+    records.push({ hex: 'a00003', lat: 42, lon: -72, alt: s < 200 ? 36_000 : Math.max(19_000, 36_000 - ((s - 200) / 110) * 17_000), gs: 450 })
     // a light aircraft falling the same way from 14,000 ft: none, as it never reaches FL150 (its table category is not used)
     records.push({ hex: 'a00004', lat: 43, lon: -73, alt: s < 200 ? 14_000 : Math.max(2_000, 14_000 - ((s - 200) / 110) * 12_000), gs: 100 })
     slices.push({ tMs: slot + s * 1000, records })

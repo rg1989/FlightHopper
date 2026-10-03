@@ -357,6 +357,18 @@ test('file: a hit is a use; maxSlots is 4 unless told', async () => {
   assert.deepEqual(store.status().slots.map((s) => s.slotMs), [e, d, AGO(1), NEWEST])
 })
 
+test('held: a look is not a use: it does not change the use order, so the file looked at is still the one to go', async () => {
+  const { store, serve } = setup()
+  const [a, b, c] = [AGO(2), AGO(3), AGO(4)]
+  for (const s of [NEWEST, AGO(1), a, b, c]) serve(s, ok(s))
+  await store.tick()
+  await store.file(a)
+  await store.file(b) // held: the newest two, a, b
+  assert.deepEqual(store.held(a), heat(a)) // looked at, not used: b is still the more recent
+  await store.file(c)
+  assert.deepEqual(store.status().slots.map((s) => s.slotMs), [c, b, AGO(1), NEWEST], 'a went, not b')
+})
+
 test('file: at most 2 downloads at once: a third slot is unavailable with no request; the same slot is shared; held and missing ones still answer', async () => {
   const { store, calls, serve } = setup()
   const [held, gone, x, y, z] = [AGO(1), AGO(2), AGO(3), AGO(4), AGO(5)]

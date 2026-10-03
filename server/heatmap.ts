@@ -43,6 +43,7 @@ const NON_ICAO = 0x1000000
 const GROUND = -123
 const NO_ALT = -124
 const NO_GS = -1
+const MIN_AIR_GS = 500 // 50 kt, in the file's 0.1 kt: slower, with an altitude and no ground flag, is taxiing
 const MAX_LAT = 90_000_000 // micro-degrees, as the file has them
 const MAX_LON = 180_000_000
 
@@ -50,6 +51,25 @@ const MAX_LON = 180_000_000
 function addressOf(hex: string): number {
   const nonIcao = hex.startsWith('~')
   return (parseInt(nonIcao ? hex.slice(1) : hex, 16) & 0xffffff) | (nonIcao ? NON_ICAO : 0)
+}
+
+/** The hex of an address key: 6 digits, '~' first for a non-ICAO address. */
+function hexOf(key: number): string {
+  return (key & NON_ICAO ? '~' : '') + (key & 0xffffff).toString(16).padStart(6, '0')
+}
+
+/**
+ * The second into the half hour at slotMs of the slice whose header is at o. Rounded to whole seconds first, so a file stamped
+ * a few ms off, early or late, groups as one on the grid does. The + 0 turns a -0 (a slice 3 ms early) into 0.
+ */
+function sliceSec(dv: DataView, o: number, slotMs: number): number {
+  return Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - slotMs) / 1000) + 0
+}
+
+/** The squawk in an ident's second word: 4 digits, null for 0 (readsb writes 0 when it has none). */
+function squawkOf(w1: number): string | null {
+  const digits = w1 & 0xffff
+  return digits === 0 ? null : digits.toString(10).padStart(4, '0')
 }
 
 /** Test and tool helper: a decompressed heatmap file, index records first as readsb writes them. */
@@ -141,9 +161,7 @@ export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon:
   for (; o < end; o += REC) {
     const w0 = dv.getUint32(o, true)
     if (w0 === HEAT_MAGIC) {
-      // Rounded to whole seconds first, so a file stamped a few ms off, early or late, groups as one on the grid does.
-      // The + 0 turns a -0 (a slice 3 ms early) into 0.
-      const at = Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - q.slotMs) / 1000) + 0
+      const at = sliceSec(dv, o, q.slotMs)
       const g = Math.floor(at / q.stepS)
       keep = at >= 0 && at < SLOT_MS / 1000 && g !== group
       if (keep) {
@@ -184,11 +202,10 @@ export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon:
     .sort((a, b) => a - b)
     .map((key) => {
       const trk = tracks.get(key)!
-      trk.hex = (key & NON_ICAO ? '~' : '') + (key & 0xffffff).toString(16).padStart(6, '0')
+      trk.hex = hexOf(key)
       const id = identAt.get(key)
       if (id !== undefined) {
-        const squawk = dv.getInt32(id + 4, true) & 0xffff
-        trk.squawk = squawk === 0 ? null : squawk.toString(10).padStart(4, '0') // readsb writes 0 when it has none
+        trk.squawk = squawkOf(dv.getInt32(id + 4, true))
         trk.callsign = callsignAt(buf, id + 8)
       }
       return trk
@@ -198,12 +215,12 @@ export function readSlot(buf: Uint8Array, q: { slotMs: number; lat: number; lon:
 
 /** One aircraft of a half-hour file as the alerts read it (scanSlot). */
 export interface ScanAircraft {
-  alt: AltSeries // its airborne altitudes (ft, 25 ft steps; baro, or GNSS where readsb had no baro): t in s into the slot
+  alt: AltSeries // its altitudes off the ground, whatever its speed (ft, 25 ft steps; baro, or GNSS where readsb had no baro): t in s into the slot
   lat: number // its newest position
   lon: number
   tS: number // when, in s into the slot
   callsign: string | null // from its newest ident record
-  squawks: { tS: number; squawk: string }[] // its ident records carrying one of the codes asked for while airborne
+  squawks: { tS: number; squawk: string }[] // its ident records carrying one of the codes asked for while airborne (see scanSlot)
 }
 
 export interface SlotScan {
@@ -212,10 +229,15 @@ export interface SlotScan {
 }
 
 /**
- * One pass over a decompressed half-hour file for the alerts (server/alerts.ts): each aircraft's airborne altitudes, its
- * newest position and callsign, and its ident records that carry one of `codes` while it is airborne (its newest position
- * before the record was not on the ground). Slices stamped outside the half hour are skipped, as readSlot does. null: no
- * slice header. ponytail: every aircraft's altitudes are held at once, about 2 million numbers for a busy half hour.
+ * One pass over a decompressed half-hour file for the alerts (server/alerts.ts): each aircraft's altitudes, its newest position
+ * and callsign, and its ident records that carry one of `codes` while it is airborne. What counts, exactly:
+ *   - an ident counts when the aircraft's newest position before it had a known altitude off the ground and a ground speed that
+ *     is unknown or 50 kt or more (a taxiing aircraft can report -250 ft at 19 kt without the ground flag);
+ *   - a position with an unknown altitude leaves that state unchanged; before any position it is unknown, and an ident does not count;
+ *   - idents in slices outside the half hour are not read: a slice stamped before the slot or at 30 min or later is skipped, as
+ *     readSlot does, and endS is the last slice kept.
+ * An altitude is collected for every position with a known altitude off the ground, whatever its speed. null: no slice header.
+ * ponytail: every aircraft's altitudes are held at once, about 2 million numbers for a busy half hour.
  */
 export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<string>): SlotScan | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
@@ -237,7 +259,7 @@ export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<str
   for (; o < end; o += REC) {
     const w0 = dv.getUint32(o, true)
     if (w0 === HEAT_MAGIC) {
-      const at = Math.round((dv.getUint32(o + 4, true) * 2 ** 32 + dv.getUint32(o + 8, true) - slotMs) / 1000) + 0
+      const at = sliceSec(dv, o, slotMs)
       keep = at >= 0 && at < SLOT_MS / 1000
       if (keep) endS = Math.max(endS, (sec = at))
       continue
@@ -248,8 +270,7 @@ export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<str
     if (w1 >= IDENT) {
       const a = get(key)
       a.callsign = callsignAt(buf, o + 8)
-      const digits = w1 & 0xffff
-      const squawk = digits === 0 ? null : digits.toString(10).padStart(4, '0')
+      const squawk = squawkOf(w1)
       if (squawk !== null && codes.has(squawk) && a.airborne === true) a.squawks.push({ tS: sec, squawk })
       continue
     }
@@ -262,7 +283,8 @@ export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<str
     const alt = dv.getInt16(o + 12, true)
     if (alt === GROUND) a.airborne = false
     else if (alt !== NO_ALT) {
-      a.airborne = true
+      const gs = dv.getInt16(o + 14, true)
+      a.airborne = gs === NO_GS || gs >= MIN_AIR_GS
       a.alt.t.push(sec)
       a.alt.ft.push(alt * 25)
     }
@@ -270,7 +292,7 @@ export function scanSlot(buf: Uint8Array, slotMs: number, codes: ReadonlySet<str
   const aircraft = new Map<string, ScanAircraft>()
   for (const [key, { airborne, ...a }] of byKey) {
     if (a.tS < 0) continue // ident records only: no place to show
-    aircraft.set((key & NON_ICAO ? '~' : '') + (key & 0xffffff).toString(16).padStart(6, '0'), a)
+    aircraft.set(hexOf(key), a)
   }
   return { endS, aircraft }
 }

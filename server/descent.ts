@@ -1,7 +1,8 @@
 // server/descent.ts
 // Steep descents in a series of barometric altitudes (docs/anomaly-alerts.md §3.2), as two rules:
-//   D1, descent: from FL200 or above, 10,000 ft or more lost within 120 s, over 4 points or more.
-//   D2, dive then lost: 3,000 ft or more lost within 30 s from above FL150, over 3 points or more, then no position for 60 s.
+//   D1, descent: from FL200 or above, 15,000 ft or more lost within 120 s, over 4 points or more.
+//   D2, dive then lost: the fall into the last point, from a top at FL150 or above within the last 60 s: 3,000 ft or more lost
+//     over 3 points or more, at 5,000 fpm or more on average, then no position for 60 s.
 // Each step of a fall goes down, or up by 300 ft at most (noise), at 30,000 fpm or less (faster is a bad decode or spoofed
 // GNSS), with at most 60 s between its points (a longer gap is a coverage hole, not a fall). Pure: server/alerts.ts runs the
 // rules on live samples and on adsb.lol's half-hour files (server/heatmap.ts scanSlot).
@@ -20,9 +21,10 @@ export interface Drop {
   toFt: number
 }
 
-export const D1 = { windowS: 120, topFt: 20_000, fallFt: 10_000, points: 4 } as const
-export const D2 = { windowS: 30, topFt: 15_000, fallFt: 3_000, points: 3, lostS: 60 } as const
+export const D1 = { windowS: 120, topFt: 20_000, fallFt: 15_000, points: 4 } as const
+export const D2 = { windowS: 60, topFt: 15_000, fallFt: 3_000, points: 3, lostS: 60, minFpm: 5_000 } as const
 const CEILING_FT = 50_000 // higher is a bad decode or spoofed GNSS (the heatmap files carry GNSS when there is no baro)
+const OUTLIER_FT = 1000 // off the line between its neighbours by more than this: a GNSS altitude among baro ones, or a bad decode
 const MAX_FPM = 30_000 // a step faster than this is not flown
 const NOISE_FT = 300 // a fall may rise this much between two points
 const MAX_GAP_S = 60
@@ -32,9 +34,12 @@ const fpm = (s: AltSeries, a: number, b: number): number => ((s.ft[b] - s.ft[a])
 
 /**
  * Without impossible points: none above 50,000 ft, none at or before the time of the point kept before it (a repeated
- * row would cut a fall in two), and no spike, a point whose steps to both neighbours are over 30,000 fpm in opposite
- * directions. The first and last points have one neighbour each and are kept: a fall cannot use a step over 30,000 fpm
- * anyway. A spike is judged against the points that the first two rules leave.
+ * row would cut a fall in two), and no outlier: an inner point whose steps to its two neighbours go in opposite directions
+ * (both non-zero) and that either lies over 1,000 ft off the straight line between them, interpolated in time, or is a
+ * spike, both steps faster than 30,000 fpm. The first and last points have one neighbour each and are kept: a fall cannot
+ * use a step over 30,000 fpm anyway. An outlier is judged against the points that the first two rules leave.
+ * ponytail: a point beside an outlier is judged against it, so it goes too when it is also off the line to it (in
+ * FZ1073's file the baro point before the GNSS one, 1,050 ft off); a run of two or more outliers is not caught whole.
  */
 export function clean(s: AltSeries): AltSeries {
   const kept: number[] = []
@@ -47,15 +52,18 @@ export function clean(s: AltSeries): AltSeries {
   }
   const out: AltSeries = { t: [], ft: [] }
   for (let k = 0; k < kept.length; k++) {
-    if (k > 0 && k < kept.length - 1) {
-      const r1 = fpm(s, kept[k - 1], kept[k])
-      const r2 = fpm(s, kept[k], kept[k + 1])
-      if (Math.abs(r1) > MAX_FPM && Math.abs(r2) > MAX_FPM && Math.sign(r1) !== Math.sign(r2)) continue
-    }
+    if (k > 0 && k < kept.length - 1 && outlier(s, kept[k - 1], kept[k], kept[k + 1])) continue
     out.t.push(s.t[kept[k]])
     out.ft.push(s.ft[kept[k]])
   }
   return out
+}
+
+/** Whether point b, between a and c, is an outlier (see clean). */
+function outlier(s: AltSeries, a: number, b: number, c: number): boolean {
+  if ((s.ft[b] - s.ft[a]) * (s.ft[c] - s.ft[b]) >= 0) return false // a zero step, or both steps the same way
+  const line = s.ft[a] + ((s.ft[c] - s.ft[a]) * (s.t[b] - s.t[a])) / (s.t[c] - s.t[a])
+  return Math.abs(s.ft[b] - line) > OUTLIER_FT || (Math.abs(fpm(s, a, b)) > MAX_FPM && Math.abs(fpm(s, b, c)) > MAX_FPM)
 }
 
 /** Whether the step from point a to a + 1 can be part of a fall: no hole, no rise over 300 ft, not faster than 30,000 fpm. */
@@ -66,9 +74,13 @@ function falls(s: AltSeries, a: number): boolean {
 }
 
 /**
- * D1: the first emergency descent in the series, from its top to its bottom (the fall is followed on while each step goes
- * down); null when there is none. ponytail: costs O(points × points in the 120 s window), about 2,000 steps for a half
- * hour of 10 s points: the window's start only moves forward, and its top is looked for in the window at every point.
+ * D1: the first emergency descent in the series, from its top to its bottom; null when there is none. The bottom is the first
+ * lowest point when the fall is found. When that is the newest point the fall follows on: each next point joins while the step
+ * into it is a fall, each new low resets the clock, and it stops when over 60 s pass with no new low (60 s is bridged, as a
+ * gap is), or at a step that is not a fall. That bridges a repeated or slightly higher sample in a live track, and level flight
+ * or a climb back still ends it.
+ * ponytail: costs O(points × points in the 120 s window), about 2,000 steps for a half hour of 10 s points: the window's
+ * start only moves forward, and its top is looked for in the window at every point.
  */
 export function steepDescent(s: AltSeries): Drop | null {
   let run = 0 // the first point of the run of falling steps that ends at j
@@ -83,25 +95,32 @@ export function steepDescent(s: AltSeries): Drop | null {
     let top = k // the highest point in the window, the latest of equals: a fall starts where level flight ends
     for (let m = k + 1; m < j; m++) if (s.ft[m] >= s.ft[top]) top = m
     if (j - top + 1 < D1.points || s.ft[top] < D1.topFt || s.ft[top] - s.ft[j] < D1.fallFt) continue
-    // The bottom: the first lowest point so far (the point that completed the fall may be a small rise after it), then on
-    // while each step goes down; the first level or rising step ends the fall.
+    // The bottom: the first lowest point so far (the point that completed the fall may be a small rise after it). When that
+    // is j, on while each step is a fall and at most 60 s have passed since the last low: a repeat or a small rise is bridged.
     let low = top
     for (let m = top + 1; m <= j; m++) if (s.ft[m] < s.ft[low]) low = m
-    if (low === j) while (low + 1 < s.t.length && s.ft[low + 1] < s.ft[low] && falls(s, low)) low++
+    if (low === j) {
+      for (let m = j + 1; m < s.t.length && falls(s, m - 1) && s.t[m] - s.t[low] <= MAX_GAP_S; m++) if (s.ft[m] < s.ft[low]) low = m
+    }
     return { startS: s.t[top], endS: s.t[low], fromFt: s.ft[top], toFt: s.ft[low] }
   }
   return null
 }
 
 /**
- * D2: a dive in the last 30 s of the series, then nothing for 60 s or more up to endS (the end of the data, e.g. a half-hour
- * file's last slice). From its top (above FL150) to the last point; null when it is not there.
+ * D2: the fall into the last point of the series, when no position follows it for 60 s or more up to endS (the end of the data,
+ * e.g. a half-hour file's last slice). Its top is a point within the last 60 s at FL150 or above, every step from it to the last
+ * point a fall, over 3 points or more, 3,000 ft or more lost, at 5,000 fpm or more on average. Of the tops that fit, the biggest
+ * fall is taken (the latest of equals: a fall starts where level flight ends); null when none fits.
  */
 export function diveThenLost(s: AltSeries, endS: number): Drop | null {
   const last = s.t.length - 1
   if (last + 1 < D2.points || endS - s.t[last] < D2.lostS) return null
-  let top = last
-  for (let m = last - 1; m >= 0 && s.t[last] - s.t[m] <= D2.windowS && falls(s, m); m--) if (s.ft[m] > s.ft[top]) top = m
-  if (last - top + 1 < D2.points || s.ft[top] < D2.topFt || s.ft[top] - s.ft[last] < D2.fallFt) return null
-  return { startS: s.t[top], endS: s.t[last], fromFt: s.ft[top], toFt: s.ft[last] }
+  let top = -1
+  for (let m = last - 1; m >= 0 && s.t[last] - s.t[m] <= D2.windowS && falls(s, m); m--) {
+    const fall = s.ft[m] - s.ft[last]
+    const fits = last - m + 1 >= D2.points && s.ft[m] >= D2.topFt && fall >= D2.fallFt && fall * 60 >= D2.minFpm * (s.t[last] - s.t[m])
+    if (fits && (top < 0 || fall > s.ft[top] - s.ft[last])) top = m
+  }
+  return top < 0 ? null : { startS: s.t[top], endS: s.t[last], fromFt: s.ft[top], toFt: s.ft[last] }
 }
