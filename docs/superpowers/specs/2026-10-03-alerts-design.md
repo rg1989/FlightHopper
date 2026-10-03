@@ -27,7 +27,8 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
     file's last slice at 05:29:50.
   - The points are cleaned first: none above 50,000 ft, and no outlier: a point whose steps to both neighbours go opposite
     ways and that is over 1,000 ft off the line between them (a GNSS altitude among baro ones), or whose steps are both over
-    30,000 fpm (a spike).
+    30,000 fpm (a spike). A point is judged only when both its steps are 60 s or less, so a point across a coverage hole
+    stays, and it goes only where it is at least as far off as the points next to it, so the good point beside a spike stays.
   - Tuned on 8 real half hours (2026-10-03, `docs/anomaly-alerts.md` §3.2): D1 first took 10,000 ft and gave 21 events, mostly
     military and fighter aircraft, and the first D2 missed FZ1073.
   - Live, D1 runs on the samples of the aircraft the server polls (the view, the chase). It runs only on a sample whose
@@ -90,7 +91,7 @@ sources, is in `docs/anomaly-alerts.md`. The user was away, so the design decisi
 |---|---|---|
 | `shared/alerts.ts` | `AlertEvent`, `EventsReply`, `describe(e)` (title and line, ASCII title for push), the squawk and status sets | nothing |
 | `server/descent.ts` | `clean`, `steepDescent` (D1), `diveThenLost` (D2) on `{ tS, ft }[]` | nothing |
-| `server/heatmap.ts` `scanSlot` | one pass over a half-hour file: airborne altitudes per aircraft, the last position, emergency idents | the file format |
+| `server/heatmap.ts` `scanSlot` | one pass over a half-hour file: every altitude that is known and off the ground, per aircraft, whatever its speed; the last position; the emergency idents of an airborne aircraft (a known altitude off the ground and a ground speed that is unknown or 50 kt or more) | the file format |
 | `server/alerts.ts` `Alerts` | switch, confirmation, episodes, the log, push, `observe(ac)`, `sample(s, track)`, `scanSlot(buf, slotMs)`, `reply()` | the above, `fs`, `fetch` |
 | `server/sources/adsbfi.ts` `squawk(code)` | `/v2/sqk/{code}`; a code that is not 4 octal digits is not asked | `fetchSnapshot` |
 | `server/poller.ts` | the sweep, after a due chase and before the watch; `onAircraft` for every aircraft it takes | `opts.squawks()` |

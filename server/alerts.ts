@@ -155,8 +155,7 @@ export class Alerts {
   sample(s: Sample, track: () => readonly Sample[], dbFlags = 0): void {
     if (!this.#on || s.onGround || s.altBaroFt === null || !((s.baroRateFpm ?? 0) <= LIVE_RATE_FPM)) return
     const category = s.category ?? null
-    if ((dbFlags & MILITARY) !== 0 || FAST_JETS.has(s.typeCode ?? '') || LIGHT.has(category ?? '') || ignored(s.hex, category)) return
-    if (this.#typed(s.hex).military === true) return
+    if (LIGHT.has(category ?? '') || ignored(s.hex, category) || this.#noFalls(s.hex, s.typeCode, dbFlags)) return
     const series: AltSeries = { t: [], ft: [] }
     for (const x of track()) {
       if (x.onGround || x.altBaroFt === null) continue
@@ -171,9 +170,10 @@ export class Alerts {
   /**
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
    * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
-   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. Not read: surface vehicles
-   * (the type table's C1 to C3), 000000 and 000001. No fall is looked for in an aircraft the type table calls military or whose
-   * type is in FAST_JETS; its squawks are read. A late 7600 on a type the table calls light (A1, B1…) is quiet.
+   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. Not read: addresses that
+   * are not ICAO, 000000 and 000001 (the type table is not asked for them), and surface vehicles (the type table's C1 to C3).
+   * No fall is looked for in an aircraft the type table calls military or whose type is in FAST_JETS; its squawks are read.
+   * A late 7600 on a type the table calls light (A1, B1…) is quiet.
    * ponytail: the half hours must come in time order (the caller scans the older first): a merge never moves an event's
    * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began.
    */
@@ -187,8 +187,9 @@ export class Alerts {
       const idents = a.squawks.length >= 2
       const mayDrop = mayFall(a.alt)
       if (!idents && !mayDrop) continue // the cheap test first: most aircraft are neither
+      if (badAddress(hex)) continue // before the type table is asked: nothing is read of it
       const typed = this.#typed(hex)
-      if (ignored(hex, typed.category)) continue
+      if (ignored(hex, typed.category)) continue // the full test, a surface vehicle by the table's category
       // ponytail: the type table's category makes a late 7600 quiet on a light type, but it gives every piston, turboprop and
       // electric type A1, so the ATR 72 and the Dash 8 are quiet too: accepted, radio failures are the least urgent cause (live
       // sightings use the broadcast category). It is not used to skip a fall: that needs a top at or above FL200 (D1) or FL150
@@ -208,7 +209,7 @@ export class Alerts {
           })
         }
       }
-      if (!mayDrop || typed.military === true || FAST_JETS.has(typed.type ?? '')) continue
+      if (!mayDrop || this.#noFalls(hex, typed.type, 0, typed)) continue
       const s = clean(a.alt)
       const d1 = steepDescent(s)
       const d = d1 ?? diveThenLost(s, scan.endS)
@@ -352,6 +353,14 @@ export class Alerts {
     }
   }
 
+  /**
+   * Whether no fall is looked for in this aircraft, live or late: it is military (dbFlags bit 1, or the type table's flag) or a
+   * fast jet or trainer type (FAST_JETS). The table is asked last, and not at all when `typed`, its answer, is given.
+   */
+  #noFalls(hex: string, type: string | null | undefined, dbFlags: number, typed?: Typed): boolean {
+    return (dbFlags & MILITARY) !== 0 || FAST_JETS.has(type ?? '') || (typed ?? this.#typed(hex)).military === true
+  }
+
   /** The type table's answer for an address (opts.typeOf); a lookup that throws counts as no type. */
   #typed(hex: string): Typed {
     try {
@@ -441,8 +450,11 @@ function positionOf(ac: ReadsbAircraft): { lat: number; lon: number } | null {
   return typeof lp?.lat === 'number' && typeof lp.lon === 'number' ? { lat: lp.lat, lon: lp.lon } : null
 }
 
-/** Never read: an address that is not ICAO (a '~' one), a placeholder some transponders send, a surface vehicle (C1 to C3). */
-const ignored = (hex: string, category: string | null): boolean => !ICAO.test(hex) || NOT_AIRCRAFT.has(hex) || SURFACE.has(category ?? '')
+/** An address that is not an aircraft's: not ICAO (a '~' one), or a placeholder some transponders send. */
+const badAddress = (hex: string): boolean => !ICAO.test(hex) || NOT_AIRCRAFT.has(hex)
+
+/** Never read: a bad address, or a surface vehicle (C1 to C3). */
+const ignored = (hex: string, category: string | null): boolean => badAddress(hex) || SURFACE.has(category ?? '')
 
 /**
  * Quiet: a light aircraft (or glider…) by its category (the broadcast one, or the type table's for a late finding), whose only

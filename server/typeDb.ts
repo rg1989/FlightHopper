@@ -185,6 +185,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
  * The table from aircrafts.json and types.json as parsed. An address is kept when it is 6 hex digits with a type
  * designator (not ZZZZ), with its military flag (the first character of its f is '1'); a type types.json does not describe
  * gets no category. Nothing of the parsed JSON is kept.
+ * ponytail: a military-flagged address with no type designator is not kept, so lookup does not call it military: 241 of the
+ * 17,038 on 2026-10-03 (checked), and a late fall of one of those is not left out.
  */
 export function buildTypeTable(aircraft: unknown, types: unknown): TypeTable {
   const described = isRecord(types) ? types : {}

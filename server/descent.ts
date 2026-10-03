@@ -34,12 +34,18 @@ const fpm = (s: AltSeries, a: number, b: number): number => ((s.ft[b] - s.ft[a])
 
 /**
  * Without impossible points: none above 50,000 ft, none at or before the time of the point kept before it (a repeated
- * row would cut a fall in two), and no outlier: an inner point whose steps to its two neighbours go in opposite directions
- * (both non-zero) and that either lies over 1,000 ft off the straight line between them, interpolated in time, or is a
- * spike, both steps faster than 30,000 fpm. The first and last points have one neighbour each and are kept: a fall cannot
- * use a step over 30,000 fpm anyway. An outlier is judged against the points that the first two rules leave.
- * ponytail: a point beside an outlier is judged against it, so it goes too when it is also off the line to it (in
- * FZ1073's file the baro point before the GNSS one, 1,050 ft off); a run of two or more outliers is not caught whole.
+ * row would cut a fall in two), and no outlier. A candidate is an inner point whose steps to its two neighbours go in
+ * opposite directions (both non-zero) and that either lies over 1,000 ft off the straight line between them, interpolated
+ * in time, or is a spike, both steps faster than 30,000 fpm. A point is judged only against close neighbours: both its steps
+ * must be at most 60 s, as in a fall, so a point across a coverage hole is kept. A candidate goes only when its deviation (how
+ * far off that line it is) is at least that of each neighbour (0 for a neighbour that is no candidate): the good point beside
+ * a spike is off the line to the spike, and stays. It is one pass over the points that the first two rules leave, and it
+ * drops a subset of what dropping every candidate would, so it never cascades.
+ * ponytail: the first and last points have one neighbour each and are never judged, so a series cut just after a GNSS point
+ * keeps it (the baro point before it may go instead) and can hide a dive.
+ * ponytail: a dive that recovers can lose its bottom point to the rule (a V, over 1,000 ft off the line between its
+ * neighbours): a fall that levels off is found, one that climbs back at once may not be.
+ * ponytail: a run of two or more outliers is not caught whole.
  */
 export function clean(s: AltSeries): AltSeries {
   const kept: number[] = []
@@ -50,20 +56,23 @@ export function clean(s: AltSeries): AltSeries {
       lastT = s.t[i]
     }
   }
+  const dev = kept.map((p, k) => (k > 0 && k < kept.length - 1 ? outlierFt(s, kept[k - 1], p, kept[k + 1]) : 0)) // 0: not a candidate
   const out: AltSeries = { t: [], ft: [] }
   for (let k = 0; k < kept.length; k++) {
-    if (k > 0 && k < kept.length - 1 && outlier(s, kept[k - 1], kept[k], kept[k + 1])) continue
+    if (dev[k] > 0 && dev[k] >= dev[k - 1] && dev[k] >= dev[k + 1]) continue
     out.t.push(s.t[kept[k]])
     out.ft.push(s.ft[kept[k]])
   }
   return out
 }
 
-/** Whether point b, between a and c, is an outlier (see clean). */
-function outlier(s: AltSeries, a: number, b: number, c: number): boolean {
-  if ((s.ft[b] - s.ft[a]) * (s.ft[c] - s.ft[b]) >= 0) return false // a zero step, or both steps the same way
+/** How far point b, between a and c, lies off the line between them, ft, when it is an outlier candidate (see clean); 0 when it is not. */
+function outlierFt(s: AltSeries, a: number, b: number, c: number): number {
+  if (s.t[b] - s.t[a] > MAX_GAP_S || s.t[c] - s.t[b] > MAX_GAP_S) return 0 // across a coverage hole: not judged
+  if ((s.ft[b] - s.ft[a]) * (s.ft[c] - s.ft[b]) >= 0) return 0 // a zero step, or both steps the same way
   const line = s.ft[a] + ((s.ft[c] - s.ft[a]) * (s.t[b] - s.t[a])) / (s.t[c] - s.t[a])
-  return Math.abs(s.ft[b] - line) > OUTLIER_FT || (Math.abs(fpm(s, a, b)) > MAX_FPM && Math.abs(fpm(s, b, c)) > MAX_FPM)
+  const off = Math.abs(s.ft[b] - line)
+  return off > OUTLIER_FT || (Math.abs(fpm(s, a, b)) > MAX_FPM && Math.abs(fpm(s, b, c)) > MAX_FPM) ? off : 0
 }
 
 /** Whether the step from point a to a + 1 can be part of a fall: no hole, no rise over 300 ft, not faster than 30,000 fpm. */

@@ -692,6 +692,20 @@ test('scanSlot: the type table is asked only for an aircraft with two idents or 
   assert.deepEqual(asked.sort(), ['a00003', 'a00004'])
 })
 
+test('scanSlot: the type table is not asked for a placeholder or a non-ICAO address: nothing is read of one', () => {
+  const asked: string[] = []
+  const both = { idents: [{ s: 600, squawk: '7700' }, { s: 660, squawk: '7700' }], alt: plunge(36_000, 1000) } // two idents and a fall
+  const { a } = setup({
+    typeOf: (hex) => {
+      asked.push(hex)
+      return { type: null, category: null }
+    },
+  })
+  a.scanSlot(heat([{ hex: '000000', ...both }, { hex: '000001', ...both }, { hex: '~abc123', ...both }, { hex: 'a00001', ...both }]), SLOT)
+  assert.deepEqual(asked, ['a00001'])
+  assert.deepEqual(a.reply().events.map((e) => e.hex), ['a00001'])
+})
+
 // ---- Task 3b: no falls for military aircraft and fighter and trainer types; an older worse code un-quiets ----
 
 /** A polled aircraft's samples fed one at a time, each with the track so far. */
@@ -746,6 +760,19 @@ test('sample: the type table is asked only for a sample whose track is checked, 
   assert.equal(a.reply().events.length, 1, 'the fall is found')
   assert.equal(err.mock.callCount(), 1)
   assert.equal(err.mock.calls[0].arguments[0], 'alerts: type lookup failed:')
+})
+
+test('sample: the type table is asked last: not for a military dbFlags or a fast-jet type code, which decide without it', () => {
+  const asked: string[] = []
+  const typeOf: TypeOf = (hex) => {
+    asked.push(hex)
+    return { type: null, category: null }
+  }
+  feed(setup({ typeOf }).a, samples(plunge(36_000, 50), 200), 1)
+  feed(setup({ typeOf }).a, samples(plunge(36_000, 50), 200, { typeCode: 'F5' }))
+  assert.deepEqual(asked, [])
+  feed(setup({ typeOf }).a, samples(plunge(36_000, 50), 200))
+  assert.ok(asked.length > 0, 'an airliner is asked')
 })
 
 /** Three aircraft in one half hour: a descent, a dive then lost, and a descent after 7700 sent twice. */

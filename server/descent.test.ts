@@ -18,7 +18,7 @@ const fl350Fall = (): [number, number][] => [...line(0, 50, 10, () => 35_000), .
 const dive = (): [number, number][] => line(0, 30, 10, (t) => 35_000 - (4_000 * t) / 30)
 
 test('clean: altitudes above 50,000 ft and spikes go; a real fall stays', () => {
-  const s = series([[0, 35_000], [10, 35_000], [20, 69_400], [30, 35_000], [40, 41_000], [50, 35_000], [60, 34_000], [70, 33_000]])
+  const s = series([[0, 35_000], [10, 35_000], [20, 69_400], [30, 35_000], [40, 12_000], [50, 35_000], [60, 34_000], [70, 33_000]])
   assert.deepEqual(clean(s), series([[0, 35_000], [10, 35_000], [30, 35_000], [50, 35_000], [60, 34_000], [70, 33_000]]))
   const fall = series(line(0, 120, 10, (t) => 35_000 - 100 * t))
   assert.deepEqual(clean(fall), fall)
@@ -31,13 +31,13 @@ test('clean: a point over 1,000 ft off the line between its neighbours, its step
     assert.deepEqual(clean(edge), edge, `${up * 1_000} ft off the line: stays`)
     assert.deepEqual(clean(series([[0, 30_000], [10, 30_000 + up * 1_001], [20, 30_000]])), series([[0, 30_000], [20, 30_000]]), `${up * 1_001} ft: goes`)
   }
-  // Neighbours that fall, the line interpolated in time: at 10 s of 100 s it is 34,600 ft, at 90 s of 100 s 31,400 ft.
-  const early = series([[0, 35_000], [10, 35_600], [100, 31_000]]) // 1,000 ft above the line
+  // Neighbours that fall, the line interpolated in time (both steps within 60 s): at 10 s of 60 s it is 34,400 ft, at 50 s of 60 s 32,000 ft.
+  const early = series([[0, 35_000], [10, 35_400], [60, 31_400]]) // 1,000 ft above the line
   assert.deepEqual(clean(early), early)
-  assert.deepEqual(clean(series([[0, 35_000], [10, 35_601], [100, 31_000]])), series([[0, 35_000], [100, 31_000]]))
-  const late = series([[0, 35_000], [90, 30_400], [100, 31_000]]) // 1,000 ft below the line
+  assert.deepEqual(clean(series([[0, 35_000], [10, 35_401], [60, 31_400]])), series([[0, 35_000], [60, 31_400]]))
+  const late = series([[0, 35_000], [50, 31_000], [60, 31_400]]) // 1,000 ft below the line
   assert.deepEqual(clean(late), late)
-  assert.deepEqual(clean(series([[0, 35_000], [90, 30_399], [100, 31_000]])), series([[0, 35_000], [100, 31_000]]))
+  assert.deepEqual(clean(series([[0, 35_000], [50, 30_999], [60, 31_400]])), series([[0, 35_000], [60, 31_400]]))
 })
 
 test('clean: a step change, a plateau and a fall that slows are not outliers: a zero step, or both steps the same way', () => {
@@ -69,6 +69,43 @@ test('clean: the ceiling is 50,000 ft: 50,000 stays, 50,001 goes', () => {
   const edge = series([[0, 49_500], [10, 50_000], [20, 50_000]])
   assert.deepEqual(clean(edge), edge)
   assert.deepEqual(clean(series([[0, 49_500], [10, 50_001], [20, 50_000]])), series([[0, 49_500], [20, 50_000]]))
+})
+
+test('clean: a point across a coverage hole is not judged: a fall into a hole keeps its bottom, and D1 is still found', () => {
+  // 35,000 ft down to 20,000 ft in 30 s, no position for 360 s, then 30,000 ft: the bottom is 5,135 ft off the line between its neighbours.
+  const s = series([[0, 35_000], [10, 35_000], [20, 30_000], [30, 25_000], [40, 20_000], [400, 30_000], [410, 30_000]])
+  assert.deepEqual(clean(s), s)
+  assert.deepEqual(steepDescent(clean(s)), { startS: 10, endS: 40, fromFt: 35_000, toFt: 20_000 })
+})
+
+test('clean: a point is judged only when both its steps are at most 60 s: a step of 60 s is judged, 61 s is a hole, on either side', () => {
+  // 1,001 ft above level neighbours: an outlier, when it is judged at all.
+  const goes = (pts: [number, number][]): void => assert.deepEqual(clean(series(pts)), series([pts[0], pts[2]]), JSON.stringify(pts))
+  const stays = (pts: [number, number][]): void => assert.deepEqual(clean(series(pts)), series(pts), JSON.stringify(pts))
+  goes([[0, 30_000], [10, 31_001], [70, 30_000]]) // the step out is 60 s
+  stays([[0, 30_000], [10, 31_001], [71, 30_000]]) // 61 s
+  goes([[0, 30_000], [60, 31_001], [70, 30_000]]) // the step in is 60 s
+  stays([[0, 30_000], [61, 31_001], [71, 30_000]]) // 61 s
+})
+
+test('clean: of a spike and the good point beside it, the one farthest off its neighbours\' line goes: the spike, not its victim', () => {
+  // A fall with one bad point. Judged against the spike, the point after a low one is 10,000 ft off the line, and so is the point
+  // before a high one (9,000 ft): each would go too. The spike is farther off (20,000 and 18,000 ft), so only it goes.
+  const low = series([[0, 35_000], [10, 34_000], [20, 33_000], [30, 12_000], [40, 31_000], [50, 30_000], [60, 29_000]])
+  assert.deepEqual(clean(low), series([[0, 35_000], [10, 34_000], [20, 33_000], [40, 31_000], [50, 30_000], [60, 29_000]]))
+  const high = series([[0, 25_000], [10, 24_000], [20, 23_000], [30, 40_000], [40, 21_000], [50, 20_000], [60, 19_000]])
+  assert.deepEqual(clean(high), series([[0, 25_000], [10, 24_000], [20, 23_000], [40, 21_000], [50, 20_000], [60, 19_000]]))
+})
+
+test('clean: outliers equally far off their neighbours\' lines all go: a zig-zag has no good point to keep', () => {
+  assert.deepEqual(clean(series([[0, 30_000], [10, 32_000], [20, 30_000], [30, 32_000], [40, 30_000]])), series([[0, 30_000], [40, 30_000]]))
+})
+
+test('clean: the first and last points have one neighbour each and are never judged', () => {
+  const first = series([[0, 40_000], [10, 30_000], [20, 30_000]])
+  const last = series([[0, 30_000], [10, 30_000], [20, 40_000]])
+  assert.deepEqual(clean(first), first)
+  assert.deepEqual(clean(last), last)
 })
 
 test('clean: a point at the time of the one kept before it, or earlier, goes, so t is strictly increasing', () => {
@@ -190,6 +227,15 @@ const FZ1073_FILE: [number, number][] = [
   [1140, 34_000], [1160, 34_000], [1170, 34_000], [1190, 34_000], [1210, 34_000], [1230, 34_000], [1250, 34_000],
   [1260, 33_975], [1270, 33_950], [1280, 33_375], [1290, 33_075], [1300, 32_850], [1320, 35_550], [1330, 27_950],
 ]
+
+test('clean: the real FZ1073 points keep the baro point at 1300 s (32,850 ft) and drop the GNSS altitude at 1320 s (35,550 ft), and only it; D2 is as before', () => {
+  // The baro point is 1,050 ft off the line to the GNSS point, but the GNSS point is 5,967 ft off the line between its neighbours: only it goes.
+  const s = clean(series(FZ1073_FILE))
+  assert.equal(s.ft[s.t.indexOf(1300)], 32_850, 'the baro point stays')
+  assert.equal(s.t.includes(1320), false, 'the GNSS altitude goes')
+  assert.deepEqual(s, series(FZ1073_FILE.filter(([t]) => t !== 1320)), 'nothing else goes')
+  assert.deepEqual(diveThenLost(s, 1790), { startS: 1270, endS: 1330, fromFt: 33_950, toFt: 27_950 })
+})
 
 test('diveThenLost (D2): the real FZ1073 points: clean drops the GNSS altitude, and the fall into the last point is found', () => {
   const raw = series(FZ1073_FILE)
