@@ -18,7 +18,7 @@ const pxPerM = (depthM: number): number => 600 / (2 * depthM * Math.tan(Math.PI 
 
 test('outlineDiscs: each sphere of the outline where it is drawn, as wide as it looks from there', () => {
   const e = entry({ outline: [[0, 0, 0, 2], [0, 5, 1, 1]] })
-  const d = outlineDiscs(scene, at(100), e, 1, { n: 0, d: new Float64Array(0) }, project)
+  const d = outlineDiscs(scene, at(100), e, { n: 0, d: new Float64Array(0) }, project)
   assert.equal(d.n, 2)
   assert.deepEqual([...d.d.subarray(0, 2)], [500, 300])
   assert.ok(Math.abs(d.d[2] - 2 * pxPerM(100)) < 1e-9, `r ${d.d[2]}`)
@@ -26,17 +26,17 @@ test('outlineDiscs: each sphere of the outline where it is drawn, as wide as it 
   assert.ok(Math.abs(d.d[5] - pxPerM(100)) < 1e-9)
 })
 
-test('outlineDiscs: the model drawn larger (its scale, Cesium\'s least size) has its outline larger, about its origin', () => {
-  const m = Matrix4.multiplyByUniformScale(at(100), 2, new Matrix4()) // the manifest's scale, as modelMatrixFor bakes it in
-  const d = outlineDiscs(scene, m, entry({ scale: 2, outline: [[0, 5, 0, 1]] }), 3, { n: 0, d: new Float64Array(0) }, project)
+test('outlineDiscs: the model drawn larger (its scale, a far one\'s least size: both in its matrix) has its outline larger', () => {
+  const m = Matrix4.multiplyByUniformScale(at(100), 2 * 3, new Matrix4()) // the manifest's scale × 3, as modelMatrixFor bakes them in
+  const d = outlineDiscs(scene, m, entry({ scale: 2, outline: [[0, 5, 0, 1]] }), { n: 0, d: new Float64Array(0) }, project)
   assert.equal(d.d[0], 500 + 10 * 5 * 2 * 3)
   assert.ok(Math.abs(d.d[2] - 6 * pxPerM(100)) < 1e-9)
 })
 
 test('outlineDiscs: a sphere behind the camera is left out; a model with no outline gets its bracket box\'s sphere', () => {
-  const d = outlineDiscs(scene, at(100), entry({ outline: [[-150, 0, 0, 2], [0, 0, 0, 2]] }), 1, { n: 0, d: new Float64Array(0) }, project)
+  const d = outlineDiscs(scene, at(100), entry({ outline: [[-150, 0, 0, 2], [0, 0, 0, 2]] }), { n: 0, d: new Float64Array(0) }, project)
   assert.equal(d.n, 1)
-  const b = outlineDiscs(scene, at(100), entry({ box: { centre: [0, 1, 0], half: 20 } }), 1, d, project)
+  const b = outlineDiscs(scene, at(100), entry({ box: { centre: [0, 1, 0], half: 20 } }), d, project)
   assert.equal(b, d, 'written into the one it was given')
   assert.deepEqual([b.n, b.d[0], b.d[1]], [1, 510, 300])
   assert.ok(Math.abs(b.d[2] - 20 * pxPerM(100)) < 1e-9)

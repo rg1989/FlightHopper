@@ -339,11 +339,11 @@ export function layoutSide(
 
 /**
  * The aircraft's middle in world coordinates: its bracket box's centre (the manifest's box, else Cesium_Air's) through
- * modelMatrix; k: the scale the model is drawn at over that (Cesium's minimumPixelSize grows it about its origin).
+ * modelMatrix, which carries the scale the model is drawn at.
  */
-export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3, k = 1): Cartesian3 {
+export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: Cartesian3): Cartesian3 {
   const bc = entry.box ? Cartesian3.fromArray(entry.box.centre, 0, out) : Cartesian3.clone(BOX_CENTRE, out)
-  return Matrix4.multiplyByPoint(modelMatrix, Cartesian3.multiplyByScalar(bc, k, out), out)
+  return Matrix4.multiplyByPoint(modelMatrix, bc, out)
 }
 
 // ---- data -----------------------------------------------------------------------------------------------------------
@@ -870,8 +870,8 @@ export class FlightFrame {
 
   /**
    * The frame around the chased model this frame: its square from the manifest box through its modelMatrix (which
-   * carries entry.scale) at the scale Cesium draws it (a far one larger: minimumPixelSize), as Traffic.update projects a
-   * traffic model's. data null, or the model behind the camera: hidden.
+   * carries the scale it is drawn at: entry.scale, and a far one larger, ChaseModel.update), as Traffic.update projects
+   * a traffic model's. data null, or the model behind the camera: hidden.
    * dataT: the data's own clock in seconds (a scenario's), for the speed trend; absent: real time (live). flightId: over
    * the brackets ('': none).
    */
@@ -1409,20 +1409,17 @@ export class FlightFrame {
     const scene = viewer.scene
     const cam = scene.camera
     const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
-    // The scale Cesium draws the model at over its matrix (last frame's: it is set as the scene renders). Not in its
-    // typings; the model drawn at 1 without it.
-    const k = (model as unknown as { computedScale?: number }).computedScale ?? 1
-    const c = boxCentre(model.modelMatrix, entry, this.#c, k)
+    const c = boxCentre(model.modelMatrix, entry, this.#c)
     const depthM = Cartesian3.dot(Cartesian3.subtract(c, cam.positionWC, this.#v), cam.directionWC)
     if (!(depthM > 1)) return null // behind the camera
     const w = SceneTransforms.worldToWindowCoordinates(scene, c, this.#w)
     if (w === undefined) return null
     this.#sq.x = w.x
     this.#sq.y = w.y
-    const rM = (entry.box?.half ?? BOX_HALF) * entry.scale
+    const half = entry.box?.half ?? BOX_HALF
     const h = scene.canvas.clientHeight
-    this.#sq.side = squarePx(rM * k, depthM, fovy, h)
-    this.#own = squarePx(rM, defaultRangeM(scene.canvas.clientWidth, h), fovy, h)
+    this.#sq.side = squarePx(half * Matrix4.getMaximumScale(model.modelMatrix), depthM, fovy, h) // as drawn: larger when far
+    this.#own = squarePx(half * entry.scale, defaultRangeM(scene.canvas.clientWidth, h), fovy, h)
     return this.#sq
   }
 

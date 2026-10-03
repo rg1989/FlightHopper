@@ -29,6 +29,11 @@ test('view radius follows the camera height, in 10 nm steps, clamped to 20–5,4
   assert.equal(viewRadiusNm(100_000), 60) // 54 nm → next step
   assert.equal(viewRadiusNm(20_000_000), 5400) // whole-Earth view: the visible hemisphere
   assert.equal(viewRadiusNm(Number.NaN), 5400)
+  // Chasing from far out: at least the 3-D traffic's radius round the aircraft, so what is drawn is asked for.
+  assert.equal(viewRadiusNm(32_000, 60), 60) // 100 km behind a cruising aircraft at −12°: the camera is 17 nm up
+  assert.equal(viewRadiusNm(32_000, 35), 40)
+  assert.equal(viewRadiusNm(150, 10), 20)
+  assert.equal(viewRadiusNm(150_000, 60), 90) // straight above: the height says more
 })
 
 test('browse poll circle: centred on the visible rectangle, covering all of it, in 10 nm steps within 20–5,400 nm', () => {

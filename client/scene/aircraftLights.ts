@@ -181,7 +181,6 @@ export function glowCanvas(hex: string, px = 128): HTMLCanvasElement {
 interface Placed {
   key: string
   mm: Matrix4
-  k: number // Cesium's own enlargement (the chased model's minimumPixelSize), about the model origin
   entry: ModelManifestEntry
   s: LightState
   shader: CustomShader | null // the chased model's paint: its lamps light its own skin (livery.ts)
@@ -240,12 +239,11 @@ export class AircraftLights {
   }
 
   /**
-   * The chased aircraft this frame, drawn with model.modelMatrix (ChaseModel.update) and enlarged by Cesium to
-   * minimumPixelSize when far (Model.computedScale, last frame's). damaged: the scenario's damage is shown.
+   * The chased aircraft this frame, drawn with model.modelMatrix (ChaseModel.update: a far one's enlargement is in it).
+   * damaged: the scenario's damage is shown.
    */
   forChase(model: ChasedModel, entry: ModelManifestEntry, s: RenderState, damaged: boolean): void {
-    const k = (model as { computedScale?: number }).computedScale
-    const p = this.#next(s.hex, model.modelMatrix, entry, Number.isFinite(k) && k! > 0 ? k! : 1)
+    const p = this.#next(s.hex, model.modelMatrix, entry)
     if (p === null) return
     p.shader = model.customShader ?? null
     p.s.onGround = s.onGround
@@ -256,7 +254,7 @@ export class AircraftLights {
 
   /** One traffic aircraft this frame, drawn with mm (Traffic.forEachDrawn's callback). */
   readonly forTraffic = (hex: string, mm: Matrix4, m: ModelManifestEntry, e: FleetEntry): void => {
-    const p = this.#next(hex, mm, m, 1)
+    const p = this.#next(hex, mm, m)
     if (p === null) return
     p.shader = null
     p.s.onGround = e.onGround
@@ -288,16 +286,15 @@ export class AircraftLights {
     this.#pools.clear()
   }
 
-  #next(key: string, mm: Matrix4, entry: ModelManifestEntry, k: number): Placed | null {
+  #next(key: string, mm: Matrix4, entry: ModelManifestEntry): Placed | null {
     if (entry.lights === undefined) return null
     let p = this.#placed[this.#n]
     if (p === undefined) {
-      p = this.#placed[this.#n] = { key, mm: new Matrix4(), k, entry, s: { onGround: false, altFt: null, gsKt: null, damaged: false }, shader: null }
+      p = this.#placed[this.#n] = { key, mm: new Matrix4(), entry, s: { onGround: false, altFt: null, gsKt: null, damaged: false }, shader: null }
     }
     this.#n++
     p.key = key
     Matrix4.clone(mm, p.mm)
-    p.k = k
     p.entry = entry
     return p
   }
@@ -319,7 +316,7 @@ export class AircraftLights {
     const L = p.entry.lights as LightAnchors
     const s = p.s
     this.#axes(p)
-    const pull = EYE_PULL * (p.entry.lengthM / p.entry.scale) * Matrix4.getMaximumScale(p.mm) * p.k
+    const pull = EYE_PULL * (p.entry.lengthM / p.entry.scale) * Matrix4.getMaximumScale(p.mm)
     const ph = phaseOf(p.key)
     // Position lights: steady; by day a faint lit lamp only.
     const nav = DAY_NAV_ALPHA + (1 - DAY_NAV_ALPHA) * n
@@ -353,7 +350,7 @@ export class AircraftLights {
   #light(p: Placed, a: readonly number[], kind: KindName, alpha: number, sz: number, sector: Sector, n: number, cam: Cartesian3, pull: number): void {
     const cut = p.s.damaged ? p.entry.paint?.cut : undefined
     if (cut !== undefined && lost(p.entry, a, cut)) return
-    const pos = Matrix4.multiplyByPoint(p.mm, Cartesian3.fromElements(a[0] * p.k, a[1] * p.k, a[2] * p.k, scratchP), scratchP)
+    const pos = Matrix4.multiplyByPoint(p.mm, Cartesian3.fromElements(a[0], a[1], a[2], scratchP), scratchP)
     const v = Cartesian3.subtract(cam, pos, scratchV)
     const d = Cartesian3.magnitude(v)
     if (!(d > 0)) return

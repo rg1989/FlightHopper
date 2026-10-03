@@ -6,7 +6,7 @@ import { Cartesian3, Cartographic, Ellipsoid, HeadingPitchRoll, Matrix4 } from '
 import { destination } from '../../shared/geo.ts'
 import type { FleetEntry, ModelManifest } from '../types.ts'
 import { measureGlb, noseAzimuthDeg } from './model.ts'
-import { BOX_CENTRE, BOX_HALF, MIN_PX, flightId, hitAt, isOccluded, minScale, shownLabels, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix } from './traffic.ts'
+import { BOX_CENTRE, BOX_HALF, MIN_PX, RANGE_NM, flightId, hitAt, isOccluded, minScale, shownLabels, nearestInRange, scaleFor, squarePx, trafficHpr, trafficMatrix, trafficRangeNm } from './traffic.ts'
 import type { Box } from './traffic.ts'
 
 const root = new URL('../../', import.meta.url)
@@ -49,6 +49,15 @@ test('nearestInRange: within the range, airborne first (parked ones at a hub mus
   near(r[0].nm, 2, 1e-9)
 })
 
+test('trafficRangeNm: 10 nm while the camera is within 5 km, then in proportion to its range, 60 nm at most', () => {
+  for (const m of [25, 150, 3000, 5000]) assert.equal(trafficRangeNm(m), RANGE_NM, `${m} m`)
+  assert.equal(trafficRangeNm(10_000), 20)
+  near(trafficRangeNm(17_500), 35, 1e-9)
+  assert.equal(trafficRangeNm(30_000), 60)
+  assert.equal(trafficRangeNm(100_000), 60, 'the chase camera\'s farthest')
+  for (let m = 25; m < 100_000; m *= 1.3) assert.ok(trafficRangeNm(m * 1.3) >= trafficRangeNm(m), 'never less farther out')
+})
+
 test('squarePx: the projected diameter, never under MIN_PX, capped when the camera is inside it', () => {
   // 60° fov over 1,000 px: at depth d a pixel is 2·d·tan 30° / 1000 m
   const mPerPx = (d: number): number => (2 * d * Math.tan(Math.PI / 6)) / 1000
@@ -64,6 +73,9 @@ test('minScale: a far model is enlarged to MIN_PX on screen, exactly the square 
   assert.ok(g > 1)
   near(squarePx(20 * g, 50_000, Math.PI / 3, 1000), MIN_PX, 1e-9)
   near((20 * g * 1000) / (50_000 * Math.tan(Math.PI / 6)), MIN_PX, 1e-9, 'its projected diameter is MIN_PX')
+  // The chased aircraft at the chase camera's farthest (100 km): an airliner's square (r 20.65 m) is half a pixel there.
+  near(squarePx(20.65 * minScale(20.65, 100_000, Math.PI / 3, 900), 100_000, Math.PI / 3, 900), MIN_PX, 1e-9)
+  assert.equal(minScale(20, 50_000, Math.PI / 3, 0), 1, 'a view of no height (before layout): true size, not an infinite one')
 })
 
 test('the bracket square is centred on each model and spans its wingspan and length (box matches the GLB)', () => {

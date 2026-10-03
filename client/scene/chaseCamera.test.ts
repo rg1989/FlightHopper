@@ -115,7 +115,7 @@ test('the view\'s middle a little under the aimed point: the aircraft sits above
   const { camera, viewer } = fakeViewer(() => 0)
   const mid = Cartesian3.fromDegrees(LOWI.lon, LOWI.lat, 1006)
   const cc = new ChaseCamera(viewer)
-  for (const r of [25, 150, 3000]) {
+  for (const r of [25, 150, 3000, 100_000]) {
     cc.orbit.set(0, -12, r)
     cc.update(st({ hM: 1000 }), 0.016, mid)
     const to = Cartesian3.normalize(Cartesian3.subtract(mid, camera.positionWC, new Cartesian3()), new Cartesian3())
@@ -153,6 +153,19 @@ test('low over flat ground: pitches down just enough to stay ≥ 15 m above terr
   assert.ok(clearanceM !== null && clearanceM >= 15 && clearanceM < 17, `${clearanceM}`)
   near(clearanceOf(camera, terrain), clearanceM as number, 1e-9)
   assert.ok(camera.position.z > 0, 'now looking down')
+})
+
+test('far out (100 km) and looking up from under the ground: pitched down to ≥ 15 m over the terrain under the camera, round the Earth\'s curve', () => {
+  const terrain: Terrain = () => 300
+  const { camera, viewer } = fakeViewer(terrain)
+  const cc = new ChaseCamera(viewer)
+  cc.orbit.set(0, 10, 100_000) // 17 km under the aircraft's height
+  const { clearanceM } = cc.update(st({ hM: 11_000 }), 0.016)
+  // One solve on the aircraft's flat ENU frame; the Earth falls away under the camera as it comes level, which adds to it.
+  assert.ok(clearanceM !== null && clearanceM >= 15 && clearanceM < 60, `${clearanceM}`)
+  near(clearanceOf(camera, terrain), clearanceM as number, 1e-9)
+  near(Cartesian3.magnitude(camera.position), 100_000, 1e-3, 'still at its range')
+  assert.equal(cc.orbit.pitchDeg, 10, 'the orbit keeps the angle asked for')
 })
 
 test('no correction when already clear', () => {
@@ -252,7 +265,7 @@ test('OrbitControl: drag right swings the view clockwise, drag down raises the c
   near(o.pitchDeg, 10, 1e-9)
 })
 
-test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 3 km; reset restores the start', () => {
+test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 100 km; reset restores the start', () => {
   const o = new OrbitControl(-12, 150)
   o.wheel(100)
   assert.ok(o.rangeM < 150 && o.rangeM > 120, `${o.rangeM}`)
@@ -261,7 +274,7 @@ test('OrbitControl: wheel up zooms in, wheel down out, clamped to 25 m … 3 km;
   o.wheel(1e6)
   near(o.rangeM, 25, 1e-9)
   o.wheel(-1e6)
-  near(o.rangeM, 3000, 1e-9)
+  near(o.rangeM, 100_000, 1e-9)
   o.drag(123, 45)
   o.reset()
   assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [0, -12, 150])
@@ -278,7 +291,17 @@ test('OrbitControl: a pinch spreading the fingers 2× halves the distance, closi
   o.pinch(1e6)
   near(o.rangeM, 25, 1e-9)
   o.pinch(1e-6)
-  near(o.rangeM, 3000, 1e-9)
+  near(o.rangeM, 100_000, 1e-9)
+})
+
+test('OrbitControl.set (a reload\'s ?cam=): clamped as the mouse\'s, 25 m … 100 km', () => {
+  const o = new OrbitControl(-12, 150)
+  o.set(370, -12, 60_000)
+  assert.deepEqual([o.headingOffsetDeg, o.pitchDeg, o.rangeM], [10, -12, 60_000])
+  o.set(0, -95, 1e9)
+  assert.deepEqual([o.pitchDeg, o.rangeM], [-89, 100_000])
+  o.set(0, 45, 1)
+  assert.deepEqual([o.pitchDeg, o.rangeM], [10, 25])
 })
 
 test('OrbitControl.trackpad: two fingers only zoom (moving up or down as the wheel does, or pinching); they never turn the view', () => {

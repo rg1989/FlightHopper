@@ -16,30 +16,31 @@ const scratchV = new Cartesian3()
 const scratchW = new Cartesian2()
 
 /**
- * entry's outline as drawn through modelMatrix (the manifest's scale baked in, modelMatrixFor) at k times that (the scale
- * Cesium draws it at over its matrix), written into out. A sphere behind the camera is left out. A model with no
+ * entry's outline as drawn through modelMatrix (which carries the scale it is drawn at: the manifest's, and a far
+ * model's enlargement, modelMatrixFor), written into out. A sphere behind the camera is left out. A model with no
  * outline measured gets the sphere of its bracket box.
  */
 export function outlineDiscs(
-  scene: Scene, modelMatrix: Matrix4, entry: ModelManifestEntry, k: number, out: Discs,
+  scene: Scene, modelMatrix: Matrix4, entry: ModelManifestEntry, out: Discs,
   project: (scene: Scene, p: Cartesian3, out: Cartesian2) => Cartesian2 | undefined = SceneTransforms.worldToWindowCoordinates,
 ): Discs {
   const cam = scene.camera
   const fovy = (cam.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
   const pxPerM = scene.canvas.clientHeight / (2 * Math.tan(fovy / 2)) // at 1 m along the view
+  const scale = Matrix4.getMaximumScale(modelMatrix)
   const box = entry.box
   const spheres = entry.outline ?? [box ? [...box.centre, box.half] : [BOX_CENTRE.x, BOX_CENTRE.y, BOX_CENTRE.z, BOX_HALF]]
   if (out.d.length < spheres.length * 3) out.d = new Float64Array(spheres.length * 3)
   let n = 0
   for (const s of spheres) {
-    const p = Matrix4.multiplyByPoint(modelMatrix, Cartesian3.fromElements(s[0] * k, s[1] * k, s[2] * k, scratchP), scratchP)
+    const p = Matrix4.multiplyByPoint(modelMatrix, Cartesian3.fromElements(s[0], s[1], s[2], scratchP), scratchP)
     const depthM = Cartesian3.dot(Cartesian3.subtract(p, cam.positionWC, scratchV), cam.directionWC)
     if (!(depthM > 1)) continue
     const w = project(scene, p, scratchW)
     if (w === undefined) continue
     out.d[n * 3] = w.x
     out.d[n * 3 + 1] = w.y
-    out.d[n * 3 + 2] = (s[3] * entry.scale * k * pxPerM) / depthM
+    out.d[n * 3 + 2] = (s[3] * scale * pxPerM) / depthM
     n++
   }
   out.n = n

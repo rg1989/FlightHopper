@@ -14,7 +14,7 @@ const DEG_PER_PX_V = 0.25
 const PITCH_MAX_DEG = 10 // slightly below the aircraft, looking up
 const ZOOM_PER_WHEEL = 0.0015 // Cesium wheel delta ≈ ±100 per notch → ×0.86 / ×1.16
 const RANGE_MIN_M = 25
-const RANGE_MAX_M = 3000
+const RANGE_MAX_M = 100_000 // far out the aircraft and its traffic keep a least size on screen (traffic.ts minScale)
 // The view's middle this far under the aimed point, so the aircraft sits a little above it at every range: where an
 // airliner sat at the default range when the camera aimed at its wheels.
 const AIM_BELOW_DEG = 2.4

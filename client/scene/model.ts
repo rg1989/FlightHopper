@@ -141,16 +141,17 @@ const scratchFix = new Matrix3()
 /**
  * World matrix of the chase model: origin at (lat, lon, hM + heightM), attitude from hprFor after fixMatrix, uniform m.scale
  * baked in (so ChaseModel leaves Model.scale at 1). heightM is origin → wheel bottom: gearHeightM, or gear.heightM
- * while ChaseModel draws the separate gear.
+ * while ChaseModel draws the separate gear. k: the model drawn k times its size, from its wheels up (a far one:
+ * traffic.ts minScale), so on the ground it stands on it.
  * ponytail: hM is the wheel-bottom height in every phase, not only on the ground, so touchdown has no gear-height
  * step. Airborne, that bias is smaller than ADS-B's 25 ft altitude step. The offset runs along the ellipsoid normal,
  * not body-up, so at 10° pitch the wheels sit 0.06 m high. Upgrade: offset along body-up when M4 adds ground contact.
  */
-export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4, heightM = m.gearHeightM): Matrix4 {
-  const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + heightM, undefined, scratchPos)
+export function modelMatrixFor(state: RenderState, m: ModelManifestEntry, result?: Matrix4, heightM = m.gearHeightM, k = 1): Matrix4 {
+  const pos = Cartesian3.fromDegrees(state.lon, state.lat, state.hM + heightM * k, undefined, scratchPos)
   const mm = Transforms.headingPitchRollToFixedFrame(pos, hprFor(state, scratchHpr), undefined, undefined, result ?? new Matrix4())
   Matrix4.multiplyByMatrix3(mm, fixMatrix(m, scratchFix), mm)
-  return Matrix4.multiplyByUniformScale(mm, m.scale, mm)
+  return Matrix4.multiplyByUniformScale(mm, m.scale * k, mm)
 }
 
 const scratchOrigin = new Cartesian3()
@@ -312,11 +313,12 @@ export class ChaseModel {
    * Rewrites modelMatrix in place. Model.update compares it with its cached copy on the next frame. The wheels are
    * gearHeightM below the origin (a geared model's gear-down height, gear up or not: no jump as it moves); the gear
    * takes the same matrix and image-based light, and its legs swing to where the gear is (dtS: seconds since the last
-   * update). Fully up, it is not drawn.
+   * update). Fully up, it is not drawn. k: the size drawn over the true one (far away it is enlarged to stay visible:
+   * traffic.ts minScale), the gear with it.
    */
-  update(state: RenderState, dtS = 0): void {
+  update(state: RenderState, dtS = 0, k = 1): void {
     this.gear.step(this.gearDown, dtS)
-    modelMatrixFor(state, this.m, this.model.modelMatrix)
+    modelMatrixFor(state, this.m, this.model.modelMatrix, undefined, k)
     this.placed = true
     this.model.show = this.visible
     const gear = this.drawnGear()
@@ -415,12 +417,14 @@ export class ChaseModel {
 
 /**
  * One chase model. Model clones its own identity modelMatrix, which update() then rewrites. The scale is in
- * modelMatrixFor, so Model.scale stays 1. minimumPixelSize keeps a distant model visible. Cesium exaggerates models with
- * the terrain by default (squashed towards verticalExaggerationRelativeHeight, flat at factor 0); the aircraft keeps
- * its true height while the topography toggle flattens or grows the ground.
+ * modelMatrixFor, so Model.scale stays 1, and so is a distant model's enlargement (update's k). No minimumPixelSize:
+ * Cesium's multiplies the scale in the matrix and grows the model about its origin, so on the ground its lower half
+ * sinks in, its gear stays small, and its brackets and lights learn the size a frame late. Cesium exaggerates models
+ * with the terrain by default (squashed towards verticalExaggerationRelativeHeight, flat at factor 0); the aircraft
+ * keeps its true height while the topography toggle flattens or grows the ground.
  */
 export function loadChaseModel(m: ModelManifestEntry): Promise<Model> {
-  return Model.fromGltfAsync({ url: modelUrl(m), minimumPixelSize: 32, show: false, enableVerticalExaggeration: false })
+  return Model.fromGltfAsync({ url: modelUrl(m), show: false, enableVerticalExaggeration: false })
 }
 
 /**
@@ -431,9 +435,8 @@ export function loadChaseModel(m: ModelManifestEntry): Promise<Model> {
 const GEAR_ENV_MAP_EPSILON_M = 20_000
 
 /**
- * A landing gear (manifest gear.uri, relative to public/): drawn with the chase model's matrix, true height like it.
- * ponytail: no minimumPixelSize, since Cesium would enlarge the gear about its own bounding sphere, not the aircraft's.
- * Below 32 px the aircraft grows and the gear does not (a few pixels off). Upgrade: copy the aircraft's scale when that shows.
+ * A landing gear (manifest gear.uri, relative to public/): drawn with the chase model's matrix (enlarged with it when
+ * far), true height like it.
  */
 export function loadGearModel(uri: string): Promise<Model> {
   return Model.fromGltfAsync({

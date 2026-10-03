@@ -510,13 +510,13 @@ test('layoutSide: where no side has the tapes beside the aircraft (the flight ca
 
 // ---- boxCentre -------------------------------------------------------------------------------------------------------
 
-test('boxCentre: the box centre through the model matrix, grown with the scale the model is drawn at (about its origin)', () => {
+test('boxCentre: the box centre through the model matrix, which carries the scale the model is drawn at', () => {
   const mm = Matrix4.fromTranslation(new Cartesian3(100, 200, 300))
   const typed = { box: { centre: [-2, 0, 1], half: 20 } } as unknown as ModelManifestEntry
   assert.deepEqual(boxCentre(mm, typed, new Cartesian3()), new Cartesian3(98, 200, 301))
-  assert.deepEqual(boxCentre(mm, typed, new Cartesian3(), 2), new Cartesian3(96, 200, 302))
+  assert.deepEqual(boxCentre(Matrix4.multiplyByUniformScale(mm, 2, new Matrix4()), typed, new Cartesian3()), new Cartesian3(96, 200, 302))
   const generic = {} as ModelManifestEntry // no box: Cesium_Air's
-  const c = boxCentre(mm, generic, new Cartesian3(), 3)
+  const c = boxCentre(Matrix4.multiplyByUniformScale(mm, 3, new Matrix4()), generic, new Cartesian3())
   assert.ok(Cartesian3.equalsEpsilon(c, new Cartesian3(100 + 3 * BOX_CENTRE.x, 200, 300 + 3 * BOX_CENTRE.z), 1e-9))
   assert.deepEqual([BOX_CENTRE.x, BOX_CENTRE.z], [-2.7, 1.58], 'the shared centre untouched')
 })

@@ -1,7 +1,7 @@
 // client/scene/traffic.ts
-// Chase traffic (.planning/chase-traffic-design.md): the other aircraft within RANGE_NM of the chased one as 3-D models
-// (the one GLB, sized by ADS-B emitter category), each framed on screen by two corner brackets whose square is also
-// its click target.
+// Chase traffic (.planning/chase-traffic-design.md): the other aircraft round the chased one (within RANGE_NM, farther
+// as the camera zooms out: trafficRangeNm) as 3-D models (the one GLB, sized by ADS-B emitter category), each framed on
+// screen by two corner brackets whose square is also its click target.
 import { Cartesian2, Cartesian3, Cartographic, HeadingPitchRoll, Math as CesiumMath, Matrix3, Matrix4, Model, SceneTransforms, Transforms } from 'cesium'
 import type { ModelNode, PerspectiveFrustum, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
@@ -13,7 +13,9 @@ import type { ModelPicker } from './modelFor.ts'
 import { GearMotion, gearWanted, swingLegs } from './gear.ts'
 import { fixMatrix, hprFor, loadGearModel, modelUrl } from './model.ts'
 
-export const RANGE_NM = 10
+export const RANGE_NM = 10 // while the camera is within NEAR_CAMERA_M of the chased aircraft
+const FAR_RANGE_NM = 60
+const NEAR_CAMERA_M = 5000
 export const MAX_MODELS = 30
 export const MIN_PX = 24 // a far model is enlarged to keep this size on screen (minScale), and so is its square
 // The bracket square, in the GLB's model frame (Cesium's: nose +X, up +Z; unscaled): the bounding-box centre, and half
@@ -31,6 +33,14 @@ export const scaleFor = (category: string | null | undefined): number => (catego
 
 /** The flight ID above a traffic model's brackets: its callsign, else its ICAO hex (as FleetLayer's label). */
 export const flightId = (e: FleetEntry): string => e.info?.callsign ?? e.hex.toUpperCase()
+
+/**
+ * The traffic's radius round the chased aircraft with the chase camera camRangeM from it: RANGE_NM near, then in
+ * proportion to the camera's range (the view widens with it), FAR_RANGE_NM at most.
+ * ponytail: a circle sized by the range, not what the view holds: FAR_RANGE_NM is reached 30 km out, a view along the
+ * ground sees past it, and MAX_MODELS of it are drawn. Upgrade: the aircraft in the view's frustum, the far ones instanced.
+ */
+export const trafficRangeNm = (camRangeM: number): number => Math.min(FAR_RANGE_NM, RANGE_NM * Math.max(1, camRangeM / NEAR_CAMERA_M))
 
 export interface Near { e: FleetEntry; nm: number }
 
@@ -51,12 +61,12 @@ export function nearestInRange(entries: readonly FleetEntry[], skipHex: string |
 
 /**
  * The factor that enlarges a model of radius rM at depthM along the view to MIN_PX on screen (1 when it is already
- * that big). The app's own minimumPixelSize: Cesium's multiplies the scale in the model matrix, so its size is not
- * the one the brackets are drawn from.
+ * that big, and for a view of no height). The app's own minimumPixelSize: Cesium's multiplies the scale in the model
+ * matrix, so its size is not the one the brackets are drawn from.
  */
 export function minScale(rM: number, depthM: number, fovyRad: number, viewHeightPx: number): number {
   const px = (rM * viewHeightPx) / (depthM * Math.tan(fovyRad / 2))
-  return px >= MIN_PX ? 1 : MIN_PX / px
+  return px > 0 && px < MIN_PX ? MIN_PX / px : 1
 }
 
 /** Side of the on-screen square around a sphere of radius rM at depthM along the view, in CSS px: its projected diameter, ≥ MIN_PX, ≤ 4 screens. */
@@ -232,7 +242,7 @@ const AGL_EVERY_S = 0.5 // a traffic aircraft's height above the drawn ground is
  * in a square opens that aircraft (open, one at most): app.ts shows its card, and its brackets are highlighted, its
  * labels always shown, until close() or it leaves the traffic.
  * ponytail: pools never shrink, so a session of many types keeps up to MAX_MODELS per type loaded. Upgrade: evict idle.
- * ponytail: no hysteresis at the range edge. Upgrade: leave at 10.5 nm.
+ * ponytail: no hysteresis at the range edge. Upgrade: leave 5 % farther out than it enters.
  */
 export class Traffic {
   readonly #viewer: Viewer
@@ -280,14 +290,15 @@ export class Traffic {
   }
 
   /**
-   * This frame's traffic around the chased aircraft at `at`, for FleetLayer.update: the hexes drawn as models, the first
-   * MAX_MODELS of nearestInRange's order that have a ready model. null at (not chasing, or no position yet): an empty
-   * set, every model and bracket hide, and the open aircraft closes.
+   * This frame's traffic within rangeNm of the chased aircraft at `at` (trafficRangeNm of the camera's range), for
+   * FleetLayer.update: the hexes drawn as models, the first MAX_MODELS of nearestInRange's order that have a ready
+   * model. null at (not chasing, or no position yet): an empty set, every model and bracket hide, and the open aircraft
+   * closes.
    */
-  select(entries: readonly FleetEntry[], chasedHex: string | null, at: { lat: number; lon: number } | null): ReadonlySet<string> {
+  select(entries: readonly FleetEntry[], chasedHex: string | null, at: { lat: number; lon: number } | null, rangeNm = RANGE_NM): ReadonlySet<string> {
     this.#models.clear()
     this.#want.clear()
-    const near = at === null ? [] : nearestInRange(entries, chasedHex, at.lat, at.lon, RANGE_NM)
+    const near = at === null ? [] : nearestInRange(entries, chasedHex, at.lat, at.lon, rangeNm)
     this.#wantOf.clear()
     for (let i = 0; i < near.length && i < MAX_MODELS; i++) {
       const e = near[i].e

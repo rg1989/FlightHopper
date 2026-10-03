@@ -13,10 +13,10 @@ const { AUTO_ORDER, PRESETS, ease, glide, presetAt } = await import('./chasePres
 const near = (a: number, b: number, eps = 1e-9): void => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`)
 const wrap = (deg: number): number => ((deg % 360) + 360) % 360
 
-test('PRESETS: inside the orbit\'s limits (OrbitControl: pitch -89..10, range 25..3000 m); Behind is the chase\'s start', () => {
+test('PRESETS: inside the orbit\'s limits (OrbitControl: pitch -89..10, range 25 m..100 km); Behind is the chase\'s start', () => {
   for (const p of Object.values(PRESETS)) {
     assert.ok(p.pitchDeg >= -89 && p.pitchDeg <= 10, p.label)
-    assert.ok(p.rangeM >= 25 && p.rangeM <= 3000, p.label)
+    assert.ok(p.rangeM >= 25 && p.rangeM <= 100_000, p.label)
   }
   assert.deepEqual({ ...PRESETS.behind, label: '' }, { label: '', headingDeg: 0, pitchDeg: -12, rangeM: 150 })
   // The sides as the orbit turns: a positive offset puts the camera on the aircraft's left.

@@ -146,7 +146,7 @@ test('roll +20° → right wing ENU up < 0 (right wing down), nose level; −20�
   assert.ok(enu(modelMatrixFor(state(KSFO.lat, KSFO.lon, 300, 90, 0, -20), m), axes.right, KSFO.lat, KSFO.lon)[2] > 0)
 })
 
-test('modelMatrixFor: origin at lat/lon and hM + gearHeightM, scale baked in, result reused', () => {
+test('modelMatrixFor: origin at lat/lon and hM + gearHeightM, scale baked in, result reused; k grows it from its wheels up', () => {
   const out = new Matrix4()
   const mm = modelMatrixFor(state(37.6, -122.4, -28.3, 45, 5, 5), m, out)
   assert.equal(mm, out)
@@ -157,6 +157,12 @@ test('modelMatrixFor: origin at lat/lon and hM + gearHeightM, scale baked in, re
   near(Matrix4.getMaximumScale(mm), m.scale, 1e-9)
   const down = Cartographic.fromCartesian(Matrix4.getTranslation(modelMatrixFor(state(37.6, -122.4, -28.3, 45), m, undefined, 11.6), new Cartesian3()))
   near(down.height, -28.3 + 11.6, 1e-4, 'an explicit origin → wheel height (the gear down)')
+  // A far model drawn 40 times its size: from its wheels up, so they stay at hM (on the ground it stands on it).
+  const far = modelMatrixFor(state(37.6, -122.4, -28.3, 45), m, undefined, undefined, 40)
+  near(Matrix4.getMaximumScale(far), 40 * m.scale, 1e-9)
+  near(Cartographic.fromCartesian(Matrix4.getTranslation(far, new Cartesian3())).height, -28.3 + 40 * m.gearHeightM, 1e-4)
+  const wheels = Matrix4.multiplyByPoint(far, new Cartesian3(0, 0, -m.gearHeightM / m.scale), new Cartesian3())
+  near(Cartographic.fromCartesian(wheels).height, -28.3, 1e-4, 'the wheels where they were')
 })
 
 // ---------- ChaseModel (Model and Viewer faked: no WebGL in Node) ----------
@@ -183,6 +189,8 @@ test('ChaseModel: added hidden; update rewrites modelMatrix in place and shows i
   assert.equal(f.model.modelMatrix, same)
   assert.ok(Matrix4.equals(f.model.modelMatrix, modelMatrixFor(s, m)))
   assert.equal(f.model.show, true)
+  cm.update(s, 0, 40)
+  assert.ok(Matrix4.equals(f.model.modelMatrix, modelMatrixFor(s, m, undefined, undefined, 40)), 'far away: drawn 40 times its size')
 
   cm.show = false
   cm.update(s)
@@ -200,7 +208,8 @@ test('ChaseModel.load: the model does not follow terrain exaggeration (keeps its
   const fromGltf = t.mock.method(Model, 'fromGltfAsync', async () => f.model as unknown as Model)
   const cm = await ChaseModel.load(f.viewer, m)
   // Cesium's default would squash the aircraft towards relH with the ground, and flatten it at factor 0.
-  assert.deepEqual(fromGltf.mock.calls[0].arguments, [{ url: `/${m.uri}`, minimumPixelSize: 32, show: false, enableVerticalExaggeration: false }])
+  // No minimumPixelSize either: a far model's least size is in its matrix (update's k), as the traffic's.
+  assert.deepEqual(fromGltf.mock.calls[0].arguments, [{ url: `/${m.uri}`, show: false, enableVerticalExaggeration: false }])
   assert.equal(cm.model, f.model)
   assert.deepEqual(f.added, [f.model])
   assert.equal(f.model.show, false)
@@ -417,6 +426,10 @@ test('ChaseModel.setGear: loads the gear once, draws it with the chase matrix; t
   cm.update(s, 0.016)
   assert.ok(Matrix4.equals(gear.modelMatrix, body.modelMatrix))
   assert.equal(gear.show, true)
+  cm.update(s, 0, 40)
+  near(Matrix4.getMaximumScale(gear.modelMatrix), 40 * b744.scale, 1e-9, 'far away the gear is enlarged with the aircraft')
+  assert.ok(Matrix4.equals(gear.modelMatrix, body.modelMatrix))
+  cm.update(s, 0)
   assert.ok(Cartesian2.equals(gear.imageBasedLighting.imageBasedLightingFactor, new Cartesian2(0.2, 0.2)), 'lit as the aircraft (the Sun dims it at night)')
 
   cm.show = false

@@ -3,8 +3,8 @@
 // - Browse: a north-up, top-down street map. Every aircraft is an icon turned to its track and coloured by altitude.
 //   Clicking one (or a list row) focuses it: its flight card shows and the map stays as it is.
 // - Chase (the card's "Chase in 3-D", ?chase=1, or a bare ?hex= link): the 3-D model and the chase camera over the
-//   satellite imagery, with the card. The other aircraft within 10 nm show as 3-D models framed by corner brackets
-//   (scene/traffic.ts); chase shows no flat icons. The sun lights the chase view, and
+//   satellite imagery, with the card. The other aircraft within 10 nm (farther as the camera zooms out) show as 3-D
+//   models framed by corner brackets (scene/traffic.ts); chase shows no flat icons. The sun lights the chase view, and
 //   the relief can sink into the map and grow back (the Scene panel's switches, keys T and L). A frame of flight data
 //   hugs the chased aircraft (scene/flightFrame.ts); the flight card stays. Roads and Borders & places are drawn for
 //   3-D there: roads on near terrain only, thin borders, place names upright over the view (scene/placeLabels.ts). Weather
@@ -25,7 +25,7 @@
 // selected one also goes into the TrackRegistry, whose full estimator the chase camera follows.
 // This file only wires the parts in scene/, track/, browse/, ui/, bench/ and api.ts together.
 import { Cartesian2, Cartesian3, Cartographic, Ellipsoid, Math as CesiumMath, SceneTransforms, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
-import type { Viewer } from 'cesium'
+import type { PerspectiveFrustum, Viewer } from 'cesium'
 import type { AlertEvent } from '../shared/alerts.ts'
 import { airlineOf } from '../shared/airlines.ts'
 import type { Airport } from '../shared/airports.ts'
@@ -63,7 +63,7 @@ import { tracePath, traceSamples } from './history/trace.ts'
 import { liveryCode, liveryFromSpec, liveryOf, type Livery } from './scene/livery.ts'
 import { ChaseModel } from './scene/model.ts'
 import { ModelPicker } from './scene/modelFor.ts'
-import { Traffic } from './scene/traffic.ts'
+import { BOX_HALF, Traffic, minScale, trafficRangeNm } from './scene/traffic.ts'
 import { AircraftLights } from './scene/aircraftLights.ts'
 import { makeNightLayer } from './scene/nightLights.ts'
 import { Buildings } from './scene/buildings.ts'
@@ -110,7 +110,9 @@ import './ui/layout.css'
 const POLL_MS = 1000 // view and chase both poll at 1 Hz; TrackRegistry's pollPeriodS says the same
 const PRUNE_AGE_S = 60 // forget an aircraft at least this long after its newest sample (Fleet: its own staleS if longer)
 // Chase traffic runs the chased aircraft's physics too (TrackRegistry.applyTo): a track per aircraft this close to it
-// (the 3-D traffic shows 10 nm), dropped 30 s after its newest sample.
+// (the 3-D traffic shows 10 nm while the camera is near), dropped 30 s after its newest sample.
+// ponytail: the traffic farther out, drawn when the camera zooms out (trafficRangeNm), is dead-reckoned from its newest
+// sample as on the map: it steps a few px at each refresh. Upgrade: tracks out to the traffic's radius.
 const TRAFFIC_TRACK_NM = 12
 const TRAFFIC_TRACK_KEEP_S = 30
 const START_HEIGHT_M = 60_000 // ?hex= start: straight down on the hero airport until the chase camera takes over
@@ -182,12 +184,13 @@ function viewNm(nm: number): number {
 }
 
 /**
- * Radius of the chase view poll: the camera height in nm (a top-down view shows about ±0.6 h), in 10 nm steps, 20–5,400 nm.
+ * Radius of the chase view poll: the camera height in nm (a top-down view shows about ±0.6 h), and at least trafficNm
+ * (the 3-D traffic's radius round the chased aircraft: what is drawn is asked for), in 10 nm steps, 20–5,400 nm.
  * ponytail: a tilted camera sees further than its height; the far part of such a view stays empty until the user looks
  * down. Upgrade: size the circle from the frustum's ground footprint (browseCircle does, for the top-down view).
  */
-export function viewRadiusNm(cameraHeightM: number): number {
-  return viewNm(cameraHeightM / 1852)
+export function viewRadiusNm(cameraHeightM: number, trafficNm = 0): number {
+  return viewNm(Math.max(cameraHeightM / 1852, trafficNm))
 }
 
 const round2 = (deg: number): number => Math.round(deg * 100) / 100
@@ -1740,7 +1743,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
     fleetLayer.setTerrain(tf) // ground icons follow the grow and sink
     // Chase shows the traffic in range as 3-D models and no flat icons (none at all without the traffic model).
-    const chaseModels = traffic?.select(all, selected, chasing && s !== null ? s : null) ?? NO_HEXES
+    const chaseModels = traffic?.select(all, selected, chasing && s !== null ? s : null, trafficRangeNm(chaseCam.orbit.rangeM)) ?? NO_HEXES
     fleetLayer.update(all, selected, tableHover ?? mapHover, chasing && s !== null && model !== null, chasing ? chaseModels : null)
     const tTable = measure === null ? 0 : performance.now()
     measure?.('fh:fleet', now)
@@ -1794,7 +1797,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         else model?.setGear(want)
         liveGear = want
       }
-      model?.update(placed, dtS)
+      // Far out the chased model is enlarged to the traffic's least size on screen (minScale), from its wheels up. Its
+      // depth along the view is the orbit's range to 0.1 %: the camera, placed after it, aims at its middle from there.
+      const fovy = (viewer.camera.frustum as PerspectiveFrustum).fovy ?? CesiumMath.PI_OVER_THREE // undefined before the first render
+      const far = model === null ? 1 : minScale((model.entry.box?.half ?? BOX_HALF) * model.entry.scale, chaseCam.orbit.rangeM, fovy, viewer.canvas.clientHeight)
+      model?.update(placed, dtS, far)
       if (model !== null) lights.forChase(model.model, model.entry, placed, sf?.event.damage.has('fin') ?? false)
       if (sf?.jumped) chaseCam.snapHeading() // a seek: behind the aircraft at once, not a swing round to it
       // The camera orbits the aircraft's middle, not its wheels: at any range it keeps its place on screen, and so do the
@@ -1848,7 +1855,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     // if it ever shows in a profile.
     const named = chasing && placeLabels.active
     const over = named && framed && model !== null
-      ? outlineDiscs(viewer.scene, model.model.modelMatrix, model.entry, (model.model as { computedScale?: number }).computedScale ?? 1, aircraftDiscs)
+      ? outlineDiscs(viewer.scene, model.model.modelMatrix, model.entry, aircraftDiscs)
       : NO_DISCS
     placeLabels.update(tf, now, named ? flightFrame.occupied(false) : NO_RECTS, over)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
@@ -1939,7 +1946,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
       if (c !== null && c.nm < MAX_VIEW_NM && !allLons) return c
     }
     const cam = viewer.camera.positionCartographic
-    const nm = viewRadiusNm(cam.height)
+    const nm = viewRadiusNm(cam.height, chasing ? trafficRangeNm(chaseCam.orbit.rangeM) : 0)
     const round = (deg: number): number => Math.round(deg * 1e4) / 1e4
     if (chasing && chased !== null) return { lat: round(chased.lat), lon: round(chased.lon), nm } // a focus alone keeps the view
     const c = viewer.canvas
@@ -1971,8 +1978,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const onScreen = at !== undefined && distanceNm(v.lat, v.lon, at.lat, at.lon) <= v.nm
     const ask = hex !== null && (chasing || onScreen || nowMs - lastFocusAskMs >= FOCUS_ASK_MS)
     if (ask && !chasing) lastFocusAskMs = nowMs
-    // The open traffic card's aircraft, as a focused one: at once, then every FOCUS_ASK_MS. Within 10 nm of the chased
-    // aircraft it is inside the view circle, so the server asks upstream nothing more for it.
+    // The open traffic card's aircraft, as a focused one: at once, then every FOCUS_ASK_MS. One of the traffic, it is
+    // inside the view circle, so the server asks upstream nothing more for it.
     const th = traffic?.openHex ?? null
     const askTraffic = th !== null && (trafficAsked?.hex !== th || nowMs - trafficAsked.ms >= FOCUS_ASK_MS)
     if (askTraffic) trafficAsked = { hex: th, ms: nowMs }
