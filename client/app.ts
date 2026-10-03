@@ -47,7 +47,7 @@ import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
 import { NO_DISCS, outlineDiscs, type Discs } from './scene/modelOutline.ts'
 import { PlaceLabels } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
-import { Weather3D, parseWxAt } from './scene/weather3d.ts'
+import { Weather3D, parseWxAt, parseWxDemo, type Aircraft as WxAircraft } from './scene/weather3d.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
 import { dayState, legSpans, type DayState } from './history/aircraftDay.ts'
@@ -496,7 +496,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const carto = new Cartographic()
   const sunAt = new Cartesian3() // the chased aircraft, where the sun's elevation is taken
   const aimAt = new Cartesian3() // the chased aircraft's middle, where the chase camera looks
-  const wxAircraft = { lat: 0, lon: 0, altM: 0 } // the chased aircraft as the 3-D weather takes it, rewritten each frame
+  const wxAircraft: WxAircraft = { lat: 0, lon: 0, altM: 0, trackDeg: 0 } // the chased aircraft as the 3-D weather takes it, rewritten each frame
   const onScreen: FleetEntry[] = [] // reused every frame
   // History, every frame (history/selected.ts placeSelected): the fleet's entries with the selected aircraft's own as its
   // day says (its track's state, or a ghost where it was last heard or is estimated to be in a hole of its leg, written into
@@ -794,11 +794,14 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const aircraftDiscs: Discs = { n: 0, d: new Float64Array(0) } // the chased aircraft's outline on screen: no name over it
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. Its overcast greys the sky and
-  // dims the Sun's light too (0 when it is hidden). ?wxat= is a check aid.
+  // dims the Sun's light too (0 when it is hidden). ?wxat=, ?wxdemo= and ?wxlook= are check aids: the weather of another place, a
+  // made-up sky in place of the real one, and the clouds' look at the start (natural, severity or blocks).
   const weather3d = new Weather3D(viewer, {
     apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
-    onShade: (shade) => sun.setOvercast(shade),
+    demo: parseWxDemo(location.search), onShade: (shade) => sun.setOvercast(shade),
   })
+  const wxLook = new URLSearchParams(location.search).get('wxlook')
+  if (wxLook === 'natural' || wxLook === 'severity' || wxLook === 'blocks') weather3d.look = wxLook
   // The flight-data frame's wind where the aircraft sends none: the weather model's (a forecast, drawn as an estimate). It has one
   // only while the 3-D weather is shown, which is a live chase with the Weather switch on.
   const modelWind: WindAloft = (lat, lon, ft) => weather3d.windAt(lat, lon, ft)
@@ -863,6 +866,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // each frame whose ground is still unknown after the memo. Read them with performance.getEntriesByName(name) or in
   // DevTools. ponytail: entries pile up (~200 per second) until performance.clearMeasures(); fine for runs of minutes.
   const measure = bench === null ? null : (name: string, startMs: number): void => void performance.measure(name, { start: startMs })
+  // And once, BENCH_SAY_MS after the start, the frame times of the last two seconds as a console warning, with whether the chase's
+  // weather was drawn: a headless check run (which prints the console's warnings) reads the weather pass's cost from two runs.
+  const BENCH_SAY_MS = 18_000
+  let benchSayMs = bench === null ? Infinity : performance.now() + BENCH_SAY_MS
   ;(window as unknown as { viewer?: Viewer }).viewer = viewer // console access for debugging and G3, as in WP-00
   ;(window as unknown as { weather3d?: Weather3D }).weather3d = weather3d // and for checks of the chase's weather
 
@@ -1845,6 +1852,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         wxAircraft.lat = chased.lat
         wxAircraft.lon = chased.lon
         wxAircraft.altM = chased.hM
+        wxAircraft.trackDeg = chased.trackDeg ?? chased.headingDeg
       }
       weather3d.setNight(prefs.light && st !== null ? st.night : 0)
       weather3d.update(chased !== null ? wxAircraft : null, now, tf)
@@ -1906,6 +1914,11 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     }
     syncUrl(now)
     bench?.frame(s, clearanceM)
+    if (bench !== null && now >= benchSayMs) {
+      benchSayMs = Infinity
+      const b = bench.recent()
+      console.warn(`FlightHopper bench: frame p50 ${(1000 / b.fpsP50).toFixed(1)} ms, p95 ${b.frameMsP95.toFixed(1)} ms · weather ${weather3d.show ? weather3d.look : 'off'}`)
+    }
     measure?.('fh:frame', now)
   }
   const removeFrame = viewer.scene.preUpdate.addEventListener(frame)

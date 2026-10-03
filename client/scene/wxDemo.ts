@@ -8,6 +8,8 @@
 // smaller storm 25 km to the left at 88 km; and a SIGMET of embedded thunderstorms, to FL340, in a ring that starts 80 km ahead and
 // holds both storms. The storms are cloudField.ts's own towers (tower). Every draw comes from one seeded sequence, in a fixed
 // order: the same call gives the same sky, and a call from another place or track gives the same sky moved and turned.
+// Two options make an aircraft start inside the weather (?wxdemo=60, =98): startKm lays the sky that far back along the track, and altM
+// puts the rain layer round the aircraft's own height.
 import type { Sigmet } from '../../shared/wx.ts'
 import { LOOKS, PUFF_FILL, RADAR_LOOK, SEV, between, farKmOf, sequence, tower, type CloudSpec } from './cloudField.ts'
 import { softSlice } from './cloudQuad.ts'
@@ -18,6 +20,8 @@ const RAD = Math.PI / 180
 const SEED = 20261003
 const CUMULUS_BASE_M = 1500
 const STORM_BASE_M = 1000
+const DECK_M: readonly [number, number] = [7000, 8700] // the rain layer's base and top
+const DECK_UNDER_M = 700 // with altM its base is this far under the aircraft
 const SIGMET_TOP_FT = 34000
 /** The SIGMET's ring, [along, right] km: starts 80 km ahead, and holds both storms with their anvils. */
 const RING: readonly (readonly [number, number])[] = [[80, -38], [112, -46], [138, -14], [130, 26], [80, 22]]
@@ -50,10 +54,15 @@ function puff(r: () => number, at: { lat: number; lon: number }, baseM: number, 
 
 /**
  * The demo sky for an aircraft at lat, lon on trackDeg (degrees true), and its one SIGMET. See the header for what is in it.
+ * startKm: the aircraft is that far along the sky (60: under the middle of the rain layer's place; 98: at the storm). altM (metres above
+ * sea level): the rain layer stands round that height, its base 700 m under it and as thick as it is, in place of 7,000 to 8,700 m.
  */
-export function demoSky(lat: number, lon: number, trackDeg: number): { specs: CloudSpec[]; sigmets: Sigmet[] } {
+export function demoSky(lat: number, lon: number, trackDeg: number, opts: { altM?: number; startKm?: number } = {}): { specs: CloudSpec[]; sigmets: Sigmet[] } {
   const r = sequence(SEED)
-  const at = (along: number, right: number): { lat: number; lon: number } => place(lat, lon, trackDeg, along, right)
+  const startKm = opts.startKm ?? 0
+  const at = (along: number, right: number): { lat: number; lon: number } => place(lat, lon, trackDeg, along - startKm, right)
+  const deckBase = opts.altM === undefined ? DECK_M[0] : opts.altM - DECK_UNDER_M
+  const deckTop = deckBase + DECK_M[1] - DECK_M[0]
   const specs: CloudSpec[] = []
 
   const cumulus: Look = { shape: LOOKS.FEW.shape, slice: LOOKS.FEW.slice, brightness: LOOKS.FEW.brightness, tint: LOOKS.FEW.tint }
@@ -68,8 +77,8 @@ export function demoSky(lat: number, lon: number, trackDeg: number): { specs: Cl
   const deck: Look = { shape: RADAR_LOOK.deck.shape, slice: RADAR_LOOK.deck.slice, brightness: RADAR_LOOK.deck.brightness, tint: RADAR_LOOK.deck.tint }
   for (let c = 0; c < 7; c++) {
     for (let row = 0; row < 13; row++) {
-      const base = 7000 + (r() - 0.5) * 200
-      const topM = 8700 + (r() - 0.5) * 200
+      const base = deckBase + (r() - 0.5) * 200
+      const topM = deckTop + (r() - 0.5) * 200
       specs.push(puff(r, at(50 + 4.33 * c + (r() - 0.5) * 2, -25 + 4 * row + (r() - 0.5) * 2), base, topM, between(r, [9000, 12000]), deck, SEV.light))
     }
   }
