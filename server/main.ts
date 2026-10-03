@@ -260,7 +260,8 @@ export function createServer(
   const recorder = cfg.recordDir !== null && source.caps.kind !== 'replay' ? new Recorder(cfg.recordDir) : null
   const flights = cfg.flightsDir === null ? null : new FlightLog({ dir: cfg.flightsDir, source: source.caps.kind, nowMs })
   // The alerts (server/alerts.ts): a live source with EVENTS_DIR set; a replay's world is not now.
-  // typeOf reads `types`, made below: safe, as it runs only from a late scan, after createServer has returned.
+  // typeOf reads `types`, made below: safe, as typeOf runs from the poller's samples and from the late scan, both after
+  // createServer has returned.
   const alerts =
     cfg.eventsDir === null || source.caps.kind === 'replay'
       ? null
@@ -571,7 +572,8 @@ export function createServer(
           }
           // Asked to roll (the command line does, for a live source): the newest hour of the past stays ready, so History
           // opens on it without a wait. Otherwise the past is fetched only when a client asks. After each tick the alerts read the
-          // newest two half hours held (oldest first; one already read costs nothing, nor does any while the switch is off).
+          // newest two half hours held (oldest first, so the end of each goes before the next and a fall across their boundary is
+          // found: Alerts.scanSlot; one already read costs nothing, nor does any while the switch is off).
           if (deps.rollHistory === true && historyTimer === null) {
             // ponytail: scanSlot reads a file synchronously, so a scan holds the event loop (poller ticks, HTTP replies): about 0.2 to
             // 0.6 s for a real 13 to 30 MB half hour, about 1.2 s for the two held the first time the switch is turned on, one half
@@ -579,6 +581,8 @@ export function createServer(
             const scan = async (): Promise<void> => {
               // The type table loads as the server starts, as the two half hours do. Each half hour is read once, so one read before
               // the table is in would leave its events without a type for good: wait for it, as the first ask for the past does.
+              // ponytail: a type table still loading after 5 s leaves that scan without types, so its events have no type and
+              // military and fast-jet falls are not left out.
               await types?.ready(TYPES_WAIT_MS)
               const newest = newestSlotMs(nowMs())
               for (const slot of [newest - SLOT_MS, newest]) {

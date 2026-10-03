@@ -1,13 +1,15 @@
 // server/alerts.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ongoing, type AlertEvent } from '../shared/alerts.ts'
+import { SLOT_MS } from '../shared/history.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { Alerts, ntfyPush } from './alerts.ts'
 import { encodeHeatmap } from './heatmap.ts'
+import { SWEEP_PERIOD_MS, SWEEP_SHARE } from './poller.ts'
 
 const T0 = Date.UTC(2026, 8, 30, 5, 31, 0)
 const SLOT = Date.UTC(2026, 8, 30, 5, 0) // the 05:00 half hour
@@ -23,6 +25,7 @@ function setup(o: {
   codes?: string[]
   typeOf?: TypeOf
   push?: (e: AlertEvent) => void
+  append?: (path: string, text: string) => void
 } = {}) {
   const clock = { t: T0 }
   const pushed: AlertEvent[] = []
@@ -31,7 +34,7 @@ function setup(o: {
     pushed.push(structuredClone(e))
     o.push?.(e)
   }
-  const a = new Alerts({ dir, nowMs: () => clock.t, sweep: true, push, codes: o.codes, typeOf: o.typeOf })
+  const a = new Alerts({ dir, nowMs: () => clock.t, sweep: true, push, codes: o.codes, typeOf: o.typeOf, append: o.append })
   if (o.on ?? true) a.setOn(true)
   return { a, clock, pushed, dir }
 }
@@ -101,14 +104,32 @@ test('a squawk counts once it is seen again 25 s or more after it was first seen
   assert.equal(pushed.length, 1)
 })
 
-test('a first sighting not seen again within 2 min is forgotten', () => {
+test('a first sighting not seen again within 10 min is forgotten', () => {
   const { a } = setup()
   a.observe(ac(), T0)
-  a.observe(ac(), T0 + 130_000)
-  a.observe(ac(), T0 + 140_000)
+  a.observe(ac(), T0 + 600_001) // 10 min and 1 ms on: a first sighting afresh
+  a.observe(ac(), T0 + 610_000)
   assert.equal(a.reply().events.length, 0)
-  a.observe(ac(), T0 + 160_000)
-  assert.equal(a.reply().events[0].openedMs, T0 + 130_000)
+  a.observe(ac(), T0 + 630_001)
+  assert.equal(a.reply().events[0].openedMs, T0 + 600_001)
+  const b = setup()
+  b.a.observe(ac(), T0)
+  b.a.observe(ac(), T0 + 600_000) // 10 min on: still waiting for it
+  assert.equal(b.a.reply().events.length, 1)
+})
+
+test('a sweep-only emergency confirms at the slowest sweep: sightings one round apart (213 s) open an event, two rounds apart too', () => {
+  // adsb.fi's 0.9 req/s after three 429s: a sweep request every 1 / (0.1125 × SWEEP_SHARE) s, so each of 3 codes every 213 s
+  // (poller.ts #sweepCode). Two rounds: an answer that failed skips its code for one.
+  const roundMs = 3 * Math.max(SWEEP_PERIOD_MS / 3, 1000 / ((0.9 / 8) * SWEEP_SHARE))
+  assert.equal(Math.round(roundMs / 1000), 213)
+  for (const apart of [roundMs, 2 * roundMs]) {
+    const { a, pushed } = setup()
+    a.observe(ac(), T0)
+    a.observe(ac(), T0 + apart)
+    assert.equal(a.reply().events.length, 1, `${apart / 1000} s apart`)
+    assert.equal(pushed.length, 1)
+  }
 })
 
 test('not read: off, on the ground, a surface vehicle, a placeholder or non-ICAO address, lifeguard, reserved, other codes', () => {
@@ -981,6 +1002,119 @@ test('a quiet event turns loud on a 7700 and is pushed once; the next 7700 sight
   clock.t = T0 + 90_000
   a.observe(light('7700'), clock.t)
   assert.equal(pushed.length, 1)
+})
+
+// ---- final fix round ----
+
+test('confirmation goes by the time of each message (receipt − seen), not of the answer: one message re-served by two sweeps confirms nothing', () => {
+  const { a } = setup()
+  a.observe(ac({ seen: 5 }), T0) // its last message 5 s before this answer
+  a.observe(ac({ seen: 35 }), T0 + 30_000) // the same message, 30 s on (readsb keeps a squawk 60 s after it)
+  assert.equal(a.reply().events.length, 0)
+  a.observe(ac({ seen: 1 }), T0 + 60_000) // a new message, 64 s after the first
+  assert.deepEqual(a.reply().events.map((e) => [e.openedMs, e.lastMs]), [[T0 - 5_000, T0 + 59_000]])
+  a.observe(ac({ seen: 40 }), T0 + 90_000) // a message older than the newest
+  assert.equal(a.reply().events[0].lastMs, T0 + 59_000)
+  a.observe(ac({ seen: 2 }), T0 + 120_000)
+  assert.equal(a.reply().events[0].lastMs, T0 + 118_000, 'its newest message')
+})
+
+test('the rev starts at the server clock (whole ms): a restarted server\'s rev is above any its last run gave', () => {
+  const dir = tmp()
+  const one = setup({ dir })
+  for (const hex of ['a00001', 'a00002', 'a00003']) for (const t of [T0, T0 + 30_000]) one.a.observe(ac({ hex }), t)
+  const last = one.a.rev
+  assert.ok(last > T0, `${last}`)
+  const two = new Alerts({ dir, nowMs: () => T0 + 60_000.7, sweep: true })
+  assert.equal(two.rev, T0 + 60_000)
+  assert.ok(two.rev > last)
+})
+
+test('the log: after a write cut short (a full disk), the next line starts on a line of its own; the cut one is skipped', (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const dir = tmp()
+  let cut = 1
+  const append = (path: string, text: string): void => {
+    if (cut-- > 0) {
+      appendFileSync(path, text.slice(0, 25)) // the disk filled in the middle of the line
+      throw new Error('ENOSPC: no space left on device, write')
+    }
+    appendFileSync(path, text)
+  }
+  const { a, clock } = setup({ dir, append })
+  for (const hex of ['a00001', 'a00002', 'a00003']) {
+    for (const x of [T0, T0 + 30_000]) {
+      clock.t = x
+      a.observe(ac({ hex }), x)
+    }
+  }
+  assert.equal(err.mock.callCount(), 1)
+  const text = readFileSync(join(dir, '2026-09-30.jsonl'), 'utf8')
+  assert.equal(text.split('\n').length, 4, `the cut line, a00002, a00003 and the end; no empty line once a write went well: ${text}`)
+  const read = new Alerts({ dir, nowMs: () => clock.t, sweep: true }).reply().events.map((e) => e.hex).sort()
+  assert.deepEqual(read, ['a00002', 'a00003'], 'only the cut line is lost')
+})
+
+// A fall across the boundary of two half hours: the late check carries the end of each half hour into the next.
+
+const NEXT = SLOT + SLOT_MS // the 05:30 half hour
+/** Half hour n after 05:00, stamped as half hour `as` (n by default), its planes' altitudes given in s since 05:00. */
+function half(n: number, planes: Plane[], as = n): Uint8Array {
+  return heat(planes.map((p) => (p.alt === undefined ? p : { ...p, alt: (s: number) => p.alt!(s + n * 1800) })), SLOT + as * SLOT_MS)
+}
+/** FZ1073's shape: level at 34,000 ft, then 6,000 ft lost in the 50 s to lastS (in s since 05:00), then no position. */
+const diveTo = (lastS: number) => (s: number): number | null => (s > lastS ? null : s < lastS - 50 ? 34_000 : 34_000 - ((s - (lastS - 50)) / 50) * 6000)
+/** From FL370 at startS (in s since 05:00), 10,000 fpm down to 17,000 ft (2 min), then level. */
+const descentAt = (startS: number) => (s: number): number => (s < startS ? 37_000 : Math.max(17_000, 37_000 - ((s - startS) / 60) * 10_000))
+const falls = (a: Alerts): unknown[] => a.reply().events.map((e) => [e.hex, e.kind, e.drop?.fromFt, e.drop?.toFt, e.openedMs]).sort()
+
+test('late, across a boundary: a dive in the last 50 s of a half hour, the aircraft gone from the next, is found once the next is read', () => {
+  const plane = { hex: 'a00001', alt: diveTo(1790) } // its last point at 05:29:50, the half hour's last slice
+  const { a, pushed } = setup()
+  a.scanSlot(half(0, [plane]), SLOT)
+  assert.equal(a.reply().events.length, 0, 'its own half hour ends as it falls')
+  a.scanSlot(half(1, [plane]), NEXT)
+  const [e] = a.reply().events
+  assert.equal(a.reply().events.length, 1)
+  assert.deepEqual([e.kind, e.drop, e.openedMs, e.lastMs, e.late], ['dive', { fromFt: 34_000, toFt: 28_000, overS: 50, lost: true }, at(29), at(29, 50), true])
+  assert.deepEqual([e.lat, e.lon, e.altFt], [40, -70, 28_000], 'where it was last heard')
+  assert.equal(pushed.length, 1)
+})
+
+test('late, across a boundary: a 20,000 ft descent split by it is found once the next half hour is read; each half hour carries its own end', () => {
+  const first = { hex: 'a00001', alt: descentAt(1740) } // 05:29:00 to 05:31:00
+  const second = { hex: 'a00002', lat: 41, alt: descentAt(3540) } // 05:59:00 to 06:01:00
+  const { a, pushed } = setup()
+  a.scanSlot(half(0, [first, second]), SLOT)
+  assert.deepEqual(falls(a), [])
+  a.scanSlot(half(1, [first, second]), NEXT)
+  assert.deepEqual(falls(a), [['a00001', 'descent', 37_000, 17_000, at(29)]])
+  a.scanSlot(half(2, [first, second]), SLOT + 2 * SLOT_MS)
+  assert.deepEqual(falls(a), [['a00001', 'descent', 37_000, 17_000, at(29)], ['a00002', 'descent', 37_000, 17_000, at(59)]])
+  assert.equal(pushed.length, 2)
+})
+
+test('late, across a boundary: a fall found in a half hour is not found twice, nor pushed again, when the next one carries its end', () => {
+  const descent = { hex: 'a00001', alt: descentAt(1640) } // 05:27:20 to 05:29:20: within the half hour's last 150 s
+  const dive = { hex: 'a00002', lat: 41, alt: diveTo(1700) } // lost at 05:28:20, 90 s before the half hour ends
+  const { a, pushed } = setup()
+  a.scanSlot(half(0, [descent, dive]), SLOT)
+  const found = structuredClone(a.reply().events)
+  assert.deepEqual(found.map((e) => e.kind).sort(), ['descent', 'dive'])
+  a.scanSlot(half(1, [descent, dive]), NEXT)
+  assert.deepEqual(a.reply().events, found)
+  assert.equal(pushed.length, 2)
+})
+
+test('late, across a boundary: nothing is carried into a half hour read without the one before it (the first read, after a gap)', () => {
+  const plane = { hex: 'a00001', alt: descentAt(1740) } // split by the 05:30 boundary, as above
+  const alone = setup()
+  alone.a.scanSlot(half(1, [plane]), NEXT)
+  assert.equal(alone.a.reply().events.length, 0, 'the first read')
+  const gap = setup()
+  gap.a.scanSlot(half(0, [plane]), SLOT)
+  gap.a.scanSlot(half(1, [plane], 2), SLOT + 2 * SLOT_MS) // what 05:30 held, as the 06:00 half hour: 05:00's end is not before it
+  assert.equal(gap.a.reply().events.length, 0, 'after a gap')
 })
 
 test('ntfyPush: an answer that is not OK and a fetch that fails are logged; nothing is thrown or left unhandled', async (t) => {

@@ -519,7 +519,7 @@ test('alerts: GET /api/events starts off and empty; POST ?on=1|0 switches the wa
   const first = await get<EventsReply>(`${base}/api/events`)
   assert.equal(first.status, 200)
   assert.equal(first.type, 'application/json')
-  assert.deepEqual(first.body, { on: false, sweep: true, rev: 0, events: [] })
+  assert.deepEqual(first.body, { on: false, sweep: true, rev: T0, events: [] }, 'the rev starts at the server clock')
 
   const on = await postEvents(base, 'on=1')
   assert.equal(on.status, 200)
@@ -589,7 +589,7 @@ test('alerts: a replay never has them, whatever EVENTS_DIR says: 404, no alertsR
 
 test('alerts: a source that cannot sweep (readsb) is live and has them, with sweep false', async (t) => {
   const { base, world } = await liveServer(t, { kind: 'readsb' })
-  assert.deepEqual(await getEvents(base), { on: false, sweep: false, rev: 0, events: [] })
+  assert.deepEqual(await getEvents(base), { on: false, sweep: false, rev: T0, events: [] })
   assert.equal((await (await postEvents(base, 'on=1')).json() as EventsReply).on, true)
   await waitFor('the poller to ask', async () => world.asked.length, (n) => n > 0)
   await sleep(350) // a few more poller ticks: a sweep would be asked by now

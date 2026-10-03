@@ -6,18 +6,26 @@
 //   EVENTS_DIR/state.json        {"on":true}: the switch, kept across restarts (default off)
 //   EVENTS_DIR/YYYY-MM-DD.jsonl  one AlertEvent per line, written when it opens or changes (the UTC day of the write); the
 //                                newest line of an id wins. The last 8 days are read at start.
+// ponytail: older day files are kept, never deleted: they are the user's archive, tens of KB a day. Delete the files to clear them.
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { EMERGENCY_SQUAWKS, EMERGENCY_STATUSES, pushBody, pushTitle, type AlertDrop, type AlertEvent, type EventsReply } from '../shared/alerts.ts'
+import { SLOT_MS } from '../shared/history.ts'
 import { callsignOf } from '../shared/readsb.ts'
 import type { ReadsbAircraft, Sample } from '../shared/types.ts'
 import { D2, clean, diveThenLost, steepDescent, type AltSeries, type Drop } from './descent.ts'
-import { scanSlot } from './heatmap.ts'
+import { scanSlot, type ScanAircraft, type SlotScan } from './heatmap.ts'
 
 const DAY_MS = 86_400_000
 const CONFIRM_MS = 25_000 // a cause counts once it is seen again this long after it was first seen (glitches are brief)
-const PENDING_MS = 2 * 60_000 // a first sighting not seen again within this is forgotten
+// A first sighting not seen again within this is forgotten. 10 min is two rounds of the sweep (an answer that fails skips its
+// code for a round) down to 0.08 req/s; at adsb.fi's 0.9 req/s after three 429s (0.1125) each of 3 codes is asked every 213 s.
+// ponytail: slower still (a fourth 429, a lower MAX_RPS, more ALERT_SQUAWKS codes), an emergency that only the sweep sees, once
+// a round, may never be confirmed.
+const PENDING_MS = 10 * 60_000
 const EPISODE_MS = 30 * 60_000 // an event takes in sightings this close to it; later, a new one opens
+const TAIL_S = 150 // the end of a half hour that the late check carries into the next: a 120 s descent (D1) and the point before it
+const SLOT_S = SLOT_MS / 1000
 const REV_EVERY_MS = 30_000 // a sighting with nothing new changes the rev only this long after it last changed
 const WRITE_EVERY_MS = 5 * 60_000 // a sighting with nothing new is written this often at most
 const DROP_WRITE_MS = 30_000 // a bigger fall is written this long after the last write at the earliest, not on the 5 min above
@@ -47,6 +55,12 @@ type Typed = { type: string | null; category: string | null; military?: boolean 
 type Who = Pick<AlertEvent, 'callsign' | 'reg' | 'type' | 'lat' | 'lon' | 'altFt'>
 type Patch = Who & { squawk?: string | null; emergency?: string | null; drop?: AlertDrop | null }
 
+/** An aircraft of a half hour as the late check judges it: its altitudes (t in s into the half hour), newest place and callsign. */
+type Heard = Pick<ScanAircraft, 'alt' | 'lat' | 'lon' | 'callsign'>
+/** The ends of the half hour read last (scanSlot), by hex: each aircraft's points in its last 150 s, t in s into the NEXT half hour. */
+type Tails = ReadonlyMap<string, Heard>
+const NO_TAILS: Tails = new Map()
+
 export interface AlertsOpts {
   dir: string // EVENTS_DIR
   nowMs?: () => number
@@ -54,6 +68,7 @@ export interface AlertsOpts {
   sweep: boolean // the source sweeps them worldwide (adsb.fi)
   push?: (e: AlertEvent) => void // a new event that is not quiet, or a new cause on one (ntfyPush)
   typeOf?: (hex: string) => Typed // the type table's lookup (typeDb.ts): a late finding's type, category and military flag; a live fall's military flag
+  append?: (path: string, text: string) => void // appends to a day file (default appendFileSync; a test cuts a write short)
 }
 
 export class Alerts {
@@ -64,24 +79,29 @@ export class Alerts {
   #sweep: boolean
   #push: (e: AlertEvent) => void
   #typeOf: (hex: string) => Typed
+  #append: (path: string, text: string) => void
   #on = false
-  #rev = 0
+  #rev: number // changes with the switch and the events; from the clock at start, so a restart's is above the last run's
   #revMs = -Infinity // when the rev last changed (server clock)
   #events = new Map<string, AlertEvent>() // by id
   #byHex = new Map<string, AlertEvent[]>() // by hex: its events, oldest first (by openedMs)
   #pending = new Map<string, { firstMs: number; lastMs: number }>() // by hex: a first sighting waiting to be seen again
   #writtenMs = new Map<string, number>() // by id: when its last line was written
+  #torn = false // the last write failed, perhaps part way through a line: the next one starts on a line of its own
   #scanned: number[] = [] // the half hours read, the newest last
+  #tails: { slotMs: number; byHex: Tails } | null = null // the ends of the half hour read last, for the one after it
   #failedMs = new Map<string, number>() // by kind of failure: when it was last logged
 
   constructor(o: AlertsOpts) {
     this.#dir = o.dir
     this.#now = o.nowMs ?? Date.now
+    this.#rev = Math.floor(this.#now())
     this.#codeList = [...(o.codes ?? EMERGENCY_SQUAWKS)]
     this.#codes = new Set(this.#codeList)
     this.#sweep = o.sweep
     this.#push = o.push ?? (() => {})
     this.#typeOf = o.typeOf ?? (() => NO_TYPE)
+    this.#append = o.append ?? appendFileSync
     mkdirSync(this.#dir, { recursive: true })
     this.#load()
   }
@@ -116,8 +136,9 @@ export class Alerts {
   /**
    * One aircraft object of a good answer (Poller opts.onAircraft), rxMs its receipt. An emergency squawk or status counts
    * once it is seen again 25 s or more after it was first seen: its event opens then, or the aircraft's event within 30 min
-   * takes it in. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and 000001. Military
-   * aircraft and fast jets are read: their squawks and statuses are emergencies.
+   * takes it in. Each sighting's time is its last message's (rxMs − seen): readsb serves a squawk for 60 s after it, so two
+   * answers can hold one message. Not read: aircraft on the ground, surface vehicles, addresses that are not ICAO, 000000 and
+   * 000001. Military aircraft and fast jets are read: their squawks and statuses are emergencies.
    * ponytail: the 25 s is for opening only; a new cause on an open event counts at once.
    */
   observe(ac: ReadsbAircraft, rxMs: number): void {
@@ -127,22 +148,23 @@ export class Alerts {
     const squawk = ac.squawk !== undefined && this.#codes.has(ac.squawk) ? ac.squawk : null
     const emergency = ac.emergency !== undefined && EMERGENCY_STATUSES.includes(ac.emergency) ? ac.emergency : null
     if (squawk === null && emergency === null) return
+    const t = rxMs - ageS(ac.seen) * 1000
     const at = positionOf(ac)
     const who: Who = {
       callsign: callsignOf(ac.flight), reg: str(ac.r), type: str(ac.t),
       lat: at?.lat ?? null, lon: at?.lon ?? null, altFt: typeof ac.alt_baro === 'number' ? ac.alt_baro : null,
     }
-    const open = this.#near(hex, rxMs, rxMs)
-    if (open !== null) return this.#merge(open, rxMs, { ...who, squawk, emergency }, false)
-    for (const [h, p] of this.#pending) if (rxMs - p.lastMs > PENDING_MS) this.#pending.delete(h)
+    const open = this.#near(hex, t, t)
+    if (open !== null) return this.#merge(open, t, { ...who, squawk, emergency }, false)
+    for (const [h, p] of this.#pending) if (t - p.lastMs > PENDING_MS) this.#pending.delete(h)
     const p = this.#pending.get(hex)
-    if (p === undefined) return void this.#pending.set(hex, { firstMs: rxMs, lastMs: rxMs })
-    p.lastMs = rxMs
-    if (rxMs - p.firstMs < CONFIRM_MS) return
+    if (p === undefined) return void this.#pending.set(hex, { firstMs: t, lastMs: t })
+    p.lastMs = Math.max(p.lastMs, t)
+    if (t - p.firstMs < CONFIRM_MS) return
     this.#pending.delete(hex)
     this.#open({
       id: `${hex}-${p.firstMs}`, hex, kind: squawk !== null ? 'squawk' : 'status', ...who, squawk, emergency, drop: null,
-      openedMs: p.firstMs, lastMs: rxMs, late: false, quiet: quietFor(ac.category ?? null, squawk, emergency),
+      openedMs: p.firstMs, lastMs: p.lastMs, late: false, quiet: quietFor(ac.category ?? null, squawk, emergency),
     })
   }
 
@@ -170,51 +192,71 @@ export class Alerts {
   /**
    * The late check of one half-hour file (slotMs its start; each half hour is read once). An aircraft with two or more ident
    * records carrying an emergency squawk while airborne, and each emergency descent (D1) or dive then lost (D2) in its
-   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. Not read: addresses that
-   * are not ICAO, 000000 and 000001 (the type table is not asked for them), and surface vehicles (the type table's C1 to C3).
-   * No fall is looked for in an aircraft the type table calls military or whose type is in FAST_JETS; its squawks are read.
-   * A late 7600 on a type the table calls light (A1, B1…) is quiet.
+   * altitudes, opens a late event, or joins the aircraft's event that its span is within 30 min of. When this half hour follows
+   * the one read last, each aircraft's points in that one's last 150 s go before its points here, so a fall across the boundary
+   * is found; an aircraft heard there and not here was lost at the boundary, and its end is judged alone, up to this half
+   * hour's last slice. A fall that both half hours hold joins one event (no second push). Not read: addresses that are not
+   * ICAO, 000000 and 000001 (the type table is not asked for them), and surface vehicles (the type table's C1 to C3). No fall
+   * is looked for in an aircraft the type table calls military or whose type is in FAST_JETS; its squawks are read. A late
+   * 7600 on a type the table calls light (A1, B1…) is quiet.
    * ponytail: the half hours must come in time order (the caller scans the older first): a merge never moves an event's
    * openedMs earlier, so an older half hour scanned after a newer leaves the event opening later than the episode began.
+   * ponytail: nothing is carried across a gap in the reads (the server down over a half hour, the switch off), so a fall across
+   * that boundary is still lost; and only altitudes are carried, so an emergency squawk with one ident on each side of a boundary
+   * is not an event.
    */
   scanSlot(buf: Uint8Array, slotMs: number): void {
     if (!this.#on || this.#scanned.includes(slotMs)) return
     this.#scanned.push(slotMs)
     if (this.#scanned.length > 4) this.#scanned.shift()
     const scan = scanSlot(buf, slotMs, this.#codes)
+    // The ends of the half hour read last go before this one's points only when this one follows it: after a gap, none.
+    const tails = this.#tails !== null && this.#tails.slotMs + SLOT_MS === slotMs ? this.#tails.byHex : NO_TAILS
+    this.#tails = scan === null ? null : { slotMs, byHex: tailsOf(scan) }
     if (scan === null) return
     for (const [hex, a] of scan.aircraft) {
-      const idents = a.squawks.length >= 2
-      const mayDrop = mayFall(a.alt)
-      if (!idents && !mayDrop) continue // the cheap test first: most aircraft are neither
-      if (badAddress(hex)) continue // before the type table is asked: nothing is read of it
-      const typed = this.#typed(hex)
-      if (ignored(hex, typed.category)) continue // the full test, a surface vehicle by the table's category
-      // ponytail: the type table's category makes a late 7600 quiet on a light type, but it gives every piston, turboprop and
-      // electric type A1, so the ATR 72 and the Dash 8 are quiet too: accepted, radio failures are the least urgent cause (live
-      // sightings use the broadcast category). It is not used to skip a fall: that needs a top at or above FL200 (D1) or FL150
-      // (D2), which leaves light aircraft out in practice, and the Dash 8 is found.
-      // ponytail: a late event's place and level are the aircraft's newest of the half hour, not where its cause was.
-      const who: Who = { callsign: a.callsign, reg: null, type: typed.type, lat: a.lat, lon: a.lon, altFt: a.alt.ft.at(-1) ?? null }
-      if (idents) {
-        const first = slotMs + a.squawks[0].tS * 1000
-        const last = slotMs + a.squawks[a.squawks.length - 1].tS * 1000
-        const squawk = a.squawks[a.squawks.length - 1].squawk
-        const open = this.#near(hex, first, last)
-        if (open !== null) this.#merge(open, last, { ...who, squawk }, true)
-        else {
-          this.#open({
-            id: `${hex}-${first}`, hex, kind: 'squawk', ...who, squawk, emergency: null, drop: null,
-            openedMs: first, lastMs: last, late: true, quiet: quietFor(typed.category, squawk, null),
-          })
-        }
-      }
-      if (!mayDrop || this.#noFalls(hex, typed.type, 0, typed)) continue
-      const s = clean(a.alt)
-      const d1 = steepDescent(s)
-      const d = d1 ?? diveThenLost(s, scan.endS)
-      if (d !== null) this.#fell(hex, d1 !== null ? 'descent' : 'dive', d, slotMs, who, true)
+      const tail = tails.get(hex)
+      this.#late(hex, a.squawks, tail === undefined ? a : { ...a, callsign: a.callsign ?? tail.callsign }, tail?.alt, slotMs, scan.endS)
     }
+    // Heard at the end of the half hour before and not in this one: lost at the boundary, its end is judged alone.
+    for (const [hex, tail] of tails) if (!scan.aircraft.has(hex)) this.#late(hex, [], tail, undefined, slotMs, scan.endS)
+  }
+
+  /**
+   * One aircraft of the late check of the half hour at slotMs: its emergency idents there, and a fall (D1, else D2 up to endS)
+   * in its altitudes, with `before`, its end of the half hour before (t in this one's), put first. `at` is its newest.
+   */
+  #late(hex: string, squawks: ScanAircraft['squawks'], at: Heard, before: AltSeries | undefined, slotMs: number, endS: number): void {
+    const idents = squawks.length >= 2
+    const mayDrop = mayFall(before, at.alt)
+    if (!idents && !mayDrop) return // the cheap test first: most aircraft are neither
+    if (badAddress(hex)) return // before the type table is asked: nothing is read of it
+    const typed = this.#typed(hex)
+    if (ignored(hex, typed.category)) return // the full test, a surface vehicle by the table's category
+    // ponytail: the type table's category makes a late 7600 quiet on a light type, but it gives every piston, turboprop and
+    // electric type A1, so the ATR 72 and the Dash 8 are quiet too: accepted, radio failures are the least urgent cause (live
+    // sightings use the broadcast category). It is not used to skip a fall: that needs a top at or above FL200 (D1) or FL150
+    // (D2), which leaves light aircraft out in practice, and the Dash 8 is found.
+    // ponytail: a late event's place and level are the aircraft's newest of the half hour, not where its cause was.
+    const who: Who = { callsign: at.callsign, reg: null, type: typed.type, lat: at.lat, lon: at.lon, altFt: at.alt.ft.at(-1) ?? null }
+    if (idents) {
+      const first = slotMs + squawks[0].tS * 1000
+      const last = slotMs + squawks[squawks.length - 1].tS * 1000
+      const squawk = squawks[squawks.length - 1].squawk
+      const open = this.#near(hex, first, last)
+      if (open !== null) this.#merge(open, last, { ...who, squawk }, true)
+      else {
+        this.#open({
+          id: `${hex}-${first}`, hex, kind: 'squawk', ...who, squawk, emergency: null, drop: null,
+          openedMs: first, lastMs: last, late: true, quiet: quietFor(typed.category, squawk, null),
+        })
+      }
+    }
+    if (!mayDrop || this.#noFalls(hex, typed.type, 0, typed)) return
+    const s = clean(before === undefined ? at.alt : { t: before.t.concat(at.alt.t), ft: before.ft.concat(at.alt.ft) })
+    const d1 = steepDescent(s)
+    const d = d1 ?? diveThenLost(s, endS)
+    if (d !== null) this.#fell(hex, d1 !== null ? 'descent' : 'dive', d, slotMs, who, true)
   }
 
   /** The switch and the events of the last 7 days, newest first (GET /api/events). */
@@ -333,13 +375,18 @@ export class Alerts {
     } else if (heard || now - (this.#writtenMs.get(e.id) ?? -Infinity) >= (grew ? DROP_WRITE_MS : WRITE_EVERY_MS)) this.#write(e)
   }
 
-  /** One line in today's file (UTC). A failure is logged once a minute at most and the event stays in memory; the next change tries again. */
+  /**
+   * One line in today's file (UTC). A failure is logged once a minute at most and the event stays in memory; the next change
+   * tries again. After a failure the next line starts with a newline: a line cut short (a full disk) cannot join it.
+   */
   #write(e: AlertEvent): void {
     const now = this.#now()
     try {
-      appendFileSync(join(this.#dir, `${new Date(now).toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(e)}\n`)
+      this.#append(join(this.#dir, `${new Date(now).toISOString().slice(0, 10)}.jsonl`), `${this.#torn ? '\n' : ''}${JSON.stringify(e)}\n`)
+      this.#torn = false
       this.#writtenMs.set(e.id, now)
     } catch (err) {
+      this.#torn = true
       this.#fail('write failed', err)
     }
   }
@@ -381,7 +428,8 @@ export class Alerts {
 
   /**
    * The switch and the events of the last 8 day files; a line that does not read (a write cut short) or is not an event is
-   * skipped. A file that ends in a cut line gets a newline, or the next line written would join it and be lost with it.
+   * skipped, as is an empty one. A file that ends in a cut line gets a newline, or the next line written would join it and be
+   * lost with it.
    */
   #load(): void {
     try {
@@ -405,8 +453,9 @@ export class Alerts {
       }
       if (text !== '' && !text.endsWith('\n')) {
         try {
-          appendFileSync(join(this.#dir, name), '\n')
+          this.#append(join(this.#dir, name), '\n')
         } catch (err) {
+          this.#torn = true
           this.#fail('write failed', err)
         }
       }
@@ -443,6 +492,9 @@ function isEvent(v: unknown): v is AlertEvent {
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
+/** How old an aircraft's last message is, s (readsb's seen); 0 when it does not say. */
+const ageS = (seen: unknown): number => (typeof seen === 'number' && Number.isFinite(seen) && seen > 0 ? seen : 0)
+
 /** Its position, else the one readsb kept when GNSS failed (lastPosition: over 60 s old). */
 function positionOf(ac: ReadsbAircraft): { lat: number; lon: number } | null {
   if (typeof ac.lat === 'number' && typeof ac.lon === 'number') return { lat: ac.lat, lon: ac.lon }
@@ -464,15 +516,39 @@ function quietFor(category: string | null, squawk: string | null, emergency: str
   return LIGHT.has(category ?? '') && (squawk === null || MINOR.has(squawk)) && (emergency === null || MINOR.has(emergency))
 }
 
-/** Whether a half hour's altitudes could hold a fall at all: D2 is the loosest rule, FL150 and 3,000 ft between the highest and lowest. */
-function mayFall(s: AltSeries): boolean {
+/**
+ * Whether an aircraft's altitudes (its end of the half hour before, then this one's) could hold a fall at all: D2 is the loosest
+ * rule, FL150 and 3,000 ft between the highest and lowest.
+ */
+function mayFall(...parts: (AltSeries | undefined)[]): boolean {
   let hi = -Infinity
   let lo = Infinity
-  for (const ft of s.ft) {
-    if (ft > hi) hi = ft
-    if (ft < lo) lo = ft
+  for (const s of parts) {
+    for (const ft of s?.ft ?? []) {
+      if (ft > hi) hi = ft
+      if (ft < lo) lo = ft
+    }
   }
   return hi >= D2.topFt && hi - lo >= D2.fallFt
+}
+
+/**
+ * The ends of a half hour, for the late check of the next (scanSlot): each aircraft with a point at FL150 or above in its last
+ * 150 s (lower, none can be the top of a fall: D2's is FL150, D1's FL200), with its points of those 150 s, their times moved
+ * into the next half hour (t − 1800 s, so negative), and its newest place and callsign.
+ */
+function tailsOf(scan: SlotScan): Tails {
+  const out = new Map<string, Heard>()
+  const from = scan.endS - TAIL_S
+  for (const [hex, a] of scan.aircraft) {
+    const { t, ft } = a.alt
+    let i = t.length
+    let high = false
+    for (; i > 0 && t[i - 1] >= from; i--) if (ft[i - 1] >= D2.topFt) high = true
+    if (!high) continue
+    out.set(hex, { alt: { t: t.slice(i).map((x) => x - SLOT_S), ft: ft.slice(i) }, lat: a.lat, lon: a.lon, callsign: a.callsign })
+  }
+  return out
 }
 
 /**
