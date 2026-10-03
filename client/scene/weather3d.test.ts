@@ -49,6 +49,7 @@ test('statusText3d: clouds from the airports held, the hazard areas, the forecas
   assert.equal(MODEL_CREDIT, 'Weather data by Open-Meteo.com', 'the credit its licence (CC BY 4.0) asks for, as it words it')
   assert.equal(statusText3d({ airports: 3, areas: 2, model: true, note: '' }), 'Clouds from 3 airports · 2 hazard areas · Weather data by Open-Meteo.com')
   assert.equal(statusText3d({ airports: 1, areas: 0, model: true, note: 'some weather unavailable' }), 'Clouds from 1 airport · 0 hazard areas · Weather data by Open-Meteo.com · some weather unavailable')
+  assert.equal(statusText3d({ airports: 0, areas: 0, model: true, note: '' }), 'Clouds from the forecast · 0 hazard areas · Weather data by Open-Meteo.com', 'over the sea')
 })
 
 /** The ring a lon/lat box makes, closed as GeoJSON closes it. */
@@ -603,7 +604,7 @@ test('Weather3D: a failed ask is one warning, a note on the line, the rest still
     assert.equal(r.asks('metar').length, 1)
     assert.equal(warned.length, 1)
     assert.match(String(warned[0][0]), /FlightHopper: 3-D weather .*wx\/metar/)
-    assert.equal(r.lines.at(-1), `Clouds from 0 airports · 1 hazard area${CREDIT} · some weather unavailable`)
+    assert.equal(r.lines.at(-1), `Clouds from the forecast · 1 hazard area${CREDIT} · some weather unavailable`)
     assert.equal(r.volumes().length, 1, 'the hazard areas came')
     r.w.update(AC, 29_000)
     await flush()
@@ -1445,7 +1446,7 @@ test('Weather3D: a failed model ask is one warning and a note on the line, asked
     r.w.update(AC, 61_000)
     await flush()
     assert.equal(r.asks('model').length, 3)
-    assert.equal(r.lines.at(-1), `Clouds from 0 airports · 1 hazard area${CREDIT}`, 'the note goes when it is answered, and the credit comes with the grid')
+    assert.equal(r.lines.at(-1), `Clouds from the forecast · 1 hazard area${CREDIT}`, 'the note goes when it is answered, and the credit comes with the grid')
     assert.notEqual(r.w.model, null)
     r.w.update(AC, 61_000 + 29 * MIN)
     await flush()
@@ -1704,11 +1705,11 @@ test('Weather3D: while a model grid is held the line carries Open-Meteo\'s credi
   r.hold.clear()
   r.release()
   await flush()
-  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas · Weather data by Open-Meteo.com')
+  assert.equal(r.lines.at(-1), 'Clouds from the forecast · 0 hazard areas · Weather data by Open-Meteo.com')
   r.failing.add('sigmet')
   r.w.update(AC, 10 * MIN + 1000)
   await flush()
-  assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 0 hazard areas · Weather data by Open-Meteo.com · some weather unavailable', 'a note goes after it')
+  assert.equal(r.lines.at(-1), 'Clouds from the forecast · 0 hazard areas · Weather data by Open-Meteo.com · some weather unavailable', 'a note goes after it')
   const warn = console.warn
   console.warn = () => {}
   try {

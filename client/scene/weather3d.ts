@@ -115,7 +115,8 @@ export function parseWxAt(search: string): WxAt | null {
 /** The panel's one-line summary: "Clouds from 3 airports · 2 hazard areas · Weather data by Open-Meteo.com" (the credit while the forecast model's grid is in use). */
 export function statusText3d(s: { airports: number; areas: number; model: boolean; note: string }): string {
   const count = (n: number, what: string): string => `${n} ${what}${n === 1 ? '' : 's'}`
-  return [`Clouds from ${count(s.airports, 'airport')}`, count(s.areas, 'hazard area'), ...(s.model ? [MODEL_CREDIT] : []), ...(s.note ? [s.note] : [])].join(' · ')
+  const from = s.airports === 0 && s.model ? 'the forecast' : count(s.airports, 'airport') // over the sea the forecast draws them all
+  return [`Clouds from ${from}`, count(s.areas, 'hazard area'), ...(s.model ? [MODEL_CREDIT] : []), ...(s.note ? [s.note] : [])].join(' · ')
 }
 
 type Box = readonly [south: number, west: number, north: number, east: number]
