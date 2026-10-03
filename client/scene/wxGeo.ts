@@ -8,7 +8,7 @@
 // object, which is read-only data from the server: a changed ring is a new object.
 // ponytail: a ring round a pole is read wrongly (its longitudes do not close, so its inside test is off). SIGMET areas are
 // small polygons; upgrade, if one is not: test the inside by winding on the sphere.
-import type { Metar, Sigmet } from '../../shared/wx.ts'
+import type { Metar, ModelGrid, Sigmet } from '../../shared/wx.ts'
 
 const MAX_SPAN_DEG = 40 // as server/wx.ts
 const FT = 0.3048
@@ -198,6 +198,11 @@ export function hazardsNear(sigmets: readonly Sigmet[], lat: number, lon: number
 /** The reports moved by dLat, dLon degrees (longitudes kept within ±180°); no move gives the list itself. */
 export function shiftMetars(list: readonly Metar[], dLat: number, dLon: number): readonly Metar[] {
   return dLat === 0 && dLon === 0 ? list : list.map((m) => ({ ...m, lat: m.lat + dLat, lon: wrapLon(m.lon + dLon) }))
+}
+
+/** The model grid moved by dLat, dLon degrees: it starts there (its first longitude kept within ±180°, the places run on from it); no move gives the grid itself. */
+export function shiftModel(grid: ModelGrid, dLat: number, dLon: number): ModelGrid {
+  return dLat === 0 && dLon === 0 ? grid : { ...grid, lat0: grid.lat0 + dLat, lon0: wrapLon(grid.lon0 + dLon) }
 }
 
 /** The hazard areas moved by dLat, dLon degrees (longitudes kept within ±180°); no move gives the list itself. */

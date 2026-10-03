@@ -8,15 +8,16 @@ import { Cartesian3, Cartographic, Color, JulianDate, Math as CesiumMath } from 
 import type { ColorMaterialProperty, CustomDataSource, Entity, Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
-import type { Cloud, Metar, Sigmet } from '../../shared/wx.ts'
+import { MODEL_CLOUD_HPA, MODEL_WIND_HPA, type Cloud, type Metar, type ModelGeo, type ModelGrid, type Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { LOOKS, MAX_CLOUDS, PUFF_FILL, RADAR_LOOK, REBUILD_KM, fadeAlpha, nearestClouds, observedClouds, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
+import { LOOKS, MAX_CLOUDS, MODEL_LOOK, PUFF_FILL, RADAR_LOOK, REBUILD_KM, fadeAlpha, modelClouds, nearestClouds, observedClouds, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
 import { fogNear, type Fog } from './groundFog.ts'
 import type { LayerLabel } from './placeLabels.ts'
 import { radarPixel, windOf, type Fall } from './precip.ts'
 import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
+import { modelWindAt } from './modelWind.ts'
 import { pickShafts, type RainShaft } from './rainShafts.ts'
 import { HAZARD_KM, Weather3D, echoShade, parseWxAt, statusText3d } from './weather3d.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
@@ -67,7 +68,7 @@ const metar = (id: string, lat: number, lon: number, o: Partial<Metar> = {}): Me
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const MIN = 60_000
 
-type Kind = 'metar' | 'sigmet' | 'radar'
+type Kind = 'metar' | 'sigmet' | 'radar' | 'model'
 interface LabelCall { key: string; rank: number; labels: LayerLabel[] }
 
 /** What a fake sky was told: every draw, frame and set. */
@@ -102,20 +103,44 @@ function fakeSky() {
   }
 }
 
+const ISA_Z: Readonly<Record<number, number>> = { 1000: 110, 925: 760, 850: 1460, 700: 3010, 600: 4200, 500: 5570, 400: 7180, 300: 9160, 250: 10360, 200: 11800 } // m
+const WIND_KT = [10, 20, 40, 80, 90, 100] // from the west at 850, 700, 500, 300, 250 and 200 hPa
+interface GridOptions {
+  cover?: (hPa: number, place: number) => number
+  wind?: (level: number, place: number) => [fromDeg: number, kt: number]
+}
+/** A model grid at geo: its cover from `cover` (none by default), the levels at the standard atmosphere's heights, sea level, the wind from the west. */
+function gridFor(geo: ModelGeo, o: GridOptions = {}): ModelGrid {
+  const per = <T>(f: (p: number) => T): T[] => Array.from({ length: geo.n * geo.n }, (_, p) => f(p))
+  const wind = o.wind ?? ((l: number): [number, number] => [270, WIND_KT[l]])
+  return {
+    ...geo, timeMs: 1791014400_000, elevM: per(() => 0),
+    clouds: MODEL_CLOUD_HPA.map((hPa) => ({ hPa, cover: per((p) => o.cover?.(hPa, p) ?? 0), zM: per(() => ISA_Z[hPa]) })),
+    winds: MODEL_WIND_HPA.map((hPa, l) => ({ hPa, kt: per((p) => wind(l, p)[1]), deg: per((p) => wind(l, p)[0]) })),
+  }
+}
+/** The grid server/wx.ts gives for the place a request asks about: 7 × 7 places 0.25° apart round the middle of its 0.5° cell. */
+function geoOf(url: string): ModelGeo {
+  const q = new URL(url, 'http://localhost').searchParams
+  const middle = (v: number): number => (Math.floor(v / 0.5) + 0.5) * 0.5
+  return { lat0: middle(Number(q.get('lat'))) - 0.75, lon0: middle(Number(q.get('lon'))) - 0.75, step: 0.25, n: 7 }
+}
+
 /**
  * A Weather3D over a fake viewer (its camera at the aircraft until moved), names overlay, sky, radar tiles and network: what
  * was asked, answered from `answers` (or failed, or held until release()).
  */
 function rig(o: { at?: { lat: number; lon: number } } = {}) {
   const asked: string[] = []
-  const answers: Record<Kind, unknown> = { metar: [], sigmet: [], radar: INDEX }
+  const answers: Record<'metar' | 'sigmet' | 'radar', unknown> = { metar: [], sigmet: [], radar: INDEX }
   const failing = new Set<Kind>()
   const hold = new Set<Kind>()
   const held: (() => void)[] = []
+  const model = { make: (geo: ModelGeo): unknown => gridFor(geo) } // what the server would answer for a grid: nothing in the sky, by default
   const getJson = async (url: string): Promise<unknown> => {
     asked.push(url)
-    const kind: Kind = url.includes('/wx/metar') ? 'metar' : url.includes('/wx/sigmet') ? 'sigmet' : 'radar'
-    const answer = structuredClone(answers[kind]) // as it is when asked
+    const kind: Kind = url.includes('/wx/metar') ? 'metar' : url.includes('/wx/sigmet') ? 'sigmet' : url.includes('/wx/model') ? 'model' : 'radar'
+    const answer = kind === 'model' ? model.make(geoOf(url)) : structuredClone(answers[kind]) // as it is when asked
     if (hold.has(kind)) await new Promise<void>((resolve) => held.push(resolve)) // until release(), when it is answered or fails as `failing` then says
     if (failing.has(kind)) throw new Error(`${kind} down`)
     return answer
@@ -150,7 +175,7 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
   }
   const w = new Weather3D(viewer, { apiBase: '/api', labels, getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile })
   return {
-    w, asked, answers, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks, tileHold, frameTiles,
+    w, asked, answers, model, failing, hold, sources, removed, labelCalls, lines, sky, tiles, tileAsks, tileHold, frameTiles,
     releaseTiles: (newestFirst = false) => (newestFirst ? tileHeld.splice(0).reverse() : tileHeld.splice(0)).forEach((f) => f()),
     releaseSome: (n: number) => tileHeld.splice(0, n).forEach((f) => f()), // the first n tiles held
     held: () => tileHeld.length,
@@ -161,7 +186,7 @@ function rig(o: { at?: { lat: number; lon: number } } = {}) {
     release: () => held.splice(0).forEach((f) => f()),
     volumes: (): Entity[] => [...sources[0].entities.values], // a copy: the collection's own array changes as it does
     shown: (): LayerLabel[] => labelCalls.at(-1)?.labels ?? [], // the labels the overlay holds for the layer now
-    asks: (what: 'metar' | 'sigmet' | 'weather-maps'): string[] => asked.filter((u) => u.includes(what === 'metar' ? '/wx/metar' : what === 'sigmet' ? '/wx/sigmet' : 'weather-maps')),
+    asks: (what: 'metar' | 'sigmet' | 'weather-maps' | 'model'): string[] => asked.filter((u) => u.includes(what === 'metar' ? '/wx/metar' : what === 'sigmet' ? '/wx/sigmet' : what === 'model' ? '/wx/model' : 'weather-maps')),
     setUnits: (u: Units): void => void (units = u),
     skyShift: (): { saturationShift: number; brightnessShift: number } => (viewer.scene as unknown as { skyAtmosphere: { saturationShift: number; brightnessShift: number } }).skyAtmosphere,
   }
@@ -200,7 +225,7 @@ test('Weather3D: hidden it asks for nothing and draws nothing, however often it 
   assert.equal(r.sources[0].show, false, 'its data source is in the viewer, hidden')
 })
 
-test('Weather3D: shown it asks at the first update with an aircraft: METARs of a whole-degree box 2° round it, SIGMETs, RainViewer\'s index', async () => {
+test('Weather3D: shown it asks at the first update with an aircraft: METARs of a whole-degree box 2° round it, SIGMETs, RainViewer\'s index, the model\'s grid', async () => {
   const r = rig()
   r.w.show = true
   assert.deepEqual(r.asked, [], 'showing asks nothing: the aircraft is not known yet')
@@ -213,7 +238,8 @@ test('Weather3D: shown it asks at the first update with an aircraft: METARs of a
   assert.deepEqual(r.asks('metar'), ['/api/wx/metar?bbox=30,32,35,37']) // 30.1 → 30, 32.9 → 32, 34.1 → 35, 36.9 → 37
   assert.deepEqual(r.asks('sigmet'), ['/api/wx/sigmet'])
   assert.deepEqual(r.asks('weather-maps'), ['https://api.rainviewer.com/public/weather-maps.json'])
-  assert.equal(r.asked.length, 3)
+  assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=32.1&lon=34.9'], 'the place the aircraft is at: the server snaps it to its cell')
+  assert.equal(r.asked.length, 4)
 })
 
 test('Weather3D: the box is cut at the poles and the antimeridian', async () => {
@@ -1352,3 +1378,312 @@ test('echoShade: rain on the radar over the camera greys the sky by its strength
   assert.equal(echoShade(48), 0.9)
 })
 
+
+// ---- the model: clouds where nothing else says, the wind aloft ---------------------------------------------------------------
+
+const cloudKey = (c: CloudSpec): string => `${c.lon}|${c.lat}|${c.heightM}|${c.scale[0]}`
+const keysOf = (cs: readonly CloudSpec[]): Set<string> => new Set(cs.map(cloudKey))
+/** A grid of mid and high cloud everywhere. */
+const CLOUDY = (geo: ModelGeo): ModelGrid => gridFor(geo, { cover: (hPa) => (hPa === 600 || hPa === 250 ? 70 : 0) })
+
+test('Weather3D: the model\'s grid is asked for at the first look with an aircraft, again after 30 min, and when the aircraft leaves the inner half of the grid it holds, not within 30 s of the last ask', async () => {
+  const r = rig()
+  await open(r)
+  assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=32.1&lon=34.9'])
+  const first = r.w.model!
+  assert.deepEqual([first.lat0, first.lon0, first.step, first.n], [31.5, 34, 0.25, 7], 'the cell 32 to 32.5°N, 34.5 to 35°E: its grid from 31.5°N 34°E, its middle at 32.25°N 34.75°E')
+  for (const [at, t] of [[{ ...AC, lat: 32.62 }, 5000], [{ ...AC, lat: 31.88 }, 6000], [{ ...AC, lon: 35.12 }, 7000], [{ ...AC, lon: 34.38 }, 8000]] as const) r.w.update(at, t) // 0.37° from the middle: inside
+  await flush()
+  assert.equal(r.asks('model').length, 1)
+  r.w.update({ ...AC, lat: 32.63 }, 10_000) // out of the inner half (0.375°), 10 s after the ask
+  await flush()
+  assert.equal(r.asks('model').length, 1, 'not within 30 s of the last ask')
+  r.w.update({ ...AC, lat: 32.63 }, 30_000)
+  await flush()
+  assert.deepEqual(r.asks('model').slice(1), ['/api/wx/model?lat=32.63&lon=34.9'])
+  assert.equal(r.w.model!.lat0, 32, 'the cell north of it: its grid from 32°N')
+  for (const t of [31_000, 40_000, 90_000]) r.w.update({ ...AC, lat: 32.63 }, t)
+  r.w.update({ ...AC, lat: 32.4 }, 100_000)
+  await flush()
+  assert.equal(r.asks('model').length, 2, 'inside the new grid\'s inner half: nothing more')
+  r.w.update({ ...AC, lat: 32.63 }, 30_000 + 30 * MIN - 1000)
+  await flush()
+  assert.equal(r.asks('model').length, 2, 'not yet: 30 min from the last ask')
+  r.w.update({ ...AC, lat: 32.63 }, 30_000 + 30 * MIN)
+  await flush()
+  assert.deepEqual(r.asks('model').slice(2), [r.asks('model')[1]], 'after 30 min, the same place')
+})
+
+test('Weather3D: a failed model ask is one warning and a note on the line, asked again in 30 s, the rest still drawn; an answer that is not a grid is a failed ask too', async () => {
+  const warned: unknown[][] = []
+  const warn = console.warn
+  console.warn = (...a: unknown[]) => void warned.push(a)
+  try {
+    const r = rig()
+    r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] })]
+    r.failing.add('model')
+    await open(r)
+    assert.equal(r.asks('model').length, 1)
+    assert.equal(warned.length, 1)
+    assert.match(String(warned[0][0]), /FlightHopper: 3-D weather .*wx\/model/)
+    assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area · some weather unavailable')
+    assert.equal(r.w.model, null)
+    assert.equal(r.volumes().length, 1, 'the rest came')
+    r.w.update(AC, 29_000)
+    await flush()
+    assert.equal(r.asks('model').length, 1)
+    r.w.update(AC, 30_000)
+    await flush()
+    assert.equal(r.asks('model').length, 2, 'asked again after 30 s, not 30 min')
+    r.failing.clear()
+    r.w.update(AC, 61_000)
+    await flush()
+    assert.equal(r.asks('model').length, 3)
+    assert.equal(r.lines.at(-1), 'Clouds from 0 airports · 1 hazard area', 'the note goes when it is answered')
+    assert.notEqual(r.w.model, null)
+    r.w.update(AC, 61_000 + 29 * MIN)
+    await flush()
+    assert.equal(r.asks('model').length, 3, 'and then the usual 30 min')
+
+    const good = gridFor({ lat0: 31.5, lon0: 34, step: 0.25, n: 7 })
+    for (const [name, bad] of Object.entries({
+      error: { error: 'nope' }, null: null, text: 'x', list: [], empty: {}, noPlaces: { ...good, n: 0 }, wrongN: { ...good, n: 'x' }, noStep: { ...good, step: 0 },
+      noOrigin: { ...good, lat0: null }, noClouds: { ...good, clouds: 'none' }, noWinds: { ...good, winds: null }, noGround: { ...good, elevM: 4 }, badLevel: { ...good, clouds: [{ hPa: 700 }] },
+    })) {
+      const s = rig()
+      s.model.make = () => bad
+      await open(s)
+      assert.equal(s.w.model, null, name)
+      assert.match(String(s.lines.at(-1)), /some weather unavailable$/, name)
+    }
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('Weather3D: an answer to an ask that has been replaced by a later one is not heard; destroyed, none is', async () => {
+  const r = rig()
+  await open(r) // the grid from 31.5°N
+  r.hold.add('model')
+  r.w.update({ ...AC, lat: 32.7 }, 30_000) // out of its inner half: asked for the cell north (32.5 to 33°N), held
+  r.hold.clear()
+  r.w.update({ ...AC, lat: 33.3 }, 60_000) // the first answer has not come, and the aircraft is farther on: asked for the cell at 33°N, answered at once
+  await flush()
+  assert.equal(r.asks('model').length, 3)
+  assert.equal(r.w.model!.lat0, 32.5)
+  r.release() // the second ask's answer lands late
+  await flush()
+  assert.equal(r.w.model!.lat0, 32.5, 'it does not replace the newer one')
+  const late = rig()
+  late.hold.add('model')
+  late.w.show = true
+  late.w.update(AC, 0)
+  late.w.destroy()
+  late.release()
+  await flush()
+  assert.equal(late.w.model, null)
+})
+
+test('Weather3D: ?wxat asks for the model round that place and keeps its grid where it is drawn, over the aircraft', async () => {
+  const zurich = { lat: 47.4, lon: 8.5 }
+  const r = rig({ at: zurich })
+  r.model.make = CLOUDY
+  await open(r) // the aircraft is over Haifa
+  assert.deepEqual(r.asks('model'), ['/api/wx/model?lat=47.4&lon=8.5'], 'the place the aircraft is at in Zurich\'s sky')
+  const d = r.w.shift
+  const g = r.w.model!
+  assert.ok(near(g.lat0, 46.5 + d.dLat, 1e-9) && near(g.lon0, 8 + d.dLon, 1e-9), `${g.lat0}, ${g.lon0}: Zurich\'s grid (from 46.5°N 8°E) moved onto the aircraft`)
+  assert.notEqual(r.w.windAt(AC.lat, AC.lon, 30_000), null, 'the grid is round the aircraft')
+  assert.equal(r.w.windAt(zurich.lat, zurich.lon, 30_000), null, 'not round Zurich: its sky is drawn over Haifa')
+  drawn(r, AC, 1000)
+  const sky = r.sky.clouds.draws.at(-1)!
+  assert.ok(sky.length > 100 && sky.every((c) => kmFrom(c, AC) <= 150), 'its clouds round the aircraft')
+})
+
+test('Weather3D: the model\'s clouds are built when the grid comes and drawn the frame after, from the grid and the reports held, after the observed ones', async () => {
+  const r = rig()
+  r.model.make = CLOUDY
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('FEW', 3000)] })]
+  await open(r)
+  assert.equal(r.sky.clouds.draws.length, 0, 'built at the look, not drawn in it')
+  r.w.update(AC, 16)
+  assert.equal(r.sky.clouds.draws.length, 1)
+  const observed = observedClouds(r.w.metars, AC.lat, AC.lon).specs
+  const model = modelClouds(r.w.model!, r.w.metars)
+  assert.ok(observed.length > 0 && model.length === MODEL_LOOK.max)
+  const sky = r.sky.clouds.draws[0]
+  assert.deepEqual(sky, nearestClouds([observed, model], AC.lat, AC.lon))
+  const seen = nearestClouds([observed], AC.lat, AC.lon)
+  assert.deepEqual(sky.slice(0, seen.length), seen, 'the observed first')
+  assert.ok(sky.length === seen.length + model.length && sky.every((c) => kmFrom(c, AC) <= 150), 'then all of the model\'s that are within reach')
+  assert.equal(r.lines.at(-1), 'Clouds from 1 airport · 0 hazard areas', 'the line counts airports, as it did')
+  r.w.update(AC, 32)
+  assert.equal(r.sky.clouds.draws.length, 1, 'drawn once')
+})
+
+test('Weather3D: with no grid yet, or one with no cloud, the sky is the observed and the radar\'s as before', async () => {
+  const r = rig()
+  r.hold.add('model')
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('SCT', 3000)] })]
+  await open(r)
+  r.w.update(AC, 16)
+  assert.deepEqual(r.sky.clouds.draws.at(-1), nearestClouds([observedClouds(r.w.metars, AC.lat, AC.lon).specs], AC.lat, AC.lon))
+  const n = r.sky.clouds.draws.length
+  r.hold.clear()
+  r.release() // the grid comes: clear
+  await flush()
+  r.w.update(AC, 32)
+  r.w.update(AC, 48)
+  assert.deepEqual(r.sky.clouds.draws.at(-1), r.sky.clouds.draws[0])
+  assert.ok(r.sky.clouds.draws.length <= n + 1, 'built again for the grid, the same sky')
+  assert.equal(r.w.model!.clouds.every((l) => l.cover.every((c) => c === 0)), true)
+})
+
+test('Weather3D: the 700 are the observed clouds first, the radar\'s, then the model\'s, each nearest first: the model fills what is left', async () => {
+  const r = rig()
+  giveTiles(r, echoTiles(AC, [[20, 0, 50], [-15, 10, 42]]))
+  r.model.make = CLOUDY
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { elevM: 30, clouds: [layer('SCT', 2000)] })]
+  await open(r)
+  drawn(r, AC, 1000)
+  const sky = r.sky.clouds.draws.at(-1)!
+  const observed = keysOf(observedClouds(r.w.metars, AC.lat, AC.lon).specs)
+  const radar = keysOf(radarClouds(radarCells(tileGetter(r), AC.lat, AC.lon, undefined, READ_KM), radarBases(r.w.metars)))
+  const model = keysOf(modelClouds(r.w.model!, r.w.metars))
+  const group = sky.map((c) => (observed.has(cloudKey(c)) ? 0 : radar.has(cloudKey(c)) ? 1 : model.has(cloudKey(c)) ? 2 : -1))
+  assert.ok(!group.includes(-1), 'every cloud is one of the three sources\'')
+  assert.deepEqual(group, [...group].sort((a, b) => a - b), 'in order: observed, radar\'s, model\'s')
+  assert.deepEqual([...new Set(group)], [0, 1, 2])
+  assert.ok(sky.length <= MAX_CLOUDS)
+})
+
+test('Weather3D: where the observed clouds fill the 700 the model\'s are not drawn at all', async () => {
+  const stations = Array.from({ length: 12 }, (_, i) => metar(`S${i}`, 32.1 + ((i % 4) - 1.5) * 0.25, 34.9 + (Math.floor(i / 4) - 1) * 0.3, { elevM: 30, clouds: [layer('OVC', 1500)] }))
+  const r = rig()
+  r.model.make = CLOUDY
+  r.answers.metar = stations
+  await open(r)
+  drawn(r, AC, 1000)
+  const sky = r.sky.clouds.draws.at(-1)!
+  assert.equal(sky.length, MAX_CLOUDS)
+  const model = keysOf(modelClouds(r.w.model!, r.w.metars))
+  assert.equal(model.size, MODEL_LOOK.max)
+  assert.ok(!sky.some((c) => model.has(cloudKey(c))), 'none of the model\'s')
+})
+
+test('Weather3D: the model\'s low clouds are left out near the reports it holds (observations win), as modelClouds says; a report that comes later takes them away', async () => {
+  const r = rig()
+  r.model.make = (geo) => gridFor(geo, { cover: (hPa) => (hPa === 925 ? 70 : 0) })
+  const lowNearStation = (): CloudSpec[] => r.sky.clouds.draws.at(-1)!.filter((c) => near(c.heightM - (PUFF_FILL * c.scale[1]) / 2, 760, 1e-6) && Math.abs(c.lat - 32.25) < 0.37 && Math.abs(c.lon - 34.75) < 0.37)
+  await open(r)
+  drawn(r, AC, 1000)
+  assert.ok(lowNearStation().length > 10, 'no report: the model\'s low deck over the block of places round the middle')
+  r.answers.metar = [metar('LLBG', 32.25, 34.75, { clouds: [layer('FEW', 3000)] })] // over the middle place of the grid, at the next list
+  r.w.update(AC, 5 * MIN)
+  await flush()
+  drawn(r, AC, 5 * MIN + 1000)
+  const model = modelClouds(r.w.model!, r.w.metars)
+  assert.notDeepEqual(model, modelClouds(r.w.model!, []), 'the report counts')
+  const sky = keysOf(r.sky.clouds.draws.at(-1)!)
+  assert.ok(model.length > 100 && model.every((c) => sky.has(cloudKey(c))), 'its clouds are the ones drawn')
+  assert.equal(lowNearStation().filter((c) => keysOf(model).has(cloudKey(c))).length, 0, 'none of the model\'s in the block of places within 40 km of the station')
+})
+
+test('Weather3D: a new grid builds the sky again from it, with nothing else new (the aircraft has left the inner half of the old one, 14 km on)', async () => {
+  const r = rig()
+  const at = { ...AC, lat: 32.0 } // the cell 32 to 32.5°N: the aircraft is 0.25° south of its grid's middle
+  await open(r, at)
+  drawn(r, at, 1000)
+  assert.equal(r.sky.clouds.draws.at(-1)!.length, 0, 'a clear grid')
+  const draws = r.sky.clouds.draws.length
+  r.model.make = CLOUDY
+  const south = { ...at, lat: 31.87 } // 0.38° from the middle: out of the inner half, 14 km from where the clouds were built
+  r.w.update(south, 30_000)
+  await flush()
+  assert.equal(r.asks('model').length, 2)
+  assert.equal(r.asks('metar').length, 1, 'nothing else asked')
+  drawn(r, south, 31_000)
+  assert.ok(r.sky.clouds.draws.length > draws && r.sky.clouds.draws.at(-1)!.length > 100, 'built again for the new grid')
+  assert.deepEqual(r.sky.clouds.draws.at(-1), nearestClouds([modelClouds(r.w.model!, r.w.metars)], south.lat, south.lon))
+})
+
+test('Weather3D: the model\'s clouds are worked out once for a grid and the reports, not at every rebuild: a radar tile or 30 km of flight builds the sky again from the same clouds', async () => {
+  const r = rig()
+  r.model.make = CLOUDY
+  r.answers.metar = [metar('LLBG', 32.01, 34.89, { clouds: [layer('FEW', 3000)] })]
+  await open(r)
+  r.w.update(AC, 16)
+  const model = keysOf(modelClouds(r.w.model!, r.w.metars))
+  const first = r.sky.clouds.draws[0].filter((c) => model.has(cloudKey(c)))
+  assert.ok(first.length > 100)
+  r.w.update(north(30.5), 2000) // 30 km on: built again
+  r.w.update(north(30.5), 2016)
+  assert.equal(r.sky.clouds.draws.length, 2)
+  const second = r.sky.clouds.draws[1].filter((c) => model.has(cloudKey(c)))
+  assert.ok(second.length > 100 && second.every((c) => first.includes(c)), 'the same objects')
+})
+
+test('Weather3D: rebuildSky works the model\'s clouds out again from the grid, so a changed look shows (a check aid)', async () => {
+  const r = rig()
+  r.model.make = (geo) => gridFor(geo, { cover: (hPa, p) => (hPa === 925 && p === 24 ? 100 : 0) }) // an overcast low deck over the middle place
+  await open(r)
+  r.w.update(AC, 16)
+  const was = MODEL_LOOK.low.density
+  const before = r.sky.clouds.draws[0].length
+  assert.ok(before > 100)
+  try {
+    ;(MODEL_LOOK.low as { density: number }).density = was / 2
+    r.w.update(AC, 1000) // a look, no rebuild due
+    r.w.update(AC, 1016)
+    assert.equal(r.sky.clouds.draws.length, 1)
+    r.w.rebuildSky()
+    r.w.update(AC, 1032)
+    assert.equal(r.sky.clouds.draws.length, 2)
+    assert.ok(near(r.sky.clouds.draws[1].length, before / 2, 1), `${r.sky.clouds.draws[1].length} against half of ${before}`)
+  } finally {
+    ;(MODEL_LOOK.low as { density: number }).density = was
+  }
+})
+
+test('Weather3D: the model\'s wind at a place and pressure altitude, from the grid as drawn; none while hidden, before the grid has come, or outside it', async () => {
+  const r = rig()
+  assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null, 'hidden, no grid')
+  assert.equal(r.w.model, null)
+  r.hold.add('model')
+  r.w.show = true
+  r.w.update(AC, 0)
+  assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null, 'asked, not answered')
+  r.hold.clear()
+  r.release()
+  await flush()
+  const w = r.w.windAt(AC.lat, AC.lon, 30_000)!
+  assert.deepEqual(w, modelWindAt(r.w.model!, AC.lat, AC.lon, 30_000))
+  assert.ok(near(w.kt, 80, 0.3) && near(w.fromDeg, 270, 0.5), `${w.kt} kt from ${w.fromDeg}: the 300 hPa wind, 30,000 ft being 301 hPa`)
+  assert.ok(near(r.w.windAt(AC.lat, AC.lon, 18_289)!.kt, 40, 0.3), 'the 500 hPa wind at 18,289 ft')
+  assert.equal(r.w.windAt(40, AC.lon, 30_000), null, 'north of the grid')
+  r.w.show = false
+  assert.equal(r.w.windAt(AC.lat, AC.lon, 30_000), null, 'hidden: none')
+  assert.notEqual(r.w.model, null, 'its grid is kept')
+  r.w.show = true
+  assert.deepEqual(r.w.windAt(AC.lat, AC.lon, 30_000), w, 'shown again: from what it holds')
+})
+
+test('Weather3D: a grid that lands while it is hidden is kept, not drawn; shown again, its clouds are built at once', async () => {
+  const r = rig()
+  r.model.make = CLOUDY
+  r.hold.add('model')
+  r.w.show = true
+  r.w.update(AC, 0)
+  r.w.show = false
+  r.hold.clear()
+  r.release()
+  await flush()
+  assert.notEqual(r.w.model, null, 'kept')
+  const draws = r.sky.clouds.draws.length
+  r.w.update(AC, 16)
+  assert.equal(r.sky.clouds.draws.length, draws, 'hidden: nothing built or drawn')
+  r.w.show = true
+  r.w.update(AC, 32)
+  r.w.update(AC, 48)
+  assert.ok(r.sky.clouds.draws.length > draws && r.sky.clouds.draws.at(-1)!.length > 100, 'shown: built from what it holds')
+})

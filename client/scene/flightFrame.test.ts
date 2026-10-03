@@ -581,6 +581,79 @@ test('liveFlightData: the heading is the drawn nose (track + the averaged crab) 
   assert.equal(liveFlightData(S, { ...RAW, true_heading: undefined }, null).hdgDeg, null)
 })
 
+test('liveFlightData: the wind is the aircraft\'s own while it sends one; none sent, the model\'s at its place and pressure altitude, an estimate; the model is asked only then', () => {
+  const asked: [number, number, number][] = []
+  const model = (lat: number, lon: number, ft: number): { fromDeg: number; kt: number } => {
+    asked.push([lat, lon, ft])
+    return { fromDeg: 250, kt: 31 }
+  }
+  const own = liveFlightData(S, RAW, null, null, model)
+  assert.deepEqual([own.windFromDeg, own.windKt], [281, 22])
+  assert.deepEqual(asked, [], 'the aircraft sends one: the model is not asked')
+  assert.deepEqual([...own.derived].sort(), ['pitchDeg', 'rollDeg'], 'its wind is data, not an estimate')
+  const bare: ReadsbAircraft = { ...RAW, wd: undefined, ws: undefined }
+  const fallback = liveFlightData(S, bare, null, null, model)
+  assert.deepEqual([fallback.windFromDeg, fallback.windKt], [250, 31])
+  assert.deepEqual(asked, [[S.lat, S.lon, 7975]], 'asked at the aircraft\'s place and barometric altitude')
+  assert.deepEqual([...fallback.derived].sort(), ['pitchDeg', 'rollDeg', 'windFromDeg', 'windKt'], 'drawn dim, as the frame\'s estimates are')
+  const noReply = liveFlightData(S, null, 7400, 'down', model)
+  assert.deepEqual([noReply.windFromDeg, noReply.windKt], [250, 31], 'no reply at all: the model\'s')
+  assert.deepEqual([...noReply.derived].sort(), ['aglFt', 'gear', 'pitchDeg', 'rollDeg', 'windFromDeg', 'windKt'])
+  assert.deepEqual([...liveFlightData(S, bare, 7400, null, model).derived].sort(), ['aglFt', 'pitchDeg', 'rollDeg', 'windFromDeg', 'windKt'])
+  assert.deepEqual([...liveFlightData(S, bare, null, 'up', model).derived].sort(), ['gear', 'pitchDeg', 'rollDeg', 'windFromDeg', 'windKt'])
+  assert.equal(liveFlightData(S, bare, null, null, model).tasKt, liveFlightData(S, bare, null).tasKt, 'nothing else changes')
+})
+
+test('liveFlightData: the pressure altitude it asks the model for is the barometric one, else the height above sea level; none known, the model is not asked', () => {
+  const asked: number[] = []
+  const model = (_lat: number, _lon: number, ft: number): { fromDeg: number; kt: number } => {
+    asked.push(ft)
+    return { fromDeg: 90, kt: 5 }
+  }
+  liveFlightData({ ...S, altBaroFt: 31_000, altMslFt: 30_950 }, null, null, null, model)
+  liveFlightData({ ...S, altBaroFt: null, altMslFt: 7890.4 }, null, null, null, model)
+  assert.deepEqual(asked, [31_000, 7890.4])
+  const none = liveFlightData({ ...S, altBaroFt: null, altMslFt: null }, null, null, null, model)
+  assert.equal(asked.length, 2)
+  assert.deepEqual([none.windFromDeg, none.windKt], [null, null])
+})
+
+test('liveFlightData: the model\'s is a wind aloft: not asked for an aircraft on the ground', () => {
+  let asked = 0
+  const model = (): { fromDeg: number; kt: number } => {
+    asked++
+    return { fromDeg: 250, kt: 31 }
+  }
+  const parked = liveFlightData({ ...S, onGround: true, altBaroFt: 120 }, null, null, null, model)
+  assert.deepEqual([asked, parked.windFromDeg, parked.windKt], [0, null, null])
+  assert.deepEqual([...parked.derived].sort(), ['pitchDeg', 'rollDeg'])
+  assert.equal(liveFlightData({ ...S, onGround: true }, RAW, null, null, model).windKt, 22, 'the aircraft\'s own wind is kept, on the ground too')
+  liveFlightData({ ...S, onGround: false }, null, null, null, model)
+  assert.equal(asked, 1)
+})
+
+test('liveFlightData: a model with no wind there, or no model, leaves it as the aircraft sent it, partly too', () => {
+  const none = (): null => null
+  const bare: ReadsbAircraft = { ...RAW, wd: undefined, ws: undefined }
+  assert.deepEqual([liveFlightData(S, bare, null, null, none).windFromDeg, liveFlightData(S, bare, null, null, none).windKt], [null, null])
+  assert.deepEqual([...liveFlightData(S, bare, null, null, none).derived].sort(), ['pitchDeg', 'rollDeg'])
+  const half: ReadsbAircraft = { ...RAW, ws: undefined } // a direction without a speed: the frame shows no wind
+  assert.deepEqual([liveFlightData(S, half, null, null).windFromDeg, liveFlightData(S, half, null, null).windKt], [281, null], 'as before')
+  assert.deepEqual([liveFlightData(S, half, null, null, none).windFromDeg, liveFlightData(S, half, null, null, none).windKt], [281, null], 'a model with nothing: as it was sent')
+  const asked = liveFlightData(S, half, null, null, () => ({ fromDeg: 250, kt: 31 }))
+  assert.deepEqual([asked.windFromDeg, asked.windKt], [250, 31], 'a model with a wind: both its own, never half of each')
+  assert.equal(liveFlightData(S, bare, null).windFromDeg, null, 'no model given: none')
+})
+
+test('frameView: the model\'s wind is drawn as an estimate, its direction against the nose too; the aircraft\'s own is not', () => {
+  const model = (): { fromDeg: number; kt: number } => ({ fromDeg: 250, kt: 31 })
+  const est = frameView(liveFlightData(S, { ...RAW, wd: undefined, ws: undefined }, 7400, null, model)).wind!
+  assert.deepEqual([est.fromDeg, est.kt, est.est], [250, 31, true])
+  assert.deepEqual(est.rel, { deg: 250 - 105.24, est: true })
+  const own = frameView(liveFlightData(S, RAW, 7400, null, model)).wind!
+  assert.deepEqual([own.fromDeg, own.kt, own.est], [281, 22, false])
+})
+
 // ---- text -----------------------------------------------------------------------------------------------------------
 
 test('text: altitude to 10 ft, thousands separated, a true minus', () => {

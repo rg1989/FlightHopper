@@ -2,8 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
-import type { Metar, Sigmet } from '../../shared/wx.ts'
-import { hazardsNear, inRing, ringCentre, ringDistanceKm, shiftMetars, shiftSigmets, viewBox, wrapLon } from './wxGeo.ts'
+import type { Metar, ModelGrid, Sigmet } from '../../shared/wx.ts'
+import { hazardsNear, inRing, ringCentre, ringDistanceKm, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon } from './wxGeo.ts'
 
 type Ring = [number, number][]
 const FT = 0.3048
@@ -232,6 +232,19 @@ test('shiftMetars: each report moved, longitudes kept within ±180°, nothing el
   assert.deepEqual({ ...got[0], lat: 0, lon: 0 }, { ...list[0], lat: 0, lon: 0 })
   assert.equal(list[0].lat, 47.46)
   assert.equal(shiftMetars(list, 0, 0), list)
+})
+
+test('shiftModel: the grid moved by moving where it starts, its first longitude kept within ±180° (the places run on from it); nothing else changed, the grid asked for left alone; no move gives the grid', () => {
+  const grid: ModelGrid = {
+    lat0: 46.5, lon0: 7.75, step: 0.25, n: 7, timeMs: 1791014400_000, elevM: [400], clouds: [{ hPa: 700, cover: [40], zM: [3100] }], winds: [{ hPa: 850, kt: [12], deg: [250] }],
+  }
+  const got = shiftModel(grid, -15.3, 26.4)
+  assert.ok(near(got.lat0, 31.2, 1e-9) && near(got.lon0, 34.15, 1e-9))
+  assert.deepEqual({ ...got, lat0: 0, lon0: 0 }, { ...grid, lat0: 0, lon0: 0 })
+  assert.equal(got.clouds, grid.clouds, 'the values are read-only data: shared, not copied')
+  assert.equal(grid.lat0, 46.5)
+  assert.ok(near(shiftModel({ ...grid, lon0: 178 }, 0, 5).lon0, -177, 1e-9), 'across the antimeridian')
+  assert.equal(shiftModel(grid, 0, 0), grid)
 })
 
 test('shiftSigmets: every corner of every ring moved, longitudes kept within ±180°, nothing else changed, the list asked for left alone; no move gives the list', () => {

@@ -40,7 +40,7 @@ import { BROWSE_HEIGHT_M, browseDrag, browsePinch, containsDeg, enterBrowse, exi
 import type { RectDeg } from './scene/browseCamera.ts'
 import { ChaseCamera } from './scene/chaseCamera.ts'
 import { FleetLayer } from './scene/fleetLayer.ts'
-import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room } from './scene/flightFrame.ts'
+import { FlightFrame, boxCentre, liveFlightData, type Rect, type Room, type WindAloft } from './scene/flightFrame.ts'
 import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
 import { PlaceLabels } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
@@ -744,6 +744,9 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const weather3d = new Weather3D(viewer, {
     apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
   })
+  // The flight-data frame's wind where the aircraft sends none: the weather model's (a forecast, drawn as an estimate). It has one
+  // only while the 3-D weather is shown, which is a live chase with the Weather switch on.
+  const modelWind: WindAloft = (lat, lon, ft) => weather3d.windAt(lat, lon, ft)
   /**
    * The layers the prefs and the view ask for: the street map or the satellite, roads and borders & places each over the
    * satellite (the chase's own in the chase, its names upright), weather live only (it is today's: it says nothing of the
@@ -1712,7 +1715,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
         // The flight-data frame, after the camera (it projects the model). Height above the ground only over the true
         // relief: flattened or growing, the ground drawn is not the ground.
         const aglFt = groundM === null || !prefs.topo || topo.animating ? null : Math.max(0, placed.hM - groundM) / FT
-        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up')
+        const data = sf !== null ? { ...sf.data, aglFt } : liveFlightData(placed, chaseRaw, aglFt, model.gearPos >= 1 ? 'down' : 'up', hist === null ? modelWind : null)
         // Its flight ID over its brackets, as over the traffic's: the callsign, else the hex (a scenario has its own).
         const id = placed.callsign ?? (sf === null ? placed.hex.toUpperCase() : '')
         flightFrame.update(viewer, model.model, model.entry, data, frameRoom(now), sf?.t, id)

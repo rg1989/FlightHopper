@@ -3,7 +3,10 @@
 // aircraft flies through, for the parts that draw it:
 // - the airports' reports (METARs) of the whole-degree box 2° round it, asked again every 5 min and at once when it leaves the box;
 // - the hazard areas (SIGMETs) and RainViewer's newest radar frame (a RadarSource: its tiles are fetched when something
-//   samples them, as the top-down map's radar does), each every 10 min.
+//   samples them, as the top-down map's radar does), each every 10 min;
+// - a weather model's forecast (Open-Meteo, through the server): a grid of 7 × 7 places 0.25° apart round the 0.5° cell the aircraft
+//   is in, asked again every 30 min and when the aircraft leaves the inner half of the grid held (not within 30 s of the last ask).
+//   A forecast, not an observation: it draws only what nothing else says, and the wind it gives is an estimate.
 // It draws the hazard areas that have a top and whose ring passes within 800 km of the aircraft (wxGeo.ts picks them): each
 // ring a translucent volume from the area's base (none: the ground) to its top, and the area's name and heights a label at
 // the ring's middle at the top height, placed with the place names (placeLabels.ts keeps them clear of each other and of the
@@ -21,6 +24,10 @@
 //   build, when the last has come, at most 3 s after the first); until a newer frame's tile has come the last frame's stands in
 //   for it. They stand on the nearest station's ceiling (cloudField.ts radarBases), and RADAR_LOOK.reserve of the 700 clouds are
 //   kept for them;
+// - the model's clouds (cloudField.ts modelClouds), the lowest priority: after the observed and the radar's clouds, they fill what is
+//   left of the 700 (none where those fill it). Worked out once for a grid and the reports held, so a rebuild for a radar tile or 30 km
+//   of flight reuses them; a grid's arrival builds the sky again. windAt gives the model's wind at a place and pressure altitude: the
+//   flight-data frame's when the aircraft sends none (app.ts, live chase only);
 // - ground fog round a station near the aircraft that sees little (groundFog.ts);
 // - rain or snow round the camera, from the radar under it or the nearest station's weather, below the cloud: a light
 //   screen overlay (precip.ts), leaned with the wind across the camera's view a few times a second.
@@ -35,24 +42,27 @@
 import { Cartesian3, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, type Cartographic, type Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
-import type { Metar, Sigmet } from '../../shared/wx.ts'
+import type { Metar, ModelGrid, Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
+import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
 import { CloudLayer } from './cloudLayer.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
+import { inInnerHalf, modelWindAt, type ModelWind } from './modelWind.ts'
 import type { LayerLabel, PlaceLabels } from './placeLabels.ts'
 import { Precipitation, cloudBaseM, nearestStation, precipFromDbz, precipFromWx, radarPixel, radarSample, windOf, type Fall } from './precip.ts'
 import { RADAR_INDEX, RADAR_SRC_MAX, RadarSource, type RadarIndex, type SourceTile } from './radar.ts'
 import { radarCells, tilesAcross } from './radarCells.ts'
 import { RainShafts, pickShafts, type RainShaft } from './rainShafts.ts'
-import { hazardsNear, ringCentre, shiftMetars, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
+import { hazardsNear, ringCentre, shiftMetars, shiftModel, shiftSigmets, viewBox, wrapLon, type Hazard } from './wxGeo.ts'
 import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 const BOX_DEG = 2 // the METAR box reaches this far from the aircraft each way, rounded out to whole degrees
 const METAR_EVERY_MS = 5 * 60_000
 const SLOW_EVERY_MS = 10 * 60_000 // SIGMETs and the radar frame
+const MODEL_EVERY_MS = 30 * 60_000 // the model's values are hourly; the server keeps a cell this long
+const MODEL_N_MAX = 15 // a grid of more places a side than this is not the server's
 const RETRY_MS = 30_000 // a failed ask is made again after this
 const LOOK_MS = 1000 // update() looks at its clocks and the aircraft this often
 export const HAZARD_KM = 800 // hazard areas are drawn when their ring passes this near the aircraft
@@ -104,7 +114,7 @@ export function statusText3d(s: { airports: number; areas: number; note: string 
 }
 
 type Box = readonly [south: number, west: number, north: number, east: number]
-type Feed = 'metar' | 'sigmet' | 'radar'
+type Feed = 'metar' | 'sigmet' | 'radar' | 'model'
 
 /** What draws the sky round the aircraft: Cesium's parts in the app (cesiumSky), fakes in tests. */
 export interface Sky {
@@ -149,6 +159,19 @@ function listOf<T>(json: unknown, usable: (x: T) => boolean): T[] {
 const metarsOf = (json: unknown): Metar[] => listOf<Metar>(json, (m) => Number.isFinite(m?.lat) && Number.isFinite(m?.lon))
 const sigmetsOf = (json: unknown): Sigmet[] => listOf<Sigmet>(json, (s) => Array.isArray(s?.rings))
 
+/** The server's grid, or a thrown error: places and levels are read warily afterwards (a missing value is none), but not a grid of another shape. */
+function modelOf(json: unknown): ModelGrid {
+  const g = json as Partial<ModelGrid> | null
+  const level = (l: unknown, a: string, b: string): boolean => {
+    const x = l as Record<string, unknown> | null
+    return Number.isFinite(x?.hPa) && Array.isArray(x?.[a]) && Array.isArray(x?.[b])
+  }
+  const ok = g !== null && typeof g === 'object' && [g.lat0, g.lon0, g.step].every(Number.isFinite) && g.step! > 0 && Number.isInteger(g.n) && g.n! >= 1 && g.n! <= MODEL_N_MAX
+    && Array.isArray(g.elevM) && Array.isArray(g.clouds) && g.clouds.every((l) => level(l, 'cover', 'zM')) && Array.isArray(g.winds) && g.winds.every((l) => level(l, 'kt', 'deg'))
+  if (!ok) throw new Error('not a model grid')
+  return g as ModelGrid
+}
+
 function frameOf(json: unknown): { host: string; path: string } {
   const idx = json as Partial<RadarIndex> | null
   const last = idx?.radar?.past?.at(-1)
@@ -190,6 +213,13 @@ export class Weather3D {
   #volumeKey = ''
   #labelKey = ''
   #line: string | null = null // the last summary written
+  #model: ModelGrid | null = null // the model's grid, as drawn (shifted by ?wxat)
+  #modelDue = -Infinity
+  #modelAskedMs = -Infinity // when the grid was last asked for
+  #modelAsk = 0 // the ask in hand: an answer to an earlier one is not heard
+  #modelGen = 0 // the grid held: the clouds are built again from it when it changes
+  #builtModel = -1
+  #modelMade: { grid: ModelGrid; metars: readonly Metar[]; specs: CloudSpec[] } | null = null // the model's clouds, kept for the grid and the reports they were made from
   #metarGen = 0 // the METAR list held: the clouds are built again from it when it changes
   #builtGen = -1
   #builtLat = Number.NaN // where the aircraft was when the clouds were built
@@ -264,6 +294,11 @@ export class Weather3D {
     return this.#sigmets
   }
 
+  /** The model's grid, as drawn (shifted by ?wxat); null until the first answer. */
+  get model(): ModelGrid | null {
+    return this.#model
+  }
+
   /** RainViewer's newest frame, unshifted; null until the first answer. */
   get radar(): RadarSource | null {
     return this.#radar
@@ -289,14 +324,23 @@ export class Weather3D {
     return this.#sky
   }
 
+  /**
+   * The model's wind at a place (as drawn) and pressure altitude (ft): the forecast's, for the flight-data frame when the aircraft sends
+   * none. Null when hidden (the grid is only asked for while shown), before it has come, or where it does not reach.
+   */
+  windAt(lat: number, lon: number, pressureAltFt: number): ModelWind | null {
+    return this.#show && this.#model !== null ? modelWindAt(this.#model, lat, lon, pressureAltFt) : null
+  }
+
   /** The Sun's night (0 day … 1 night) the sky is lit by: app.ts gives it every frame, 0 while the Sun toggle is off. */
   setNight(n: number): void {
     this.#night = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0
   }
 
-  /** The sky built again from what it holds, every report's clouds and the radar's worked out anew (a check aid: after changing a look constant, LOOKS or RADAR_LOOK, in the console). */
+  /** The sky built again from what it holds, every report's clouds, the radar's and the model's worked out anew (a check aid: after changing a look constant, LOOKS, RADAR_LOOK or MODEL_LOOK, in the console). */
   rebuildSky(): void {
     this.#made = new WeakMap()
+    this.#modelMade = null
     this.#builtGen = -1
     this.#refresh()
   }
@@ -368,6 +412,7 @@ export class Weather3D {
     }
     const lat = this.#here.lat - this.#shift.dLat // where the aircraft is in the weather's own place
     const lon = wrapLon(this.#here.lon - this.#shift.dLon)
+    this.#askModel(nowMs, lat, lon)
     const b = this.#box
     if (b === null || nowMs >= this.#metarsDue || lat < b[0] || lat > b[2] || lon < b[1] || lon > b[3]) {
       // ponytail: the box stops at ±180° and the poles: stations across the antimeridian are not asked for. Upgrade: a second box there.
@@ -378,6 +423,19 @@ export class Weather3D {
       this.#metarsDue = nowMs + METAR_EVERY_MS
       void this.#loadMetars(box, nowMs)
     }
+  }
+
+  /**
+   * The model's grid when it is due (every 30 min), or when the aircraft is out of the inner half of the grid held, but not within
+   * 30 s of the last ask: a grid the server cannot centre on the aircraft (near a pole) would be asked for at every look.
+   */
+  #askModel(nowMs: number, lat: number, lon: number): void {
+    const grid = this.#model
+    const leaving = grid !== null && !inInnerHalf(grid, this.#here.lat, this.#here.lon)
+    if (nowMs < this.#modelDue && !(leaving && nowMs - this.#modelAskedMs >= RETRY_MS)) return
+    this.#modelDue = nowMs + MODEL_EVERY_MS
+    this.#modelAskedMs = nowMs
+    void this.#loadModel(`${this.#apiBase}/wx/model?lat=${+lat.toFixed(3)}&lon=${+lon.toFixed(3)}`, ++this.#modelAsk, nowMs)
   }
 
   /**
@@ -406,6 +464,17 @@ export class Weather3D {
         this.#metarGen++
       }
       this.#refresh() // the clouds built from them, and the line
+    })
+  }
+
+  #loadModel(url: string, ask: number, askedMs: number): Promise<void> {
+    return this.#fetch('model', url, modelOf, () => !this.#destroyed && ask === this.#modelAsk, (grid) => {
+      if (grid === null) this.#modelDue = Math.min(this.#modelDue, askedMs + RETRY_MS)
+      else {
+        this.#model = shiftModel(grid, this.#shift.dLat, this.#shift.dLon)
+        this.#modelGen++
+      }
+      this.#refresh() // the clouds built from it, and the line
     })
   }
 
@@ -458,7 +527,7 @@ export class Weather3D {
       this.#labelKey = labels
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, this.#hazards.map((h) => this.#label(h, u)))
     }
-    if (this.#builtGen !== this.#metarGen || this.#builtRadar !== this.#radarGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
+    if (this.#builtGen !== this.#metarGen || this.#builtRadar !== this.#radarGen || this.#builtModel !== this.#modelGen || !(distanceNm(a.lat, a.lon, this.#builtLat, this.#builtLon) * KM_PER_NM < REBUILD_KM)) this.#buildClouds()
     const from = Cartesian3.fromDegrees(a.lon, a.lat, a.altM, Ellipsoid.WGS84, this.#hereWC)
     this.#sky.clouds.fade(from)
     this.#sky.shafts.fade(from)
@@ -472,10 +541,10 @@ export class Weather3D {
   }
 
   /**
-   * The clouds and rain shafts round the aircraft: the observed clouds built now, then the radar's, within one cap; the radar's
-   * keep RADAR_LOOK.reserve of it when it has so many, the observed ones giving way, the farthest first. Where the tiles held
-   * have an echo the radar's part (the heavier) is built at the next frame (#buildRadar), else it is nothing but the asking for
-   * its tiles and is done here. Drawn at the frame after.
+   * The clouds and rain shafts round the aircraft: the observed clouds built now, then the radar's, then the model's, within one cap;
+   * the radar's keep RADAR_LOOK.reserve of it when it has so many, the observed ones giving way, the farthest first; the model's
+   * come last, a forecast: they fill what is left. Where the tiles held have an echo the radar's part (the heavier) is built at the
+   * next frame (#buildRadar), else it is nothing but the asking for its tiles and is done here. Drawn at the frame after.
    */
   #buildClouds(): void {
     const a = this.#here
@@ -488,17 +557,32 @@ export class Weather3D {
     if (!this.#echoes()) this.#buildRadar()
   }
 
-  /** The sky from the observed clouds staged and the radar's, at the aircraft's place now: to be drawn at the next frame. */
+  /** The sky from the observed clouds staged, the radar's and the model's, at the aircraft's place now: to be drawn at the next frame. */
   #buildRadar(): void {
     const a = this.#here
     const observed = this.#staged!
     this.#staged = null
     const radar = this.#radarSky()
-    const clouds = radar.clouds.length === 0
-      ? nearestClouds([observed], a.lat, a.lon)
-      : nearestClouds([nearestClouds([observed], a.lat, a.lon, MAX_CLOUDS - Math.min(radar.clouds.length, RADAR_LOOK.reserve)), radar.clouds], a.lat, a.lon)
-    this.#pending = { clouds, shafts: radar.shafts }
+    // The observed clouds first, giving way to the radar's reserve; then the radar's; then the model's: a forecast, the lowest priority,
+    // it fills what is left of the 700.
+    const room = radar.clouds.length === 0 ? MAX_CLOUDS : MAX_CLOUDS - Math.min(radar.clouds.length, RADAR_LOOK.reserve)
+    this.#pending = { clouds: nearestClouds([nearestClouds([observed], a.lat, a.lon, room), radar.clouds, this.#modelSky()], a.lat, a.lon), shafts: radar.shafts }
     this.#builtRadar = this.#radarGen
+    this.#builtModel = this.#modelGen
+  }
+
+  /**
+   * The model's clouds from the grid and the reports held, made again only when either has changed: a rebuild for a radar tile or 30 km
+   * of flight finds them as they were. None before the grid has come.
+   */
+  #modelSky(): CloudSpec[] {
+    const grid = this.#model
+    if (grid === null) return []
+    const made = this.#modelMade
+    if (made !== null && made.grid === grid && made.metars === this.#metars) return made.specs
+    const specs = modelClouds(grid, this.#metars)
+    this.#modelMade = { grid, metars: this.#metars, specs }
+    return specs
   }
 
   /** Whether any tile held has an echo (else the radar has no clouds to build). */

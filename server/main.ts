@@ -9,6 +9,7 @@
 //   GET /api/recordings                 every recorded flight, newest first; /api/recordings/track?file= one of them
 //   POST /api/recordings/rename?file&name, POST /api/recordings/delete?file   name one (blank clears), delete one for good
 //   GET /api/wx/metar?bbox=s,w,n,e      METARs in the box (whole degrees, ≤ 40° a side); GET /api/wx/sigmet: SIGMETs (wx.ts)
+//   GET /api/wx/model?lat&lon           Open-Meteo's forecast for a 7 × 7 grid (0.25°) round the 0.5° cell of the place (wx.ts)
 //   GET /api/history?slot&lat&lon&nm    one past UTC half hour in a circle (adsb.lol's heatmap file: historyStore.ts), each aircraft
 //                                       with its type and category (typeDb.ts). 404: adsb.lol has none (or it is older than the
 //                                       oldest day it keeps); 503 + Retry-After: 15: it cannot be had now
@@ -477,6 +478,7 @@ export function createServer(
     try {
       if (url.pathname === '/api/wx/metar') body = await wx.metars(url.searchParams.get('bbox'))
       else if (url.pathname === '/api/wx/sigmet') body = await wx.sigmets()
+      else if (url.pathname === '/api/wx/model') body = await wx.model(url.searchParams.get('lat'), url.searchParams.get('lon'))
       else if (url.pathname === '/api/view') body = view(url.searchParams)
       else if (url.pathname === '/api/chase') body = chase(url.searchParams)
       else if (url.pathname === '/api/status') body = poller.report()

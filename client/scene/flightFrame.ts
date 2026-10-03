@@ -27,6 +27,7 @@ import {
 } from '../ui/units.ts'
 import { defaultRangeM } from './chaseCamera.ts'
 import { Glide, TREND_S, Trend, rel180, trendShown } from './instrumentMath.ts'
+import type { ModelWind } from './modelWind.ts'
 import { BOX_CENTRE, BOX_HALF, squarePx } from './traffic.ts'
 import '../ui/flightFrame.css'
 
@@ -347,10 +348,13 @@ export function boxCentre(modelMatrix: Matrix4, entry: ModelManifestEntry, out: 
 
 // ---- data -----------------------------------------------------------------------------------------------------------
 
-const LIVE_DERIVED: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg'])
-const LIVE_DERIVED_AGL: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt'])
-const LIVE_DERIVED_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'gear'])
-const LIVE_DERIVED_AGL_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg', 'rollDeg', 'aglFt', 'gear'])
+/** The weather model's wind at a place and pressure altitude (ft), or null (Weather3D.windAt): what the frame shows when the aircraft sends none. */
+export type WindAloft = (lat: number, lon: number, pressureAltFt: number) => ModelWind | null
+
+/** The live frame's estimates, by which of aglFt (1), gear (2) and the model's wind (4) are in use: a set for each, made once (the frame reads it every frame). */
+const LIVE_DERIVED: readonly ReadonlySet<keyof FlightData>[] = Array.from({ length: 8 }, (_, m) =>
+  new Set<keyof FlightData>(['pitchDeg', 'rollDeg', ...(m & 1 ? (['aglFt'] as const) : []), ...(m & 2 ? (['gear'] as const) : []), ...(m & 4 ? (['windFromDeg', 'windKt'] as const) : [])]),
+)
 
 /**
  * The frame's data in live chase: the drawn state for altitude, vertical speed, speed, heading, track and attitude, and
@@ -360,13 +364,17 @@ const LIVE_DERIVED_AGL_GEAR: ReadonlySet<keyof FlightData> = new Set(['pitchDeg'
  * own where it broadcasts one, else from its airspeed at its pressure altitude (in its reported outside air temperature,
  * else the standard atmosphere's). The heading and attitude are the drawn ones, the 3-D model's, so the
  * instruments and the model agree: the heading while the aircraft reports one (the track + its averaged crab), the
- * attitude synthesised from the path, so an estimate; aglFt (the app's ground under the aircraft) is one too. One line
- * per field: each is the one place its source is chosen.
+ * attitude synthesised from the path, so an estimate; aglFt (the app's ground under the aircraft) is one too. The wind is the
+ * aircraft's own; where it sends none, windAloft's, the weather model's at its place and barometric altitude (else the height
+ * above sea level), an estimate (a forecast), asked only then, and not on the ground. One line per field: each is the one place
+ * its source is chosen.
  */
-export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null, gear: FlightData['gear'] = null): FlightData {
+export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt: number | null, gear: FlightData['gear'] = null, windAloft: WindAloft | null = null): FlightData {
   const n = (v: number | undefined): number | null => (fin(v) ? v : null)
   const iasKt = s.iasKt ?? n(raw?.ias)
   const pressureAltFt = s.altBaroFt ?? s.altMslFt ?? null // the true airspeed's height: the air's pressure there
+  const [wd, ws] = [n(raw?.wd), n(raw?.ws)]
+  const model = (wd !== null && ws !== null) || windAloft === null || pressureAltFt === null || s.onGround ? null : windAloft(s.lat, s.lon, pressureAltFt) // a wind aloft: none for an aircraft on the ground
   return {
     altFt: s.altMslFt ?? s.altBaroFt,
     aglFt,
@@ -379,12 +387,12 @@ export function liveFlightData(s: RenderState, raw: ReadsbAircraft | null, aglFt
     pitchDeg: s.pitchDeg,
     rollDeg: s.rollDeg,
     g: null,
-    windFromDeg: n(raw?.wd),
-    windKt: n(raw?.ws),
+    windFromDeg: model === null ? wd : model.fromDeg,
+    windKt: model === null ? ws : model.kt,
     gear, // the drawn gear (gear.ts), as a crew would have it: an estimate
     flaps: null,
     epr: null,
-    derived: gear === null ? (aglFt === null ? LIVE_DERIVED : LIVE_DERIVED_AGL) : aglFt === null ? LIVE_DERIVED_GEAR : LIVE_DERIVED_AGL_GEAR,
+    derived: LIVE_DERIVED[(aglFt === null ? 0 : 1) | (gear === null ? 0 : 2) | (model === null ? 0 : 4)],
   }
 }
 

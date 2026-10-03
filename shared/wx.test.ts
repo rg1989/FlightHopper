@@ -1,7 +1,7 @@
 // shared/wx.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { slimMetars } from './wx.ts'
+import { MODEL_CLOUD_HPA, MODEL_VARIABLES, MODEL_WIND_HPA, slimMetars, slimModel, type ModelGeo } from './wx.ts'
 
 const MI = 1.609344 // km in a statute mile
 const near = (a: number | null, b: number): boolean => a !== null && Math.abs(a - b) < 1e-9
@@ -91,4 +91,124 @@ test('slimMetars: elevM is the API\'s elev, the station\'s metres above sea leve
   assert.equal(elev(-12), -12)
   for (const bad of ['35', null, undefined, Number.NaN, {}]) assert.equal(elev(bad), null, String(bad))
   assert.equal(slimMetars([{ icaoId: 'X', lat: 1, lon: 2 }])[0].elevM, null)
+})
+
+// ---- slimModel --------------------------------------------------------------------------------------------------------------
+
+// One place of Open-Meteo's multi-point answer as it came (api.open-meteo.com/v1/forecast, 2026-10-03 08:40 UTC, forecast_hours=1,
+// wind_speed_unit=kn, timeformat=unixtime), without its hourly_units: the model's own nearest point (not the one asked for), its
+// height, and arrays of one value each.
+const REAL_PLACE = {
+  latitude: 32.1875, longitude: 34.8125, generationtime_ms: 418.38550567626953, utc_offset_seconds: 0, timezone: 'GMT', timezone_abbreviation: 'GMT', elevation: 0,
+  hourly: {
+    time: [1791014400], cloud_cover_1000hPa: [0], cloud_cover_925hPa: [0], cloud_cover_850hPa: [0], cloud_cover_700hPa: [5], cloud_cover_600hPa: [0],
+    cloud_cover_500hPa: [0], cloud_cover_400hPa: [0], cloud_cover_300hPa: [0], cloud_cover_250hPa: [0], cloud_cover_200hPa: [0],
+    geopotential_height_1000hPa: [158], geopotential_height_925hPa: [834], geopotential_height_850hPa: [1554], geopotential_height_700hPa: [3153],
+    geopotential_height_600hPa: [4386], geopotential_height_500hPa: [5802], geopotential_height_400hPa: [7458.03], geopotential_height_300hPa: [9496.77],
+    geopotential_height_250hPa: [10731.43], geopotential_height_200hPa: [12172.09], wind_speed_850hPa: [17.1], wind_speed_700hPa: [16.4],
+    wind_speed_500hPa: [42.4], wind_speed_300hPa: [83.4], wind_speed_250hPa: [82.5], wind_speed_200hPa: [92], wind_direction_850hPa: [213],
+    wind_direction_700hPa: [231], wind_direction_500hPa: [236], wind_direction_300hPa: [237], wind_direction_250hPa: [236], wind_direction_200hPa: [233],
+  },
+}
+
+const GEO: ModelGeo = { lat0: 31.5, lon0: 34, step: 0.25, n: 7 }
+
+/** A 7 × 7 answer whose values say where they belong: place k, level l. `over` replaces some of one place's arrays. */
+function answer(over: Record<number, Record<string, unknown>> = {}, n = 49): unknown[] {
+  return Array.from({ length: n }, (_, k) => {
+    const hourly: Record<string, unknown> = { time: [1791014400] }
+    MODEL_CLOUD_HPA.forEach((p, l) => {
+      hourly[`cloud_cover_${p}hPa`] = [(k + l) % 101]
+      hourly[`geopotential_height_${p}hPa`] = [100 * l + k + 0.4]
+    })
+    MODEL_WIND_HPA.forEach((p, l) => {
+      hourly[`wind_speed_${p}hPa`] = [10 * l + k + 0.04]
+      hourly[`wind_direction_${p}hPa`] = [(10 * l + k) % 360 + 0.4]
+    })
+    return { latitude: 0, longitude: 0, elevation: 10 + k + 0.4, hourly: { ...hourly, ...over[k] } }
+  })
+}
+
+test('MODEL_VARIABLES: cloud cover and level height at ten levels, wind speed and direction at six, in the order they are asked', () => {
+  assert.equal(MODEL_VARIABLES.length, 32)
+  assert.deepEqual(MODEL_VARIABLES.slice(0, 3), ['cloud_cover_1000hPa', 'cloud_cover_925hPa', 'cloud_cover_850hPa'])
+  assert.equal(MODEL_VARIABLES[10], 'geopotential_height_1000hPa')
+  assert.equal(MODEL_VARIABLES[20], 'wind_speed_850hPa')
+  assert.equal(MODEL_VARIABLES[26], 'wind_direction_850hPa')
+  assert.equal(MODEL_VARIABLES.at(-1), 'wind_direction_200hPa')
+  assert.deepEqual(MODEL_CLOUD_HPA, [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200])
+  assert.deepEqual(MODEL_WIND_HPA, [850, 700, 500, 300, 250, 200])
+})
+
+test('slimModel: the real place of an Open-Meteo answer: every level by its own name, the ground and the hour', () => {
+  const g = slimModel([REAL_PLACE], { lat0: 32.25, lon0: 34.75, step: 0.25, n: 1 })
+  assert.deepEqual([g.lat0, g.lon0, g.step, g.n, g.timeMs], [32.25, 34.75, 0.25, 1, 1791014400_000], 'where it was asked for, not where the model answered from')
+  assert.deepEqual(g.elevM, [0])
+  assert.deepEqual(g.clouds.map((l) => l.hPa), MODEL_CLOUD_HPA)
+  assert.deepEqual(g.clouds.map((l) => l.cover[0]), [0, 0, 0, 5, 0, 0, 0, 0, 0, 0])
+  assert.deepEqual(g.clouds.map((l) => l.zM[0]), [158, 834, 1554, 3153, 4386, 5802, 7458, 9497, 10731, 12172], 'whole metres')
+  assert.deepEqual(g.winds.map((l) => l.hPa), MODEL_WIND_HPA)
+  assert.deepEqual(g.winds.map((l) => l.kt[0]), [17.1, 16.4, 42.4, 83.4, 82.5, 92])
+  assert.deepEqual(g.winds.map((l) => l.deg[0]), [213, 231, 236, 237, 236, 233])
+})
+
+test('slimModel: 49 places in the order asked become arrays by level: index = row × 7 + column, rows north, columns east', () => {
+  const g = slimModel(answer(), GEO)
+  assert.equal(g.elevM.length, 49)
+  assert.equal(g.clouds.length, 10)
+  assert.equal(g.winds.length, 6)
+  for (const l of g.clouds) assert.ok(l.cover.length === 49 && l.zM.length === 49)
+  for (const l of g.winds) assert.ok(l.kt.length === 49 && l.deg.length === 49)
+  assert.deepEqual(g.clouds[3].cover.slice(0, 3), [3, 4, 5], 'place k, level 3 (700 hPa)')
+  assert.equal(g.clouds[3].cover[48], (48 + 3) % 101)
+  assert.equal(g.clouds[2].zM[9], 209, 'level 2, place 9: 100 × 2 + 9 + 0.4, in whole metres')
+  assert.equal(g.elevM[7], 17, '10 + 7 + 0.4')
+  assert.equal(g.winds[1].kt[5], 15, '10 × 1 + 5 + 0.04, to 0.1 kt')
+  assert.equal(g.winds[1].deg[5], 15)
+  assert.deepEqual([g.lat0, g.lon0, g.step, g.n], [31.5, 34, 0.25, 7])
+  assert.equal(g.timeMs, 1791014400_000)
+})
+
+test('slimModel: a value the model has none for is null, wherever it is; so is one that is not a number; the rest of the grid stays', () => {
+  const g = slimModel(answer({
+    2: { cloud_cover_700hPa: [null], geopotential_height_300hPa: [null], wind_speed_500hPa: [null] },
+    5: { wind_direction_500hPa: ['north'], cloud_cover_850hPa: [Number.NaN] },
+    8: { cloud_cover_925hPa: [], wind_speed_200hPa: undefined },
+  }), GEO)
+  assert.equal(g.clouds[3].cover[2], null)
+  assert.equal(g.clouds[7].zM[2], null)
+  assert.equal(g.winds[2].kt[2], null)
+  assert.equal(g.winds[2].deg[5], null)
+  assert.equal(g.clouds[2].cover[5], null)
+  assert.equal(g.clouds[1].cover[8], null, 'an empty array')
+  assert.equal(g.winds[5].kt[8], null, 'a key left out')
+  assert.equal(g.clouds[3].cover[1], 4, 'a neighbour is as it was')
+  assert.equal(g.clouds[3].cover[3], 6)
+  const bare = slimModel(answer({ 0: { time: [] }, 1: { time: [null] }, 2: { time: [1791018000] } }), GEO)
+  assert.equal(bare.timeMs, 1791018000_000, 'the hour is the first place\'s that has one')
+  const none = slimModel(answer().map(() => ({ hourly: {} })), GEO)
+  assert.equal(none.timeMs, null)
+  assert.ok(none.elevM.every((v) => v === null) && none.clouds.every((l) => l.cover.every((v) => v === null)) && none.winds.every((l) => l.kt.every((v) => v === null)))
+})
+
+test('slimModel: whole percent, metres and degrees; the wind to 0.1 kt, its direction never 360; a place with no height is null', () => {
+  const places = answer({
+    0: { cloud_cover_1000hPa: [49.6], geopotential_height_1000hPa: [-120.6], wind_speed_850hPa: [17.26], wind_direction_850hPa: [212.5], wind_direction_700hPa: [359.6] },
+  })
+  delete (places[1] as { elevation?: number }).elevation
+  const g = slimModel(places, GEO)
+  assert.equal(g.clouds[0].cover[0], 50)
+  assert.equal(g.clouds[0].zM[0], -121, 'below sea level in a deep low')
+  assert.equal(g.winds[0].kt[0], 17.3)
+  assert.equal(g.winds[0].deg[0], 213)
+  assert.equal(g.winds[1].deg[0], 0, 'north')
+  assert.equal(g.elevM[1], null)
+})
+
+test('slimModel: anything but one object a place is an error: the server serves the last good answer, or says it failed', () => {
+  for (const bad of [null, {}, 'x', [], answer({}, 48), answer({}, 50), { error: true, reason: 'Latitude must be in range of -90 to 90°.' }]) {
+    assert.throws(() => slimModel(bad, GEO), /expected an object for each of 49 places/, JSON.stringify(bad)?.slice(0, 40))
+  }
+  assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? null : p)), GEO), /expected an object for each of 49 places/, 'a place that is not an object')
+  assert.throws(() => slimModel(answer().map((p, k) => (k === 3 ? 'x' : p)), GEO), /expected an object/)
 })

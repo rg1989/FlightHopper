@@ -25,6 +25,11 @@ function isa(hM: number): { tK: number; pPa: number } {
   return { tK: T11, pPa: P11 * Math.exp((-G * (hM - TROPOPAUSE_M)) / (287.05287 * T11)) }
 }
 
+/** The standard atmosphere's pressure (hPa) at a pressure altitude (ft): what a pressure level is in height (the weather model's levels). */
+export function pressureHPa(pressureAltFt: number): number {
+  return isa(Math.max(pressureAltFt, -1000) * FT).pPa / 100
+}
+
 /**
  * True airspeed (kt) from calibrated airspeed (kt) at a pressure altitude (ft), subsonic: the impact pressure CAS means
  * at sea level, the Mach number that pressure means up here, and the speed of sound in the outside air (ISA, or the

@@ -2,10 +2,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { distanceNm } from '../../shared/geo.ts'
-import type { Cloud, Metar } from '../../shared/wx.ts'
+import { MODEL_CLOUD_HPA, MODEL_WIND_HPA, type Cloud, type Metar, type ModelGrid } from '../../shared/wx.ts'
 import {
-  CLOUD_KM, LOOKS, MAX_CLOUDS, PUFF_FILL, PUFF_SEEN, RADAR_LOOK, REBUILD_KM, STATION_CAP, ceilingM, fadeAlpha, metarClouds, nearestClouds, observedClouds, overcastShade,
-  radarBases, radarClouds, reportsSky, sunBrightness, towerRiseM, type CloudSpec, type RadarBase,
+  CLOUD_KM, LOOKS, MAX_CLOUDS, MODEL_LOOK, PUFF_FILL, PUFF_SEEN, RADAR_LOOK, REBUILD_KM, STATION_CAP, ceilingM, fadeAlpha, farKmOf, metarClouds, modelClouds, nearestClouds,
+  observedClouds, overcastShade, radarBases, radarClouds, reportsSky, sunBrightness, towerRiseM, type CloudSpec, type RadarBase,
 } from './cloudField.ts'
 import { EDGE_ALPHA, edgeAlpha, staysInside } from './cloudQuad.ts'
 import type { RadarCell } from './radarCells.ts'
@@ -663,9 +663,260 @@ test('radarClouds: the look constants are read as the clouds are made (the conso
   }
 })
 
+// ---- the model's clouds ------------------------------------------------------------------------------------------------------
+
+const ISA_Z: Readonly<Record<number, number>> = { 1000: 110, 925: 760, 850: 1460, 700: 3010, 600: 4200, 500: 5570, 400: 7180, 300: 9160, 250: 10360, 200: 11800 } // m, standard atmosphere
+const PLACES = 49
+const MIDDLE = 24 // the middle place of a 7 × 7 grid: row 3, column 3
+interface GridOptions {
+  cover?: (hPa: number, place: number) => number | null
+  z?: (hPa: number, place: number) => number | null
+  elev?: (place: number) => number | null
+  lat0?: number
+  lon0?: number
+}
+/** A model grid, 7 × 7 places 0.25° apart from lat0, lon0 (31.5°N 34°E, so the middle place is at 32.25°N 34.75°E): its cover as `cover` has it (none by default), the levels at the standard atmosphere's heights, the ground at sea level. */
+function modelGrid(o: GridOptions = {}): ModelGrid {
+  const per = <T>(f: (p: number) => T): T[] => Array.from({ length: PLACES }, (_, p) => f(p))
+  return {
+    lat0: o.lat0 ?? 31.5, lon0: o.lon0 ?? 34, step: 0.25, n: 7, timeMs: 1791014400_000,
+    elevM: per((p) => (o.elev === undefined ? 0 : o.elev(p))),
+    clouds: MODEL_CLOUD_HPA.map((hPa) => ({
+      hPa, cover: per((p) => (o.cover === undefined ? 0 : o.cover(hPa, p))), zM: per((p) => (o.z === undefined ? ISA_Z[hPa] : o.z(hPa, p))),
+    })),
+    winds: MODEL_WIND_HPA.map((hPa) => ({ hPa, kt: per(() => 10), deg: per(() => 270) })),
+  }
+}
+/** A grid with cloud at one level of one place only. */
+const one = (hPa: number, cover: number, place = MIDDLE, o: GridOptions = {}): ModelGrid => modelGrid({ cover: (h, p) => (h === hPa && p === place ? cover : 0), ...o })
+const CELL_KM2 = (lat: number): number => (0.25 * 111.195) ** 2 * Math.cos((lat * Math.PI) / 180) // a place's cell, km²
+const MID_LAT = 32.25
+const MID_LON = 34.75
+
+test('MODEL_LOOK: the values the plan gives, each named; the densities are modest, under the observed looks\'', () => {
+  assert.deepEqual([MODEL_LOOK.minCover, MODEL_LOOK.stationKm, MODEL_LOOK.lowHPa, MODEL_LOOK.highHPa], [20, 40, 850, 300])
+  for (const k of ['low', 'mid', 'high'] as const) assert.ok(MODEL_LOOK[k].density > 0 && MODEL_LOOK[k].density < 1, `${k}: ${MODEL_LOOK[k].density}`)
+  assert.ok(MODEL_LOOK.sct < MODEL_LOOK.bkn && MODEL_LOOK.bkn < MODEL_LOOK.ovc && MODEL_LOOK.minCover < MODEL_LOOK.sct)
+})
+
+test('modelClouds: a level with 20 % cloud or more is drawn, less is not; a clear sky, no cover or no height draws nothing', () => {
+  assert.equal(modelClouds(one(700, 19.9), []).length, 0)
+  assert.ok(modelClouds(one(700, 20), []).length > 0)
+  assert.equal(modelClouds(modelGrid(), []).length, 0, 'a clear sky')
+  assert.equal(modelClouds(modelGrid({ cover: () => null }), []).length, 0, 'the model has none')
+  assert.equal(modelClouds(one(700, 80, MIDDLE, { z: () => null }), []).length, 0, 'no height: nowhere to stand them')
+  const short = modelGrid({ cover: () => 80 })
+  short.clouds.forEach((l) => (l.cover.length = 10)) // a grid with places missing
+  assert.ok(modelClouds(short, []).length > 0 && modelClouds(short, []).every((c) => c.lat < 32), 'only the places it has')
+})
+
+test('modelClouds: puffs by cover as for a report\'s FEW, SCT, BKN and OVC (the observed looks\' density, from 20, 25, 50 and 87.5 %), times the level\'s class: low, mid or high', () => {
+  const cell = CELL_KM2(MID_LAT)
+  for (const [hPa, density] of [[925, MODEL_LOOK.low.density], [600, MODEL_LOOK.mid.density], [250, MODEL_LOOK.high.density]] as const) {
+    for (const [cover, name] of [[20, 'FEW'], [24.9, 'FEW'], [25, 'SCT'], [49.9, 'SCT'], [50, 'BKN'], [87.4, 'BKN'], [87.5, 'OVC'], [100, 'OVC']] as const) {
+      assert.equal(modelClouds(one(hPa, cover), []).length, Math.round(LOOKS[name].perKm2 * density * cell), `${hPa} hPa, ${cover} %: ${name}`)
+    }
+  }
+  const counts = [20, 30, 60, 90].map((c) => modelClouds(one(925, c), []).length)
+  assert.ok(counts[0] < counts[1] && counts[1] < counts[2] && counts[2] < counts[3], `more cloud, more puffs: ${counts}`)
+})
+
+test('modelClouds: a place\'s cell is 0.25° square on the ground: a cell near the pole holds fewer puffs (by the cosine of its latitude)', () => {
+  const equator = modelClouds(one(925, 100, MIDDLE, { lat0: -0.5 }), []).length // the place at 0.25°N
+  const sixty = modelClouds(one(925, 100, MIDDLE, { lat0: 59.5 }), []).length // at 60.25°N
+  assert.ok(near(sixty / equator, Math.cos((60.25 * Math.PI) / 180) / Math.cos((0.25 * Math.PI) / 180), 0.02), `${sixty} against ${equator}`)
+})
+
+test('modelClouds: a level\'s puffs stand from its height (their bottoms there), spread over the place\'s cell, on the model\'s ground', () => {
+  const g = one(700, 80, MIDDLE, { elev: (p) => (p === MIDDLE ? 640 : 0), z: (hPa) => (hPa === 700 ? 3123 : ISA_Z[hPa]) })
+  const cs = modelClouds(g, [])
+  assert.ok(cs.length > 30)
+  for (const c of cs) {
+    assert.ok(near(bottom(c), 3123, 1e-6), `a bottom at ${bottom(c)}`)
+    assert.equal(c.groundM, 640)
+    assert.ok(Math.abs(c.lat - MID_LAT) <= 0.125 + 1e-9 && Math.abs(c.lon - MID_LON) <= 0.125 + 1e-9, `${c.lat}, ${c.lon}: outside the cell`)
+  }
+  const lats = cs.map((c) => c.lat)
+  const lons = cs.map((c) => c.lon)
+  assert.ok(Math.max(...lats) - Math.min(...lats) > 0.2 && Math.max(...lons) - Math.min(...lons) > 0.2, 'spread over the cell, not in a clump')
+  assert.ok(Math.min(...lats) < MID_LAT && Math.max(...lats) > MID_LAT && Math.min(...lons) < MID_LON && Math.max(...lons) > MID_LON)
+})
+
+test('modelClouds: low levels (850 hPa and lower) look like the observed layers; mid levels are flat altocumulus, high levels thin, flat, pale cirrus', () => {
+  const look = (hPa: number) => {
+    const cs = modelClouds(one(hPa, 70), [])
+    return { cs, w: cs.map((c) => c.scale[0]), h: cs.map((c) => c.scale[1]), flat: mean(cs.map((c) => c.scale[1] / c.scale[0])), b: mean(cs.map((c) => c.brightness)) }
+  }
+  const within = (xs: number[], [lo, hi]: readonly [number, number]): boolean => Math.min(...xs) >= lo && Math.max(...xs) <= hi
+  for (const hPa of [1000, 925, 850]) {
+    const l = look(hPa)
+    assert.ok(within(l.w, LOOKS.BKN.w) && within(l.h, LOOKS.BKN.h), `${hPa} hPa: a broken layer's puffs`)
+    assert.ok(l.cs.every((c) => c.slice >= LOOKS.BKN.slice[0] - 1e-12 && c.brightness >= LOOKS.BKN.brightness[0] && c.brightness <= LOOKS.BKN.brightness[1]))
+  }
+  const mid = MODEL_LOOK.mid.look!
+  const high = MODEL_LOOK.high.look!
+  for (const hPa of [700, 600, 500, 400]) {
+    const l = look(hPa)
+    assert.ok(within(l.w, mid.w) && within(l.h, mid.h), `${hPa} hPa: altocumulus`)
+    assert.ok(l.flat < 0.2, `${hPa} hPa: flat, ${l.flat}`)
+  }
+  for (const hPa of [300, 250, 200]) {
+    const l = look(hPa)
+    assert.ok(within(l.w, high.w) && within(l.h, high.h), `${hPa} hPa: cirrus`)
+    assert.ok(l.flat < 0.1, `${hPa} hPa: flatter still, ${l.flat}`)
+    assert.ok(l.b < 1 && l.cs.every((c) => c.tint <= high.tint[1] + 1e-12), `${hPa} hPa: pale, not blazing white`)
+  }
+  assert.ok(look(925).flat > look(600).flat && look(600).flat > look(250).flat, 'flatter with height')
+  assert.ok(look(250).h.every((h) => h < Math.min(...look(925).h)), 'thinner with height')
+})
+
+test('modelClouds: a level the model puts under the ground (less than 100 m over it) is not drawn: 1000 hPa over a hill, 925 hPa over a mountain', () => {
+  assert.ok(modelClouds(one(1000, 90, MIDDLE, { elev: () => 10 }), []).length > 0, '110 m is 100 m over a ground of 10 m: drawn')
+  assert.equal(modelClouds(one(1000, 90, MIDDLE, { elev: () => 11 }), []).length, 0, 'but not 99 m over 11 m')
+  assert.equal(modelClouds(one(925, 90, MIDDLE, { elev: () => 700 }), []).length, 0, '760 m over a ground of 700 m')
+  assert.ok(modelClouds(one(925, 90, MIDDLE, { elev: () => 600 }), []).length > 0)
+  assert.equal(modelClouds(one(700, 90, MIDDLE, { elev: () => 2950 }), []).length, 0, 'any level, not only the low')
+  assert.equal(modelClouds(one(1000, 90, MIDDLE, { z: () => -80 }), []).length, 0, 'a deep low: 1000 hPa under the sea')
+  const unknown = modelClouds(one(925, 90, MIDDLE, { elev: () => null }), [])
+  assert.ok(unknown.length > 0 && unknown.every((c) => c.groundM === 0), 'no ground known: sea level')
+})
+
+test('modelClouds: observations win: no low level within 40 km of a station that reports the sky (cloud, a clear sky or a hidden one); a station that says nothing of it, or one farther off, leaves it', () => {
+  const north = (km: number) => ({ lat: MID_LAT + km / 111.195, lon: MID_LON })
+  const reports = {
+    layers: metar({ id: 'LAYERS', ...north(39), clouds: [layer('FEW', 3000)] }),
+    clear: metar({ id: 'CLEAR', ...north(20), clouds: [layer('CLR', null)] }),
+    cavok: metar({ id: 'CAVOK', ...north(30), raw: 'METAR CAVOK 031200Z 27010KT CAVOK 25/12 Q1015' }),
+    fog: metar({ id: 'FOG', ...north(10), clouds: [layer('OVX', null)], vertVisFt: 200 }),
+  }
+  for (const [name, m] of Object.entries(reports)) assert.ok(reportsSky(m), name)
+  for (const hPa of [1000, 925, 850]) {
+    const g = one(hPa, 80)
+    assert.ok(modelClouds(g, []).length > 0, `${hPa} hPa alone`)
+    for (const [name, m] of Object.entries(reports)) assert.equal(modelClouds(g, [m]).length, 0, `${hPa} hPa, ${name} within 40 km`)
+  }
+  const g = one(925, 80)
+  assert.ok(modelClouds(g, [metar({ id: 'FAR', ...north(41), clouds: [layer('FEW', 3000)] })]).length > 0, '41 km: left')
+  assert.ok(modelClouds(g, [metar({ id: 'SILENT', ...north(5) })]).length > 0, 'it says nothing of the sky: not an observation of it')
+  assert.ok(!reportsSky(metar({ id: 'SILENT' })))
+  // a distance on the ground, not in degrees: 0.4° of longitude is 37.6 km here, 0.4° of latitude 44.5 km
+  assert.equal(modelClouds(g, [metar({ id: 'W', lat: MID_LAT, lon: MID_LON - 0.4, clouds: [layer('OVC', 800)] })]).length, 0, '0.4° west: 37.6 km')
+  assert.ok(modelClouds(g, [metar({ id: 'N', lat: MID_LAT + 0.4, lon: MID_LON, clouds: [layer('OVC', 800)] })]).length > 0, '0.4° north: 44.5 km')
+  for (const hPa of [700, 600, 500, 400, 300, 250, 200]) {
+    const alone = modelClouds(one(hPa, 80), [])
+    assert.ok(alone.length > 0)
+    assert.deepEqual(modelClouds(one(hPa, 80), Object.values(reports)), alone, `${hPa} hPa: mid and high levels are drawn whatever the stations say`)
+  }
+})
+
+test('modelClouds: a station keeps the low levels off the places within 40 km of it and no others (its cell and its neighbours here, not the next ring)', () => {
+  const g = modelGrid({ cover: (hPa) => (hPa === 925 ? 40 : 0) }) // 40 % at 925 hPa everywhere
+  const st = metar({ id: 'MID', lat: MID_LAT, lon: MID_LON, clouds: [layer('FEW', 3000)] })
+  const inBlock = (c: CloudSpec): boolean => Math.abs(c.lat - MID_LAT) < 0.375 - 1e-9 && Math.abs(c.lon - MID_LON) < 0.375 - 1e-9 // the 3 × 3 places within 40 km: 27.8 km north, 23.5 km east, 36.4 km on the diagonal
+  const free = modelClouds(g, [])
+  const kept = modelClouds(g, [st])
+  assert.ok(free.filter(inBlock).length > 10, 'the block has clouds without the station')
+  assert.equal(kept.filter(inBlock).length, 0, 'none in the block with it')
+  assert.equal(kept.length, free.length, 'the places left out do not use up the cap: the others have it')
+})
+
+test('modelClouds: at most MODEL_LOOK.max clouds: what is wanted is thinned evenly over places and levels, and a cloud that stays is made √(wanted ÷ kept) larger, but not past 3 ×', () => {
+  const overcast = modelClouds(modelGrid({ cover: () => 100 }), []) // 490 places and levels wanting 35,000 clouds
+  assert.equal(overcast.length, MODEL_LOOK.max)
+  assert.ok(overcast.every((c) => c.scale[0] >= 3 * Math.min(LOOKS.OVC.w[0], MODEL_LOOK.mid.look!.w[0], MODEL_LOOK.high.look!.w[0]) - 1e-6), 'so much was thinned: every cloud 3 × as wide as its look says')
+  assert.ok(overcast.every((c) => c.scale[0] <= 3 * Math.max(LOOKS.OVC.w[1], MODEL_LOOK.high.look!.w[1]) + 1e-6 && c.scale[1] <= 3 * LOOKS.OVC.h[1] + 1e-6), 'and no more')
+  // one low, one mid and one high level overcast over the whole grid: 10,800 wanted; each kind keeps its share (51 %, 30 %, 19 %), over the whole grid
+  const three = modelClouds(modelGrid({ cover: (hPa) => (hPa === 925 || hPa === 600 || hPa === 250 ? 100 : 0) }), [])
+  assert.equal(three.length, MODEL_LOOK.max)
+  const share = (z: number): number => three.filter((c) => near(bottom(c), z, 1e-6)).length / three.length
+  assert.ok(near(share(760), 0.5, 0.06) && near(share(4200), 0.33, 0.06) && near(share(10360), 0.16, 0.06), `low ${share(760)}, mid ${share(4200)}, high ${share(10360)}`)
+  const lats = three.map((c) => c.lat)
+  const lons = three.map((c) => c.lon)
+  assert.ok(Math.min(...lats) < 31.8 && Math.max(...lats) > 32.7 && Math.min(...lons) < 34.3 && Math.max(...lons) > 35.2, 'over the whole grid, not the nearest corner of it')
+  // six places overcast at 925 hPa want 6 × 115 = 690: 300 stay, 50 each, each made √(115 ÷ 50) = 1.5 × larger
+  const six = modelGrid({ cover: (hPa, p) => (hPa === 925 && p < 6 ? 100 : 0) })
+  const thinned = modelClouds(six, [])
+  assert.equal(thinned.length, 300)
+  const was = MODEL_LOOK.max
+  try {
+    ;(MODEL_LOOK as { max: number }).max = 10_000
+    const full = modelClouds(six, [])
+    assert.equal(full.length, 6 * Math.round(LOOKS.OVC.perKm2 * MODEL_LOOK.low.density * CELL_KM2(31.5)))
+    const grew = mean(thinned.map((c) => c.scale[0])) / mean(full.map((c) => c.scale[0]))
+    const wanted = full.length / 6
+    assert.ok(near(grew, Math.sqrt(wanted / 50), 0.1), `${grew} wider, ${Math.sqrt(wanted / 50)} expected`)
+    assert.ok(near(mean(thinned.map((c) => c.scale[1])) / mean(full.map((c) => c.scale[1])), Math.sqrt(wanted / 50), 0.1), 'and taller')
+  } finally {
+    ;(MODEL_LOOK as { max: number }).max = was
+  }
+})
+
+test('modelClouds: thinning keeps the clouds it keeps where they were (the first of each place\'s own sequence); a cloud fades out by its size as the others do', () => {
+  const six = modelGrid({ cover: (hPa, p) => (hPa === 925 && p < 6 ? 100 : 0) })
+  const thinned = modelClouds(six, [])
+  const was = MODEL_LOOK.max
+  try {
+    ;(MODEL_LOOK as { max: number }).max = 10_000
+    const full = modelClouds(six, [])
+    const places = new Set(full.map((c) => `${c.lat.toFixed(6)}|${c.lon.toFixed(6)}`))
+    assert.ok(thinned.length > 0 && thinned.every((c) => places.has(`${c.lat.toFixed(6)}|${c.lon.toFixed(6)}`)), 'every cloud kept is a place the full sky has: thinning moves none')
+  } finally {
+    ;(MODEL_LOOK as { max: number }).max = was
+  }
+  for (const c of thinned) assert.equal(c.farKm, farKmOf(Math.max(c.scale[0], c.scale[1])))
+  assert.ok(thinned.every((c) => c.farKm > 0 && c.farKm <= CLOUD_KM))
+})
+
+test('modelClouds: the same grid and reports draw the same clouds; another seed others; the next grid, a step on, draws a place again just as it was', () => {
+  const g = one(700, 70)
+  assert.deepEqual(modelClouds(g, []), modelClouds(structuredClone(g), []))
+  assert.notDeepEqual(modelClouds(g, [], 1).map((c) => c.lon), modelClouds(g, []).map((c) => c.lon))
+  const next = one(700, 70, 16, { lat0: 31.75, lon0: 34.25 }) // the same place, row 2 column 2 of a grid from 31.75°N 34.25°E
+  assert.deepEqual(modelClouds(next, []), modelClouds(g, []))
+  const more = modelClouds(one(700, 90), [])
+  assert.deepEqual(more.slice(0, modelClouds(g, []).length).map((c) => [c.lon, c.lat]), modelClouds(g, []).map((c) => [c.lon, c.lat]), 'more cover: the same first clouds, more of them')
+})
+
+test('modelClouds: each level of a place draws puffs of its own, not the same spots again (no columns of stacked puffs)', () => {
+  const cs = modelClouds(modelGrid({ cover: (hPa, p) => (p === MIDDLE && (hPa === 925 || hPa === 850) ? 70 : 0) }), [])
+  const low = cs.filter((c) => near(bottom(c), 760, 1e-6))
+  const lower = cs.filter((c) => near(bottom(c), 1460, 1e-6))
+  assert.ok(low.length > 30 && lower.length > 30 && low.length + lower.length === cs.length)
+  const spots = new Set(low.map((c) => `${c.lon}|${c.lat}`))
+  assert.ok(!lower.some((c) => spots.has(`${c.lon}|${c.lat}`)))
+})
+
+test('modelClouds: a place across the antimeridian draws the same puffs whichever way its longitude is written (180.25 or −179.75): the next grid draws it as it was', () => {
+  const east = one(700, 70, 3, { lat0: 0, lon0: 179.5 }) // row 0, column 3: 180.25°E
+  const west = one(700, 70, 0, { lat0: 0, lon0: -179.75 }) // row 0, column 0
+  assert.ok(modelClouds(west, []).length > 20)
+  assert.deepEqual(modelClouds(east, []), modelClouds(west, []))
+})
+
+test('modelClouds: the look constants are read as the clouds are made (the console can tune them: Weather3D.rebuildSky)', () => {
+  const g = one(925, 100)
+  const before = modelClouds(g, []).length
+  assert.ok(before > 50)
+  const was = MODEL_LOOK.low.density
+  try {
+    ;(MODEL_LOOK.low as { density: number }).density = was / 2
+    assert.ok(near(modelClouds(g, []).length, before / 2, 1), `${modelClouds(g, []).length} against ${before / 2}`)
+  } finally {
+    ;(MODEL_LOOK.low as { density: number }).density = was
+  }
+})
+
+test('modelClouds: a grid across the antimeridian draws its clouds on both sides of it, longitudes within ±180°', () => {
+  const g = modelGrid({ cover: () => 60, lon0: 179.5, lat0: 0 })
+  const cs = modelClouds(g, [])
+  assert.equal(cs.length, MODEL_LOOK.max)
+  assert.ok(cs.every((c) => c.lon >= -180 && c.lon <= 180))
+  assert.ok(cs.some((c) => c.lon > 179.5) && cs.some((c) => c.lon < -179), 'both sides')
+})
+
 // ---- puffs that end inside their quad ----------------------------------------------------------------------------------------
 
-/** Every puff of every source of clouds, over many reports and cells: the observed layers, a CB's and a TCU's towers and anvils, the radar's towers and decks. */
+/** Every puff of every source of clouds, over many reports and cells: the observed layers, a CB's and a TCU's towers and anvils, the radar's towers and decks, the model's levels. */
 function generatedSkies(): { name: string; cs: CloudSpec[] }[] {
   const layers: [string, Cloud[]][] = [
     ['FEW', [layer('FEW', 2000)]], ['SCT', [layer('SCT', 3000)]], ['BKN', [layer('BKN', 2500)]], ['OVC', [layer('OVC', 1500)]], ['CB', [layer('FEW', 3000, 'CB')]],
@@ -680,6 +931,11 @@ function generatedSkies(): { name: string; cs: CloudSpec[] }[] {
     { name: 'radar: heavy region', cs: radarClouds(heavy, base1500) }, { name: 'radar: isolated cells', cs: radarClouds(alone, base1500) },
     { name: 'radar: light rain', cs: radarClouds(light, base1500) }, { name: 'radar: snow', cs: radarClouds(snow, base1500) },
   )
+  const levels: [string, (hPa: number, p: number) => number][] = [
+    ['every level, 20 to 99 %', (hPa, p) => 20 + ((p * 7 + hPa) % 80)], ['overcast low levels', (hPa) => (hPa >= 850 ? 100 : 0)],
+    ['broken mid levels', (hPa) => (hPa < 850 && hPa > 300 ? 70 : 0)], ['scattered cirrus', (hPa) => (hPa <= 300 ? 40 : 0)], ['few, everywhere', () => 22],
+  ]
+  for (const [name, cover] of levels) for (const seed of [0, 1, 2]) skies.push({ name: `model: ${name}, seed ${seed}`, cs: modelClouds(modelGrid({ cover, lat0: 10 + 20 * seed }), [], seed) })
   return skies
 }
 

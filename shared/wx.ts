@@ -3,6 +3,12 @@
 // cut to what the map and its card show, and SIGMETs (international, GeoJSON polygons). Upstream: aviationweather.gov Data
 // API (https://aviationweather.gov/data/api/, checked 2026-10-02): JSON, no key, no CORS (hence the server), 100 req/min.
 // It leaves a key out when it has nothing for it (no wgst, wxString, vertVis or clouds), so every field is read warily.
+// And a weather model's forecast for the chase (client/scene/weather3d.ts): a small grid of places, each with its cloud cover
+// and the height of each pressure level, and the wind at some. Upstream: Open-Meteo's forecast API
+// (https://open-meteo.com/en/docs, checked 2026-10-03; CC BY 4.0, keyless, non-commercial): asked for many places at once, it
+// answers an array of one object per place in the order asked, each with the model's own nearest point (a few km from the
+// one asked for), its ground height, and `hourly` arrays of the hours asked for; a value it has none for is null. slimModel cuts
+// that to arrays by level. This is a forecast, not an observation: the chase draws it only where no report says otherwise.
 
 export type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR'
 
@@ -139,4 +145,83 @@ export function slimSigmets(json: unknown): Sigmet[] {
     })
   }
   return out
+}
+
+// ---- the model's grid ------------------------------------------------------------------------------------------------------
+
+/** The pressure levels (hPa) the model's cloud cover and level height are asked for, the lowest in the sky first; and those its wind is asked for. */
+export const MODEL_CLOUD_HPA: readonly number[] = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200]
+export const MODEL_WIND_HPA: readonly number[] = [850, 700, 500, 300, 250, 200]
+/** Open-Meteo's `hourly` variables for those levels, in the order they are asked for (the wind in knots: wind_speed_unit=kn). */
+export const MODEL_VARIABLES: readonly string[] = [
+  ...MODEL_CLOUD_HPA.map((p) => `cloud_cover_${p}hPa`),
+  ...MODEL_CLOUD_HPA.map((p) => `geopotential_height_${p}hPa`),
+  ...MODEL_WIND_HPA.map((p) => `wind_speed_${p}hPa`),
+  ...MODEL_WIND_HPA.map((p) => `wind_direction_${p}hPa`),
+]
+
+/** Where a model grid stands: its south-west place (degrees), the spacing, and the places a side: n × n, row by row from the south-west (index = row × n + column; rows go north, columns east). */
+export interface ModelGeo {
+  lat0: number
+  lon0: number // continuous: a grid across the antimeridian runs past 180
+  step: number
+  n: number
+}
+
+/** One pressure level's cloud cover (%) and height (m above sea level, geopotential) at each place; null where the model has none. */
+export interface ModelCloudLevel {
+  hPa: number
+  cover: (number | null)[]
+  zM: (number | null)[]
+}
+
+/** One pressure level's wind at each place: speed (kt) and the direction it blows from (degrees true). */
+export interface ModelWindLevel {
+  hPa: number
+  kt: (number | null)[]
+  deg: (number | null)[]
+}
+
+/** The model's forecast of a grid of places for one hour, as the server sends it. */
+export interface ModelGrid extends ModelGeo {
+  timeMs: number | null // the hour the values are for
+  elevM: (number | null)[] // the model's own ground height at each place, metres above sea level
+  clouds: ModelCloudLevel[] // MODEL_CLOUD_HPA's order
+  winds: ModelWindLevel[] // MODEL_WIND_HPA's order
+}
+
+/**
+ * Open-Meteo's answer for the places of geo (the order they were asked in) as a ModelGrid. The places stand where they were asked for
+ * (a regular grid): the model answers from its own nearest point, up to a few km off, which the response says and this ignores. Whole
+ * percent, metres and degrees, wind to 0.1 kt; a value the model lacks is null. Anything but one object a place is an error (the
+ * caller serves the last good answer instead).
+ */
+export function slimModel(json: unknown, geo: ModelGeo): ModelGrid {
+  const count = geo.n * geo.n
+  if (!Array.isArray(json) || json.length !== count || !json.every((p) => typeof p === 'object' && p !== null)) throw new Error(`expected an object for each of ${count} places`)
+  const places = json as { elevation?: unknown; hourly?: Record<string, unknown> }[]
+  const hour = (p: (typeof places)[number], name: string): number | null => {
+    const values = p.hourly?.[name]
+    return Array.isArray(values) ? fin(values[0]) : null // the one hour asked for
+  }
+  const column = (read: (p: (typeof places)[number]) => number | null, round: (v: number) => number): (number | null)[] =>
+    places.map((p) => {
+      const v = read(p)
+      return v === null ? null : round(v)
+    })
+  const hourly = (name: string, round: (v: number) => number): (number | null)[] => column((p) => hour(p, name), round)
+  const whole = Math.round
+  const tenth = (v: number): number => Math.round(v * 10) / 10
+  const compass = (v: number): number => Math.round(v) % 360 // 359.6 is 0
+  const time = places.map((p) => hour(p, 'time')).find((t) => t !== null) ?? null
+  return {
+    lat0: geo.lat0,
+    lon0: geo.lon0,
+    step: geo.step,
+    n: geo.n,
+    timeMs: time === null ? null : time * 1000,
+    elevM: column((p) => fin(p.elevation), whole),
+    clouds: MODEL_CLOUD_HPA.map((hPa) => ({ hPa, cover: hourly(`cloud_cover_${hPa}hPa`, whole), zM: hourly(`geopotential_height_${hPa}hPa`, whole) })),
+    winds: MODEL_WIND_HPA.map((hPa) => ({ hPa, kt: hourly(`wind_speed_${hPa}hPa`, tenth), deg: hourly(`wind_direction_${hPa}hPa`, compass) })),
+  }
 }
