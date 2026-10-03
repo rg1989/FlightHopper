@@ -1,9 +1,10 @@
 /* client/ui/alerts.css */
 /* The Events panel (alerts.ts): the switch rows are the Layers panel's (sceneToggles.css), with a line under the first on
    what the server watches; then the week's events, one row each: a tag (the squawk, EMG, or an arrow for a fall) in red
-   or amber, the aircraft and what happened, when, live or late, and beside some a small text button for the other
-   action. The toasts for new events: at the top centre under the search box, clear of the flight card and the rail (an
-   open panel too while there is room); on phones at the top, under the notch. Theme tokens only. */
+   or amber over the late mark, the aircraft over what happened, and on the right the time (and a live dot) over the other
+   action or when Replay opens; on phones those two are columns of their own. The toasts for new events: at the top centre
+   under the search box, clear of the flight card and the rail (an open panel too while there is room); on phones at the
+   top, under the notch. Theme tokens only. */
 .fh-alerts {
   display: flex;
   flex-direction: column;
@@ -98,13 +99,31 @@
   list-style: none;
 }
 
+/* A row: its button on the left; the time over the other action (or when Replay opens) on the right, outside the button,
+   which cannot hold another. The whole row is one target: its hover and its focus ring are the row's. */
 .fh-alerts-item {
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 1fr 1fr;
+  cursor: pointer;
+  transition: background var(--fh-fast) var(--fh-ease);
 }
 
 .fh-alerts-item + .fh-alerts-item {
   border-top: 1px solid var(--fh-hairline);
+}
+
+.fh-alerts-item:hover {
+  background: var(--fh-hover);
+}
+
+.fh-alerts-item:has(> .fh-alerts-main:active) {
+  background: var(--fh-press);
+}
+
+.fh-alerts-item:has(> .fh-alerts-main:focus-visible) {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: -2px;
 }
 
 /* Listed only (a light aircraft's radio failure): dimmed. */
@@ -112,39 +131,34 @@
   opacity: 0.55;
 }
 
-/* The row's button: tag · aircraft over what happened · when, then live or late. */
+/* The row's button: the tag over the late mark, then the aircraft over what happened. */
 .fh-alerts-main {
   display: grid;
-  flex: 1;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-row: 1 / 3;
+  grid-column: 1;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   column-gap: 10px;
   min-width: 0;
   min-height: 54px;
-  padding: 8px 12px 8px 14px;
+  padding: 8px 4px 8px 14px;
   border: 0;
   background: transparent;
   color: var(--fh-text);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--fh-fast) var(--fh-ease);
 }
 
-.fh-alerts-main:hover,
-.fh-alerts-alt:hover {
-  background: var(--fh-hover);
+.fh-alerts-main:focus-visible {
+  outline: none; /* the row's (above) */
 }
 
-.fh-alerts-main:active,
-.fh-alerts-alt:active {
-  background: var(--fh-press);
-}
-
-.fh-alerts-main:focus-visible,
-.fh-alerts-alt:focus-visible {
-  outline: 2px solid var(--fh-accent);
-  outline-offset: -2px;
+.fh-alerts-lead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .fh-alerts-tag {
@@ -160,6 +174,16 @@
   color: var(--fh-alerts-tone);
   font: 700 11px/1 var(--fh-font);
   letter-spacing: 0.04em;
+}
+
+.fh-alerts-late {
+  padding: 1px 5px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 5px;
+  color: var(--fh-muted);
+  font: 600 9.5px/1.4 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .fh-alerts-text {
@@ -187,39 +211,61 @@
   -webkit-line-clamp: 2;
 }
 
-.fh-alerts-meta {
+/* The right-hand column: the time (and a live dot) over the other action or when Replay opens. */
+.fh-alerts-when {
   display: flex;
+  grid-row: 1;
+  grid-column: 2;
   align-items: center;
-  align-self: start;
+  align-self: end;
+  justify-content: flex-end;
   gap: 6px;
-  padding-top: 2px;
+  padding: 0 12px 1px 0;
   color: var(--fh-muted);
   font-size: 11.5px;
   white-space: nowrap;
 }
 
-.fh-alerts-late {
-  padding: 1px 5px;
-  border: 1px solid var(--fh-hairline);
-  border-radius: 5px;
-  color: var(--fh-muted);
-  font: 600 9.5px/1.4 var(--fh-font);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.fh-alerts-alt,
+.fh-alerts-at {
+  grid-row: 2;
+  grid-column: 2;
+  align-self: start;
+  justify-self: end;
+  white-space: nowrap;
 }
 
-/* The small text button beside a row: Replay, or Live. */
+/* The small text button: Replay, or Live. */
 .fh-alerts-alt {
-  flex: none;
-  min-width: 60px;
-  padding: 0 12px;
+  margin: 1px 6px 6px 0;
+  padding: 3px 6px;
   border: 0;
-  border-left: 1px solid var(--fh-hairline);
+  border-radius: 6px;
   background: transparent;
   color: var(--fh-accent);
-  font: 600 12px/1 var(--fh-font);
+  font: 600 12px/1.2 var(--fh-font);
   cursor: pointer;
   transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-alerts-alt:hover {
+  background: var(--fh-accent-soft);
+}
+
+.fh-alerts-alt:active {
+  background: var(--fh-press);
+}
+
+.fh-alerts-alt:focus-visible {
+  outline: 2px solid var(--fh-accent);
+  outline-offset: -2px;
+}
+
+/* History does not have the event yet: when Replay opens, a note. */
+.fh-alerts-at {
+  padding: 4px 12px 0 0;
+  color: var(--fh-faint);
+  font-size: 11px;
 }
 
 .fh-alerts-empty {
@@ -401,12 +447,56 @@
     font-size: 15px;
   }
 
-  .fh-alerts-meta {
+  .fh-alerts-section,
+  .fh-alerts-late {
+    font-size: 11px;
+  }
+
+  /* The full-width sheet has the room: the time, then the other action as a column the row's height. */
+  .fh-alerts-item {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto;
+  }
+
+  .fh-alerts-main {
+    grid-row: 1;
+  }
+
+  .fh-alerts-when {
+    grid-row: 1;
+    align-self: center;
+    padding: 0 10px 0 0;
     font-size: 12.5px;
+  }
+
+  .fh-alerts-alt,
+  .fh-alerts-at {
+    display: grid;
+    grid-row: 1;
+    grid-column: 3;
+    place-items: center;
+    align-self: stretch;
+    justify-self: stretch;
+    min-width: 72px;
+    margin: 0;
+    padding: 0 12px;
+    border-left: 1px solid var(--fh-hairline);
+    border-radius: 0;
   }
 
   .fh-alerts-alt {
     font-size: 14px;
+  }
+
+  .fh-alerts-alt:hover {
+    background: var(--fh-hover);
+  }
+
+  .fh-alerts-at {
+    max-width: 96px;
+    font-size: 12px;
+    text-align: center;
+    white-space: normal;
   }
 
   .fh-toasts {
@@ -429,15 +519,24 @@
   }
 }
 
+@media (pointer: coarse), (max-width: 640px) {
+  .fh-pill.fh-alerts-toast-go {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
 @media (pointer: coarse) {
   .fh-alerts-main {
     min-height: 60px;
   }
 
   .fh-alerts-alt {
-    min-width: 72px;
+    min-height: 30px;
+    padding: 4px 10px;
   }
 
+  .fh-alerts-item,
   .fh-alerts-main,
   .fh-alerts-alt {
     touch-action: manipulation; /* no double-tap zoom delay */
