@@ -1,0 +1,776 @@
+<title>Chase Weather Mocks</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: one wide viewport is the working surface; its controls sit in a strip directly under it; the options are explained below in columns. */
+:root {
+  color-scheme: dark;
+  --bg: #08121d; --panel: #101b2a; --panel-2: #16243a; --line: #24364f;
+  --fg: #e9eff7; --dim: #93a5bd; --accent: #4c9bff;
+  --sev0: #f2f5f8; --sev1: #58a6ff; --sev2: #ffbe3d; --sev3: #ff4d3d; --haz: #ff5a52;
+  --text: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --cond: 'Barlow Condensed', 'Arial Narrow', 'Barlow', sans-serif;
+}
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--text); font-size: 16px; line-height: 1.5; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 56px; display: flex; flex-direction: column; gap: 22px; }
+h1 { font-family: var(--cond); font-weight: 600; font-size: clamp(30px, 4.6vw, 46px); line-height: 1.02; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--cond); font-weight: 600; font-size: 24px; letter-spacing: .02em; margin: 0; }
+h3 { font-size: 16px; font-weight: 600; margin: 0; }
+p { margin: 0; }
+.lede { color: var(--dim); max-width: 68ch; font-size: 17px; }
+.eyebrow { font-family: var(--cond); text-transform: uppercase; letter-spacing: .14em; font-size: 13px; color: var(--accent); }
+header { display: flex; flex-direction: column; gap: 8px; }
+
+.view { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 300px; max-width: 100%; background: #0b1826; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+.view:active { cursor: grabbing; }
+.view canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.over { position: absolute; inset: 0; pointer-events: none; overflow: hidden; font-family: var(--cond); }
+.chip { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; max-width: calc(100% - 24px); }
+.chip span { background: rgba(10, 18, 29, .82); border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; font-size: 16px; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.chip span i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--c, var(--dim)); }
+.chip span.haz { border-color: var(--haz); color: #ffd9d6; }
+.over.inside { box-shadow: inset 0 0 0 2px var(--haz), inset 0 0 46px rgba(255, 90, 82, .34); }
+.lab { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; font-size: 14px; letter-spacing: .06em; text-shadow: 0 1px 3px rgba(0, 0, 0, .9); }
+.lab.ac { color: #ffd23f; font-weight: 600; }
+.lab.hz { color: #ff8a84; }
+.lab.tick { color: #d8ecff; font-size: 12px; }
+.brk { position: absolute; border: 0 solid #ffd23f; width: 10px; height: 10px; }
+.brk.a { border-top-width: 2px; border-right-width: 2px; }
+.brk.b { border-bottom-width: 2px; border-left-width: 2px; }
+.strip { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(430px, calc(100% - 24px)); background: rgba(10, 18, 29, .84); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px 4px; }
+.strip b { display: block; font-weight: 500; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.strip canvas { display: block; width: 100%; height: auto; }
+.hint { position: absolute; right: 10px; bottom: 10px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); background: rgba(10, 18, 29, .6); padding: 2px 8px; border-radius: 4px; }
+.nogl { padding: 24px; color: var(--dim); }
+
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.group > span { font-family: var(--cond); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; color: var(--dim); }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button { flex: 1 1 auto; font: 500 14px var(--text); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+.seg button:hover { border-color: var(--accent); }
+.seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #04111f; font-weight: 600; }
+.seg button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 26px 32px; }
+.notes section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.notes dl { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.notes dt { font-weight: 600; }
+.notes dt em { font-style: normal; font-family: var(--cond); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #04111f; background: var(--accent); border-radius: 3px; padding: 1px 6px; margin-left: 6px; vertical-align: 1px; }
+.notes dd { margin: 0; color: var(--dim); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; color: var(--dim); }
+.legend span::before { content: ''; display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; background: var(--c); vertical-align: -1px; }
+.pick { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.pick p { max-width: 72ch; }
+.pick p + p { color: var(--dim); }
+</style>
+
+<main class="wrap">
+  <header>
+    <span class="eyebrow">FlightHopper · chase view</span>
+    <h1>Weather the aircraft really flies through</h1>
+    <p class="lede">A mock, not the app: one aircraft on a straight heading, climbing through fair-weather cloud, then a rain layer, then a thunderstorm inside a hazard area. Every cloud here is a real volume, so the aircraft fades as it enters and is gone in thick cloud. Switch the looks under the view and tell me which to build.</p>
+  </header>
+
+  <div class="view" id="view">
+    <canvas id="gl"></canvas>
+    <div class="over" id="over">
+      <div class="chip" id="chip"></div>
+      <div class="brk a" id="brkA"></div><div class="brk b" id="brkB"></div>
+      <div class="lab ac" id="acLab">TRA3W</div>
+      <div class="lab hz" id="hzLab">Embedded thunderstorms · tops 34,000 ft</div>
+      <div id="ticks"></div>
+      <div class="strip" id="strip"><b>Ahead on this heading</b><canvas id="stripCv" width="828" height="210"></canvas></div>
+      <div class="hint" id="hint">Drag to look around · scroll or pinch to zoom</div>
+    </div>
+    <p class="nogl" id="nogl" hidden>This mock needs WebGL 2, which this browser does not offer.</p>
+  </div>
+
+  <div class="controls" id="controls">
+    <div class="group"><span>Cloud look</span><div class="seg" data-set="look">
+      <button type="button" data-v="0">Natural</button><button type="button" data-v="1">Severity colours</button><button type="button" data-v="2">Blocks</button></div></div>
+    <div class="group"><span>Hazard area</span><div class="seg" data-set="haz">
+      <button type="button" data-v="0">Curtain</button><button type="button" data-v="1">Fence</button><button type="button" data-v="2">Box (today)</button></div></div>
+    <div class="group"><span>Looking ahead</span><div class="seg" data-toggle="aids">
+      <button type="button" data-bit="1">Track line</button><button type="button" data-bit="2">Level slice</button><button type="button" data-bit="4">Ahead strip</button></div></div>
+    <div class="group"><span>Jump to</span><div class="seg" data-jump>
+      <button type="button" data-x="-37">Small clouds</button><button type="button" data-x="6">Rain layer</button><button type="button" data-x="42">Storm</button></div></div>
+    <div class="group"><span>Camera</span><div class="seg" data-cam>
+      <button type="button" data-c="0,-12,0.25">Chase</button><button type="button" data-c="35,-22,6">6 km out</button><button type="button" data-c="20,-38,45">45 km out</button></div></div>
+    <div class="group"><span>Time</span><div class="seg" data-time>
+      <button type="button" data-t="0">Pause</button><button type="button" data-t="1">Real time</button><button type="button" data-t="12">12× faster</button></div></div>
+  </div>
+
+  <div class="pick">
+    <h2>What I would build</h2>
+    <p><strong>Severity colours, the curtain, the track line and the ahead strip.</strong> Clouds stay cloud-shaped and the aircraft disappears in them, but rain and storms carry the colours of the rain radar, so the kind of weather is read at a glance. The hazard area stops being a pink box you sit inside: its edge is a curtain, its ground is hatched, and the status line at the top says whether you are in it.</p>
+    <p>All three cloud looks run on the same engine, one extra drawing pass over the scene, so the choice between them is only about how it reads. The speed cost is the same for each.</p>
+  </div>
+
+  <div class="notes">
+    <section>
+      <h2>Cloud look</h2>
+      <div class="legend"><span style="--c:var(--sev0)">Cloud</span><span style="--c:var(--sev1)">Light rain</span><span style="--c:var(--sev2)">Heavy rain</span><span style="--c:var(--sev3)">Thunderstorm</span></div>
+      <dl>
+        <dt>Natural</dt><dd>Soft volumes lit by the sun: white fair-weather cloud, grey rain layers, dark storm towers. Closest to the real sky. Severity is read from darkness and shape only.</dd>
+        <dt>Severity colours <em>my pick</em></dt><dd>The same volumes, but rain and storms are tinted like the radar. White means cloud with nothing falling from it.</dd>
+        <dt>Blocks</dt><dd>The sky cut into 1 km cells; a cell with weather in it is a solid block in its severity colour. Least like a sky, most like a chart: every edge is exact and nothing is fuzzy.</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Hazard area</h2>
+      <dl>
+        <dt>Curtain <em>my pick</em></dt><dd>An outline and hatching on the surface, and a curtain along the edge that is strongest at the area's top height. Nothing fills the area, so the view inside stays clean.</dd>
+        <dt>Fence</dt><dd>Posts and a top rail in place of the curtain. Lighter still; harder to see far away.</dd>
+        <dt>Box (today)</dt><dd>The translucent box the app draws now, for comparison.</dd>
+      </dl>
+      <p style="color:var(--dim)">With the curtain or the fence, a red frame round the view and the status line say when the aircraft is inside the area and below its top.</p>
+    </section>
+    <section>
+      <h2>Looking ahead</h2>
+      <dl>
+        <dt>Track line</dt><dd>The next six minutes on this heading and rate of climb, with a tick each minute. It takes the weather's colour where it passes through cloud.</dd>
+        <dt>Level slice</dt><dd>A flat cut through the weather at the aircraft's own altitude, with rings at 10, 20 and 40 km. Best read zoomed out, looking down.</dd>
+        <dt>Ahead strip</dt><dd>A side view of the next 80 km: what stands in the way, how high it reaches, and when the aircraft gets there.</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Zoom</h2>
+      <p style="color:var(--dim)">The camera here goes out to 100 km, as the app will. The aircraft never shrinks below a small fixed size on screen and keeps its brackets and flight number, so it stays findable from any distance. The same rule holds for the other aircraft in the app.</p>
+    </section>
+  </div>
+</main>
+
+<script id="fs" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform vec2 uRes;
+uniform vec3 uCam;
+uniform mat3 uRot;
+uniform float uTan;
+uniform vec3 uAc, uAcF, uAcU;
+uniform float uAcS;
+uniform int uLook, uHaz, uAids;
+uniform sampler2D uMap;
+uniform sampler3D uNoise;
+uniform vec2 uPoly[5];
+uniform float uHazTop;
+out vec4 outC;
+
+const vec3 SUN = normalize(vec3(.45, -.5, .75));
+const vec3 HAZE = vec3(.66, .76, .88);
+const vec3 HAZC = vec3(1., .35, .32);
+const vec2 MAP0 = vec2(-40., -80.);
+const float MAPS = 160.;
+const float ZLO = .8, ZHI = 12.5;
+const float MIN_KM = 11.55; // a minute's flight at 374 kt
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+vec4 wm(vec2 xy) { return textureLod(uMap, (xy - MAP0) / MAPS, 0.); }
+vec3 sevCol(float s) {
+  vec3 c0 = vec3(.95, .96, .97), c1 = vec3(.345, .65, 1.), c2 = vec3(1., .745, .24), c3 = vec3(1., .3, .24);
+  return s < 1. ? mix(c0, c1, s) : s < 2. ? mix(c1, c2, s - 1.) : mix(c2, c3, clamp(s - 2., 0., 1.));
+}
+float prof(float z, float b, float t) { float h = (z - b) / (t - b); return smoothstep(0., .14, h) * (1. - smoothstep(.55, 1., h)); }
+
+// The weather's shape without its fine detail: how much cloud (0..1) at p, and how severe (0 cloud, 1 light rain, 2 heavy rain, 3 storm).
+float macro(vec3 p, out float sev) {
+  sev = 0.;
+  if (p.z < ZLO || p.z > ZHI) return 0.;
+  vec2 uv = (p.xy - MAP0) / MAPS;
+  if (uv.x < 0. || uv.x > 1. || uv.y < 0. || uv.y > 1.) return 0.;
+  vec4 m = textureLod(uMap, uv, 0.);
+  float cu = p.z < 3.8 ? smoothstep(.05, .5, m.r) * prof(p.z, 1.5, 2. + 1.7 * sqrt(m.r)) * 1.5 : 0.;
+  float dk = (p.z > 6.6 && p.z < 9.2) ? m.g * prof(p.z, 6.9, 8.8) * 1.6 : 0.;
+  float h = clamp((p.z - 1.) / 10.5, 0., 1.);
+  float thr = mix(.42, .6, smoothstep(0., .45, h));
+  thr = mix(thr, .1, smoothstep(.7, .88, h));
+  float st = smoothstep(thr, thr + .16, m.b) * smoothstep(1., 1.3, p.z) * (1. - smoothstep(11., 11.5, p.z)) * 1.5;
+  float d = max(cu, max(dk, st));
+  sev = (st >= dk && st >= cu) ? 2. + smoothstep(.66, .84, m.b) : dk >= cu ? 1. : 0.;
+  return min(d, 1.);
+}
+float fbm(vec3 p) {
+  return .5 * texture(uNoise, p / 32.).r + .27 * texture(uNoise, p / 11.).r + .15 * texture(uNoise, p / 4.).r + .08 * texture(uNoise, p / 1.4).r;
+}
+
+vec3 warp(vec3 p) {
+  vec3 q = p / 13.;
+  float a = texture(uNoise, q).r - .5, b = texture(uNoise, q + vec3(.37, .11, .53)).r - .5;
+  return p + vec3(a, b, .35 * (a + b)) * 2.6;
+}
+
+bool inPoly(vec2 p) {
+  bool c = false;
+  for (int i = 0; i < 5; i++) {
+    vec2 a = uPoly[i], b = uPoly[i == 0 ? 4 : i - 1];
+    if (((a.y > p.y) != (b.y > p.y)) && (p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)) c = !c;
+  }
+  return c;
+}
+float polyDist(vec2 p) {
+  float d = 1e9;
+  for (int i = 0; i < 5; i++) {
+    vec2 a = uPoly[i], b = uPoly[i == 4 ? 0 : i + 1];
+    vec2 pa = p - a, ba = b - a;
+    d = min(d, length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)));
+  }
+  return d;
+}
+
+vec3 skyCol(vec3 rd) {
+  vec3 c = mix(HAZE, vec3(.2, .42, .78), pow(max(rd.z, 0.), .55));
+  return c + vec3(1., .9, .7) * pow(max(dot(rd, SUN), 0.), 220.) * .7;
+}
+vec3 seaCol(vec3 h, float t, float pix) {
+  vec3 c = vec3(.035, .1, .19) * (.82 + .36 * texture(uNoise, vec3(h.xy / 90., .37)).r);
+  float coast = h.x - 86. - 7. * sin(h.y * .07) - 3. * sin(h.y * .19 + 1.3);
+  vec3 land = mix(vec3(.2, .23, .15), vec3(.34, .3, .21), texture(uNoise, vec3(h.xy / 23., .11)).r);
+  c = mix(c, land, smoothstep(0., .4 + t * pix * 2., coast));
+  bool inside = inPoly(h.xy);
+  if (uHaz == 2) { if (inside) c = mix(c, HAZC, .1); }
+  else {
+    if (inside) c = mix(c, HAZC, .09 + .17 * step(.5, fract((h.x + h.y) / 3.2)));
+    float lw = max(.14, 2.5 * pix * t);
+    c = mix(c, HAZC, (1. - smoothstep(lw * .5, lw, polyDist(h.xy))) * .9);
+  }
+  vec2 so = SUN.xy / SUN.z;
+  float sh = max(max(smoothstep(.2, .8, wm(h.xy + so * 1.7).r) * .5, smoothstep(.2, .7, wm(h.xy + so * 7.2).g) * .42), smoothstep(.3, .7, wm(h.xy + so * 2.5).b) * .68);
+  c *= 1. - sh;
+  return mix(c, HAZE, 1. - exp(-t / 75.));
+}
+
+// The aircraft, in metres: x forward, y left, z up.
+float sdCap(vec3 p, vec3 a, vec3 b, float r) { vec3 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)) - r; }
+float sdBox(vec3 p, vec3 b) { vec3 q = abs(p) - b; return length(max(q, 0.)) + min(max(q.x, max(q.y, q.z)), 0.); }
+float acMap(vec3 q) {
+  float d = sdCap(q, vec3(-16., 0., 0.), vec3(17., 0., 0.), 2.);
+  float ay = abs(q.y);
+  d = min(d, sdBox(vec3(q.x + .34 * ay + 1., q.y, q.z + .7), vec3(2.6 - .08 * ay, 17., .28)));
+  d = min(d, sdBox(vec3(q.x + .4 * ay + 15.5, q.y, q.z - .6), vec3(1.5, 6.5, .2)));
+  d = min(d, sdBox(vec3(q.x + .7 * q.z + 13.6, q.y, q.z - 4.), vec3(2., .24, 3.4)));
+  d = min(d, sdCap(vec3(q.x, ay, q.z), vec3(1.5, 5.8, -2.), vec3(5., 5.8, -2.), 1.));
+  return d;
+}
+float acHit(vec3 ro, vec3 rd, out vec3 nW, out vec3 qh) {
+  vec3 L = cross(uAcU, uAcF);
+  float k = 1000. / uAcS;
+  vec3 rel = ro - uAc;
+  vec3 q0 = vec3(dot(rel, uAcF), dot(rel, L), dot(rel, uAcU)) * k;
+  vec3 qd = vec3(dot(rd, uAcF), dot(rd, L), dot(rd, uAcU));
+  float tc = -dot(q0, qd);
+  vec3 perp = q0 + qd * tc; // the ray's nearest point to the aircraft: small numbers, whatever the range
+  float disc = 23. * 23. - dot(perp, perp);
+  if (disc < 0.) return -1.;
+  float s = sqrt(disc);
+  if (tc + s < 0.) return -1.;
+  float t0 = max(-s, -tc), t = t0;
+  for (int i = 0; i < 60; i++) {
+    vec3 q = perp + qd * t;
+    float d = acMap(q);
+    if (d < .04) {
+      vec2 e = vec2(.06, 0.);
+      vec3 n = normalize(vec3(acMap(q + e.xyy) - acMap(q - e.xyy), acMap(q + e.yxy) - acMap(q - e.yxy), acMap(q + e.yyx) - acMap(q - e.yyx)));
+      nW = uAcF * n.x + L * n.y + uAcU * n.z;
+      qh = q;
+      return (tc + t) / k;
+    }
+    t += d * .8;
+    if (t > s) break;
+  }
+  return -1.;
+}
+
+float gT[8]; vec4 gC[8]; int gN = 0;
+void ev(float t, vec3 c, float a) { if (gN < 8 && a > .004 && t > 0.) { gT[gN] = t; gC[gN] = vec4(c * a, a); gN++; } }
+
+void main() {
+  vec2 ndc = gl_FragCoord.xy / uRes * 2. - 1.;
+  vec3 rd = normalize(uRot * vec3(ndc.x * uTan * uRes.x / uRes.y, ndc.y * uTan, 1.));
+  vec3 ro = uCam;
+  float pix = 2. * uTan / uRes.y;
+
+  // What is solid: the sky, the surface, the aircraft.
+  float tO = 400.;
+  vec3 oc = skyCol(rd);
+  if (rd.z < -1e-4) {
+    float ts = -ro.z / rd.z;
+    if (ts < tO) { tO = ts; oc = seaCol(ro + rd * ts, ts, pix); } else oc = HAZE;
+  }
+  vec3 nA, qA;
+  float ta = acHit(ro, rd, nA, qA);
+  if (ta > 0. && ta < tO) {
+    tO = ta;
+    vec3 base = (qA.z > 1.6 && qA.x < -12.5) ? vec3(.1, .62, .36) : vec3(.94, .95, .96);
+    vec3 c = base * (.4 + .68 * max(dot(nA, SUN), 0.)) + vec3(.5, .62, .8) * (.5 + .5 * nA.z) * .14;
+    oc = mix(c, HAZE, 1. - exp(-ta / 140.));
+  }
+
+  // What is see-through and thin: the hazard area's edge, the level slice, the track line. Each a place along the ray.
+  for (int i = 0; i < 5; i++) {
+    vec2 a = uPoly[i], b = uPoly[i == 4 ? 0 : i + 1];
+    vec2 e = b - a, n = vec2(e.y, -e.x);
+    float den = dot(n, rd.xy);
+    if (abs(den) < 1e-6) continue;
+    float t = dot(n, a - ro.xy) / den;
+    if (t <= 0. || t > tO) continue;
+    vec3 h = ro + rd * t;
+    float u = dot(h.xy - a, e) / dot(e, e);
+    if (u < 0. || u > 1. || h.z < 0. || h.z > uHazTop) continue;
+    float len = length(e), s = u * len, v = h.z / uHazTop;
+    float lw = max(.06, 2.2 * pix * t);
+    float top = 1. - smoothstep(lw * .5, lw, uHazTop - h.z);
+    float bot = 1. - smoothstep(lw * .5, lw, h.z);
+    float al;
+    if (uHaz == 2) {
+      float corner = 1. - smoothstep(lw * .5, lw, min(s, len - s));
+      al = max(.11, .34 * max(max(top, bot), corner));
+    } else if (uHaz == 1) {
+      float post = 1. - smoothstep(lw * .4, lw * .9, abs(fract(s / 4. + .5) - .5) * 4.);
+      al = max(max(top * .9, bot * .6), post * .72);
+    } else {
+      float pleat = .78 + .22 * step(.5, fract(s / 2.));
+      al = max(max(top * .9, bot * .6), .36 * pow(smoothstep(.25, 1., v), 1.4) * pleat);
+    }
+    ev(t, HAZC, al);
+  }
+  if (uHaz == 2 && abs(rd.z) > 1e-5) {
+    float t = (uHazTop - ro.z) / rd.z;
+    if (t > 0. && t < tO && inPoly((ro + rd * t).xy)) ev(t, HAZC, .1);
+  }
+  if ((uAids & 2) != 0 && abs(rd.z) > 1e-5) {
+    float t = (uAc.z - ro.z) / rd.z;
+    if (t > 0. && t < tO) {
+      vec3 h = ro + rd * t;
+      float r = length(h.xy - uAc.xy);
+      if (r < 60.) {
+        float sv; float d = macro(vec3(h.xy, uAc.z), sv);
+        float lw = max(.05, 1.6 * pix * t);
+        float fill = smoothstep(.22, .4, d);
+        float rim = fill * (1. - smoothstep(.4, .4 + .5, d)) ;
+        float ring = max(max(1. - smoothstep(lw * .5, lw, abs(r - 10.)), 1. - smoothstep(lw * .5, lw, abs(r - 20.))), 1. - smoothstep(lw * .5, lw, abs(r - 40.)));
+        float fade = 1. - smoothstep(52., 60., r);
+        vec3 c = mix(vec3(.8, .9, 1.), sevCol(sv), fill);
+        ev(t, c, fade * max(max(.05, ring * .34), max(fill * .5, rim * .85)));
+      }
+    }
+  }
+  if ((uAids & 1) != 0) {
+    float b = dot(rd, uAcF);
+    vec3 w0 = ro - uAc;
+    float d0 = dot(rd, w0), e0 = dot(uAcF, w0);
+    float den = 1. - b * b;
+    if (den > 1e-6) {
+      float tc = clamp((e0 - b * d0) / den, .03 * uAcS, 70.);
+      vec3 q = uAc + uAcF * tc;
+      float sc = dot(q - ro, rd);
+      if (sc > 0. && sc < tO) {
+        float sv; float d = macro(q, sv);
+        float inC = smoothstep(.2, .35, d);
+        float m = mod(tc + MIN_KM * .5, MIN_KM) - MIN_KM * .5;
+        float lw = max(.0004, 1.4 * pix * sc) * (1. + .9 * inC);
+        float tick = tc > 3. ? 1. - smoothstep(lw * 1.5, lw * 3., abs(m)) : 0.;
+        float dist = length(ro + rd * sc - q);
+        float al = 1. - smoothstep(lw * .5, lw * (1.3 + 2.4 * tick), dist);
+        ev(sc, mix(vec3(.78, .92, 1.), sevCol(sv), inC), al * mix(.8, 1., inC));
+      }
+    }
+  }
+  for (int i = 1; i < gN; i++) {
+    float t = gT[i]; vec4 c = gC[i]; int j = i - 1;
+    while (j >= 0 && gT[j] > t) { gT[j + 1] = gT[j]; gC[j + 1] = gC[j]; j--; }
+    gT[j + 1] = t; gC[j + 1] = c;
+  }
+
+  vec3 col = vec3(0.), fogC = vec3(0.);
+  float A = 0., fogA = 0.;
+  int ei = 0;
+
+  if (uLook < 2) {
+    // Clouds as volumes: steps along the ray, small inside cloud, long outside it.
+    float tEnd = min(tO, 260.);
+    float t = .02 * hash(gl_FragCoord.xy);
+    for (int i = 0; i < 128; i++) {
+      if (t >= tEnd || A > .985) break;
+      vec3 p = ro + rd * t;
+      float tN;
+      if (p.z < ZLO || p.z > ZHI) {
+        float tgt = p.z < ZLO ? (rd.z > 1e-5 ? (ZLO - ro.z) / rd.z : tEnd) : (rd.z < -1e-5 ? (ZHI - ro.z) / rd.z : tEnd);
+        tN = min(tEnd, max(tgt, t) + 2e-3);
+      } else {
+        float sev; float dm = macro(warp(p), sev);
+        if (dm <= 0.) tN = t + max(.12, .07 * t) * (.75 + .5 * hash(gl_FragCoord.xy + float(i)));
+        else {
+          float ds = max(.03, .022 * t);
+          float n = fbm(p);
+          float d = clamp((dm - n * .74) / (1. - n * .74), 0., 1.);
+          if (d > .01) {
+            float s2;
+            float sh = exp(-(macro(p + SUN * .45, s2) * 1.1 + macro(p + SUN * 1.3, s2) * 1.6));
+            vec3 c = mix(vec3(.36, .42, .52), vec3(1., .98, .95), sh);
+            c *= sev < 1.5 ? mix(1., .86, sev) : mix(.8, .6, clamp(sev - 2., 0., 1.));
+            if (uLook == 1 && sev > .5) c = mix(c, sevCol(sev) * (.7 + .3 * sh), .62);
+            c = mix(c, HAZE, 1. - exp(-t / 120.));
+            float a = 1. - exp(-d * (sev > 1.5 ? 11. : 7.) * ds);
+            col += (1. - A) * a * c;
+            A += (1. - A) * a;
+          }
+          tN = t + ds;
+        }
+      }
+      for (int k = 0; k < 8; k++) {
+        if (ei >= gN || gT[ei] >= tN) break;
+        col += (1. - A) * gC[ei].rgb; A += (1. - A) * gC[ei].a; ei++;
+      }
+      t = tN;
+    }
+  } else {
+    // Clouds as blocks: the sky in cells of 1 × 1 × 0.5 km, a cell with weather in it solid from outside and a mist from inside.
+    const vec3 CS = vec3(1., 1., .5);
+    float tS = 0.;
+    if (ro.z > ZHI) tS = rd.z < -1e-5 ? (ZHI - ro.z) / rd.z : 1e9;
+    else if (ro.z < .5) tS = rd.z > 1e-5 ? (.5 - ro.z) / rd.z : 1e9;
+    float tHit = -1., sevH = 0., fogLen = 0., fogSev = 0.;
+    vec3 nrm = vec3(0.);
+    bool inBody = false;
+    if (tS < tO) {
+      vec3 cell = floor((ro + rd * (tS + 1e-3)) / CS);
+      vec3 sg = vec3(rd.x >= 0. ? 1. : -1., rd.y >= 0. ? 1. : -1., rd.z >= 0. ? 1. : -1.);
+      vec3 inv = 1. / max(abs(rd), vec3(1e-6));
+      vec3 tD = CS * inv;
+      vec3 tM = ((cell + max(sg, 0.)) * CS - ro) * sg * inv;
+      float tC = tS;
+      for (int i = 0; i < 260; i++) {
+        float sv; float d = macro((cell + .5) * CS, sv);
+        bool filled = d > .28;
+        if (i == 0 && filled && tS == 0.) { inBody = true; fogSev = sv; }
+        if (filled && !inBody) { tHit = tC; sevH = sv; break; }
+        float tN; vec3 nn;
+        if (tM.x < tM.y && tM.x < tM.z) { tN = tM.x; tM.x += tD.x; cell.x += sg.x; nn = vec3(-sg.x, 0., 0.); }
+        else if (tM.y < tM.z) { tN = tM.y; tM.y += tD.y; cell.y += sg.y; nn = vec3(0., -sg.y, 0.); }
+        else { tN = tM.z; tM.z += tD.z; cell.z += sg.z; nn = vec3(0., 0., -sg.z); }
+        if (inBody) { if (filled) fogLen = min(tN, tO); else inBody = false; }
+        nrm = nn; tC = tN;
+        if (tC > tO || tC > 260. || (cell.z > 26. && sg.z > 0.) || (cell.z < 0. && sg.z < 0.)) break;
+      }
+    }
+    if (tHit >= 0. && tHit < tO) {
+      vec3 h = ro + rd * tHit, f = fract(h / CS);
+      vec2 e = abs(nrm.x) > .5 ? f.yz : abs(nrm.y) > .5 ? f.xz : f.xy;
+      vec2 de = min(e, 1. - e) * (abs(nrm.z) > .5 ? vec2(1.) : vec2(1., .5));
+      float lw = max(.035, 2. * pix * tHit);
+      float edge = 1. - smoothstep(lw * .5, lw, min(de.x, de.y));
+      float shade = nrm.z > .5 ? 1. : nrm.z < -.5 ? .55 : abs(nrm.x) > .5 ? .84 : .7;
+      vec3 bc = sevH < .5 ? mix(vec3(.6, .68, .8), vec3(.96, .97, .98), shade) : sevCol(sevH) * shade;
+      bc *= 1. - .22 * edge;
+      oc = mix(bc, HAZE, 1. - exp(-tHit / 110.));
+      tO = tHit;
+    }
+    for (int k = 0; k < 8; k++) {
+      if (ei >= gN) break;
+      if (gT[ei] < tO) { col += (1. - A) * gC[ei].rgb; A += (1. - A) * gC[ei].a; }
+      ei++;
+    }
+    if (fogLen > 0.) {
+      fogA = 1. - exp(-3.2 * fogLen);
+      fogC = fogSev < .5 ? vec3(.86, .89, .93) : sevCol(fogSev) * .85;
+    }
+  }
+  for (int k = 0; k < 8; k++) {
+    if (ei >= gN) break;
+    if (gT[ei] < tO) { col += (1. - A) * gC[ei].rgb; A += (1. - A) * gC[ei].a; }
+    ei++;
+  }
+  outC = vec4(mix(col + (1. - A) * oc, fogC, fogA), 1.);
+}
+</script>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s)
+  const view = $('#view'), cv = $('#gl')
+  const gl = cv.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' })
+  if (!gl) { $('#nogl').hidden = false; $('#over').hidden = true; return }
+
+  // ---- the weather: a map of 160 × 160 km, 256 texels a side. R small cumulus, G the rain layer, B the storms.
+  const N = 256, X0 = -40, Y0 = -80, S = 160
+  const R = new Float32Array(N * N), G = new Float32Array(N * N), B = new Float32Array(N * N)
+  const rng = (a) => () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
+  const rnd = rng(11)
+  const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t) }
+  const LG = 48, lump = Float32Array.from({ length: LG * LG }, () => rnd())
+  const lumpAt = (x, y) => { // smooth 2-D noise, 0..1, features of about 7 km
+    const u = (((x / 7) % LG) + LG) % LG, v = (((y / 7) % LG) + LG) % LG
+    const i = Math.floor(u), j = Math.floor(v), fu = sst(0, 1, u - i), fv = sst(0, 1, v - j)
+    const at = (a, b) => lump[(b % LG) * LG + (a % LG)]
+    return (at(i, j) * (1 - fu) + at(i + 1, j) * fu) * (1 - fv) + (at(i, j + 1) * (1 - fu) + at(i + 1, j + 1) * fu) * fv
+  }
+  const puffs = [[-33, .3, 1.9], [-27.5, -.4, 1.7], [-30.5, 3.2, 1.3]]
+  for (let i = 0; i < 95; i++) puffs.push([-40 + rnd() * 84, -46 + rnd() * 92, .8 + rnd() * 1.5])
+  for (let i = 0; i < 40; i++) puffs.push([44 + rnd() * 74, -78 + rnd() * 156, .8 + rnd() * 1.3])
+  const STORMS = [[62, 1.5, 16], [50, -25, 13]]
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const x = X0 + ((i + .5) / N) * S, y = Y0 + ((j + .5) / N) * S, k = j * N + i
+    let r = 0
+    for (const [px, py, pr] of puffs) { const d = Math.hypot(x - px, y - py); if (d < pr) r = Math.max(r, sst(0, 1, 1 - d / pr)) }
+    R[k] = r
+    const l = lumpAt(x, y)
+    G[k] = Math.min(1, sst(9, 14, x) * (1 - sst(36, 41, x)) * sst(-25, -19, y) * (1 - sst(23, 29, y)) * (.72 + .56 * l))
+    let b = 0
+    for (const [sx, sy, sr] of STORMS) b = Math.max(b, 1 - Math.hypot(x - sx, y - sy) / sr + .12 * (l - .5))
+    B[k] = Math.min(1, Math.max(0, b))
+  }
+  const tex = (arr, x, y) => {
+    const u = ((x - X0) / S) * N - .5, v = ((y - Y0) / S) * N - .5
+    if (u < 0 || v < 0 || u >= N - 1 || v >= N - 1) return 0
+    const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, k = j * N + i
+    return (arr[k] * (1 - fu) + arr[k + 1] * fu) * (1 - fv) + (arr[k + N] * (1 - fu) + arr[k + N + 1] * fu) * fv
+  }
+  const prof = (z, b, t) => { const h = (z - b) / (t - b); return sst(0, .14, h) * (1 - sst(.55, 1, h)) }
+  /** The shader's macro(): [cloud 0..1, severity 0..3] at a place, km. */
+  const macro = (x, y, z) => {
+    if (z < .8 || z > 12.5) return [0, 0]
+    const r = tex(R, x, y), g = tex(G, x, y), b = tex(B, x, y)
+    const cu = z < 3.8 ? sst(.05, .5, r) * prof(z, 1.5, 2 + 1.7 * Math.sqrt(r)) * 1.5 : 0
+    const dk = z > 6.6 && z < 9.2 ? g * prof(z, 6.9, 8.8) * 1.6 : 0
+    const h = Math.min(1, Math.max(0, (z - 1) / 10.5))
+    let thr = .42 + .18 * sst(0, .45, h)
+    thr += (.1 - thr) * sst(.7, .88, h)
+    const st = sst(thr, thr + .16, b) * sst(1, 1.3, z) * (1 - sst(11, 11.5, z)) * 1.5
+    const d = Math.min(1, Math.max(cu, dk, st))
+    return [d, d <= 0 ? 0 : st >= dk && st >= cu ? 2 + sst(.66, .84, b) : dk >= cu ? 1 : 0]
+  }
+  const POLY = [[41, -34], [70, -40], [97, -12], [90, 24], [47, 20]]
+  const HAZ_TOP = 10.36 // 34,000 ft
+  const inPoly = (x, y) => {
+    let c = false
+    for (let i = 0, j = POLY.length - 1; i < POLY.length; j = i++) {
+      const [xi, yi] = POLY[i], [xj, yj] = POLY[j]
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c
+    }
+    return c
+  }
+
+  // ---- WebGL
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s }
+  const prog = gl.createProgram()
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, '#version 300 es\nvoid main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2. - 1., 0., 1.); }'))
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, $('#fs').textContent))
+  gl.linkProgram(prog)
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog))
+  gl.useProgram(prog)
+  const U = (n) => gl.getUniformLocation(prog, n)
+  const mapPx = new Uint8Array(N * N * 4)
+  for (let k = 0; k < N * N; k++) { mapPx[k * 4] = R[k] * 255; mapPx[k * 4 + 1] = G[k] * 255; mapPx[k * 4 + 2] = B[k] * 255; mapPx[k * 4 + 3] = 255 }
+  gl.activeTexture(gl.TEXTURE0)
+  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture())
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, mapPx)
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v)
+  // 3-D noise: random values, smoothed twice, stretched to 0..1; it tiles.
+  const M = 32, r2 = rng(5)
+  let nz = Float32Array.from({ length: M * M * M }, () => r2())
+  for (let pass = 0; pass < 2; pass++) {
+    const o = new Float32Array(M * M * M)
+    for (let z = 0; z < M; z++) for (let y = 0; y < M; y++) for (let x = 0; x < M; x++) {
+      let s = 0
+      for (let c = -1; c <= 1; c++) for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) s += nz[(((z + c + M) % M) * M + ((y + b + M) % M)) * M + ((x + a + M) % M)]
+      o[(z * M + y) * M + x] = s / 27
+    }
+    nz = o
+  }
+  let lo = 1, hi = 0
+  for (const v of nz) { lo = Math.min(lo, v); hi = Math.max(hi, v) }
+  gl.activeTexture(gl.TEXTURE1)
+  gl.bindTexture(gl.TEXTURE_3D, gl.createTexture())
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, M, M, M, 0, gl.RED, gl.UNSIGNED_BYTE, Uint8Array.from(nz, (v) => ((v - lo) / (hi - lo)) * 255))
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.REPEAT], [gl.TEXTURE_WRAP_T, gl.REPEAT], [gl.TEXTURE_WRAP_R, gl.REPEAT]]) gl.texParameteri(gl.TEXTURE_3D, k, v)
+  gl.uniform1i(U('uMap'), 0)
+  gl.uniform1i(U('uNoise'), 1)
+  gl.uniform2fv(U('uPoly'), POLY.flat())
+  gl.uniform1f(U('uHazTop'), HAZ_TOP)
+
+  // ---- state
+  const q = new URLSearchParams(location.search) // local checks only: the published page has no query string
+  const num = (k, d) => (q.has(k) && Number.isFinite(+q.get(k)) ? +q.get(k) : d)
+  const st = { look: num('look', 1), haz: num('haz', 0), aids: num('aids', 5), x: num('x', -38), mult: num('mult', matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 12), h: 0, p: -12, r: .25 }
+  if (q.has('cam')) [st.h, st.p, st.r] = q.get('cam').split(',').map(Number)
+  if (q.has('bare')) document.querySelector('header').hidden = true
+  let scale = num('q', Math.min(devicePixelRatio || 1, 1.5) * .8)
+  const X_START = -38, X_END = 108, KMS = .1925 // 374 kt
+  const TAN = Math.tan((25 * Math.PI) / 180)
+  const zAt = (x) => (x < 6 ? 1.2 + ((x + 38) / 44) * 6.5 : 7.7)
+  const slope = (x) => (x < 6 ? 6.5 / 44 : 0)
+
+  const press = (sel, on) => document.querySelectorAll(sel).forEach((b) => b.setAttribute('aria-pressed', String(on(b))))
+  const sync = () => {
+    press('[data-set="look"] button', (b) => +b.dataset.v === st.look)
+    press('[data-set="haz"] button', (b) => +b.dataset.v === st.haz)
+    press('[data-toggle] button', (b) => (st.aids & +b.dataset.bit) !== 0)
+    press('[data-time] button', (b) => +b.dataset.t === st.mult)
+    $('#strip').hidden = (st.aids & 4) === 0
+    $('#ticks').hidden = (st.aids & 1) === 0
+  }
+  $('#controls').addEventListener('click', (e) => {
+    const b = e.target.closest('button')
+    if (!b) return
+    const g = b.parentElement
+    if (g.dataset.set) st[g.dataset.set] = +b.dataset.v
+    else if (g.dataset.toggle) st.aids ^= +b.dataset.bit
+    else if ('jump' in g.dataset) st.x = +b.dataset.x
+    else if ('cam' in g.dataset) [st.h, st.p, st.r] = b.dataset.c.split(',').map(Number)
+    else if ('time' in g.dataset) st.mult = +b.dataset.t
+    sync()
+    lastHud = 0
+  })
+  sync()
+
+  // ---- camera input: drag orbits, wheel and pinch zoom
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v))
+  const pts = new Map()
+  let pinch0 = 0
+  view.addEventListener('pointerdown', (e) => { view.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); $('#hint').hidden = true })
+  view.addEventListener('pointermove', (e) => {
+    const p = pts.get(e.pointerId)
+    if (!p) return
+    if (pts.size === 1) { st.h += (e.clientX - p[0]) * .3; st.p = clamp(st.p - (e.clientY - p[1]) * .25, -89, 10) }
+    pts.set(e.pointerId, [e.clientX, e.clientY])
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1])
+      if (pinch0 > 0 && d > 0) st.r = clamp((st.r * pinch0) / d, .06, 100)
+      pinch0 = d
+    }
+  })
+  const up = (e) => { pts.delete(e.pointerId); pinch0 = 0 }
+  view.addEventListener('pointerup', up)
+  view.addEventListener('pointercancel', up)
+  view.addEventListener('wheel', (e) => { e.preventDefault(); st.r = clamp(st.r * Math.exp(e.deltaY * .0015), .06, 100); $('#hint').hidden = true }, { passive: false })
+
+  // ---- the frame
+  const norm = (v) => { const l = Math.hypot(...v); return v.map((c) => c / l) }
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+  const SEV = ['#f2f5f8', '#58a6ff', '#ffbe3d', '#ff4d3d']
+  const KIND = ['cloud', 'light rain', 'heavy rain', 'a thunderstorm']
+  const sevOf = (s) => Math.min(3, Math.round(s))
+  const acLab = $('#acLab'), hzLab = $('#hzLab'), brkA = $('#brkA'), brkB = $('#brkB'), ticks = $('#ticks'), chip = $('#chip')
+  const tickEls = Array.from({ length: 6 }, (_, i) => { const d = document.createElement('div'); d.className = 'lab tick'; d.textContent = `${i + 1} min`; ticks.append(d); return d })
+  const strip = $('#stripCv'), sx = strip.getContext('2d')
+  const MIN_KM = 11.55
+  let last = performance.now(), lastHud = 0, slow = 0
+
+  const hud = (ac, F) => {
+    // The status line: where the aircraft is, and the first weather on this heading and climb.
+    const [d0, s0] = macro(ac[0], ac[1], ac[2])
+    let cloud
+    if (d0 > .3) cloud = [`In ${KIND[sevOf(s0)]}`, SEV[sevOf(s0)]]
+    else {
+      cloud = ['Clear air ahead', '#7fd38a']
+      let worst = -1, at = -1 // the first weather on the way, and the worst of its first 8 km
+      for (let d = .5; d <= 80; d += .5) {
+        const [dd, ss] = macro(ac[0] + F[0] * d, ac[1] + F[1] * d, ac[2] + F[2] * d)
+        if (dd > .3) { if (at < 0) at = d; if (d - at > 8) break; worst = Math.max(worst, sevOf(ss)) } else if (at >= 0) break
+      }
+      if (worst >= 0) { const m = at / MIN_KM; cloud = [`Clear air · ${KIND[worst]} in ${m < 1 ? 'under a minute' : `${Math.round(m)} min`}`, SEV[worst]] }
+    }
+    const inside = inPoly(ac[0], ac[1]) && ac[2] < HAZ_TOP
+    let haz = null
+    if (inside) haz = 'Inside hazard area · embedded thunderstorms to 34,000 ft'
+    else for (let d = .5; d <= 80; d += .5) if (inPoly(ac[0] + F[0] * d, ac[1] + F[1] * d) && ac[2] + F[2] * d < HAZ_TOP) { haz = `Hazard area in ${Math.max(1, Math.round(d / MIN_KM))} min · embedded thunderstorms to 34,000 ft`; break }
+    chip.innerHTML = `<span style="--c:${cloud[1]}"><i></i>${cloud[0]}</span>` + (haz ? `<span class="haz">${haz}</span>` : '')
+    $('#over').classList.toggle('inside', inside && st.haz !== 2)
+    if ((st.aids & 4) === 0) return
+    // The ahead strip: 80 km along the heading, 0 to 12.5 km up.
+    const W = strip.width, H = strip.height, L = 62, T = 6, Bm = 26, pw = W - L - 8, ph = H - T - Bm
+    sx.clearRect(0, 0, W, H)
+    sx.fillStyle = '#0d1a2b'
+    sx.fillRect(L, T, pw, ph)
+    const X = (d) => L + (d / 80) * pw, Y = (z) => T + ph - (z / 12.5) * ph
+    let d0h = -1
+    for (let d = 0; d <= 80.01; d += .5) { // the hazard area, where the heading crosses it
+      const on = d <= 80 && inPoly(ac[0] + F[0] * d, ac[1] + F[1] * d)
+      if (on && d0h < 0) d0h = d
+      if ((!on || d >= 80) && d0h >= 0) {
+        sx.fillStyle = 'rgba(255,90,82,.13)'
+        sx.fillRect(X(d0h), Y(HAZ_TOP), X(d) - X(d0h), Y(0) - Y(HAZ_TOP))
+        sx.strokeStyle = '#ff5a52'; sx.lineWidth = 2; sx.setLineDash([6, 4])
+        sx.strokeRect(X(d0h), Y(HAZ_TOP), X(d) - X(d0h), Y(0) - Y(HAZ_TOP))
+        sx.setLineDash([])
+        d0h = -1
+      }
+    }
+    const cw = pw / 160, chh = ph / 50
+    for (let i = 0; i < 160; i++) for (let j = 0; j < 50; j++) {
+      const d = (i + .5) * .5, z = (j + .5) * .25
+      const [dd, ss] = macro(ac[0] + F[0] * d, ac[1] + F[1] * d, z)
+      if (dd > .25) { sx.globalAlpha = Math.min(1, .35 + dd); sx.fillStyle = SEV[sevOf(ss)]; sx.fillRect(L + i * cw, T + ph - (j + 1) * chh, cw + .6, chh + .6) }
+    }
+    sx.globalAlpha = 1
+    sx.font = '500 19px "Barlow Condensed", "Arial Narrow", sans-serif'
+    sx.fillStyle = '#93a5bd'; sx.strokeStyle = 'rgba(147,165,189,.22)'; sx.lineWidth = 1
+    sx.textAlign = 'right'; sx.textBaseline = 'middle'
+    for (const ft of [10, 20, 30, 40]) { const y = Y(ft * .3048); sx.fillText(`${ft},000`, L - 5, y); sx.beginPath(); sx.moveTo(L, y); sx.lineTo(L + pw, y); sx.stroke() }
+    sx.textAlign = 'center'; sx.textBaseline = 'top'
+    for (let m = 1; m <= 6; m++) { const x = X(m * MIN_KM); sx.fillText(`${m} min`, x, T + ph + 4); sx.beginPath(); sx.moveTo(x, T + ph); sx.lineTo(x, T + ph - 6); sx.stroke() }
+    const hz = Math.hypot(F[0], F[1])
+    sx.strokeStyle = '#ffd23f'; sx.lineWidth = 2.5; sx.setLineDash([9, 5])
+    sx.beginPath(); sx.moveTo(X(0), Y(ac[2])); sx.lineTo(X(80), Y(Math.min(12.5, ac[2] + (F[2] / hz) * 80))); sx.stroke()
+    sx.setLineDash([])
+    sx.fillStyle = '#ffd23f'
+    sx.beginPath(); sx.moveTo(X(0) + 12, Y(ac[2])); sx.lineTo(X(0), Y(ac[2]) - 6); sx.lineTo(X(0), Y(ac[2]) + 6); sx.fill()
+  }
+
+  const frame = (now) => {
+    const dt = Math.min(.1, (now - last) / 1000)
+    last = now
+    st.x += dt * KMS * st.mult
+    if (st.x > X_END) st.x = X_START
+    const w = view.clientWidth, h = view.clientHeight
+    const bw = Math.max(2, Math.round(w * scale)), bh = Math.max(2, Math.round(h * scale))
+    if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; gl.viewport(0, 0, bw, bh) }
+    const ac = [st.x, 0, zAt(st.x)], F = norm([1, 0, slope(st.x)]), Uu = norm([-F[2], 0, F[0]])
+    const a = (-st.h * Math.PI) / 180, p = (st.p * Math.PI) / 180, pv = p - (2.4 * Math.PI) / 180
+    const cam = [ac[0] - Math.cos(a) * Math.cos(p) * st.r, ac[1] - Math.sin(a) * Math.cos(p) * st.r, Math.max(.03, ac[2] - Math.sin(p) * st.r)]
+    const fwd = [Math.cos(a) * Math.cos(pv), Math.sin(a) * Math.cos(pv), Math.sin(pv)]
+    const right = norm(cross(fwd, [0, 0, 1])), upv = cross(right, fwd)
+    const pixA = (2 * TAN) / h // radians a CSS pixel
+    const acS = Math.max(1, 26 / (.04 / (st.r * pixA))) // never smaller than 26 px across
+    gl.uniform2f(U('uRes'), bw, bh)
+    gl.uniform3fv(U('uCam'), cam)
+    gl.uniformMatrix3fv(U('uRot'), false, [...right, ...upv, ...fwd])
+    gl.uniform1f(U('uTan'), TAN)
+    gl.uniform3fv(U('uAc'), ac)
+    gl.uniform3fv(U('uAcF'), F)
+    gl.uniform3fv(U('uAcU'), Uu)
+    gl.uniform1f(U('uAcS'), acS)
+    gl.uniform1i(U('uLook'), st.look)
+    gl.uniform1i(U('uHaz'), st.haz)
+    gl.uniform1i(U('uAids'), st.aids)
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+
+    // Labels over the view.
+    const proj = (pt) => { const v = [pt[0] - cam[0], pt[1] - cam[1], pt[2] - cam[2]], z = dot(v, fwd); return z <= .001 ? null : [(dot(v, right) / (z * TAN * (w / h)) * .5 + .5) * w, (.5 - dot(v, upv) / (z * TAN) * .5) * h] }
+    const put = (el, s, dx = 0, dy = 0) => { const on = s !== null && s[0] > -40 && s[0] < w + 40 && s[1] > -20 && s[1] < h + 20; el.hidden = !on; if (on) { el.style.left = `${s[0] + dx}px`; el.style.top = `${s[1] + dy}px` } }
+    const s0 = proj(ac), half = Math.max(17, (.024 * acS) / (st.r * pixA))
+    put(acLab, s0, 0, -half - 12)
+    put(brkA, s0, half - 10, -half); put(brkB, s0, -half, half - 10)
+    let best = null // the hazard label: on the edge nearest the aircraft, at the top height
+    for (let i = 0; i < POLY.length; i++) { const A = POLY[i], Bp = POLY[(i + 1) % POLY.length], m = [(A[0] + Bp[0]) / 2, (A[1] + Bp[1]) / 2], d = Math.hypot(m[0] - ac[0], m[1] - ac[1]); if (best === null || d < best[0]) best = [d, m] }
+    put(hzLab, proj([best[1][0], best[1][1], HAZ_TOP]), 0, -12)
+    let prev = s0
+    tickEls.forEach((el, i) => {
+      const d = (i + 1) * MIN_KM
+      let s = proj([ac[0] + F[0] * d, ac[1] + F[1] * d, ac[2] + F[2] * d])
+      if (s !== null && prev !== null && Math.hypot(s[0] - prev[0], s[1] - prev[1]) < 34) s = null
+      else if (s !== null) prev = s
+      put(el, s, 0, -13)
+    })
+    if (now - lastHud > 200) { lastHud = now; hud(ac, F) }
+    // Too slow for this machine: draw fewer pixels.
+    slow = dt > .045 ? slow + 1 : Math.max(0, slow - 1)
+    if (slow > 20 && scale > .4) { scale *= .8; slow = 0 }
+    requestAnimationFrame(frame)
+  }
+  requestAnimationFrame(frame)
+})()
+</script>
