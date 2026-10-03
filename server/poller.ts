@@ -24,12 +24,16 @@ export interface PollerOpts {
   // 0.04 req/s the cell cover of one view (2–4 cells) refreshed each aircraft only every 50–100 s; one circle, every 25 s.
   singleCircle?: boolean
   info?: InfoStore // gets every non-hidden aircraft object of every good answer (identity, detail panel, routes)
+  // ponytail: onSample and onAircraft must be synchronous. A throw is caught and logged (#hookFailed); the rejection of an
+  // async one is not caught: it would be an unhandled rejection.
   onSample?: (s: Sample) => void // every sample the store took (server/flightLog.ts records the ones it follows)
   // Hexes to keep fresh even when no view covers them (flights being recorded): each is asked by hex once its newest
   // sample is WATCH_PERIOD_MS old. Area sources only; a full snapshot carries them anyway.
   watched?: () => readonly string[]
   // The squawks to sweep worldwide now (server/alerts.ts; empty: none). One request every SWEEP_PERIOD_MS / codes, so each
   // code every SWEEP_PERIOD_MS, after a due chase and before the watched hexes and the areas. Sources with squawk() only.
+  // At a low request rate the gap is longer: the sweep takes at most SWEEP_SHARE of the tokens (#sweepCode).
+  // ponytail: squawks() is called every tick (100 ms) and must not throw: a throw rejects the tick (start() logs it each time).
   squawks?: () => readonly string[]
   onAircraft?: (ac: ReadsbAircraft, rxMs: number) => void // every non-hidden aircraft object of every good answer (server/alerts.ts)
 }
@@ -49,6 +53,11 @@ export const POLLER_DEFAULTS = {
 
 /** Each swept squawk is asked for this often: 3 codes cost 0.1 req/s of adsb.fi's 0.9 (docs/anomaly-alerts.md §7.2). */
 export const SWEEP_PERIOD_MS = 30_000
+/**
+ * The sweep takes at most this share of the request budget: the map keeps at least 7 tokens in 8. At adsb.fi's 0.9 req/s the
+ * 3 codes take 11 % and this does not bind. At a lower rate the sweep slows down to fit (see #sweepCode).
+ */
+export const SWEEP_SHARE = 1 / 8
 
 const TICK_MS = 100
 /** A view up to this radius is polled as one circle of its own (the upstream's limit); a wider one as grid cells. */
@@ -89,7 +98,7 @@ const OFFSET_WINDOW_MS = 10 * 60_000
 const HOUR_MS = 3_600_000
 const MIN_SPAN_MS = 60_000 // bytes/hour is extrapolated from at least one minute
 const KEEP_INTERVALS = 100 // p95 over the most recent intervals
-const HOOK_LOG_MS = 60_000 // a failing onAircraft is logged at most this often
+const HOOK_LOG_MS = 60_000 // a failing onAircraft, and a failing onSample, are each logged at most this often
 /** The InfoStore forgets an aircraft after this long without an answer: as long as the SampleStore keeps its newest sample. */
 export const INFO_HORIZON_MS = LATEST_HORIZON_MS
 
@@ -133,8 +142,9 @@ interface CellState {
  * is asked every chasePeriodMs: it carries the chased aircraft and its traffic in one request. A hex request (the chase
  * batch) goes out only for a chased aircraft the areas have not delivered lately and that is not inside the view
  * circle. While the alerts ask for squawks (opts.squawks), one of them is asked worldwide in turn, each every
- * SWEEP_PERIOD_MS, after a due chase and before the watched hexes and the areas (sources with squawk() only). Every
- * request needs a bucket token first; interest lapses interestTtlMs after the last touch.
+ * SWEEP_PERIOD_MS (longer at a low request rate: the sweep takes at most SWEEP_SHARE of the tokens), after a due chase and
+ * before the watched hexes and the areas (sources with squawk() only). Every request needs a bucket token first; interest
+ * lapses interestTtlMs after the last touch.
  */
 export class Poller {
   #source: Source
@@ -152,7 +162,7 @@ export class Poller {
   #lastWatchReqMs = -Infinity
   #lastSweepMs = -Infinity
   #sweepNext = 0 // index of the next squawk to sweep
-  #hookFailedMs = -Infinity // when onAircraft last threw and was logged
+  #hookFailedMs = { onAircraft: -Infinity, onSample: -Infinity } // when each hook last threw and was logged
   #hexRetryMs = new Map<string, number>() // hex → not asked again before this (its last hex request brought no position)
   #lastAllReqMs = -Infinity
   #chaseOk = new OkIntervals()
@@ -250,6 +260,8 @@ export class Poller {
         }
         return true
       }
+      // ponytail: a due sweep goes before the areas, so it can delay a chase circle (an area request) by one token interval:
+      // about 1 s every 10 s at 0.9 req/s.
       const code = this.#sweepCode(now)
       if (code !== null) {
         if (!this.#bucket.tryTake()) return false
@@ -380,17 +392,30 @@ export class Poller {
       try {
         this.#opts.onAircraft?.(ac, r.tRecvMs)
       } catch (e) {
-        // A bug in the hook costs the answer nothing: the rest of it is still ingested. Logged once a minute, not once per aircraft.
-        if (now - this.#hookFailedMs >= HOOK_LOG_MS) {
-          this.#hookFailedMs = now
-          console.error('poller: onAircraft failed:', e)
-        }
+        this.#hookFailed('onAircraft', e)
       }
       const s = toSample(ac, snap.nowMs, offsetMs, r.tRecvMs)
-      if (s && this.#store.add(s)) this.#opts.onSample?.(s)
+      if (s && this.#store.add(s)) {
+        try {
+          this.#opts.onSample?.(s)
+        } catch (e) {
+          this.#hookFailed('onSample', e)
+        }
+      }
     }
     info?.prune(now, INFO_HORIZON_MS) // on good answers only: its route-cache sweep need not run every 100 ms tick
     return true
+  }
+
+  /**
+   * A bug in a hook costs the answer nothing: the rest of it is still ingested (the aircraft that threw is stored too) and the
+   * tick goes on. Logged once a minute per hook, not once per aircraft.
+   */
+  #hookFailed(hook: 'onAircraft' | 'onSample', e: unknown): void {
+    const now = this.#now()
+    if (now - this.#hookFailedMs[hook] < HOOK_LOG_MS) return
+    this.#hookFailedMs[hook] = now
+    console.error(`poller: ${hook} failed:`, e)
   }
 
   #expire(now: number): void {
@@ -425,11 +450,19 @@ export class Poller {
       .map(([hex]) => hex)
   }
 
-  /** The squawk due for its sweep request, or null: none asked for, no squawk() on the source, or the last one too recent. */
+  /**
+   * The squawk due for its sweep request, or null: none asked for, no squawk() on the source, or the last one too recent.
+   * The gap between two sweep requests is the larger of SWEEP_PERIOD_MS / codes and 1 / (rps × SWEEP_SHARE) seconds, so the
+   * sweep never takes more than SWEEP_SHARE of the tokens. It goes before the areas: without the second term, at 0.1 req/s
+   * (a token every 10 s) it would take all of them and the map none.
+   * rps is the bucket's rate now, read each time we ask: a 429 halves it for good. `degraded` is not used for this: it is
+   * null again 60 s after a 429, but the halved rate stays, so the sweep would go back to its full rate on half a budget.
+   */
   #sweepCode(now: number): string | null {
     const codes = this.#opts.squawks?.() ?? []
-    if (codes.length === 0 || this.#source.squawk === undefined || now - this.#lastSweepMs < SWEEP_PERIOD_MS / codes.length) return null
-    return codes[this.#sweepNext % codes.length]
+    if (codes.length === 0 || this.#source.squawk === undefined) return null
+    const gapMs = Math.max(SWEEP_PERIOD_MS / codes.length, 1000 / (this.#bucket.state().rps * SWEEP_SHARE))
+    return now - this.#lastSweepMs < gapMs ? null : codes[this.#sweepNext % codes.length]
   }
 
   /**
