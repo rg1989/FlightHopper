@@ -9,6 +9,14 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Setup guide and public-repo pass (2026-10-04, local `main`, not pushed).** The first start in a browser opens a
+  setup guide (`client/ui/setup.ts`, mounted by `settings.ts`): Welcome, one step for each key with the provider's
+  sign-up steps and the Settings dialog's own key form, Ready. Shown once (`fh.setup.v1`), not on the TV; Settings →
+  API keys → Setup guide reopens it; `?setup=1` opens it, `?setup=0` keeps it shut (`qa-remote.sh` adds it to every
+  shot). The README is rewritten for a first-time reader, with screenshots in `docs/images/`; its old History, weather
+  and data-source notes are `docs/history.md`, `docs/weather.md`, `docs/data-sources.md`. `make` runs `npm ci` when
+  `node_modules` is missing. Home paths, the login name and LAN addresses are out of the tracked files. No licence
+  file yet: the user's choice.
 - **Buttons rearranged on local `main` (2026-09-30, not pushed).** rail.ts items take `spot: 'under' | 'corner' |
   'left' | 'bottom'` (was `corner`/`under` booleans). Scenarios is a square at the top left (its panel opens beside it,
   `.fh-panel-left`; the flight card moved right by `--fh-spot`), the instrument layout a square at the bottom centre
