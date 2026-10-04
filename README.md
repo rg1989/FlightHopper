@@ -2,7 +2,26 @@
 
 Live air traffic on a 3-D globe. Pick an aircraft and fly behind it over real terrain, down to the runway.
 
-![An A320 over the hills east of San Francisco Bay, with the flight instruments round it](docs/images/chase.jpg)
+![A Lufthansa A320neo over the English countryside, on its way into Heathrow](docs/images/hero.jpg)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/final.jpg" alt="A British Airways A320neo on short final to Heathrow, with the flight instruments round it"><br><sub>On final: flight instruments, 3-D buildings, the traffic ahead</sub></td>
+<td width="50%"><img src="docs/images/terrain.jpg" alt="An A320 over the hills east of San Francisco Bay"><br><sub>Real terrain under every flight</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/sunset.jpg" alt="An Iberia A350 with its gear down against the setting sun"><br><sub>The sun and moon where they are at that hour</sub></td>
+<td><img src="docs/images/night.jpg" alt="A British Airways A320 at night, cabin windows lit, street lights below"><br><sub>Night: cabin and navigation lights, street lights below</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/weather.jpg" alt="Clouds round an A320, and a strip that shows the weather ahead"><br><sub>Weather round the aircraft, and what lies ahead</sub></td>
+<td><img src="docs/images/map.jpg" alt="The map west of London: aircraft coloured by altitude, one selected with its flown path"><br><sub>The live map: every aircraft in view, the selected one's path</sub></td>
+</tr>
+</table>
+
+<sub>Screenshots of the app replaying recorded traffic at Heathrow and San Francisco. The sunset and night views set
+the time of day with `?sun=`, the weather view shows the demo sky (`?wxdemo=1`), and the close-ups hide the instrument
+cards with the layout button.</sub>
 
 A personal, non-commercial project. **Entertainment only: not for navigation, ATC or any operational decision.**
 
@@ -20,10 +39,6 @@ A personal, non-commercial project. **Entertainment only: not for navigation, AT
 - **Scenarios.** Reconstructed flights played back with a timeline and captions from the official record.
 - **Alerts.** Emergency squawks worldwide and steep descents, with optional push to a phone.
 - **Phone and TV.** A phone layout, and a kiosk mode driven by a TV remote ([tv/](tv/README.md)).
-
-| The live map | A night approach |
-|---|---|
-| ![Aircraft over the San Francisco Bay area on the map](docs/images/map.jpg) | ![An El Al 737 at night with its instruments](docs/images/night.jpg) |
 
 ## Quick start
 
@@ -138,6 +153,16 @@ No framework: TypeScript run by Node directly, Vite for the client, `node --test
 
 Each source has its own terms: see [docs/data-sources.md](docs/data-sources.md). Read them before you use
 FlightHopper for anything but personal use.
+
+## Licence
+
+The code is under the [MIT licence](LICENSE). That does not cover what the repository bundles from others:
+
+- **Aircraft models** in `public/models/`: GPL-2.0 or GPL-3.0, from FlightGear aircraft. Their licences and source are
+  in [third_party/aircraft-models](third_party/aircraft-models/README.md).
+- **Fonts** in `public/fonts/`: SIL Open Font License, each with its licence file beside it.
+- **Airline names and marks** on the liveries belong to their owners.
+- **Data fetched while the app runs**: each source's own terms, listed above.
 
 ## Questions and bugs
 
