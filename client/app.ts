@@ -720,6 +720,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const settings = mountSettings(ui, {
     env: import.meta.env, store, controls: !matchMedia('(pointer: coarse)').matches,
     dark: prefs.dark, onDark: (dark) => setPrefs({ ...prefs, dark }),
+    search: location.search, // the first start in a browser opens the setup guide (ui/setup.ts)
   })
   rail.button('settings').setAttribute('aria-haspopup', 'dialog')
   for (const f of ionFell) settings.setFallback('ion', f.what, f.why)

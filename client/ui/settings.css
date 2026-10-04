@@ -141,6 +141,17 @@
   line-height: 1.5;
 }
 
+/* Opens the setup guide (setup.ts): a link-like button under the intro. */
+.fh-settings-guide {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--fh-font);
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .fh-key {
   margin: 14px 0 0;
   padding: 13px 14px 14px;
