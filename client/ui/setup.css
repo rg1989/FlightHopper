@@ -5,10 +5,6 @@
   width: min(520px, calc(100vw - 32px));
 }
 
-.fh-setup-step[hidden] {
-  display: none;
-}
-
 .fh-setup-eyebrow {
   margin-bottom: 4px;
   color: var(--fh-accent);

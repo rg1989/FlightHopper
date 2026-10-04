@@ -7,7 +7,7 @@ import { registerHooks } from 'node:module'
 registerHooks({
   load: (url, context, nextLoad) => (url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context)),
 })
-const { GUIDES, SETUP_KEY, setupDue, setupSummary } = await import('./setup.ts')
+const { GUIDES, SETUP_KEY, setupDue, setupSummary, withoutSetup } = await import('./setup.ts')
 
 function storage(init: Record<string, string> = {}): Storage {
   const m = new Map(Object.entries(init))
@@ -54,4 +54,11 @@ test('GUIDES: every link is https and on its provider\'s own site', () => {
       assert.ok(s.link, 'a link has its text')
     }
   }
+})
+
+test('withoutSetup: the closed guide takes ?setup= out of the address, so a reload does not open it again', () => {
+  assert.equal(withoutSetup('?setup=1'), '')
+  assert.equal(withoutSetup('?hex=4b1806&setup=1&chase=1'), '?hex=4b1806&chase=1')
+  assert.equal(withoutSetup('?hex=4b1806'), '?hex=4b1806')
+  assert.equal(withoutSetup(''), '')
 })

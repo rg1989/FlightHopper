@@ -31,6 +31,14 @@ export function setupDue(store: Storage | null, sources: Sources, search: string
   }
 }
 
+/** The query without ?setup=: the closed guide takes it out of the address, so a reload does not open it again. */
+export function withoutSetup(search: string): string {
+  const q = new URLSearchParams(search)
+  q.delete('setup')
+  const s = q.toString()
+  return s === '' ? '' : `?${s}`
+}
+
 /** What the globe is drawn with, given the keys (config.ts readConfig's defaults). */
 export function setupSummary(sources: Sources): { imagery: string; terrain: string } {
   const ion = sources.ion !== 'none'
@@ -224,6 +232,7 @@ export function mountSetup(root: HTMLElement, host: SetupHost): SetupHandle {
   const keep = (e: KeyboardEvent): void => e.stopPropagation()
   dialog.addEventListener('close', () => {
     window.removeEventListener('keydown', keep, true)
+    if (location.search.includes('setup=')) history.replaceState(history.state, '', `${location.pathname}${withoutSetup(location.search)}${location.hash}`)
     try {
       host.store?.setItem(SETUP_KEY, '1')
     } catch {
