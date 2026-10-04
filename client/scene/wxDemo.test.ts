@@ -186,15 +186,17 @@ test('demoSky: startKm lays the same sky that far back along the track, so the a
   assert.deepEqual(demoSky(LAT, LON, 90, {}), a)
 })
 
-test('demoSky: altM puts the rain layer round the aircraft\'s own height (its base 700 m under it, its top 1,700 m above that), so an aircraft at any height starts inside it; the rest is as it was', () => {
+test('demoSky: altM puts the rain layer round the aircraft\'s own height (its base 1,500 m under it, its top 1,000 m over it), so an aircraft at any height starts inside it, and one that descends is still in it a minute later; the rest is as it was', () => {
   const a = demoSky(LAT, LON, 90)
   for (const altM of [2400, 5200, 11_300]) {
     const b = demoSky(LAT, LON, 90, { altM, startKm: 60 })
     const rain = b.specs.filter((c) => sevOf(c) === 1)
     assert.ok(rain.length >= 40)
-    for (const c of rain) assert.ok(near(bottom(c), altM - 700, 150) && near(top(c), altM + 1000, 150), `${bottom(c)} to ${top(c)} round ${altM}`)
-    const s = sampleField(buildField(b.specs, LAT, LON), LAT, LON, altM)
+    for (const c of rain) assert.ok(near(bottom(c), altM - 1500, 150) && near(top(c), altM + 1000, 150), `${bottom(c)} to ${top(c)} round ${altM}`)
+    const f = buildField(b.specs, LAT, LON)
+    const s = sampleField(f, LAT, LON, altM)
     assert.ok(s.cover > 0.8 && near(s.sev, 1, 1e-6), `the aircraft at ${altM} m is in it: cover ${s.cover}`)
+    assert.ok(sampleField(f, LAT, LON, altM - 900).cover > 0.8, 'and 900 m lower (a minute of a 3,000 ft/min descent) it still is')
     const rest = demoSky(LAT, LON, 90, { altM })
     for (let i = 0; i < a.specs.length; i++) {
       assert.deepEqual([rest.specs[i].lat, rest.specs[i].lon, rest.specs[i].scale[0]], [a.specs[i].lat, a.specs[i].lon, a.specs[i].scale[0]], 'every puff where it was, as wide')

@@ -36,6 +36,9 @@ export interface AlertsUiOpts {
 export interface AlertsHandle {
   refresh(): void // ask for the events (the server says they changed); one ask at a time
   update(reply: EventsReply | null): void // a reply of GET or POST /api/events; null: no alerts on this server
+  // A toast of the app's own words (a title over a line), with no event and no action: for something the person should know once
+  // and can do nothing about (the 3-D clouds stopped). It closes like the others, and counts among the three.
+  notice(title: string, text: string): void
   opened(): void // the panel was opened: what it lists counts as seen, the badge clears, and the events are asked for afresh
   // Whether the app polls live data now (false in History and in a scenario): while it does not, no status says that the
   // events changed, so the panel asks for them every 30 s itself.
@@ -673,32 +676,25 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     setTimeout(() => t.el.remove(), 180)
   }
 
-  /** A toast for a new event, the newest on top; the oldest goes when there would be more than MAX_TOASTS. */
-  function showToast(e: AlertEvent, now: number): void {
+  /** A toast's two lines of words: a title over what it says. */
+  function toastWords(title: string, text: string): HTMLElement {
+    const words = h('div', 'fh-alerts-toast-text')
+    words.append(h('strong', 'fh-alerts-toast-who', title), h('span', 'fh-alerts-toast-what', text))
+    return words
+  }
+
+  /**
+   * A toast on the stack, the newest on top (the oldest goes when there would be more than MAX_TOASTS), made of `parts` and a close
+   * button after them; it closes by that button or after its 30 s, which wait while the pointer or the focus is on it.
+   */
+  function push(el: HTMLElement, parts: HTMLElement[]): Toast {
     while (toasts.length >= MAX_TOASTS) closeToast(toasts[0], false)
-    const action = primaryAction(e, now)
-    const tag = tagOf(e)
-    const el = h('div', 'fh-alerts-toast fh-glass fh-blur')
-    el.dataset.id = e.id
-    el.dataset.tone = tag.tone
-    el.dataset.action = action
-    const tagEl = h('span', 'fh-alerts-tag fh-num', tag.text)
-    tagEl.setAttribute('aria-hidden', 'true')
-    const text = h('div', 'fh-alerts-toast-text')
-    text.append(h('strong', 'fh-alerts-toast-who', who(e)), h('span', 'fh-alerts-toast-what', what(e)))
-    const go = h('button', 'fh-pill fh-alerts-toast-go', action === 'follow' ? 'Follow' : 'Replay')
-    go.type = 'button'
-    go.setAttribute('aria-label', actionText(e, action, now))
     const x = h('button', 'fh-ibtn fh-sm fh-alerts-toast-x')
     x.type = 'button'
     x.setAttribute('aria-label', 'Close')
     x.append(icon('x', 14))
-    el.append(tagEl, text, go, x)
+    el.append(...parts, x)
     const t: Toast = { el, x, timer: null, leftMs: TOAST_MS, armedMs: 0, hover: false, focus: false }
-    go.addEventListener('click', () => {
-      closeToast(t)
-      act(e, action)
-    })
     x.addEventListener('click', () => closeToast(t))
     // Kept while the pointer or the focus is on it: it never goes from under a hand about to press it.
     el.addEventListener('pointerenter', () => {
@@ -721,6 +717,27 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
     stack.prepend(el)
     toasts.push(t)
     arm(t)
+    return t
+  }
+
+  /** A toast for a new event: its tag, the aircraft over what happened, and Follow or Replay. */
+  function showToast(e: AlertEvent, now: number): void {
+    const action = primaryAction(e, now)
+    const tag = tagOf(e)
+    const el = h('div', 'fh-alerts-toast fh-glass fh-blur')
+    el.dataset.id = e.id
+    el.dataset.tone = tag.tone
+    el.dataset.action = action
+    const tagEl = h('span', 'fh-alerts-tag fh-num', tag.text)
+    tagEl.setAttribute('aria-hidden', 'true')
+    const go = h('button', 'fh-pill fh-alerts-toast-go', action === 'follow' ? 'Follow' : 'Replay')
+    go.type = 'button'
+    go.setAttribute('aria-label', actionText(e, action, now))
+    const t = push(el, [tagEl, toastWords(who(e), what(e)), go])
+    go.addEventListener('click', () => {
+      closeToast(t)
+      act(e, action)
+    })
   }
 
   /**
@@ -788,6 +805,12 @@ export function mountAlerts(body: HTMLElement, toastRoot: HTMLElement, opts: Ale
       paintList()
       badge()
       ownAsks()
+    },
+    notice(title, text) {
+      if (dead) return
+      const el = h('div', 'fh-alerts-toast fh-alerts-note fh-glass fh-blur')
+      el.dataset.tone = 'warn'
+      push(el, [toastWords(title, text)])
     },
     opened() {
       if (dead) return

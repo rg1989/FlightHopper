@@ -4,21 +4,25 @@
 // it), and the terrain, the buildings and the aircraft hide the cloud behind them and are hidden by the cloud in front, as the depth
 // buffer says. Weather3D hands it the cloud specs of every source at once (draw), and it builds the field round the aircraft from them.
 // The pass is a PostProcessStageComposite of two stages, both on the scene's own colour:
-// - the march, at half the size: the ray from the depth buffer (as groundFog.ts reads it), walked in at most 96 steps. Where no band
-//   with weather near holds the ray's height it goes straight to the next band's heights, or 4.5 km on (a coarse map of where each band
-//   has weather vouches for that far); in a band's heights it searches in steps that grow with the distance, and a step that lands in
-//   cloud goes back: the cloud's near side is found (to a thirty-second of the step), and the cloud is walked in small steps from
-//   there. Neighbouring pixels start their search a quarter of a step apart, in blocks of 2 × 2, and the mix lays the four together:
-//   what one pixel's steps pass over the next one's find, with no random jitter, so no grain. It gives the weather's colour,
-//   premultiplied, and how much it covers;
-// - the mix, at full size: the march laid over the scene, each pixel the mean of the four march pixels round it, those that saw about
-//   the same depth weighing most (so the aircraft's outline stays sharp against cloud); and under it the clouds' shadows on what is
+// - the march, at half the size (scale: marchPace.ts makes it coarser when the frames are slow): the ray from the depth buffer (as
+//   groundFog.ts reads it), walked in at most 128 steps. Through clear air it strides: to the heights of the next band that has
+//   weather, or as far as the clear-air map (survey) says that band's cover is, whichever is further. Where it may meet cloud it
+//   searches in steps that grow with the distance (over or under a layer, as long as the height between allows), and a step that lands
+//   in cloud goes back: the cloud's near side is found (to a thirty-second of the step), and the cloud is walked in small steps from
+//   there, longer ones where it is thin. Neighbouring pixels start their search a quarter of a step apart, in blocks of 2 × 2, and the
+//   mix lays the four together: what one pixel's steps pass over the next one's find, with no random jitter, so no grain. The noise's
+//   fine octaves fade where a step, or a far pixel, is too coarse to follow them. It gives the weather's colour, premultiplied, and
+//   how much it covers. (Before the strides a ray near weather spent its steps on empty air, and what it met after that it read in
+//   steps twenty times too long, by chance: a stipple at every ragged edge.)
+// - the mix, at full size: the march laid over the scene, each pixel from the nine march pixels round it, weighed so that the four
+//   starts count alike and the mix changes evenly from pixel to pixel (no march pixel shows as a block), those that saw about the
+//   same depth weighing most (so the aircraft's outline stays sharp against cloud); and under it the clouds' shadows on what is
 //   ground.
 // The shader works in a frame of its own, so that it holds no large number: km east, north and up from the field's middle at sea level
 // (localFrame; JS gives it u_eyeToLocal each frame, worked out in doubles). A point's height over the sea is z + (x² + y²) / 2R, and
 // its place on the field's flat map follows from x and y (localToMap, the shader's toMap: to 40 m within 150 km, 100 m in the corners).
 // Three textures, each an ImageData that Cesium uploads as it is (the atlas's alpha is data: nothing may premultiply it): the field's
-// atlas (wxField.ts fieldAtlas); a noise volume of 64³ packed as 64 tiles (noiseAtlas); the coarse map (survey). The density at a point
+// atlas (wxField.ts fieldAtlas); a noise volume of 64³ packed as 64 tiles (noiseAtlas); the clear-air map (survey). The density at a point
 // is wxField.ts sampleField's (each band whose heights hold the point, cover × profile, the largest winning and giving the severity),
 // taken where a domain warp puts the point and eroded by four octaves of the noise, as the approved mock does
 // (.planning/mocks/chase-weather-mocks.html). In the two volume looks it is drawn times 1.5 and capped at 1 (GAIN, the mock's: bodies
@@ -28,8 +32,9 @@
 // severity), severity (the same, tinted by the severity's colour from light rain up) and blocks (the sky in cells of 1 × 1 km and 500 m
 // of height, a cell solid when the field's cover at its middle is over 0.28: faces shaded by the way they face, darker edges, the
 // severity's colour; from inside a body, a mist of its colour). The blocks are walked cell by cell: each step ends on the cell's far
-// face, by the ray's way on the field's map at that cell, so the Earth's curve is in it and a face is exact at any distance. (The plan
-// was steps of a quarter cell and a bisect back to the face: 96 of those reach 12 to 27 km, and a storm may stand 100 km off.) Under a
+// face, by the ray's way on the field's map at that cell, so the Earth's curve is in it and a face is exact as far as the walk gets:
+// 128 cells where weather is near, and strides between. (The plan was steps of a quarter cell and a bisect back to the face: those
+// reach 12 to 27 km, and a storm may stand 100 km off.) Under a
 // cloud of light rain or more a thin veil of rain, streaked, falls to the ground. The cover fades to nothing between 130 and 150 km
 // from the aircraft (fade). By night the light is dimmed as cloudField.ts sunBrightness says, and the shadows go.
 // The same march draws what is see-through and thin, so that it sorts with the cloud (Cesium's own lines and volumes, drawn before the
@@ -45,11 +50,16 @@
 //   rim, with rings at 10, 20 and 40 km.
 // - These are drawn at the march's half size: a line's widths are the mock's in the march's pixels, each two of the screen's.
 // The track line (setAhead) is the mix's, at full size: the way ahead (wxAhead.ts aheadPath, seven places, given every frame as
-// numbers) as a line two pixels wide, with a wider tick at each minute: white-blue in clear air and, thicker, the severity's colour
-// where the field's cover is over 0.3. It is hidden by what is solid in front of it, and laid over the cloud, not sorted with it. (In
+// numbers) as a line two pixels wide: white-blue in clear air and, thicker, the severity's colour where the field's cover is over
+// 0.3. Its minutes are the app's labels: a wider bead at each could not be made out under its label, and is not drawn. It is hidden
+// by what is solid in front of it, and laid over the cloud. (In
 // the march it was a soft band of six to eight pixels, and the cloud it marks hid its coloured stretch from outside; the march at
 // full size draws it as thin, and on the check machine one frame in twenty then took 40 ms, not 19.) It and the slice read the
 // field's cover as it is (not times GAIN), as the status line does (wxAhead.ts).
+// ponytail: the track line is laid over the cloud, not sorted with it: where it passes behind a storm's tower it is drawn over the
+// tower. Upgrade: the line as an event of the march, at the mix's size (the march would have to hand on the depth it hides to).
+// ponytail: the 48 edges nearest the aircraft are picked when the hazard areas are given and at each draw (30 km of flight), not as
+// the aircraft moves: among more than 48, one that has become nearer since is not yet drawn. Upgrade: pick again every few km.
 // While hidden, while there is no cloud, no hazard area's edge and no aid to draw, and once destroyed there is no stage in the scene,
 // so nothing runs. With no cloud the march is given blank images and walks no ray.
 // A shader that another graphics card will not compile would stop Cesium's render loop, and with it the whole viewer: a render error
@@ -75,8 +85,9 @@ import { Cartesian2, Cartesian3, Color, Ellipsoid, Matrix4, PostProcessStage, Po
 import { geoidN } from '../../shared/geoid.ts'
 import type { TerrainFrame } from '../types.ts'
 import { sequence, sunBrightness, type CloudSpec } from './cloudField.ts'
+import { MARCH_SCALES } from './marchPace.ts'
 import { AHEAD_MIN, type AheadPath } from './wxAhead.ts'
-import { BANDS, FALL, FALL_MAX_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, RISE, RISE_MAX_M, buildField, fieldAtlas, type WxField } from './wxField.ts'
+import { BANDS, FALL, FALL_MAX_M, FIELD_KM, FIELD_N, HEIGHT_MAX_M, RISE, RISE_MAX_M, TOWER_BAND, buildField, fieldAtlas, type WxField } from './wxField.ts'
 import type { Hazard } from './wxGeo.ts'
 
 export type CloudLook = 'natural' | 'severity' | 'blocks'
@@ -97,14 +108,33 @@ const NOISE_COLS = 8
 const NOISE_ROWS = NOISE_N / NOISE_COLS
 const NOISE_KM = 32 // its longest period: the octaves and the warp are whole fractions of it, so a shift of 32 km changes nothing
 const NOISE_SEED = 5
-const NEAR_N = 64 // the coarse map's side: cells of 5 km
-// Where the coarse map reads 0 for a band, between its cells' middles, that band has no weather within 7.2 km (the four cells round,
-// and theirs, are clear); the warp moves a sample 2.2 km at most and a block's middle is 0.7 km from its corner: a stride of this is safe.
-const CLEAR_KM = 4.5
-const SEARCH = 0.035 // a search step is this share of the distance from the camera (0.12 km at least) …
+/** The noise's mean, of 1 (it is the same noise every time: tested). An octave too fine for a step is given as this. */
+export const NOISE_MEAN = 0.55
+const NEAR_N = 256 // the clear-air map's side: cells of 1.25 km
+const NEAR_KM = FIELD_KM / NEAR_N
+/** The farthest the clear-air map tells, km: a byte's step is 0.2 km. */
+export const NEAR_MAX_KM = 51
+const OCTAGON = 1 / Math.cos(Math.PI / 8) // a way made of steps to the eight cells round a cell is at most this much longer than the straight one (1.082)
+const WARP_KM = 2.2 // the warp moves a sample no further than this over the map (1.525 km each way)
+// What the march takes off the clear-air map's word before it strides: the word is mixed from the four cells round a place, each as
+// much as half a cell's diagonal from it, and the sample taken there is read where the warp puts it. (A block's middle, 0.7 km from
+// its corner, and the light's two samples, 1.3 km off at most, are nearer than the warp's reach.)
+const CLEAR_MARGIN_KM = Math.ceil((Math.SQRT1_2 * NEAR_KM + WARP_KM) * 10) / 10
+const STRIDE_KM = 20 // the longest stride: the ray's height is taken to change evenly along it, and over this far the Earth's curve adds 30 m
+const SEARCH = 0.035 // a search step is this share of the distance from the camera (SEARCH_MIN_KM at least) …
+const SEARCH_MIN_KM = 0.15
 const SEARCH_UP_KM = 0.25 // … and climbs or sinks no more than this: the thinnest cloud is 0.45 km
-const STAY_KM = 0.8 // out of a cloud, the ray keeps to small steps this far
-const STEPS = 96 // of the march, at most
+// Over or under a layer's cloud a search step may be as long as the height between them allows, taking the cloud's top and base to
+// rise or sink no steeper than this (1: 45°; the warp bends them by a third of that, and a puff next to a lower one stands as a
+// wall, but is wider than it is taller). Not by a tower: its sides are walls, and its anvil overhangs.
+const SLOPE = 1
+const STAY_KM = 0.4 // out of a cloud, the ray keeps to small steps this far
+const STEPS = 128 // of the march, at most (the mock's)
+// Cover times profile times GAIN under this is no cloud: the noise would have to be under a fifth to leave any of it, which it is at
+// fewer than one place in a thousand (tested). The march searches up to where there is more, not through this thin rind.
+const ERODE = 0.74 // the noise, 0 … 1, eats this much of the cover at most (the mock's)
+const THIN_STEP = 0.25 // in thin cloud a step is as long as hides this much (an optical depth), four small steps at most
+const THIN = ERODE * 0.2
 /** The cover fades to nothing between these, km from the aircraft: what Weather3D reads its sources by. */
 export const REACH_KM: readonly [number, number] = [130, 150]
 const RIM_KM: readonly [number, number] = [150, 158] // and at the square's rim
@@ -208,22 +238,19 @@ function twice(v: Float32Array, dims: readonly [number, number, number], axis: 0
   out[axis] *= 2
   const o = new Float32Array(out[0] * out[1] * out[2])
   const n = dims[axis]
-  const at = (i: number[]): number => v[(i[2] * dims[1] + i[1]) * dims[0] + i[0]]
-  const i = [0, 0, 0]
+  const stride = axis === 0 ? 1 : axis === 1 ? dims[0] : dims[0] * dims[1] // one place on along the axis, in v
+  let k = 0
   for (let z = 0; z < out[2]; z++) {
     for (let y = 0; y < out[1]; y++) {
       for (let x = 0; x < out[0]; x++) {
-        const k = [x, y, z]
-        const j = k[axis] >> 1
-        i[0] = x
-        i[1] = y
-        i[2] = z
-        const tap = (d: number): number => {
-          i[axis] = (j + d + n) % n
-          return at(i)
-        }
+        const along = axis === 0 ? x : axis === 1 ? y : z
+        const j = along >> 1
+        const row = axis === 0 ? (z * dims[1] + y) * dims[0] : axis === 1 ? z * dims[1] * dims[0] + x : y * dims[0] + x // the first of v's values on this line along the axis
+        const a = v[row + ((j + n - 1) % n) * stride]
+        const b = v[row + j * stride]
+        const c = v[row + ((j + 1) % n) * stride]
         // on a value's own place the spline weighs it and its neighbours 1 : 4 : 1; half-way between two, the four round 1 : 23 : 23 : 1
-        o[(z * out[1] + y) * out[0] + x] = k[axis] % 2 === 0 ? (tap(-1) + 4 * tap(0) + tap(1)) / 6 : (tap(-1) + 23 * tap(0) + 23 * tap(1) + tap(2)) / 48
+        o[k++] = along % 2 === 0 ? (a + 4 * b + c) / 6 : (a + 23 * b + 23 * c + v[row + ((j + 2) % n) * stride]) / 48
       }
     }
   }
@@ -279,43 +306,61 @@ export function noiseAtlas(): Bitmap {
 }
 
 /**
- * What the march asks of a field before it walks it: `near`, where each band has weather, coarsely (64 × 64 cells of 5 km, the first
- * row the south; 255 where the band has cover in the cell or in a cell beside it, else 0: where a bilinear read of it is 0 the band has
- * no weather within 7.2 km. R is the lowest layer band's, G the next one's, B the two high ones' together, A the towers'); and `wet`,
- * per band, whether rain falls from it (cover with a severity of light rain or more).
+ * What the march asks of a field before it walks it: `near`, the clear-air map: how far it is, over the map, from each cell's middle
+ * to the nearest cover of a band (256 × 256 cells of 1.25 km, the first row the south; a byte is NEAR_MAX_KM / 255, so 255 is 51 km
+ * or more. R is the lowest layer band's, G the next one's, B the two high ones' together, A the towers'), so that a ray in clear air
+ * strides to the weather and does not search for it. A word is never more than the true distance (a stride passes over nothing): the
+ * way is counted in steps to the eight cells round, which is at most 8 % longer than the straight one, so it is taken that much
+ * shorter, and half a cell's diagonal is taken off for the cover's place inside its cell. And `wet`, per band, whether rain falls
+ * from it (cover with a severity of light rain or more).
  */
 export function survey(f: WxField): { near: Bitmap; wet: boolean[] } {
   const n = NEAR_N
   const per = FIELD_N / n
-  const hit = new Uint8Array(n * n * 4)
   const wet = Array.from({ length: BANDS }, () => false)
+  const far = 4 * n // further, in cells, than any way across the map
+  const ways = Array.from({ length: 4 }, () => new Float32Array(n * n).fill(far))
+  const any = [false, false, false, false]
   for (let b = 0; b < BANDS; b++) {
     if (f.lo[b] > f.hi[b]) continue
-    const [cov, sev] = [f.cov[b], f.sev[b]]
-    const channel = NEAR_CHANNEL[b]
-    for (let j = 0; j < FIELD_N; j++) {
+    const [cov, sev, way] = [f.cov[b], f.sev[b], ways[NEAR_CHANNEL[b]]]
+    any[NEAR_CHANNEL[b]] = true
+    let rains = false
+    for (let j = 0, o = 0; j < FIELD_N; j++) {
       const row = Math.floor(j / per) * n
-      for (let i = 0; i < FIELD_N; i++) {
-        const o = j * FIELD_N + i
+      for (let i = 0; i < FIELD_N; i++, o++) {
         if (!(cov[o] > 0)) continue
-        hit[(row + Math.floor(i / per)) * 4 + channel] = 1
-        if (sev[o] >= 0.5) wet[b] = true
+        way[row + Math.floor(i / per)] = 0
+        if (sev[o] >= 0.5) rains = true
       }
     }
+    wet[b] = rains
   }
-  const data = new Uint8ClampedArray(n * n * 4)
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      for (let c = 0; c < 4; c++) {
-        let any = 0
-        for (let b = Math.max(0, j - 1); b <= Math.min(n - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(n - 1, i + 1); a++) any |= hit[(b * n + a) * 4 + c]
-        data[(j * n + i) * 4 + c] = any * 255
-      }
+  const data = new Uint8ClampedArray(n * n * 4).fill(255)
+  for (let c = 0; c < 4; c++) {
+    if (!any[c]) continue
+    const w = ways[c]
+    // each cell's shortest way to a cell with cover: from the cells before it in a sweep up the map, then from those after it in a sweep down
+    for (let o = 0; o < n * n; o++) {
+      if (w[o] === 0) continue
+      const [i, up] = [o % n, o >= n]
+      let v = w[o]
+      if (i > 0) v = Math.min(v, w[o - 1] + 1)
+      if (up) v = Math.min(v, w[o - n] + 1, i > 0 ? w[o - n - 1] + Math.SQRT2 : far, i < n - 1 ? w[o - n + 1] + Math.SQRT2 : far)
+      w[o] = v
+    }
+    for (let o = n * n - 1; o >= 0; o--) {
+      const [i, down] = [o % n, o < n * (n - 1)]
+      let v = w[o]
+      if (v > 0 && i < n - 1) v = Math.min(v, w[o + 1] + 1)
+      if (v > 0 && down) v = Math.min(v, w[o + n] + 1, i < n - 1 ? w[o + n + 1] + Math.SQRT2 : far, i > 0 ? w[o + n - 1] + Math.SQRT2 : far)
+      w[o] = v
+      data[o * 4 + c] = Math.floor(Math.min(1, (Math.max(0, v / OCTAGON - Math.SQRT1_2) * NEAR_KM) / NEAR_MAX_KM) * 255)
     }
   }
   return { near: { data, width: n, height: n }, wet }
 }
-const NEAR_CHANNEL: readonly number[] = [0, 1, 2, 2, 3] // the coarse map's channel for each band (the shader's nearOf)
+const NEAR_CHANNEL: readonly number[] = [0, 1, 2, 2, 3] // the clear-air map's channel for each band (the shader's clearOf)
 
 /** A number as the 16 bits it is packed in: its count of quanta from the least, held to 0 … 65535. */
 const word = (v: number, quantum: number, least = 0): number => Math.min(65535, Math.max(0, Math.round((v - least) / quantum)))
@@ -559,7 +604,11 @@ in vec2 v_textureCoordinates;
 ${SHARED}
 const vec3 HAZE = vec3(0.66, 0.76, 0.88); // the air's colour over a long way
 const float GAIN = ${glsl(GAIN)};
-const float CLEAR = ${glsl(CLEAR_KM)};
+const float NEAR_MAX = ${glsl(NEAR_MAX_KM)}; // the clear-air map's 1 is this far, km
+const float MARGIN = ${glsl(CLEAR_MARGIN_KM)}; // and this is taken off its word: the map's coarseness and the warp's reach
+const float STRIDE = ${glsl(STRIDE_KM)}; // the longest stride through clear air
+const float THIN = ${glsl(THIN)}; // cover times profile times GAIN under this is no cloud: the noise eats it all
+const float NOISE_MEAN = ${glsl(NOISE_MEAN)};
 const float BOX = ${glsl(BOX_KM)};
 const float PAD = 1.0; // the warp moves a sample's height by 0.9 km at most
 const vec3 CELL = vec3(1.0, 1.0, 0.5); // blocks: a cell's size east, north and up
@@ -579,48 +628,60 @@ int gI = 0;
 // Extinction per km of full cloud: more in heavy rain and storms.
 float sigma(float sev) { return sev > 1.5 ? ${glsl(SIGMA_STORM)} : ${glsl(SIGMA)}; }
 
-// The coarse map's word for band b (survey): 0 where the band has no weather within 7 km.
-float nearOf(vec4 nr, int b) { return b == 0 ? nr.r : b == 1 ? nr.g : b < 4 ? nr.b : nr.a; }
+// The clear-air map's word for band b (survey), less the margin: how far the ray may go over the map, km, before the band's cover may
+// be met; 0 or under: it may be here.
+float clearOf(vec4 nr, int b) { return (b == 0 ? nr.r : b == 1 ? nr.g : b < 4 ? nr.b : nr.a) * NEAR_MAX - MARGIN; }
 
-// What a ray may meet at a height h where the coarse map reads nr, climbing dh per km: 2, cloud (a band with weather near holds the
-// height; pad: how far from h a sample may be read); 1, only rain (under such a band, when rain falls from it); 0, nothing.
-// edge: how far along the ray the next band's heights begin (1e9: never).
-int meets(vec4 nr, float h, float dh, float pad, out float edge) {
+// What a ray may meet where it is, at the height h, climbing dh per km and going hs km over the map per km (nr: the clear-air map
+// there; pad: how far from h a sample may be read): 2, cloud (a band holds the height and its cover is within the margin); 1, only
+// rain (under such a band, when rain falls from it); 0, nothing. room: how far the ray can go before it may meet a band it does not
+// meet here: until it is in the band's heights or, if that is further, until the band's cover is within the margin (STRIDE at most).
+// edge: how far to the cloud's heights of a band whose rain the ray is in (1e9: never).
+int meets(vec4 nr, float h, float dh, float hs, float pad, out float room, out float edge) {
+  room = STRIDE;
   edge = 1.0e9;
   int kind = 0;
   for (int b = 0; b < ${BANDS}; b++) {
-    if (u_lo[b] > u_hi[b] || nearOf(nr, b) <= 0.0) continue;
-    float lo = u_lo[b] - pad, hi = u_hi[b] + pad;
-    if (h > hi) { if (dh < 0.0) edge = min(edge, (hi - h) / dh); }
+    if (u_lo[b] > u_hi[b]) continue;
+    float lo = u_lo[b] - pad, hi = u_hi[b] + pad, low = min(u_floor[b], lo);
+    float up = h > hi ? (dh < 0.0 ? (hi - h) / dh : 1.0e9) : h < low ? (dh > 0.0 ? (low - h) / dh : 1.0e9) : 0.0;
+    float f = max(up, clearOf(nr, b) / hs);
+    if (f > 0.0) room = min(room, f);
     else if (h >= lo) kind = 2;
     else {
-      float under = h >= u_floor[b] ? lo : min(u_floor[b], lo); // in its rain: the cloud is next; under its floor: the floor
-      if (h >= u_floor[b] && kind < 1) kind = 1;
-      if (dh > 0.0) edge = min(edge, (under - h) / dh);
+      if (kind < 1) kind = 1;
+      if (dh > 0.0) edge = min(edge, (lo - h) / dh);
     }
   }
   return kind;
 }
 
 // The field at a place of the map (wxField.ts sampleField): the most cloud any band has there, 0 … 1, and its severity. rain: under a
-// band's cloud of light rain or more, how much rain falls there and its severity. nr: the coarse map there (a band with nothing near
-// is not read).
-float cover(vec3 m, vec4 nr, out float sev, out vec2 rain) {
+// band's cloud of light rain or more, how much rain falls there and its severity. nr: the clear-air map where the ray is (a band whose
+// cover is beyond the margin is not read). gap: how far the place is, in height, over or under the cloud of every band that has cover
+// near (0: beside a cloud, in one's heights, or by a tower; 1e9: no band has any near).
+float cover(vec3 m, vec4 nr, out float sev, out vec2 rain, out float gap) {
   sev = 0.0;
   rain = vec2(0.0);
+  gap = 1.0e9;
   if (abs(m.x) > 0.5 * FIELD_KM || abs(m.y) > 0.5 * FIELD_KM) return 0.0;
   float most = 0.0;
   for (int b = 0; b < ${BANDS}; b++) {
-    if (m.z < u_floor[b] || m.z > u_hi[b] || nearOf(nr, b) <= 0.0) continue;
+    if (u_lo[b] > u_hi[b] || clearOf(nr, b) > 0.0) continue;
+    if (m.z > u_hi[b]) { gap = min(gap, m.z - u_hi[b]); continue; }
+    if (m.z < u_floor[b]) { gap = min(gap, u_floor[b] - m.z); continue; }
     vec4 f = band(b, m.xy);
+    if (f.r <= 0.0 || b == ${TOWER_BAND}) gap = 0.0;
     if (f.r <= 0.0) continue;
-    float base = f.g * HEIGHT_MAX;
+    float base = f.g * HEIGHT_MAX, top = f.b * HEIGHT_MAX;
     if (m.z < base) {
       float r = f.r * smoothstep(0.5, 1.0, f.a * 3.0);
       if (r > rain.x) rain = vec2(r, f.a * 3.0);
+      gap = min(gap, base - m.z);
       continue;
     }
-    float d = f.r * prof(m.z, base, f.b * HEIGHT_MAX);
+    gap = min(gap, max(m.z - top, 0.0));
+    float d = f.r * prof(m.z, base, top);
     if (d > most) { most = d; sev = f.a * 3.0; }
   }
   float k = reach(m.xy);
@@ -630,9 +691,9 @@ float cover(vec3 m, vec4 nr, out float sev, out vec2 rain) {
 
 // The cloud at a place of the frame, with no detail: what the light is dimmed by on its way.
 float body(vec3 p, vec4 nr) {
-  float s;
+  float s, g;
   vec2 r;
-  return min(1.0, GAIN * cover(toMap(p), nr, s, r));
+  return min(1.0, GAIN * cover(toMap(p), nr, s, r, g));
 }
 
 // The noise at q, in its periods: slice ⌊z⌋ and the next from one read (R and G), mixed; a tile's rim makes the read wrap.
@@ -645,9 +706,16 @@ float noise(vec3 q) {
 }
 
 // Four octaves, of 32, 10.7, 4 and 1.4 km (the mock's, with a little more weight on the two fine ones: the field's small clouds are a
-// few texels wide, and their edges are the noise's to draw).
-float fbm(vec3 q) {
-  return 0.42 * noise(q) + 0.27 * noise(q * 3.0) + 0.19 * noise(q * 8.0) + 0.12 * noise(q * 23.0);
+// few texels wide, and their edges are the noise's to draw). The noise's lumps are about three of its 32 cells across: 3 km, 1 km,
+// 0.35 km and 0.12 km in the four octaves. lod: what a sample stands for, km: the march's step there, or three march pixels' width
+// if that is more. An octave whose lumps are smaller than that goes to the noise's mean (fading from half their size): a long step,
+// or a far pixel, then reads a smoother cloud, the same from pixel to pixel, where it would read a chance place of the detail (a
+// grain).
+float fbm(vec3 q, float lod) {
+  float fine = lod < 0.12 ? mix(noise(q * 23.0), NOISE_MEAN, smoothstep(0.06, 0.12, lod)) : NOISE_MEAN;
+  float mid = lod < 0.35 ? mix(noise(q * 8.0), NOISE_MEAN, smoothstep(0.17, 0.35, lod)) : NOISE_MEAN;
+  float wide = lod < 1.0 ? mix(noise(q * 3.0), NOISE_MEAN, smoothstep(0.5, 1.0, lod)) : NOISE_MEAN;
+  return 0.42 * noise(q) + 0.27 * wide + 0.19 * mid + 0.12 * fine;
 }
 
 // The place the field is read at for p: moved by up to 1.3 km each way, smoothly (over 16 km), so that a disc is not a disc, and by
@@ -860,37 +928,56 @@ void main() {
   float mist = 0.0, mistSev = 0.0; // blocks: the length of the ray inside the body the camera is in, and its severity
 
   if (u_look < 1.5) {
-    // Clouds as volumes. Where a band with weather near holds the ray's height it is searched in steps that cannot pass over a cloud
-    // unseen for long; a step that lands in cloud goes back, the stretch before it is walked again in quarters, and the cloud's near
-    // side is then found by halving the last quarter three times: the cloud is walked from its own edge, not from a step's place, so
-    // its shading is smooth from pixel to pixel. (There too the four pixels of a block start a quarter of a small step apart: the
-    // noise is finer than the steps, and their mean reads it four times as closely.) In cloud, where the noise has eaten it away, and
-    // for a little way past it, the steps are small; smallest while little is hidden yet, where the light changes fast. A ray that
-    // has used two fifths of its steps takes longer and longer ones (twenty times at the last), so that it ends coarser, not short.
-    float t = tS + phase * max(0.12, ${glsl(SEARCH)} * tS);
+    // Clouds as volumes. The ray strides through clear air: to the heights of the next band that has weather, or as far as the
+    // clear-air map says that band's cover is, whichever is further. Where it may meet cloud it is searched in steps that cannot pass
+    // over a cloud unseen for long (over or under a cloud, as long as the height between them allows); a step that lands in cloud
+    // goes back, the stretch before it is walked again in quarters, and the cloud's near side is then found by halving the last
+    // quarter three times: the cloud is walked from its own edge, not from a step's place, so its shading is smooth from pixel to
+    // pixel. (There too the four pixels of a block start a quarter of a small step apart: the noise is finer than the steps, and
+    // their mean reads it four times as closely.) In cloud, where the noise has eaten it away, and for a little way past it, the
+    // steps are small; smallest while little is hidden yet, where the light changes fast. A ray that has used three fifths of its
+    // steps takes longer and longer ones (twenty times at the last), so that it ends coarser, not short; the noise's fine octaves
+    // fade for a step too long to follow them (fbm), so a long step reads a smoother cloud and not a chance place of the detail.
+    float t = tS + phase * max(${glsl(SEARCH_MIN_KM)}, ${glsl(SEARCH)} * tS);
     float tLast = t, fineTo = -1.0, walk = 0.03;
     float by = -1.0; // cloud was met short of here: no long steps yet (a cloud's edge is in folds, and long steps would catch some and not others)
     bool searched = false; // the last step was a search step
     bool edging = false; // walking back up to a cloud: its near side is still to find
     int used = 0; // steps taken, the halvings too
+    float pace = 0.03; // the last step taken in cloud: the next sample's detail is read as coarsely (fbm)
+    float hs = 1.04 * length(rd.xy) + 1.0e-4; // the ray's way over the map, km per km, at most
     for (int i = 0; i < ${STEPS}; i++) {
       if (t >= tEnd || A > 0.985 || used >= ${STEPS}) break;
       used++;
-      float late = max(0.0, float(used) - ${glsl(STEPS * 0.4)}) / ${glsl(STEPS / 8)};
+      float late = max(0.0, float(used) - ${glsl(STEPS * 0.6)}) / ${glsl(STEPS / 12)};
       float stretch = 1.0 + late * late;
       vec3 p = ro + rd * t;
       vec3 m = toMap(p);
       float dh = rd.z + dot(p.xy, rd.xy) * INV_R; // the ray's climb here, km per km
       vec4 nr = textureLod(u_near, vec2(m.x / FIELD_KM + 0.5, 0.5 - m.y / FIELD_KM), 0.0);
-      float edge;
-      int kind = meets(nr, m.z, dh, PAD, edge);
-      if (kind == 0) { t += min(CLEAR, edge) + 2.0e-3; searched = false; continue; }
+      float room, edge;
+      int kind = meets(nr, m.z, dh, hs, PAD, room, edge);
+      if (kind == 0) {
+        float least = max(${glsl(SEARCH_MIN_KM)}, ${glsl(SEARCH)} * t);
+        bool up = t < fineTo; // walking back up to a cloud: in the walk's steps
+        // A stride, to where the band's weather may begin; from there (or from here, when there is little room: the ray runs along
+        // the rim of a band's margin, or between two, and strides would be many and short) a step as in a search, of the pixel's own
+        // share: a stride ends at the same place for all four pixels of a block, and their searches should not.
+        bool strode = room >= least;
+        if (strode) t += room + 2.0e-3;
+        tLast = t;
+        t += up ? walk : (strode ? phase : 1.0) * max(${glsl(SEARCH_MIN_KM)}, ${glsl(SEARCH)} * t) * stretch;
+        searched = !up;
+        edging = up;
+        continue;
+      }
       vec3 q = (u_noiseFrame * vec4(p, 1.0)).xyz;
-      float sev;
+      float sev, gap;
       vec2 rain;
-      float dm = min(1.0, GAIN * cover(toMap(warp(p, q)), nr, sev, rain));
-      float ds = max(0.03, min(0.018 * t, 0.1 + 0.6 * A)) * stretch;
-      if (dm > 0.0) {
+      float dm = min(1.0, GAIN * cover(toMap(warp(p, q)), nr, sev, rain, gap));
+      float small = clamp(0.018 * t, 0.03, max(0.1, 0.004 * t)); // a small step here: finer near the camera, where a pixel sees less
+      float ds = clamp(0.018 * t, 0.03, max(0.1, 0.004 * t) + 0.6 * A) * stretch;
+      if (dm > THIN) {
         if (searched && t > fineTo) { fineTo = t; walk = max(0.03, 0.25 * (t - tLast)); t = tLast + walk; searched = false; edging = true; continue; }
         searched = false;
         if (edging) {
@@ -899,20 +986,22 @@ void main() {
           for (int k = 0; k < 3; k++) {
             float mid = 0.5 * (clear + t);
             vec3 pm = ro + rd * mid;
-            float s2;
+            float s2, g2;
             vec2 r2;
-            if (cover(toMap(warp(pm, (u_noiseFrame * vec4(pm, 1.0)).xyz)), nr, s2, r2) > 0.0) t = mid;
+            if (GAIN * cover(toMap(warp(pm, (u_noiseFrame * vec4(pm, 1.0)).xyz)), nr, s2, r2, g2) > THIN) t = mid;
             else clear = mid;
           }
           used += 3;
-          t += phase * max(0.03, min(0.018 * t, 0.1)); // from the edge found, each of the four pixels its share of a step in
+          t += phase * small; // from the edge found, each of the four pixels its share of a step in
           continue;
         }
         by = t + ${glsl(STAY_KM)};
-        float n = fbm(q);
-        float d = clamp((dm - n * 0.74) / (1.0 - n * 0.74), 0.0, 1.0);
-        if (d <= 0.01) ds = max(0.03, min(0.018 * t, 0.1)) * stretch; // eaten away by the noise here: steps that still find where it is not
+        float n = fbm(q, max(pace, 3.0 * pix * t));
+        float d = clamp((dm - n * ${glsl(ERODE)}) / (1.0 - n * ${glsl(ERODE)}), 0.0, 1.0);
+        if (d <= 0.01) ds = min(ds, small * stretch); // eaten away by the noise here: steps that still find where it is not
         else {
+          // thin cloud hides little in a step, and a ray through a long veil of it has many to take: longer ones, up to four small ones
+          ds = max(ds, min(${glsl(THIN_STEP)} / (sigma(sev) * d), 4.0 * small) * stretch);
           float sh = exp(-(body(p + sun * 0.45, nr) * 1.1 + body(p + sun * 1.3, nr) * 1.6));
           vec3 c = mix(vec3(0.36, 0.42, 0.52), vec3(1.0, 0.98, 0.95), sh);
           c *= sev < 1.5 ? mix(1.0, 0.86, sev) : mix(0.8, 0.6, clamp(sev - 2.0, 0.0, 1.0));
@@ -923,11 +1012,19 @@ void main() {
           col += (1.0 - A) * a * c;
           A += (1.0 - A) * a;
         }
+        pace = ds;
       } else {
+        pace = small;
         if (t < fineTo) { ds = walk; searched = false; edging = true; } // walking up to the cloud a search step found
-        else if (t < by) { ds = max(0.03, min(0.018 * t, 0.1)) * stretch; searched = false; } // just out of cloud
-        else if (kind == 2) { ds = min(max(0.12, ${glsl(SEARCH)} * t), max(0.12, ${glsl(SEARCH_UP_KM)} / max(abs(dh), 1.0e-4))) * stretch; searched = true; }
-        else { ds = min(min(max(0.12, 0.07 * t), CLEAR), edge + 2.0e-3); searched = false; }
+        else if (t < by) { ds = small * stretch; searched = false; } // just out of cloud
+        else if (kind == 2) {
+          // a search step: by the distance, climbing or sinking little; or, over or under a cloud, as far as the height between allows
+          float least = ${glsl(SEARCH_MIN_KM)};
+          ds = min(max(least, ${glsl(SEARCH)} * t), max(least, ${glsl(SEARCH_UP_KM)} / max(abs(dh), 1.0e-4)));
+          ds = max(ds, min(gap / (abs(dh) + ${glsl(SLOPE)}), STRIDE)) * stretch;
+          searched = true;
+        }
+        else { ds = min(min(max(0.12, 0.07 * t), room), edge) + 2.0e-3; searched = false; }
         if (rain.x > 0.0) {
           float tau = tauR + rain.x * streaks(p, t) * ${glsl(RAIN)} * sigma(rain.y) * min(ds, tEnd - t);
           float a = ${glsl(RAIN_MOST)} * (exp(-tauR) - exp(-tau));
@@ -948,28 +1045,29 @@ void main() {
     vec3 face = vec3(0.0, 0.0, rd.z < 0.0 ? 1.0 : -1.0); // the face the ray came in by: a top or a bottom at first
     float tB = -1.0, sevB = 0.0;
     vec3 mB = vec3(0.0);
+    float hs = 1.04 * length(rd.xy) + 1.0e-4; // the ray's way over the map, km per km, at most
     for (int i = 0; i < ${STEPS}; i++) {
       if (t >= tEnd) break;
       vec3 p = ro + rd * t;
       vec3 m = toMap(p);
       float dh = rd.z + dot(p.xy, rd.xy) * INV_R;
       vec4 nr = textureLod(u_near, vec2(m.x / FIELD_KM + 0.5, 0.5 - m.y / FIELD_KM), 0.0);
-      float edge;
-      int kind = meets(nr, m.z, dh, 0.5 * CELL.z, edge);
+      float room, edge, gap;
+      int kind = meets(nr, m.z, dh, hs, 0.5 * CELL.z, room, edge);
       float sev;
       vec2 rain;
       float adv;
       bool filled = false;
       if (kind < 2) {
-        // nothing here, or only rain: on to the next band's heights, or as far as the coarse map vouches for
-        adv = min(CLEAR, edge);
-        if (kind == 1) { adv = min(adv, max(0.12, 0.07 * t)); cover(m, nr, sev, rain); }
+        // nothing here, or only rain: on to the next band's heights, or as far as the clear-air map vouches for
+        adv = min(room, edge);
+        if (kind == 1) { adv = min(adv, max(0.12, 0.07 * t)); cover(m, nr, sev, rain, gap); }
         else rain = vec2(0.0);
         inBody = false;
         face = vec3(0.0, 0.0, dh < 0.0 ? 1.0 : -1.0);
       } else {
         vec3 cell = floor(m / CELL);
-        filled = cover((cell + 0.5) * CELL, nr, sev, rain) > ${glsl(FILL)};
+        filled = cover((cell + 0.5) * CELL, nr, sev, rain, gap) > ${glsl(FILL)};
         if (i == 0 && filled && tS <= 0.0) { inBody = true; mistSev = sev; }
         if (filled && !inBody) { tB = t; sevB = sev; mB = m; break; }
         vec3 dm = vec3(u_map.xy * rd.xy, dh); // the ray's way on the map here
@@ -1036,14 +1134,14 @@ uniform float u_path[${PATH_N * 3}]; // the way ahead in the frame, km: the airc
 uniform vec2 u_aids; // 1 where it shows: x the track line, y the level slice (the march draws that)
 in vec2 v_textureCoordinates;
 ${SHARED}
-// The track line (the mock's): the way ahead as a line two pixels wide at any distance, with a wider tick at each minute; white-blue
-// in clear air and, thicker, the severity's colour where the field's cover is over 0.3. Of the stretches between the path's places,
-// the one this ray passes nearest, by the angle between them; the field is read only by a ray near it. Its colour, and how much of
-// the pixel it covers. Hidden by what is solid in front of it (tO: km to what the pixel shows), not by cloud: see the header.
+// The track line (the mock's): the way ahead as a line two pixels wide at any distance; white-blue in clear air and, thicker, the
+// severity's colour where the field's cover is over 0.3. (The minutes on it are the app's labels, "1 min" to "6 min"; a bead under
+// each could not be made out, and is not drawn.) Of the stretches between the path's places, the one this ray passes nearest, by
+// the angle between them; the field is read only by a ray near it. Its colour, and how much of the pixel it covers. Hidden by what
+// is solid in front of it (tO: km to what the pixel shows), not by cloud: see the header.
 vec4 track(vec3 ro, vec3 rd, float tO, float pix) {
   float off = 1.0e9; // the angle from the ray to the nearest stretch
   float at = 0.0; // how far along the ray that is
-  float mark = 1.0e9; // and how far along the stretch from a minute's place
   vec3 q = vec3(0.0); // the stretch's place nearest the ray
   for (int i = 0; i < ${PATH_N - 1}; i++) {
     vec3 p0 = vec3(u_path[3 * i], u_path[3 * i + 1], u_path[3 * i + 2]);
@@ -1064,18 +1162,16 @@ vec4 track(vec3 ro, vec3 rd, float tO, float pix) {
       off = a;
       at = sc;
       q = c;
-      mark = min(i == 0 ? 1.0e9 : tc, len - tc); // no tick at the aircraft itself
     }
   }
   if (off >= 1.0e9) return vec4(0.0);
   float wide = max(0.0004, 1.4 * pix * at);
   float dist = off * at;
-  if (dist >= wide * 7.03) return vec4(0.0); // the widest the line gets: in cloud (1.9 times) at a tick (3.7 times)
+  if (dist >= wide * 2.5) return vec4(0.0); // the widest the line gets: in cloud (1.9 times), out to its soft edge (1.3 times)
   float sev;
   float inC = smoothstep(0.2, 0.35, fieldCover(toMap(q), sev));
   float lw = wide * (1.0 + 0.9 * inC);
-  float tick = 1.0 - smoothstep(lw * 1.5, lw * 3.0, mark);
-  float al = 1.0 - smoothstep(lw * 0.5, lw * (1.3 + 2.4 * tick), dist);
+  float al = 1.0 - smoothstep(lw * 0.5, lw * 1.3, dist);
   return vec4(mix(vec3(0.78, 0.92, 1.0), sevCol(sev), inC), al * mix(0.8, 1.0, inC));
 }
 
@@ -1100,20 +1196,25 @@ void main() {
     scene.rgb *= 1.0 - u_shadow * sh * smoothstep(0.03, 0.3, sun.z);
   }
 
-  // The march, from half the size: the four march pixels round this one. For the volumes all four alike: they are the four starts of
-  // the march's steps, and their mean is a march of four times the steps. For the blocks, whose march has no such starts, by their
+  // The march, from its smaller size: the nine march pixels round this one. For the volumes, each row and column of three weighs a
+  // half for the middle one and shares the other half between the two beside it by their nearness: wherever the pixel lies, the four
+  // starts of the march's steps then count alike (their mean is a march of four times the steps), and the mix changes evenly from one
+  // pixel to the next, so no march pixel shows as a block. For the blocks, whose march has no such starts, the four nearest by their
   // nearness. Those that saw about the same depth as this pixel weigh most, so the aircraft's and the terrain's outlines stay sharp.
-  float even = u_look < 1.5 ? 1.0 : 0.0;
+  bool even = u_look < 1.5;
   vec2 size = vec2(textureSize(u_march, 0));
   vec2 g = v_textureCoordinates * size - 0.5;
-  vec2 i = floor(g), f = g - i;
+  vec2 c = floor(g + 0.5), d = g - c; // the nearest march pixel, and how far this pixel is from its middle: -1/2 to 1/2
+  vec2 lo = even ? 0.25 - 0.5 * d : max(-d, 0.0), mid = even ? vec2(0.5) : 1.0 - abs(d), hi = even ? 0.25 + 0.5 * d : max(d, 0.0);
   vec4 sum = vec4(0.0);
   float weights = 0.0;
-  for (int k = 0; k < 4; k++) {
-    vec2 o = vec2(float(k & 1), float(k >> 1));
-    vec2 uv = (i + o + 0.5) / size;
+  for (int k = 0; k < 9; k++) {
+    ivec2 o = ivec2(k % 3, k / 3) - 1;
+    float w = (o.x < 0 ? lo.x : o.x > 0 ? hi.x : mid.x) * (o.y < 0 ? lo.y : o.y > 0 ? hi.y : mid.y);
+    if (w <= 0.0) continue;
+    vec2 uv = (c + vec2(o) + 0.5) / size;
     float dd = (texture(depthTexture, uv).r - depth) / ${glsl(DEPTH_SAME)};
-    float w = mix((o.x > 0.5 ? f.x : 1.0 - f.x) * (o.y > 0.5 ? f.y : 1.0 - f.y), 0.25, even) / (1.0 + dd * dd);
+    w /= 1.0 + dd * dd;
     sum += w * texture(u_march, uv);
     weights += w;
   }
@@ -1151,6 +1252,7 @@ export class CloudVolume {
   readonly #camera: Camera
   readonly #geoid: (lat: number, lon: number) => number
   readonly #onFailed: () => void
+  readonly #broken: boolean
   readonly #unlisten: (() => void) | null // ends its listening for the scene's render errors
   readonly #frame = new Matrix4() // world metres to the field's frame
   readonly #eyeToLocal = new Matrix4()
@@ -1181,16 +1283,21 @@ export class CloudVolume {
   #ahead: AheadPath | null = null
   #light = 1
   #shadow = SHADOW
+  #marchScale = MARCH_SCALES[0]
   #show = false
   #failed = false
   #destroyed = false
 
-  /** geoid: the sea's height above the ellipsoid at a place, m (default EGM96). onFailed: told once, when a render error has taken the pass out for good. */
-  constructor(scene: VolumeScene, opts: { geoid?: (lat: number, lon: number) => number; onFailed?: () => void } = {}) {
+  /**
+   * geoid: the sea's height above the ellipsoid at a place, m (default EGM96). onFailed: told once, when a render error has taken the
+   * pass out for good. broken: the march is given a shader that cannot compile (?wxbreak=1: the failure seen handled on any machine).
+   */
+  constructor(scene: VolumeScene, opts: { geoid?: (lat: number, lon: number) => number; onFailed?: () => void; broken?: boolean } = {}) {
     this.#stages = scene.postProcessStages
     this.#camera = scene.camera
     this.#geoid = opts.geoid ?? geoidN
     this.#onFailed = opts.onFailed ?? (() => {})
+    this.#broken = opts.broken === true
     this.#unlisten = scene.renderError?.addEventListener((_scene, error) => this.#fail(error)) ?? null
   }
 
@@ -1202,6 +1309,20 @@ export class CloudVolume {
     if (this.#destroyed || on === this.#show) return
     this.#show = on
     this.#sync(false)
+  }
+
+  /**
+   * The share of the view's width and height the march is walked at: a half until told (marchPace.ts says when the frames ask for a
+   * coarser one). A stage's size is fixed when it is made, so another size is a new pass.
+   */
+  get scale(): number {
+    return this.#marchScale
+  }
+
+  set scale(s: number) {
+    if (this.#destroyed || s === this.#marchScale || !(s > 0 && s <= 1)) return
+    this.#marchScale = s
+    this.#sync(true)
   }
 
   /** The field last built: what the pass draws, and what the HUD asks (wxField.ts sampleField). Null before the first draw. */
@@ -1364,7 +1485,8 @@ export class CloudVolume {
       u_aids: () => this.#aids,
     }
     const march = new PostProcessStage({
-      name: `fh_cloud_march_${n}`, fragmentShader: MARCH_SHADER, textureScale: 0.5,
+      name: `fh_cloud_march_${n}`, fragmentShader: this.#broken ? `${MARCH_SHADER}\n?wxbreak=1: this line is not a shader's, so the march does not compile.\n` : MARCH_SHADER,
+      textureScale: this.#marchScale,
       uniforms: {
         ...shared, u_noise: image(this.#cloud ? noiseAtlas() : BLANK), u_near: images.near, u_noiseFrame: () => this.#noiseFrame, u_floor: () => this.#floor,
         u_top: () => this.#top, u_light: () => this.#light,

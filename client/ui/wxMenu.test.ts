@@ -212,10 +212,10 @@ test('destroy() takes the panel\'s parts out of its root', () => {
   assert.equal(root.children.length, 0)
 })
 
-// .fh-seg-b's thirds are 95 px each in the 320 px panel and "Severity colours" needs about 110: the buttons share the row by their text.
-// CSS, so checked as text.
-test('wxMenu.css: the look buttons share the row by their text, and the legend has the panel\'s margins', () => {
+// .fh-seg-b's thirds are 95 px each in the 320 px panel and "Severity colours" needs about 110: a button is as wide as its words need,
+// and the buttons are equal where a third is enough (Curtain, Fence, Box). CSS, so checked as text.
+test('wxMenu.css: a segment\'s buttons are equal shares of the row, each no narrower than its words; and the legend has the panel\'s margins', () => {
   const css = readFileSync(new URL('./wxMenu.css', import.meta.url), 'utf8')
-  assert.match(css, /\.fh-wxm-seg \.fh-seg-b \{[^}]*flex: 1 1 auto;[^}]*white-space: nowrap;[^}]*\}/)
+  assert.match(css, /\.fh-wxm-seg \.fh-seg-b \{[^}]*flex: 1 1 0;[^}]*min-width: max-content;[^}]*white-space: nowrap;[^}]*\}/)
   assert.match(css, /\.fh-wxm-legend \{[^}]*padding: 0 14px 10px;[^}]*\}/)
 })

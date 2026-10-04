@@ -9,7 +9,7 @@ import type { Sigmet } from '../../shared/wx.ts'
 import type { Units } from '../ui/units.ts'
 import { coverAt, type Cover, type WxField } from './wxField.ts'
 import { ringContains, wrapLon, type Hazard } from './wxGeo.ts'
-import { sigmetLabel } from './wxText.ts'
+import { sigmetColor, sigmetLabel } from './wxText.ts'
 
 export const AHEAD_MIN = 6 // the path: the aircraft now, then each minute to this many
 export const AHEAD_KM = 80 // how far the status and the strip look, whatever the speed
@@ -92,8 +92,9 @@ export function pathPointAt(path: AheadPath, km: number, out: AheadPoint = { lat
 
 /** What the status line says of the weather and the hazard areas on the path. */
 export interface AheadStatus {
+  known: boolean // whether the sky is known at all (a weather source has answered): when not, nothing is said of the weather, and `cloud` is clear air
   cloud: { inside: boolean; sev: number; inMin: number | null } // inMin: minutes to the first weather on the path (0 inside it); null: none within reach. sev: inside, the weather the aircraft is in; else the worst of the first WORST_KM km of what is ahead
-  hazard: { inside: boolean; inMin: number | null; text: string } | null // the hazard area the aircraft is in, else the nearest on the path; null: none. Inside: from its base to under its top
+  hazard: { inside: boolean; inMin: number | null; text: string; color: string } | null // the hazard area the aircraft is in, else the nearest on the path, with its own colour (wxText.ts sigmetColor); null: none. Inside: from its base to under its top
 }
 
 /** Whether the point is in the hazard area's volume: within one of its rings, from its base up to under its top. */
@@ -102,13 +103,14 @@ const within = (h: Hazard, lat: number, lon: number, altM: number): boolean => a
 /**
  * What the aircraft is in and what lies ahead: the field's cover at the aircraft (above IN_COVER: in weather), else the first place along
  * the path, looked at every half km to AHEAD_KM, where it is; and the hazard area the aircraft is in (above its base, under its top), else
- * the first one the path enters. `label` gives a hazard area's words.
+ * the first one the path enters. `label` gives a hazard area's words. `known`: whether any weather source has answered; until one
+ * has, the field (empty, not missing) says nothing, and is not read.
  */
-export function aheadStatus(path: AheadPath, field: WxField | null, hazards: readonly Hazard[], label: (h: Hazard) => string): AheadStatus {
+export function aheadStatus(path: AheadPath, field: WxField | null, hazards: readonly Hazard[], label: (h: Hazard) => string, known = true): AheadStatus {
   const walk = walker(path)
   const [here, p, cell] = [path.points[0], { lat: 0, lon: 0, altM: 0 }, { cover: 0, sev: 0 }]
   let cloud: AheadStatus['cloud'] = { inside: false, sev: 0, inMin: null }
-  if (field !== null && !field.empty) {
+  if (known && field !== null && !field.empty) {
     if (coverAt(field, here.lat, here.lon, here.altM, cell).cover > IN_COVER) cloud = { inside: true, sev: sevOf(cell.sev), inMin: 0 }
     else {
       let [first, worst] = [-1, 0] // the first weather on the way, and the worst of its first WORST_KM km
@@ -126,16 +128,16 @@ export function aheadStatus(path: AheadPath, field: WxField | null, hazards: rea
   }
   let hazard: AheadStatus['hazard'] = null
   const now = hazards.find((h) => within(h, here.lat, here.lon, here.altM))
-  if (now !== undefined) hazard = { inside: true, inMin: 0, text: label(now) }
+  if (now !== undefined) hazard = { inside: true, inMin: 0, text: label(now), color: sigmetColor(now.sigmet.hazard) }
   else if (hazards.length > 0) {
     for (let i = 1; i <= PROFILE_COLS && hazard === null; i++) {
       const d = i * STEP_KM
       walk(d, p)
       const next = hazards.find((h) => within(h, p.lat, p.lon, p.altM))
-      if (next !== undefined) hazard = { inside: false, inMin: d / path.kmPerMin, text: label(next) }
+      if (next !== undefined) hazard = { inside: false, inMin: d / path.kmPerMin, text: label(next), color: sigmetColor(next.sigmet.hazard) }
     }
   }
-  return { cloud, hazard }
+  return { known, cloud, hazard }
 }
 
 /** The ahead strip's side view: PROFILE_COLS × PROFILE_ROWS cells; cell (i, j) is at index j × cols + i, i counting from the aircraft out and j from sea level up. */
@@ -146,7 +148,7 @@ export interface AheadProfile {
   topM: number
   cover: Float32Array // the field's cover at each cell's middle, on the path (wxField.ts coverAt)
   sev: Float32Array // and its severity
-  hazards: { fromKm: number; toKm: number; baseM: number; topM: number }[] // each stretch of the path inside a hazard area's rings, nearest first, with the area's heights
+  hazards: { fromKm: number; toKm: number; baseM: number; topM: number; color: string }[] // each stretch of the path inside a hazard area's rings, nearest first, with the area's heights and its colour (wxText.ts sigmetColor)
 }
 
 /** The field along the path, in cells of 0.5 km by 250 m up to 80 km and 12,500 m; and where the path is inside a hazard area. */
@@ -161,7 +163,7 @@ export function aheadProfile(path: AheadPath, field: WxField | null, hazards: re
   const rowM = PROFILE_TOP_M / rows
   const open = hazards.map(() => -1) // each hazard area: the column its run in progress began at
   const close = (k: number, end: number): void => {
-    out.push({ fromKm: open[k] * STEP_KM, toKm: end * STEP_KM, baseM: hazards[k].baseM, topM: hazards[k].topM })
+    out.push({ fromKm: open[k] * STEP_KM, toKm: end * STEP_KM, baseM: hazards[k].baseM, topM: hazards[k].topM, color: sigmetColor(hazards[k].sigmet.hazard) })
   }
   for (let i = 0; i < cols; i++) {
     walk((i + 0.5) * STEP_KM, p)
@@ -186,14 +188,17 @@ export function aheadProfile(path: AheadPath, field: WxField | null, hazards: re
   return { cols, rows, kmAhead: AHEAD_KM, topM: PROFILE_TOP_M, cover, sev, hazards: out }
 }
 
-/** The status line in words: the weather ("In light rain", "Clear air · a thunderstorm in 3 min", "Clear air ahead") with its severity's step (null: none ahead), and the hazard area ("Inside hazard area · …", "Hazard area in 2 min · …"), or null. */
+/**
+ * The status line in words: the weather ("In light rain", "Clear air · a thunderstorm in 3 min", "Clear air ahead"; "No weather data" while the sky is not known)
+ * with its severity's step (null: none ahead), and the hazard area ("Inside hazard area · …", "Hazard area in 2 min · …"), or null.
+ */
 export function statusWords(s: AheadStatus): { cloud: string; sev: number | null; hazard: string | null } {
   const { inside, inMin } = s.cloud
   const sev = sevOf(s.cloud.sev)
-  let cloud = 'Clear air ahead'
+  let cloud = s.known ? 'Clear air ahead' : 'No weather data'
   let step: number | null = null
-  if (inside) [cloud, step] = [`In ${SEV_NAME[sev]}`, sev]
-  else if (inMin !== null) [cloud, step] = [`Clear air · ${SEV_NAME[sev]} in ${inMin < 1 ? 'under a minute' : `${Math.round(inMin)} min`}`, sev]
+  if (s.known && inside) [cloud, step] = [`In ${SEV_NAME[sev]}`, sev]
+  else if (s.known && inMin !== null) [cloud, step] = [`Clear air · ${SEV_NAME[sev]} in ${inMin < 1 ? 'under a minute' : `${Math.round(inMin)} min`}`, sev]
   const h = s.hazard
   const hazard = h === null ? null : h.inside ? `Inside hazard area · ${h.text}` : `Hazard area ${h.inMin === null ? 'ahead' : `in ${Math.max(1, Math.round(h.inMin))} min`} · ${h.text}`
   return { cloud, sev: step, hazard }

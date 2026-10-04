@@ -1,11 +1,13 @@
 // client/ui/wxHud.ts
 // The chase weather's HUD, over the 3-D view (wxAhead.ts works out what it says): at the top centre under the search box
 // - the status line: a chip with where the aircraft is ("In light rain", or "Clear air · a thunderstorm in 3 min"; a dot in the
-//   severity's colour) and, when a hazard area is on the path, a red-edged chip under it ("Inside hazard area · …", "Hazard area in 2
-//   min · …");
-// - while the aircraft is inside a hazard area and under its top, a red frame inset round the whole view: the answer to "am I in it?";
+//   severity's colour; "No weather data" with a grey dot until a weather source has answered) and, when a hazard area is on the path,
+//   a chip under it edged in the area's own colour ("Inside hazard area · …", "Hazard area in 2 min · …"); each chip is one line;
+// - while the aircraft is inside a hazard area and under its top, a red frame inset round the whole view: the answer to "am I in it?"
+//   (red whatever the area's colour, and whatever style its edges are drawn in);
 // - the ahead strip under them: a side view of the next 80 km on this heading (the weather's cells in the severity's colours, the hazard
-//   areas dashed red, the aircraft's way as a dashed line with a tick each minute, the heights in the frame's units).
+//   areas dashed, each in its colour, the aircraft's way as a dashed line with a tick each minute, the heights in the frame's units).
+//   A window under 480 px high has no room for it (wxHud.css): it is not drawn there.
 // The app gives it what to say a few times a second (set) and whether the strip shows (setStrip: the Weather menu's choice). Nothing
 // here is computed: set(null …) hides it all, and so does the app while the weather is hidden. It publishes its height as
 // --fh-wxhud-h on its root, which wxHud.css uses to stand the alert toasts under it.
@@ -27,7 +29,7 @@ export type StripContext = Pick<CanvasRenderingContext2D,
   'clearRect' | 'fillRect' | 'strokeRect' | 'beginPath' | 'moveTo' | 'lineTo' | 'stroke' | 'fill' | 'fillText' | 'setLineDash'
   | 'fillStyle' | 'strokeStyle' | 'lineWidth' | 'font' | 'textAlign' | 'textBaseline' | 'globalAlpha'>
 
-const HAZARD_COLOR = '#ff5a5a' // a thunderstorm area's colour on the map (wxText.ts sigmetColor); the frame, the chip and the strip share it
+const UNKNOWN_COLOR = 'var(--fh-muted)' // the status dot while the sky is not known
 const PATH_COLOR = '#ffd23f' // the traffic's yellow (theme.css --fh-traffic): the aircraft and its way
 const AXIS_COLOR = '#8e9aab' // theme.css --fh-muted
 const GRID_COLOR = 'rgba(142, 154, 171, 0.25)'
@@ -39,6 +41,7 @@ const STRIP_RATIO = 0.28 // its height of its width; the canvas's CSS keeps the 
 const PAD = { left: 58, right: 8, rightBoth: 58, top: 6, bottom: 18 } // CSS px round the plot: the height labels at its left (and right, in both units), the minutes under it
 const TICK_PX = 6
 const MIN_LABEL_GAP_PX = 44 // the least room between two minute labels: a slow aircraft's minutes are close, and every other is named
+const MIN_LABEL_PX = 34 // a minute label's width, about ("6 min" at 11 px)
 const GRID_FT = [10_000, 20_000, 30_000, 40_000] // the gridlines, in the unit the strip's heights are in
 const GRID_M = [3000, 6000, 9000, 12_000]
 const TRACE_STEP_KM = 5
@@ -52,7 +55,7 @@ const thousands = (n: number): string => n.toLocaleString('en-US')
 
 /**
  * The ahead strip on a canvas of w × h CSS px (its context scaled to them): the plot's cells in the severity's colours where the cover is
- * over STRIP_COVER, the hazard areas the path crosses (a dashed red box, base to top), the gridlines with their heights in the frame's
+ * over STRIP_COVER, the hazard areas the path crosses (a dashed box in the area's colour, base to top), the gridlines with their heights in the frame's
  * units (feet, metres, or feet at the left and metres at the right), the minutes under the plot, and the way ahead as a dashed line
  * from a marker for the aircraft.
  */
@@ -64,10 +67,10 @@ export function drawStrip(ctx: StripContext, w: number, h: number, profile: Ahea
   ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = PLOT_COLOR
   ctx.fillRect(x0, y0, pw, ph)
-  for (const z of profile.hazards) { // the hazard areas: from the base to the top, over the stretch of the path inside
+  for (const z of profile.hazards) { // the hazard areas: from the base to the top, over the stretch of the path inside, each in its own colour
     const [ax, ay, bx, by] = [X(z.fromKm), Y(z.topM), X(z.toKm), Y(z.baseM)]
     ctx.globalAlpha = 0.14
-    ctx.fillStyle = HAZARD_COLOR
+    ctx.fillStyle = z.color
     ctx.fillRect(ax, ay, bx - ax, by - ay)
     ctx.globalAlpha = 1
   }
@@ -82,10 +85,12 @@ export function drawStrip(ctx: StripContext, w: number, h: number, profile: Ahea
     }
   }
   ctx.globalAlpha = 1
-  ctx.strokeStyle = HAZARD_COLOR
   ctx.lineWidth = 1.5
   ctx.setLineDash([5, 3])
-  for (const z of profile.hazards) ctx.strokeRect(X(z.fromKm), Y(z.topM), X(z.toKm) - X(z.fromKm), Y(z.baseM) - Y(z.topM))
+  for (const z of profile.hazards) {
+    ctx.strokeStyle = z.color
+    ctx.strokeRect(X(z.fromKm), Y(z.topM), X(z.toKm) - X(z.fromKm), Y(z.baseM) - Y(z.topM))
+  }
   ctx.setLineDash([])
   // The heights.
   ctx.font = `500 ${FONT_PX}px ${family}`
@@ -121,7 +126,9 @@ export function drawStrip(ctx: StripContext, w: number, h: number, profile: Ahea
     ctx.stroke()
     if (x - named < MIN_LABEL_GAP_PX) continue
     named = x
-    ctx.fillText(`${m} min`, x, y1 + 4)
+    const inside = x + MIN_LABEL_PX / 2 <= w // a minute at the plot's far edge: its label ends at the strip's edge, not past it
+    ctx.textAlign = inside ? 'center' : 'right'
+    ctx.fillText(`${m} min`, inside ? x : w - 1, y1 + 4)
   }
   // The way ahead, from the aircraft.
   ctx.strokeStyle = PATH_COLOR
@@ -176,6 +183,7 @@ export function mountWxHud(root: HTMLElement): WxHudHandle {
   let last: { status: AheadStatus | null; profile: AheadProfile | null; path: AheadPath | null; units: Units } | null = null
   let published = 0
   let dotColor = ''
+  let hazardColor = ''
   const family = (): string => (typeof getComputedStyle === 'function' ? getComputedStyle(canvas).fontFamily : '') || FALLBACK_FONT
 
   /** Text and visibility written only when they change: the line says the same thing most of the time. */
@@ -189,6 +197,7 @@ export function mountWxHud(root: HTMLElement): WxHudHandle {
   function paintStrip(profile: AheadProfile, path: AheadPath, units: Units): void {
     const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null
     if (ctx === null) return
+    if (canvas.clientWidth === 0 && typeof getComputedStyle === 'function' && getComputedStyle(strip).display === 'none') return // a short window: the stylesheet has taken the strip away
     const w = Math.max(220, Math.round(canvas.clientWidth || STRIP_W)) // laid out: the strip is shown, so it has a width
     const hh = Math.round(w * STRIP_RATIO)
     const r = Math.min(2, (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1) || 1)
@@ -219,10 +228,11 @@ export function mountWxHud(root: HTMLElement): WxHudHandle {
     const words = statusWords(s)
     show(box, true)
     say(cloudText, words.cloud)
-    const color = words.sev === null ? 'var(--fh-ok)' : SEV_COLOR[words.sev]
+    const color = !s.known ? UNKNOWN_COLOR : words.sev === null ? 'var(--fh-ok)' : SEV_COLOR[words.sev]
     if (color !== dotColor) dot.style.setProperty('--c', (dotColor = color))
     show(hazardChip, words.hazard !== null)
     if (words.hazard !== null) say(hazardText, words.hazard)
+    if (s.hazard !== null && s.hazard.color !== hazardColor) hazardChip.style.setProperty('--hz', (hazardColor = s.hazard.color))
     show(veil, s.hazard?.inside === true)
     const drawn = stripOn && last.profile !== null && last.path !== null
     show(strip, drawn)

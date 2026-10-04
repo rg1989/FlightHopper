@@ -21,7 +21,9 @@ const SEED = 20261003
 const CUMULUS_BASE_M = 1500
 const STORM_BASE_M = 1000
 const DECK_M: readonly [number, number] = [7000, 8700] // the rain layer's base and top
-const DECK_UNDER_M = 700 // with altM its base is this far under the aircraft
+// With altM its base is this far under the aircraft, and its top that far over it: a replay's aircraft is often descending (the check
+// flight sinks 300 m in the 22 s before a shot, and drops 900 m when its first report after a gap comes), and has to be inside still.
+const DECK_ROUND_M: readonly [number, number] = [1500, 1000]
 const SIGMET_TOP_FT = 34000
 /** The SIGMET's ring, [along, right] km: starts 80 km ahead, and holds both storms with their anvils. */
 const RING: readonly (readonly [number, number])[] = [[80, -38], [112, -46], [138, -14], [130, 26], [80, 22]]
@@ -55,14 +57,13 @@ function puff(r: () => number, at: { lat: number; lon: number }, baseM: number, 
 /**
  * The demo sky for an aircraft at lat, lon on trackDeg (degrees true), and its one SIGMET. See the header for what is in it.
  * startKm: the aircraft is that far along the sky (60: under the middle of the rain layer's place; 98: at the storm). altM (metres above
- * sea level): the rain layer stands round that height, its base 700 m under it and as thick as it is, in place of 7,000 to 8,700 m.
+ * sea level): the rain layer stands round that height, from 1,500 m under it to 1,000 m over it, in place of 7,000 to 8,700 m.
  */
 export function demoSky(lat: number, lon: number, trackDeg: number, opts: { altM?: number; startKm?: number } = {}): { specs: CloudSpec[]; sigmets: Sigmet[] } {
   const r = sequence(SEED)
   const startKm = opts.startKm ?? 0
   const at = (along: number, right: number): { lat: number; lon: number } => place(lat, lon, trackDeg, along - startKm, right)
-  const deckBase = opts.altM === undefined ? DECK_M[0] : opts.altM - DECK_UNDER_M
-  const deckTop = deckBase + DECK_M[1] - DECK_M[0]
+  const [deckBase, deckTop] = opts.altM === undefined ? DECK_M : [opts.altM - DECK_ROUND_M[0], opts.altM + DECK_ROUND_M[1]]
   const specs: CloudSpec[] = []
 
   const cumulus: Look = { shape: LOOKS.FEW.shape, slice: LOOKS.FEW.slice, brightness: LOOKS.FEW.brightness, tint: LOOKS.FEW.tint }
