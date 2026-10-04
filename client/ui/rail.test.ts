@@ -229,6 +229,26 @@ test('mountRail: hiding the button of the open panel closes the panel; hiding an
   rail.destroy()
 })
 
+test('mountRail: the panel of a hidden button does not open (no panel shows without its button); shown again, it does', () => {
+  const root = new El('div')
+  const opened: (string | null)[] = []
+  const rail = mountRail(root as unknown as HTMLElement, [
+    { id: 'status', icon: 'status', label: 'Live status', short: 'Live', panel: { title: 'Status', mount: () => {} } },
+    { id: 'weather', icon: 'cloud', label: 'Weather', short: 'Weather', spot: 'under', panel: { title: 'Weather', mount: () => {} } },
+  ], (id) => opened.push(id))
+  const [panel] = find(root, (e) => e.classes.has('fh-panel'))
+  rail.setHidden('weather', true)
+  rail.open('weather')
+  assert.deepEqual([rail.openId, panel.hidden, opened.length], [null, true, 0])
+  rail.open('status')
+  rail.open('weather')
+  assert.equal(rail.openId, 'status', 'the open panel stays')
+  rail.setHidden('weather', false)
+  rail.open('weather')
+  assert.equal(rail.openId, 'weather')
+  rail.destroy()
+})
+
 // .fh-ibtn and .fh-rail .fh-ibtn (the phone tab) set a display, which beats the hidden attribute's own. CSS, so checked as text.
 test('rail.css: a hidden button and its square really go, in the wide rail and the phone tab bar', () => {
   const css = readFileSync(new URL('./rail.css', import.meta.url), 'utf8')

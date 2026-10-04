@@ -774,6 +774,34 @@ test('mountAlerts: at most 3 toasts, the newest on top; each closes after 30 s, 
   assert.equal(m.toasts().length, 0, 'gone 30 s after it came, the time under the pointer not counted')
 })
 
+test('mountAlerts: a notice is a toast of the app\'s own words, with no event and no action: it closes by × or after 30 s like the others, and counts among the three', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const m = mount(t)
+  m.handle.notice('Weather', '3-D clouds stopped after a drawing error')
+  const [toast] = m.toasts()
+  assert.equal(m.toasts().length, 1)
+  assert.equal(one(toast, 'fh-alerts-toast-who').textContent, 'Weather')
+  assert.equal(one(toast, 'fh-alerts-toast-what').textContent, '3-D clouds stopped after a drawing error')
+  assert.deepEqual([find(toast, 'fh-alerts-toast-go').length, find(toast, 'fh-alerts-tag').length], [0, 0], 'nothing to follow or replay, no tag')
+  assert.equal(toast.dataset.tone, 'warn')
+  assert.ok(toast.has('fh-alerts-note'))
+  assert.deepEqual(m.calls, { follow: [], replay: [], auto: [], badge: [], switch: [], get: 0 }, 'the bell, the list and the app are not touched')
+  one(toast, 'fh-alerts-toast-x').click()
+  t.mock.timers.tick(200) // its fade
+  assert.equal(m.toasts().length, 0)
+  m.handle.notice('Weather', 'again')
+  t.mock.timers.tick(29_000)
+  assert.equal(m.toasts().length, 1)
+  t.mock.timers.tick(1200)
+  t.mock.timers.tick(200)
+  assert.equal(m.toasts().length, 0, 'gone after 30 s')
+  // With events' toasts: the newest on top, three at most.
+  m.handle.update(reply(1))
+  m.handle.update(reply(2, [1, 2, 3].map((i) => live(`a${i}a${i}a${i}-${i}`, { openedMs: T - 60_000 + i }))))
+  m.handle.notice('Weather', 'a fourth')
+  assert.deepEqual(m.toasts().map((x) => x.dataset.id ?? 'note'), ['note', 'a3a3a3-3', 'a2a2a2-2'], 'the oldest went')
+})
+
 test('mountAlerts: a closed toast is never armed again (the pointer or the focus leaving it as it goes)', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   const m = mount(t)

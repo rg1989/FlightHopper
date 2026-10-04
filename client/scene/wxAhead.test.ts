@@ -10,6 +10,7 @@ import {
 } from './wxAhead.ts'
 import type { Hazard } from './wxGeo.ts'
 import { buildField, sampleField } from './wxField.ts'
+import { sigmetColor } from './wxText.ts'
 
 type Ring = [number, number][]
 const FT = 0.3048
@@ -180,7 +181,7 @@ test('aheadStatus: the severity is the worst of the first 8 km of the cloud on t
 
 test('aheadStatus: a hazard area the aircraft is in and under the top of is inside; above the top, or under its base, it is not', () => {
   const ring = band(-10, 40)
-  assert.deepEqual(aheadStatus(path({ alt: 5000 }), null, [hazard(ring, 0, 10_000)], words).hazard, { inside: true, inMin: 0, text: 'TS 0-10000' })
+  assert.deepEqual(aheadStatus(path({ alt: 5000 }), null, [hazard(ring, 0, 10_000)], words).hazard, { inside: true, inMin: 0, text: 'TS 0-10000', color: sigmetColor('TS') })
   assert.equal(aheadStatus(path({ alt: 11_000 }), null, [hazard(ring, 0, 10_000)], words).hazard, null, 'above the top, and it stays level: nothing')
   assert.equal(aheadStatus(path({ alt: 3000 }), null, [hazard(ring, 6000, 10_000)], words).hazard, null, 'under its base')
   assert.equal(aheadStatus(path({ alt: 10_000 }), null, [hazard(ring, 0, 10_000)], words).hazard, null, 'a top is not inside it')
@@ -212,10 +213,30 @@ test('aheadStatus: of several hazard areas the one the aircraft is in; else the 
   const s = aheadStatus(path({ alt: 5000 }), null, [far, near1], words)
   assert.equal(s.hazard?.text, 'ICE 0-10000')
   const here = hazard(band(-5, 5), 0, 10_000, { hazard: 'MTW' })
-  assert.deepEqual(aheadStatus(path({ alt: 5000 }), null, [far, near1, here], words).hazard, { inside: true, inMin: 0, text: 'MTW 0-10000' })
+  assert.deepEqual(aheadStatus(path({ alt: 5000 }), null, [far, near1, here], words).hazard, { inside: true, inMin: 0, text: 'MTW 0-10000', color: sigmetColor('MTW') })
   const asked: Hazard[] = []
   aheadStatus(path({ alt: 5000 }), null, [near1], (h) => (asked.push(h), 'x'))
   assert.deepEqual(asked, [near1], 'the label asked for the one it says')
+})
+
+test('aheadStatus and aheadProfile: a hazard area has its own colour, the one its edges and its label are drawn in (icing is not a thunderstorm\'s red)', () => {
+  const ice = hazard(band(25, 30), 0, 10_000, { hazard: 'ICE' })
+  const turb = hazard(band(50, 60), 0, 10_000, { hazard: 'TURB' })
+  assert.notEqual(sigmetColor('ICE'), sigmetColor('TS'))
+  assert.equal(aheadStatus(path({ alt: 5000 }), null, [turb, ice], words).hazard?.color, sigmetColor('ICE'), 'the one it names')
+  assert.deepEqual(aheadProfile(path({ alt: 5000 }), null, [turb, ice]).hazards.map((z) => z.color), [sigmetColor('ICE'), sigmetColor('TURB')], 'each run its area\'s')
+})
+
+test('aheadStatus: while no weather source has answered the sky is not known, and nothing is said of it, whatever the field holds; the hazard areas are said all the same', () => {
+  const empty = buildField([], LAT, LON)
+  const s = aheadStatus(path({ alt: 5000 }), empty, [hazard(band(-10, 40), 0, 10_000)], words, false)
+  assert.equal(s.known, false)
+  assert.deepEqual(s.cloud, CLEAR)
+  assert.equal(s.hazard?.inside, true)
+  assert.equal(aheadStatus(path(), empty, [], words, true).known, true)
+  assert.equal(aheadStatus(path(), empty, [], words).known, true, 'known, unless told')
+  const unasked = aheadStatus(path(), buildField([puff(2000, 4000, { sev: 2 })], LAT, LON), [], words, false)
+  assert.deepEqual([unasked.known, unasked.cloud], [false, CLEAR], 'the field is not read')
 })
 
 test('aheadStatus: a hazard area of several rings is in where any ring is; one across the antimeridian is read as the one area it is', () => {
@@ -283,7 +304,8 @@ test('aheadProfile: a hazard area is a run along the path, from its first column
 
 // ---- the words ---------------------------------------------------------------------------------------------------------
 
-const status = (cloud: Partial<AheadStatus['cloud']>, hazardPart: AheadStatus['hazard'] = null): AheadStatus => ({ cloud: { inside: false, sev: 0, inMin: null, ...cloud }, hazard: hazardPart })
+const status = (cloud: Partial<AheadStatus['cloud']>, hazardPart: Omit<NonNullable<AheadStatus['hazard']>, 'color'> | null = null, known = true): AheadStatus =>
+  ({ known, cloud: { inside: false, sev: 0, inMin: null, ...cloud }, hazard: hazardPart === null ? null : { color: '#ff5a5a', ...hazardPart } })
 
 test('the severity scale: cloud, light rain, heavy rain, a thunderstorm, with the colours of the plan; a number rounds and stays within it', () => {
   assert.deepEqual([...SEV_COLOR], ['#f2f5f8', '#58a6ff', '#ffbe3d', '#ff4d3d'])
@@ -304,6 +326,11 @@ test('statusWords: clear air with weather ahead — the worst of it and the minu
   assert.equal(statusWords(status({ sev: 0, inMin: 1.4 })).cloud, 'Clear air · cloud in 1 min')
   assert.equal(statusWords(status({ sev: 2, inMin: 17.6 })).cloud, 'Clear air · heavy rain in 18 min')
   assert.deepEqual(statusWords(status({})), { cloud: 'Clear air ahead', sev: null, hazard: null })
+})
+
+test('statusWords: the sky not known (no weather source has answered) — "No weather data", not "Clear air ahead"; a hazard area is still said', () => {
+  assert.deepEqual(statusWords(status({}, null, false)), { cloud: 'No weather data', sev: null, hazard: null })
+  assert.equal(statusWords(status({}, { inside: true, inMin: 0, text: 'icing' }, false)).hazard, 'Inside hazard area · icing')
 })
 
 test('statusWords: a hazard area — "Inside hazard area · …", "Hazard area in 2 min · …" (never under a minute), and none', () => {

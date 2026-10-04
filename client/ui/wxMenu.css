@@ -1,10 +1,11 @@
 /* client/ui/wxMenu.css */
 /* The Weather panel is the Layers panel's look (sceneToggles.css: the section heads, segments, rows and switches); only what it adds. */
 
-/* "Severity colours" needs more of the row than a third: the buttons share it by their text. */
+/* A segment's buttons are equal shares of the row, but none narrower than its words: "Severity colours" needs more than a third,
+   and takes it from the two beside it; Curtain, Fence and Box are thirds. */
 .fh-wxm-seg .fh-seg-b {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: max-content;
   padding: 0 8px;
   white-space: nowrap;
 }

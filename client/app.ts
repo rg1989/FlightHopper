@@ -49,7 +49,7 @@ import { makeMapLayer, makeReferenceLayers } from './scene/mapLayer.ts'
 import { NO_DISCS, outlineDiscs, type Discs } from './scene/modelOutline.ts'
 import { PlaceLabels, type LayerLabel } from './scene/placeLabels.ts'
 import { Weather } from './scene/weather.ts'
-import { Weather3D, parseWxAt, parseWxDemo, type Aircraft as WxAircraft } from './scene/weather3d.ts'
+import { Weather3D, parseWxAt, parseWxBreak, parseWxDemo, parseWxScale, type Aircraft as WxAircraft } from './scene/weather3d.ts'
 import { aheadPath, aheadProfile, aheadStatus, hazardWords } from './scene/wxAhead.ts'
 import { makePendingLayer } from './scene/pendingLayer.ts'
 import { RouteLine, type PathPoint } from './scene/routeLine.ts'
@@ -107,7 +107,7 @@ import { mountTable, type TableHandle } from './ui/table.ts'
 import { mountSearchBox, type SearchBoxHandle } from './ui/searchBox.ts'
 import { mountWxHud } from './ui/wxHud.ts'
 import { mountWxMenu, type WxMenuHandle } from './ui/wxMenu.ts'
-import { WX_KEYS, WX_PREFS_KEY, dropWxAids, readWxPrefs, writeWxPrefs, type WxPrefs } from './ui/wxPrefs.ts'
+import { WX_KEYS, WX_PREFS_KEY, dropWxAids, readWxPrefs, savedAfter, writeWxPrefs, type WxPrefs } from './ui/wxPrefs.ts'
 import type { Item as SearchItem } from './search/search.ts'
 import type { SceneTogglesHandle } from './ui/sceneToggles.ts'
 import './ui/theme.css'
@@ -146,7 +146,7 @@ const FT = 0.3048
 // What covers the canvas where the flight-data frame must not go, measured at most every SAFE_EVERY_MS (a layout read).
 // Not a traffic aircraft's card: opened and closed by a click, it keeps off the frame instead (keepClear), which stays put.
 // A new overlay goes in MAP_COVERS too (History's top-down map keeps its aircraft clear of the same).
-const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search, .fh-presets, .fh-wxhud'
+const FRAME_COVERS = '.fh-rail, .fh-corner-b, .fh-panel, .fh-card:not(.fh-tcard), .fh-outage-pill, .fh-playbar, .fh-captions, .fh-event-title, .fh-search, .fh-presets, .fh-wxhud-chip, .fh-wxhud-strip'
 // What covers the top-down map in History, where its aircraft must not come to rest: FRAME_COVERS less what History never shows
 // (captions, event title, TV presets, the outage pill) and with the search box's bar, not its list (that slides open and shut
 // over most of the map: it must not move the map under the person typing). The History bar is a .fh-playbar, an open rail
@@ -439,8 +439,10 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   // Stored at once: the address bar keeps only toggles that differ from the defaults (urlState.ts), so a ?topo=1 read
   // here must be what a reload finds in storage once the bar has dropped it.
   writeScenePrefs(prefs, store)
-  // The Weather menu's choices: ?wxlook, ?wxhaz, ?wxtrack, ?wxslice and ?wxstrip win for this load only, so they are not stored here: a choice made in the menu is.
+  // The Weather menu's choices: ?wxlook, ?wxhaz, ?wxtrack, ?wxslice and ?wxstrip win for this load only. So what is in force (wxPrefs) is kept apart from
+  // what is saved (wxSaved): nothing is stored here, and a choice made in the menu saves that choice alone (setWxPrefs), not the link's other aids with it.
   let wxPrefs = readWxPrefs(location.search, storedWx)
+  let wxSaved = readWxPrefs('', storedWx)
   const base = import.meta.env.BASE_URL
   const scenarioBase = scenarioBaseFor(location.search, base, import.meta.env.DEV)
   const urlScenario = readScenario(location.search) // ?scenario=<id>&t=<s>: that scenario, paused at t, once loaded
@@ -822,39 +824,51 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
   const aircraftDiscs: Discs = { n: 0, d: new Float64Array(0) } // the chased aircraft's outline on screen: no name over it
   const weather = new Weather(viewer, cfg.apiBase, ui, (text) => toggles.setWeather(text), { units: () => frameUnits, radarIndex: () => map.liftIndex })
   // The chase's weather: round the chased aircraft, its hazard areas' labels through the names overlay. Its overcast greys the sky and
-  // dims the Sun's light too (0 when it is hidden). ?wxat= and ?wxdemo= are check aids: the weather of another place, and a made-up sky in place of
-  // the real one. The clouds' look and the other Weather-menu choices are applied below (applyWxPrefs).
+  // dims the Sun's light too (0 when it is hidden). ?wxat=, ?wxdemo=, ?wxbreak= and ?wxscale= are check aids: the weather of another place, a made-up sky
+  // in place of the real one, a cloud pass that fails on purpose, and the cloud march held at one size. The clouds' look and the other Weather-menu
+  // choices are applied below (applyWxPrefs). Should the cloud pass fail (a drawing error took it out: its choices then do nothing), the Weather
+  // button and its panel go (applyLayers) and one toast says so.
   const weather3d = new Weather3D(viewer, {
     apiBase: cfg.apiBase, labels: placeLabels, onStatus: (text) => toggles.setWeather(text), units: () => frameUnits, at: parseWxAt(location.search),
-    demo: parseWxDemo(location.search), onShade: (shade) => sun.setOvercast(shade),
+    demo: parseWxDemo(location.search), broken: parseWxBreak(location.search), scale: parseWxScale(location.search), onShade: (shade) => sun.setOvercast(shade),
+    onCloudsFailed: (note) => {
+      applyLayers()
+      alertsUi.notice('Weather', note)
+    },
   })
   // What is ahead on this heading (scene/wxAhead.ts): the way the chased aircraft goes if it keeps its track, speed and climb is worked out
   // every frame, for the 3-D view's track line and level slice (Weather3D.setAhead); a few times a second (WX_LOOK_MS) the status line,
   // the ahead strip (ui/wxHud.ts) and the track line's minute labels follow from it. Hidden with the weather: nothing is worked out.
+  // Until a source of clouds has answered (weather3d.known) the status line says "No weather data" and the strip has no cells.
   // wxAids are the Looking ahead choices of the Weather menu (wxPrefs: the track line, the level slice, the ahead strip).
   // ponytail: the minute labels are placed with the names (placeLabels.ts), a few times a second, so they trail the track line by up to
-  // WX_LOOK_MS, and they show only while the names do (Borders & places). Upgrade: PlaceLabels moves a layer's labels in place, every frame.
+  // WX_LOOK_MS. (They are a layer of the names overlay, like the hazard areas' labels: they show whether or not Borders & places is on, and
+  // while they do the overlay places its names every frame.) Upgrade: PlaceLabels moves a layer's labels in place, every frame.
   const wxHud = mountWxHud(ui)
   const wxAids = { track: wxPrefs.track, slice: wxPrefs.slice, strip: wxPrefs.strip }
   let wxLookMs = -Infinity
   let wxHudUp = false // the HUD shows something
   let wxMinutesUp = false // the names overlay holds the minute labels
+  let wxHudRects: readonly Rect[] = NO_RECTS // the HUD's chips and strip on the canvas: no name of the 3-D view (a hazard area's label is one) goes under them
   const lookAhead = (s: RenderState | null, now: number): void => {
     const path = s === null || !weather3d.show ? null : aheadPath({ lat: s.lat, lon: s.lon, altM: s.hM - geoidN(s.lat, s.lon) }, s.trackDeg ?? s.headingDeg, s.gsKt ?? 0, s.vsFpm ?? 0)
     weather3d.setAhead(path, wxAids)
-    const field = weather3d.field // none until the first draw: no word on the sky before it is known
-    if (path === null || field === null) {
+    if (path === null) {
       if (wxHudUp) wxHud.set(null, null, null, frameUnits)
       if (wxMinutesUp) placeLabels.setLayer(WX_MINUTES_KEY, WX_MINUTES_RANK, [])
       wxHudUp = wxMinutesUp = false
+      wxHudRects = NO_RECTS
       return
     }
     if (now - wxLookMs < WX_LOOK_MS) return
     wxLookMs = now
     const units = frameUnits
     const hazards = weather3d.hazards
-    wxHud.set(aheadStatus(path, field, hazards, (h) => hazardWords(h.sigmet, units)), wxAids.strip ? aheadProfile(path, field, hazards) : null, path, units)
+    const known = weather3d.known // no source has answered yet: the field (none, or an empty one) says nothing of the sky
+    const field = known ? weather3d.field : null
+    wxHud.set(aheadStatus(path, field, hazards, (h) => hazardWords(h.sigmet, units), known), wxAids.strip ? aheadProfile(path, field, hazards) : null, path, units)
     wxHudUp = true
+    wxHudRects = measureRoom('.fh-wxhud-chip, .fh-wxhud-strip').covers.filter((r) => r.w > 0 && r.h > 0)
     if (weather3d.aheadShow.track || wxMinutesUp) {
       const minutes: LayerLabel[] = !weather3d.aheadShow.track ? [] : path.points.slice(1).map((p, i) => ({
         text: `${i + 1} min`, position: Cartesian3.fromDegrees(p.lon, p.lat, p.altM + geoidN(p.lat, p.lon)), color: WX_MINUTES_COLOR,
@@ -895,7 +909,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const wx = weatherView({ wx: prefs.wx, chasing, history: hist !== null, scenario: run !== null })
     weather.show = wx.topDown
     weather3d.show = wx.chase
-    rail.setHidden('weather', !weather3d.show) // the Weather button is there while the chase's weather is drawn; its panel goes with it
+    rail.setHidden('weather', !weather3d.show || weather3d.cloudsFailed) // the Weather button is there while the chase's weather is drawn (and its cloud pass has not failed: its choices then do nothing); its panel goes with it
     map.lift = weather.show
     if (wx.liveOnly) toggles.setWeather('Live only')
     else if (!prefs.wx) toggles.setWeather(null)
@@ -1635,16 +1649,20 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     toggles.update(next)
     settings.setDark(next.dark)
     // Every call is the person's own (a switch, a key): turning Weather on in a live chase opens its panel, after applyLayers showed its button.
-    if (weatherMenuOpens({ was: wxWas, now: next.wx, chasing, history: hist !== null, scenario: run !== null })) rail.open('weather')
+    if (weatherMenuOpens({ was: wxWas, now: next.wx, chasing, history: hist !== null, scenario: run !== null })) rail.open('weather') // (not when its button is hidden: the rail refuses)
   }
 
-  /** Every Weather-menu choice: apply it, store it, show it. A URL aid (?wxlook …) was for the load it came with: a choice made since is the one a reload keeps. */
+  /**
+   * Every Weather-menu choice: apply it, store it, show it. A URL aid (?wxlook …) was for the load it came with: a choice made since is the one a reload
+   * keeps, so the changed choice's aid leaves the address, and that choice alone is written onto what is saved (a link's other aids are not).
+   */
   function setWxPrefs(next: WxPrefs): void {
     const search = dropWxAids(location.search, WX_KEYS.filter((k) => next[k] !== wxPrefs[k]))
     if (search !== location.search) history.replaceState(history.state, '', `${location.pathname}${search}${location.hash}`)
+    wxSaved = savedAfter(wxSaved, wxPrefs, next)
     wxPrefs = next
     applyWxPrefs(next)
-    writeWxPrefs(next, store)
+    writeWxPrefs(wxSaved, store)
     wxMenu.update(next)
   }
 
@@ -1952,7 +1970,7 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     const over = named && framed && model !== null
       ? outlineDiscs(viewer.scene, model.model.modelMatrix, model.entry, aircraftDiscs)
       : NO_DISCS
-    placeLabels.update(tf, now, named ? flightFrame.occupied(false) : NO_RECTS, over)
+    placeLabels.update(tf, now, !named ? NO_RECTS : wxHudRects.length === 0 ? flightFrame.occupied(false) : [...flightFrame.occupied(false), ...wxHudRects], over)
     // The planes darken with the terrain under the Sun (WP-E3); off (browse, the toggle off) they stay as built. Three
     // numbers written in place, so it runs every frame.
     runways.setLight(chasing && prefs.light && st !== null ? st : null) // the light as set: the Moon's too
@@ -2004,7 +2022,8 @@ export async function startApp(root: HTMLElement, cfg: ClientConfig, hooks: { on
     if (bench !== null && now >= benchSayMs) {
       benchSayMs = Infinity
       const b = bench.recent()
-      console.warn(`FlightHopper bench: frame p50 ${(1000 / b.fpsP50).toFixed(1)} ms, p95 ${b.frameMsP95.toFixed(1)} ms · weather ${weather3d.show ? weather3d.look : 'off'}`)
+      const wx = weather3d.show ? `${weather3d.look}, march at ${weather3d.sky.clouds.scale ?? '?'}, last draw ${weather3d.drawMs.toFixed(0)} ms` : 'off'
+      console.warn(`FlightHopper bench: frame p50 ${(1000 / b.fpsP50).toFixed(1)} ms, p95 ${b.frameMsP95.toFixed(1)} ms · weather ${wx}`)
     }
     measure?.('fh:frame', now)
   }

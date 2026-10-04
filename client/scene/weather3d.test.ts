@@ -11,7 +11,7 @@ import { geoidN } from '../../shared/geoid.ts'
 import { MODEL_CLOUD_HPA, MODEL_WIND_HPA, type Cloud, type Metar, type ModelGeo, type ModelGrid, type Sigmet } from '../../shared/wx.ts'
 import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
-import { LOOKS, MAX_CLOUDS, MODEL_LOOK, PUFF_FILL, RADAR_LOOK, REBUILD_KM, fadeAlpha, modelClouds, nearestClouds, observedClouds, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
+import { LOOKS, MAX_CLOUDS, MODEL_LOOK, PUFF_FILL, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
 import { fogNear, type Fog } from './groundFog.ts'
 import type { LayerLabel } from './placeLabels.ts'
 import { radarPixel, windOf, type Fall } from './precip.ts'
@@ -19,7 +19,7 @@ import { RadarSource, type SourceTile } from './radar.ts'
 import { radarCells } from './radarCells.ts'
 import { modelWindAt } from './modelWind.ts'
 import { REACH_KM, type CloudLook, type HazardStyle } from './cloudVolume.ts'
-import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, parseWxDemo, statusText3d } from './weather3d.ts'
+import { HAZARD_KM, HttpError, MODEL_DWELL_MS, Weather3D, echoShade, parseWxAt, parseWxBreak, parseWxDemo, parseWxScale, statusText3d } from './weather3d.ts'
 import { aheadPath, type AheadPath } from './wxAhead.ts'
 import { demoSky } from './wxDemo.ts'
 import { buildField, type WxField } from './wxField.ts'
@@ -92,7 +92,7 @@ function fakeSky() {
   return {
     clouds: {
       show: false, draws: [] as CloudSpec[][], ats: [] as { lat: number; lon: number }[], frames: [] as [TerrainFrame, number][], fades: [] as Cartesian3[], destroyed: false,
-      look: 'severity' as CloudLook, field: null as WxField | null, failed: false,
+      look: 'severity' as CloudLook, field: null as WxField | null, failed: false, scale: 0.5,
       hazardSets: [] as { hazards: Hazard[]; style: HazardStyle; color: (h: Hazard) => string }[], aheads: [] as { path: AheadPath | null; show: { track: boolean; slice: boolean } }[],
       draw(specs: readonly CloudSpec[], at: { lat: number; lon: number }) { this.draws.push([...specs]); this.ats.push({ ...at }) },
       setHazards(hazards: readonly Hazard[], style: HazardStyle, color: (h: Hazard) => string) { this.hazardSets.push({ hazards: [...hazards], style, color }) },
@@ -146,7 +146,7 @@ function geoOf(url: string): ModelGeo {
  * was asked, answered from `answers` (or failed, or held until release()). The model is asked at the first look (no dwell) unless
  * `dwell` asks for the real 10 s; `network` has it use its own getJson, over the global fetch; `demo`: ?wxdemo's km.
  */
-function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: boolean; demo?: number } = {}) {
+function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: boolean; demo?: number; scale?: number } = {}) {
   const asked: string[] = []
   const answers: Record<'metar' | 'sigmet' | 'radar', unknown> = { metar: [], sigmet: [], radar: INDEX }
   const failing = new Set<Kind>()
@@ -191,12 +191,13 @@ function rig(o: { at?: { lat: number; lon: number }; dwell?: boolean; network?: 
   }
   const epoch = { now: GRID_HOUR_MS + 30 * MIN } // the wall clock: half an hour into the hour the grids are for
   const shades: number[] = [] // what the sky's grey was handed on as
+  const failedNotes: string[] = [] // what the app was told when the cloud pass failed
   const w = new Weather3D(viewer, {
     apiBase: '/api', labels, getJson: o.network ? undefined : getJson, onStatus: (t) => lines.push(t), units: () => units, at: o.at, sky, tile, epochMs: () => epoch.now,
-    onShade: (s) => shades.push(s), dwellMs: o.dwell ? undefined : 0, demo: o.demo,
+    onShade: (s) => shades.push(s), dwellMs: o.dwell ? undefined : 0, demo: o.demo, onCloudsFailed: (note) => failedNotes.push(note), scale: o.scale,
   })
   return {
-    w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, shades, sky, tiles, tileAsks, tileHold, frameTiles,
+    w, asked, answers, model, epoch, failing, hold, sources, removed, labelCalls, lines, shades, failedNotes, sky, tiles, tileAsks, tileHold, frameTiles,
     releaseTiles: (newestFirst = false) => (newestFirst ? tileHeld.splice(0).reverse() : tileHeld.splice(0)).forEach((f) => f()),
     releaseSome: (n: number) => tileHeld.splice(0, n).forEach((f) => f()), // the first n tiles held
     held: () => tileHeld.length,
@@ -2141,7 +2142,7 @@ test('Weather3D: the hazard areas\' style (the box until set) is kept as given; 
   assert.equal(r.labelCalls.some((c) => c.key === 'ahead'), false, 'the minute labels are the app\'s, not Weather3D\'s')
 })
 
-test('Weather3D: when the cloud pass has failed (a render error took it out for good) the line says so, after a note of a source that is down; the rest of the weather goes on', async () => {
+test('Weather3D: when the cloud pass has failed (a render error took it out for good) the line says so, after a note of a source that is down, and the app is told once, with the words; the hazard areas, whose edges the pass drew, are then marked on the ground in every style, the box too; the rest of the weather goes on', async () => {
   const warn = console.warn
   console.warn = () => {}
   try {
@@ -2150,21 +2151,110 @@ test('Weather3D: when the cloud pass has failed (a render error took it out for 
     r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] })]
     await open(r)
     assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT}`)
+    assert.deepEqual([r.w.hazardStyle, r.footprints().length, r.w.cloudsFailed, r.failedNotes.length], ['box', 0, false, 0], 'a box has no footprint while the pass draws it')
     const [fog, rain] = [r.sky.fog.sets.length, r.sky.precip.sets.length]
     r.sky.clouds.failed = true
     r.w.update(AC, 1000) // the next look
-    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · 3-D clouds unavailable on this graphics card`)
-    assert.deepEqual([r.shown().length, r.sky.fog.sets.length, r.sky.precip.sets.length], [1, fog + 1, rain + 1], 'the labels stay, and the fog and the rain are looked at as before')
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · 3-D clouds stopped after a drawing error`)
+    assert.equal(r.w.cloudsFailed, true)
+    assert.deepEqual(r.failedNotes, ['3-D clouds stopped after a drawing error'])
+    assert.equal(r.footprints().length, 2, 'the box\'s ring on the ground now: its fill and its outline')
+    r.w.hazardStyle = 'curtain'
+    r.w.hazardStyle = 'box'
+    assert.equal(r.footprints().length, 2, 'whatever the style')
+    r.w.update(AC, 2000)
+    r.w.update(AC, 3000)
+    assert.equal(r.failedNotes.length, 1, 'told once')
+    assert.deepEqual([r.shown().length, r.sky.fog.sets.length, r.sky.precip.sets.length], [1, fog + 3, rain + 3], 'the labels stay, and the fog and the rain are looked at as before')
     const draws = r.sky.clouds.draws.length
-    r.w.update(north(31), 2000)
-    r.w.update(north(31), 2016)
-    r.w.update(north(31), 2032)
+    r.w.update(north(31), 4000)
+    r.w.update(north(31), 4016)
+    r.w.update(north(31), 4032)
     assert.equal(r.sky.clouds.draws.length, draws + 1, 'the field is still built: the status line and the ahead strip ask it')
     r.failing.add('sigmet')
     r.w.update(north(31), 10 * MIN + 3000)
     await flush()
-    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · some weather unavailable · 3-D clouds unavailable on this graphics card`)
+    assert.equal(r.lines.at(-1), `Clouds from 1 airport · 1 hazard area${CREDIT} · some weather unavailable · 3-D clouds stopped after a drawing error`)
   } finally {
     console.warn = warn
   }
+})
+
+test('Weather3D: the sky is known once a source of clouds has answered (the reports, the radar\'s frame or the forecast; the demo sky as soon as it is laid): before that, and while every one of them has only failed, it is not, whatever the hazard list says', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    const r = rig()
+    assert.equal(r.w.known, false, 'hidden, nothing asked')
+    r.answers.sigmet = [sigmet({ rings: [northOf(300, 2)] })]
+    for (const feed of ['metar', 'radar', 'model'] as const) r.failing.add(feed)
+    await open(r)
+    assert.equal(r.w.hazards.length, 1, 'the hazard areas came')
+    assert.equal(r.w.known, false, 'no cloud source has answered: an empty sky is not a clear one')
+    r.failing.delete('radar')
+    r.w.update(AC, 31_000) // asked again after 30 s
+    await flush()
+    assert.equal(r.w.known, true, 'the radar\'s frame came')
+    r.failing.add('radar')
+    r.w.update(AC, 11 * MIN)
+    await flush()
+    assert.equal(r.w.known, true, 'a source that goes down afterwards leaves what it gave (the line notes it)')
+    const reports = rig()
+    reports.failing.add('radar')
+    reports.failing.add('model')
+    await open(reports)
+    assert.equal(reports.w.known, false, 'an answer with no station in it (the open sea) says nothing of the sky')
+    reports.answers.metar = [metar('LLBG', 32.01, 34.89)]
+    reports.w.update(AC, 5 * MIN + 1000)
+    await flush()
+    assert.equal(reports.w.known, true, 'a report, even of a clear sky')
+    const demo = rig({ demo: 0 })
+    assert.equal(demo.w.known, false)
+    await open(demo)
+    assert.equal(demo.w.known, true, 'the demo sky is the whole sky')
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('Weather3D: the frames\' times set how fine the cloud march is walked (marchPace.ts): slow frames for a while make it coarser, and when that does not help it is taken back and left; hidden and shown again, it starts over at half size', async () => {
+  const r = rig({ demo: 0 })
+  await open(r)
+  assert.equal(r.sky.clouds.scale, 0.5)
+  const seen = [0.5]
+  let t = 0
+  const frames = (ms: number, seconds: number): void => {
+    for (const end = t + seconds * 1000; t < end;) {
+      t += ms
+      r.w.update(AC, t)
+      if (r.sky.clouds.scale !== seen.at(-1)) seen.push(r.sky.clouds.scale)
+    }
+  }
+  frames(16.7, 20)
+  assert.deepEqual(seen, [0.5], 'quick frames: half size')
+  frames(33, 7)
+  assert.deepEqual(seen, [0.5, 0.35], 'slow for a while: coarser')
+  frames(33, 6)
+  assert.deepEqual(seen, [0.5, 0.35, 0.5], 'no quicker for it: back, the slowness is not the march\'s')
+  frames(33, 60)
+  assert.deepEqual(seen, [0.5, 0.35, 0.5], 'and left there')
+  r.w.show = false
+  r.w.show = true
+  t += 60_000 // the gap while hidden is not a frame
+  frames(40, 14)
+  assert.equal(r.sky.clouds.scale, 0.35, 'shown again: it tries again (after the eight seconds a start is given)')
+  r.w.show = false
+  assert.equal(r.sky.clouds.scale, 0.5, 'hidden: back to half size for the next time')
+  // ?wxscale holds a size, whatever the frames' times
+  const held = rig({ demo: 0, scale: 0.25 })
+  await open(held)
+  for (let ms = 40; ms < 30_000; ms += 40) held.w.update(AC, ms)
+  assert.equal(held.sky.clouds.scale, 0.25)
+})
+
+test('parseWxBreak, parseWxScale: ?wxbreak=1 breaks the cloud pass\'s shader on purpose; ?wxscale holds the march at one of its three sizes; anything else is neither', () => {
+  assert.equal(parseWxBreak('?hex=a831b2&wxbreak=1'), true)
+  for (const off of ['', '?wxbreak=0', '?wxbreak=', '?wxbreak=true', '?wx=1']) assert.equal(parseWxBreak(off), false, off)
+  assert.deepEqual(['?wxscale=0.5', '?wxscale=0.35', '?wx=1&wxscale=0.25'].map(parseWxScale), [0.5, 0.35, 0.25])
+  for (const off of ['', '?wxscale=', '?wxscale=1', '?wxscale=0.3', '?wxscale=half', '?wxscale=0']) assert.equal(parseWxScale(off), null, off)
 })

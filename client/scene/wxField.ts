@@ -235,6 +235,7 @@ export function fieldAtlas(f: WxField): { data: Uint8ClampedArray; width: number
   const [width, height] = [3 * FIELD_N, 2 * FIELD_N]
   const data = new Uint8ClampedArray(width * height * 4)
   for (let b = 0; b < BANDS; b++) {
+    if (f.lo[b] > f.hi[b]) continue // an empty band: its tile stays blank (and the work of looking at its 262,144 texels is saved: the field is built while the view runs)
     const [x0, y0] = [(b % 3) * FIELD_N, Math.floor(b / 3) * FIELD_N]
     const [cov, base, top, sev] = [f.cov[b], f.base[b], f.top[b], f.sev[b]]
     for (let j = 0; j < FIELD_N; j++) {

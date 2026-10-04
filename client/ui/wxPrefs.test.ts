@@ -1,7 +1,7 @@
 // client/ui/wxPrefs.test.ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_WX_PREFS, WX_PREFS_KEY, WX_URL_KEYS, dropWxAids, readWxPrefs, writeWxPrefs, type WxPrefs } from './wxPrefs.ts'
+import { DEFAULT_WX_PREFS, WX_PREFS_KEY, WX_URL_KEYS, dropWxAids, readWxPrefs, savedAfter, writeWxPrefs, type WxPrefs } from './wxPrefs.ts'
 
 const DEFAULTS: WxPrefs = { look: 'severity', hazard: 'curtain', track: true, slice: false, strip: true }
 
@@ -109,4 +109,26 @@ test('dropWxAids: the aids of the choices that changed leave the address, the re
   assert.equal(dropWxAids('?hex=a831b2&at=32.0%2C34.8%2C12', ['look', 'track']), '?hex=a831b2&at=32.0%2C34.8%2C12')
   assert.equal(dropWxAids('?wxlook=natural', []), '?wxlook=natural')
   assert.equal(dropWxAids('', ['look']), '')
+})
+
+test('savedAfter: a choice made in the menu is written onto what was saved; a URL aid in force for this load is not, unless it is the field that changed', () => {
+  // Blocks was saved; the link asks for Natural and for the level slice, for this load.
+  const stored = '{"look":"blocks","hazard":"fence","track":true,"slice":false,"strip":true}'
+  const saved = readWxPrefs('', stored)
+  const inForce = readWxPrefs('?wxlook=natural&wxslice=1', stored)
+  assert.deepEqual(inForce, { look: 'natural', hazard: 'fence', track: true, slice: true, strip: true })
+  // The person turns the ahead strip off, and nothing else.
+  const next = { ...inForce, strip: false }
+  assert.deepEqual(savedAfter(saved, inForce, next), { look: 'blocks', hazard: 'fence', track: true, slice: false, strip: false }, 'Blocks stays saved, and the slice stays off')
+  assert.deepEqual(saved, { look: 'blocks', hazard: 'fence', track: true, slice: false, strip: true }, 'what was saved is not changed in place')
+  // The person then picks Severity colours over the link's Natural: that is their choice, and is saved.
+  const after = savedAfter(savedAfter(saved, inForce, next), next, { ...next, look: 'severity' })
+  assert.deepEqual(after, { look: 'severity', hazard: 'fence', track: true, slice: false, strip: false })
+  // A choice back to what the link had asked for is a choice too.
+  assert.equal(savedAfter(saved, { ...inForce, slice: false }, inForce).slice, true)
+  assert.deepEqual(savedAfter(saved, inForce, inForce), saved, 'nothing changed: nothing written')
+  // What is stored is what a load without the link reads back.
+  const store = new Map<string, string>()
+  writeWxPrefs(savedAfter(saved, inForce, next), { setItem: (k, v) => void store.set(k, v) })
+  assert.deepEqual(readWxPrefs('', store.get(WX_PREFS_KEY)!), { look: 'blocks', hazard: 'fence', track: true, slice: false, strip: false })
 })

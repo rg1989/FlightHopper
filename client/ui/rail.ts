@@ -181,7 +181,7 @@ export function mountRail(root: HTMLElement, items: readonly RailItem[], onOpen?
       return openId
     },
     open(id) {
-      if (id === openId || (id !== null && !panes.has(id))) return
+      if (id === openId || (id !== null && (!panes.has(id) || buttons.get(id)!.hidden))) return // (no panel without its button: setHidden)
       if (openId !== null) {
         const p = panes.get(openId)!
         p.body.hidden = true

@@ -6,9 +6,10 @@
    and the rail and an open panel on the right (--rp, kept clear while there is room, else covered rather than narrower than 280 px),
    so these rules are the toasts' (alerts.css), and the toasts stand under the HUD (the last rules here). A phone has no search box: the
    HUD runs across the top, under the notch (and under the live-data pill, as the toasts do). Over the traffic brackets and the flight-data
-   frame (the frame keeps off it: app.ts FRAME_COVERS), under the outage card (17), the flight card (18), the panels (19) and the rail (20). */
+   frame (the frame keeps off its chips and its strip: app.ts FRAME_COVERS), under the outage card (17), the flight card (18), the panels
+   (19) and the rail (20). It is as wide as a chip's one line may need (520 px); the strip, in its middle, is 400 px at most. */
 .fh-wxhud {
-  --w: 400px;
+  --w: 520px;
   --l: 0px;
   --r: calc(58px + var(--fh-right));
   --rp: var(--r);
@@ -48,6 +49,18 @@
   --rp: calc(70px + 320px + var(--fh-right));
 }
 
+/* A traffic aircraft's card in the chased card's corner (flightCard.css: sent home, or on a screen up to 860 px wide): that corner is
+   kept clear for it as for the chased card, whether or not that one is there. */
+.fh-ui:has(> .fh-tcard.fh-card-home:not([hidden])) .fh-wxhud {
+  --l: calc(var(--fh-left) + 320px);
+}
+
+@media (max-width: 860px) {
+  .fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip)):not(:has(> .fh-panel:not([hidden]))) .fh-wxhud {
+    --l: calc(var(--fh-left) + 320px);
+  }
+}
+
 /* The live-data pill (outage.css) is under the search box too: the HUD goes under it. */
 @media (min-width: 641px) {
   .fh-ui:has(> .fh-outage-pill:not([hidden])) .fh-wxhud {
@@ -76,6 +89,16 @@
   .fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip):not(.fh-card-home)):not(:has(> .fh-panel:not([hidden]))) .fh-wxhud {
     --rp: calc(78px + 336px + var(--fh-right));
   }
+
+  .fh-ui:has(> .fh-tcard.fh-card-home:not([hidden])) .fh-wxhud {
+    --l: calc(var(--fh-left) + 336px);
+  }
+}
+
+@media (pointer: coarse) and (min-width: 641px) and (max-width: 860px) {
+  .fh-ui:has(> .fh-tcard:not([hidden]):not(.fh-card-flip)):not(:has(> .fh-panel:not([hidden]))) .fh-wxhud {
+    --l: calc(var(--fh-left) + 336px);
+  }
 }
 
 /* Narrow screens: an open panel hides the flight card (flightCard.css), so its corner is free. */
@@ -85,25 +108,35 @@
   }
 }
 
-/* The status line: a chip for the weather, the severity's colour in its dot (clear air is green), and under it one for a hazard area,
-   edged in red. Over a bright sky or sea the glass keeps the text legible. */
+/* The status line: a chip for the weather, the severity's colour in its dot (clear air is green; grey while the sky is not known),
+   and under it one for a hazard area, edged in that area's colour. Each is one line, cut with an ellipsis only where the room between
+   the flight card and the rail is less than its words. Over a bright sky or sea the glass keeps the text legible. */
 .fh-wxhud-lines {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .fh-wxhud-chip {
   display: flex;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
   max-width: 100%;
+  min-width: 0;
   padding: 6px 13px;
   border-radius: 16px;
   color: var(--fh-text);
   font: 600 13px/1.3 var(--fh-font);
-  text-align: center;
+}
+
+.fh-wxhud-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fh-wxhud-dot {
@@ -115,15 +148,27 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
+/* --hz: the hazard area's colour (wxHud.ts writes it; a thunderstorm area's red until it does). */
 .fh-wxhud-hazard {
-  border-color: rgb(255 90 90 / 0.6);
-  box-shadow: var(--fh-shadow), 0 0 0 1px rgb(255 90 90 / 0.18);
-  color: #ffd9d6;
+  --hz: #ff5a5a;
+  border-color: color-mix(in srgb, var(--hz) 60%, transparent);
+  box-shadow: var(--fh-shadow), 0 0 0 1px color-mix(in srgb, var(--hz) 18%, transparent);
+  color: color-mix(in srgb, var(--hz) 20%, #fff);
 }
 
 /* The ahead strip: its title, and the canvas (wxHud.ts draws it at the width it is laid out at: its height keeps the 25 : 7 shape). */
 .fh-wxhud-strip {
+  box-sizing: border-box;
+  align-self: center;
+  width: min(100%, 400px);
   padding: 6px 8px 5px;
+}
+
+/* A short window (a phone on its side, a low browser window): the strip would take half its height. The status line stays. */
+@media (max-height: 480px) {
+  .fh-wxhud-strip {
+    display: none !important;
+  }
 }
 
 .fh-wxhud-strip-h {
@@ -180,6 +225,12 @@
 
   .fh-wxhud-strip-h {
     font-size: 11px;
+  }
+
+  /* A traffic aircraft's card flipped to the top (flightCard.css) lies over this place: the HUD waits unseen until it closes, not
+     half under it. */
+  .fh-ui:has(> .fh-tcard.fh-card-flip:not([hidden])) .fh-wxhud {
+    visibility: hidden;
   }
 
   .fh-ui:has(> .fh-wxhud:not([hidden])) .fh-toasts {

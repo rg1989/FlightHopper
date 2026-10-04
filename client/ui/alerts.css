@@ -391,6 +391,11 @@
   from { opacity: 0; transform: translateY(-8px) scale(0.98); }
 }
 
+/* A notice (the app's own words: no tag, no action): its words take the tag's and the action's columns too. */
+.fh-alerts-note .fh-alerts-toast-text {
+  grid-column: 1 / 4;
+}
+
 .fh-alerts-toast.fh-out {
   opacity: 0;
   transform: translateY(-4px);
@@ -432,6 +437,10 @@
     grid-row: 2;
     grid-column: 2 / 4;
     justify-self: start;
+  }
+
+  .fh-alerts-note .fh-alerts-toast-text {
+    grid-column: 1 / 3;
   }
 }
 

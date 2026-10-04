@@ -13,7 +13,7 @@ registerHooks({
 const { drawStrip, mountWxHud, stripPlot } = await import('./wxHud.ts')
 
 // Node has no DOM: just enough of one for mountWxHud, with counters for what is written.
-interface Call { op: string; a: unknown[]; fill: string; stroke: string; alpha: number; dash: number[] }
+interface Call { op: string; a: unknown[]; fill: string; stroke: string; alpha: number; dash: number[]; align: string }
 class Ctx {
   calls: Call[] = []
   fillStyle = '#000'
@@ -26,7 +26,7 @@ class Ctx {
   #dash: number[] = []
   transform: number[] = []
   #note(op: string, a: unknown[]): void {
-    this.calls.push({ op, a, fill: this.fillStyle, stroke: this.strokeStyle, alpha: this.globalAlpha, dash: this.#dash })
+    this.calls.push({ op, a, fill: this.fillStyle, stroke: this.strokeStyle, alpha: this.globalAlpha, dash: this.#dash, align: this.textAlign })
   }
   clearRect(...a: number[]): void { this.#note('clearRect', a) }
   fillRect(...a: number[]): void { this.#note('fillRect', a) }
@@ -99,7 +99,9 @@ function mount() {
 }
 type Mounted = ReturnType<typeof mount>
 
-const status = (cloud: Partial<AheadStatus['cloud']> = {}, hazard: AheadStatus['hazard'] = null): AheadStatus => ({ cloud: { inside: false, sev: 0, inMin: null, ...cloud }, hazard })
+const RED = '#ff5a5a' // a thunderstorm area's colour (wxText.ts sigmetColor)
+const status = (cloud: Partial<AheadStatus['cloud']> = {}, hazard: (Omit<NonNullable<AheadStatus['hazard']>, 'color'> & { color?: string }) | null = null, known = true): AheadStatus =>
+  ({ known, cloud: { inside: false, sev: 0, inMin: null, ...cloud }, hazard: hazard === null ? null : { color: RED, ...hazard } })
 const PATH = aheadPath({ lat: 32, lon: 34.9, altM: 3000 }, 0, 360, 0)!
 /** A profile with weather in the cells given: [column, row, cover, severity]. */
 function profile(cells: [number, number, number, number][] = [], hazards: AheadProfile['hazards'] = []): AheadProfile {
@@ -142,13 +144,30 @@ test('the status line: where the aircraft is, in the words and the dot of its se
   assert.equal(m.dot.vars['--c'], '#f2f5f8')
 })
 
-test('a hazard area: its chip under the status line, and the red frame round the view only while the aircraft is inside it', () => {
+test('the status line while the sky is not known (no weather source has answered): "No weather data" with a grey dot, never the green "Clear air ahead"', () => {
+  const m = mount()
+  m.hud.set(status({}, null, false), null, null, DEFAULT_UNITS)
+  assert.equal(m.cloudText.textContent, 'No weather data')
+  assert.equal(m.dot.vars['--c'], 'var(--fh-muted)')
+  assert.deepEqual(visible(m), { box: true, veil: false, hazard: false, strip: false })
+  m.hud.set(status({}, { inside: true, inMin: 0, text: 'icing' }, false), null, null, DEFAULT_UNITS)
+  assert.deepEqual(visible(m), { box: true, veil: true, hazard: true, strip: false }, 'a hazard area is known from its own list: its chip and the frame show')
+  m.hud.set(status(), null, null, DEFAULT_UNITS)
+  assert.deepEqual([m.cloudText.textContent, m.dot.vars['--c']], ['Clear air ahead', 'var(--fh-ok)'], 'once a source has answered')
+})
+
+test('a hazard area: its chip under the status line, edged in the area\'s own colour, and the red frame round the view only while the aircraft is inside it', () => {
   const m = mount()
   m.hud.set(status({}, { inside: true, inMin: 0, text: 'embedded thunderstorms, up to 35,000 ft' }), null, null, DEFAULT_UNITS)
   assert.equal(m.hazardText.textContent, 'Inside hazard area · embedded thunderstorms, up to 35,000 ft')
+  assert.equal(m.hazard.vars['--hz'], RED)
   assert.deepEqual(visible(m), { box: true, veil: true, hazard: true, strip: false })
-  m.hud.set(status({}, { inside: false, inMin: 2.2, text: 'icing, 8,000 to 20,000 ft' }), null, null, DEFAULT_UNITS)
+  const writes = m.hazard.setProps
+  m.hud.set(status({}, { inside: true, inMin: 0, text: 'embedded thunderstorms, up to 35,000 ft' }), null, null, DEFAULT_UNITS)
+  assert.equal(m.hazard.setProps, writes, 'the same colour is not written again')
+  m.hud.set(status({}, { inside: false, inMin: 2.2, text: 'icing, 8,000 to 20,000 ft', color: '#5ac8fa' }), null, null, DEFAULT_UNITS)
   assert.equal(m.hazardText.textContent, 'Hazard area in 2 min · icing, 8,000 to 20,000 ft')
+  assert.equal(m.hazard.vars['--hz'], '#5ac8fa', 'icing is not a thunderstorm\'s red')
   assert.deepEqual(visible(m), { box: true, veil: false, hazard: true, strip: false }, 'ahead of it: no frame')
   m.hud.set(status(), null, null, DEFAULT_UNITS)
   assert.deepEqual(visible(m), { box: true, veil: false, hazard: false, strip: false }, 'none on the path')
@@ -237,6 +256,9 @@ test('the stylesheet: a hidden part really goes (its chips and veil are flex and
   assert.match(css, /\.fh-wxhud-veil \{[^}]*inset: 0;[^}]*pointer-events: none;[^}]*box-shadow: inset 0 0 0 2px #ff5a5a, inset 0 0 46px/)
   assert.match(css, /\.fh-ui:has\(> \.fh-wxhud:not\(\[hidden\]\)\) \.fh-toasts \{\s*top: calc\(var\(--fh-top\) \+ 54px \+ var\(--fh-wxhud-h, 0px\)/)
   assert.match(css, /\.fh-wxhud \{[^}]*pointer-events: none;/)
+  assert.match(css, /\.fh-wxhud-text \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/, 'a chip is one line, cut with an ellipsis when it must be')
+  assert.match(css, /\.fh-wxhud-hazard \{[^}]*border-color: color-mix\(in srgb, var\(--hz[^}]*\}/, 'the hazard chip\'s edge is the area\'s colour')
+  assert.match(css, /@media \(max-height: 480px\) \{\s*\.fh-wxhud-strip \{\s*display: none !important;/, 'a short window has no room for the strip')
 })
 
 // ---- the strip's drawing ---------------------------------------------------------------------------------------------------
@@ -265,6 +287,17 @@ test('drawStrip: a gridline stands at its height: 30,000 ft at 9,144 of 12,500 m
   const p = stripPlot(W, H, DEFAULT_UNITS)
   const text = ctx.calls.find((c) => c.op === 'fillText' && c.a[0] === '30,000 ft')!
   assert.ok(Math.abs((text.a[2] as number) - (p.y1 - (9144 / PROFILE_TOP_M) * (p.y1 - p.y0))) < 1e-9)
+})
+
+test('drawStrip: a minute at the plot\'s far edge has its label inside the strip (ending at its edge), not cut off by it', () => {
+  const p = stripPlot(W, H, DEFAULT_UNITS)
+  const ctx = draw(profile(), DEFAULT_UNITS, aheadPath({ lat: 32, lon: 34.9, altM: 3000 }, 0, 427, 0)!) // 13.18 km a minute: the sixth at 79 km
+  const labels = ctx.calls.filter((c) => c.op === 'fillText' && /min/.test(String(c.a[0])))
+  assert.deepEqual(labels.map((c) => c.a[0]), ['1 min', '2 min', '3 min', '4 min', '5 min', '6 min'])
+  const sixth = labels[5]
+  assert.ok((sixth.a[1] as number) > p.x1 - 6, 'its tick is at the plot\'s edge')
+  assert.deepEqual([sixth.align, sixth.a[1]], ['right', W - 1], 'so the label ends at the strip\'s edge')
+  assert.ok(labels.slice(0, 5).every((c) => c.align === 'center'), 'the others are centred on their ticks')
 })
 
 test('drawStrip: the minutes under the plot, each at its distance along 80 km; a slow aircraft\'s minutes are close, so only those with room are named; none past 80 km', () => {
@@ -297,9 +330,12 @@ test('drawStrip: a cell is drawn where the cover is over 0.25, in its severity\'
   assert.equal(ctx.rects('#f2f5f8').length, 1, 'and cloud')
 })
 
-test('drawStrip: a hazard area is a dashed red box over the stretch it is crossed, from its base to its top, tinted inside', () => {
+test('drawStrip: a hazard area is a dashed box in its own colour over the stretch it is crossed, from its base to its top, tinted inside', () => {
   const p = stripPlot(W, H, DEFAULT_UNITS)
-  const ctx = draw(profile([], [{ fromKm: 40, toKm: 60, baseM: 3000, topM: 10_000 }]))
+  const two = draw(profile([], [{ fromKm: 5, toKm: 15, baseM: 0, topM: 6000, color: '#5ac8fa' }, { fromKm: 40, toKm: 60, baseM: 3000, topM: 10_000, color: RED }]))
+  assert.deepEqual(two.calls.filter((c) => c.op === 'strokeRect').map((c) => c.stroke), ['#5ac8fa', RED], 'each box its area\'s colour')
+  assert.deepEqual(two.calls.filter((c) => c.op === 'fillRect' && c.alpha < 0.3 && c.alpha > 0.1).map((c) => c.fill), ['#5ac8fa', RED], 'and its tint')
+  const ctx = draw(profile([], [{ fromKm: 40, toKm: 60, baseM: 3000, topM: 10_000, color: RED }]))
   const boxes = ctx.calls.filter((c) => c.op === 'strokeRect')
   assert.equal(boxes.length, 1)
   assert.equal(boxes[0].stroke, '#ff5a5a')
@@ -312,7 +348,7 @@ test('drawStrip: a hazard area is a dashed red box over the stretch it is crosse
   const tint = ctx.calls.filter((c) => c.op === 'fillRect' && c.fill === '#ff5a5a')
   assert.equal(tint.length, 1)
   assert.ok(tint[0].alpha < 0.3)
-  const high = draw(profile([], [{ fromKm: 0, toKm: 20, baseM: 0, topM: 30_000 }])).calls.find((c) => c.op === 'strokeRect')!
+  const high = draw(profile([], [{ fromKm: 0, toKm: 20, baseM: 0, topM: 30_000, color: RED }])).calls.find((c) => c.op === 'strokeRect')!
   assert.ok(Math.abs((high.a[1] as number) - p.y0) < 1e-9, 'a top above the strip is held to its top edge')
 })
 

@@ -44,8 +44,18 @@
 // once a second, when the clouds' reach is also centred on the aircraft.
 // It also hands the cloud volume the way ahead of the chased aircraft (wxAhead.ts aheadPath, given every frame by app.ts: setAhead)
 // with which of its two aids show, the track line and the level slice: the volume draws them.
-// Should the volume's pass fail on this graphics card (cloudVolume.ts: a render error takes it out for good), the rest goes on, and
-// the panel's line says "3-D clouds unavailable on this graphics card".
+// Every frame it also gives the frames' times to a pace (marchPace.ts), which says how fine the volume's march is walked: coarser
+// when the frames have been slow for a while, never to and fro.
+// Should the volume's pass fail (cloudVolume.ts: a render error takes it out for good, a shader this graphics card will not compile
+// among them), the rest goes on: the panel's line says "3-D clouds stopped after a drawing error", the app is told once
+// (onCloudsFailed: it takes the Weather menu away and says the note), and the hazard areas, whose edges the pass drew, are marked by
+// their footprints on the ground in every style. ?wxbreak=1 is a check aid for this: it makes the pass's shader not compile.
+// `known` says whether any source of clouds has answered yet: until one has, an empty sky is not a clear one (the status line's).
+// ponytail: what a build adds can still appear at once in two cases. The field is a square of 160 km each way, so due east, west,
+// north and south of a build's place it holds only 10 km of the 30 km beyond the reach: a band 120 to 150 km off on those lines
+// appears at a build, inside the reach's fade. And the observed and the model's clouds are kept by their puffs' own fade (farKm and
+// 30 km), not by the reach: small cumulus 66 to 96 km out appear at full strength at a build. Upgrade: end the reach 30 km inside the
+// field's rim (or a larger field), and keep every source's clouds by the one reach.
 // Live only: app.ts shows it in a live chase, not in History or a scenario (it is today's sky). Hidden it asks for nothing and
 // draws nothing, and update() returns at once; shown, it looks at its clocks and the aircraft once a second.
 // ?wxat=<lat>,<lon> is a check aid (the UI does not mention it): a replay's aircraft flies where the sky may be clear, so the
@@ -54,6 +64,9 @@
 // RainViewer's own, so a sample at a drawn place is taken at that place less the shift.
 // ?wxdemo=<km> is another (parseWxDemo): no weather is asked for at all; the sky is wxDemo.ts's made-up one (cumulus, a rain layer, two
 // storms in a hazard area), laid out once along the aircraft's track from its first place, the aircraft that many km into it.
+// ?wxbreak=1 is a third (parseWxBreak): the cloud pass is given a shader that does not compile, so that its failure is seen handled
+// on any machine (with ?wxdemo=1 the pass, and so the failure, comes at once). ?wxscale=0.5, 0.35 or 0.25 is a fourth (parseWxScale):
+// the cloud march held at that size, the frames' times not asked.
 import { Cartesian3, ClassificationType, Color, CustomDataSource, Ellipsoid, Math as CesiumMath, StripeMaterialProperty, StripeOrientation, type Cartographic, type Viewer } from 'cesium'
 import { distanceNm } from '../../shared/geo.ts'
 import { geoidN } from '../../shared/geoid.ts'
@@ -62,6 +75,7 @@ import type { TerrainFrame } from '../types.ts'
 import { DEFAULT_UNITS, type Units } from '../ui/units.ts'
 import { MAX_CLOUDS, RADAR_LOOK, REBUILD_KM, modelClouds, nearestClouds, observedClouds, overcastShade, radarBases, radarClouds, type CloudSpec } from './cloudField.ts'
 import { CloudVolume, REACH_KM, resumeRendering, type CloudLook, type HazardStyle } from './cloudVolume.ts'
+import { MARCH_SCALES, MarchPace } from './marchPace.ts'
 import { drawnHeightM } from './exaggeration.ts'
 import { GroundFog, fogNear } from './groundFog.ts'
 import { inInnerHalf, modelWindAt, type ModelWind } from './modelWind.ts'
@@ -97,7 +111,7 @@ const OUTLINE_PX = 2.5
 const LABEL_KEY = 'hazards' // this layer in the names overlay
 const LABEL_RANK = 1.5 // after the seas (1), before every city (2)
 const NOTE = 'some weather unavailable'
-const NO_CLOUDS = '3-D clouds unavailable on this graphics card' // the cloud volume's pass failed (cloudVolume.ts)
+const NO_CLOUDS = '3-D clouds stopped after a drawing error' // the cloud volume's pass failed (cloudVolume.ts): any render error while it was in the scene, a shader this graphics card will not compile among them
 const KM_PER_NM = 1.852
 const KM_PER_DEG = 111.195 // of latitude, on a sphere of 6,371 km
 /**
@@ -161,12 +175,21 @@ export function parseWxDemo(search: string): number | null {
   return km === 1 ? 0 : km
 }
 
+/** ?wxbreak=1: the cloud pass's shader is made not to compile (a check aid: the failure's handling is then seen on any machine). */
+export const parseWxBreak = (search: string): boolean => new URLSearchParams(search).get('wxbreak') === '1'
+
+/** ?wxscale=0.5, 0.35 or 0.25: the cloud march held at that size, whatever the frames' times (a check aid); none when absent or another number. */
+export function parseWxScale(search: string): number | null {
+  const scale = Number(new URLSearchParams(search).get('wxscale') ?? '')
+  return MARCH_SCALES.includes(scale) ? scale : null
+}
+
 type Box = readonly [south: number, west: number, north: number, east: number]
 type Feed = 'metar' | 'sigmet' | 'radar' | 'model'
 
 /** What draws the sky round the aircraft: Cesium's parts in the app (cesiumSky), fakes in tests. */
 export interface Sky {
-  clouds: Pick<CloudVolume, 'show' | 'draw' | 'frame' | 'fade' | 'destroy' | 'setHazards' | 'setAhead'> & Partial<Pick<CloudVolume, 'look' | 'field' | 'failed'>>
+  clouds: Pick<CloudVolume, 'show' | 'draw' | 'frame' | 'fade' | 'destroy' | 'setHazards' | 'setAhead'> & Partial<Pick<CloudVolume, 'look' | 'field' | 'failed' | 'scale'>>
   fog: Pick<GroundFog, 'set' | 'frame' | 'destroy'>
   precip: Pick<Precipitation, 'set' | 'aim' | 'destroy'>
 }
@@ -174,12 +197,13 @@ export interface Sky {
 /**
  * The sky's parts in the viewer: the cloud volume and the fog in its scene, the rain or snow overlay in its element (the globe's).
  * Should the volume's pass fail (a render error while it is in the scene: Cesium has then stopped rendering), the viewer's render
- * loop is started again without it, and onCloudsFailed is told.
+ * loop is started again without it, and onCloudsFailed is told. broken: ?wxbreak, the pass's shader made not to compile.
  * ponytail: cloudLayer.ts (the clouds as Cesium's puffs) and rainShafts.ts stay in the tree, unused, until the user has accepted the
  * volumes. Upgrade: delete them, their tests, and what of cloudField.ts only they read.
  */
-const cesiumSky = (viewer: Viewer, onCloudsFailed: () => void): Sky => ({
+const cesiumSky = (viewer: Viewer, onCloudsFailed: () => void, broken: boolean): Sky => ({
   clouds: new CloudVolume(viewer.scene, {
+    broken,
     onFailed: () => {
       resumeRendering(viewer)
       onCloudsFailed()
@@ -201,6 +225,9 @@ export interface Weather3DOptions {
   onShade?: (shade: number) => void // the sky's grey (0 … 1) as it is written, 0 when hidden: the Sun dims its light by it
   dwellMs?: number // how long the aircraft stays before the model is asked for; default MODEL_DWELL_MS
   demo?: number | null // ?wxdemo: the km along the demo sky the aircraft starts at; null or absent: the real weather
+  broken?: boolean // ?wxbreak=1: the cloud pass's shader is made not to compile, to see the failure handled
+  scale?: number | null // ?wxscale: the cloud march held at this size; null or absent: by the frames' times (marchPace.ts)
+  onCloudsFailed?: (note: string) => void // told once, with the words for it, when the cloud pass has failed for good (the Weather menu's choices then do nothing)
 }
 
 /** A non-OK answer: its status, and the seconds the server said to wait (a 503's retryAfterS), if it did. */
@@ -271,6 +298,12 @@ export class Weather3D {
   readonly #onShade: (shade: number) => void
   readonly #dwellMs: number
   readonly #demo: number | null
+  readonly #onCloudsFailed: (note: string) => void
+  readonly #scale: number | null // ?wxscale: the march's size, held
+  readonly #pace = new MarchPace() // how fine the cloud march is walked, by the frames' times
+  #frameMs = Number.NaN // the last frame's time, for the pace
+  #cloudsFailed = false // the cloud pass's failure has been seen and told
+  #known = false // a source of clouds has answered: the sky is not a guess
   #demoSpecs: CloudSpec[] | null = null // the demo sky's clouds, once it is laid out
   #look: CloudLook
   #hazardStyle: HazardStyle = 'box'
@@ -318,6 +351,7 @@ export class Weather3D {
   #builtLon = Number.NaN
   #stations = 0 // the stations the clouds were built from
   #pending: { clouds: CloudSpec[]; at: { lat: number; lon: number } } | null = null // built round a place, drawn at the next frame
+  #drawMs = 0 // how long the last draw took
   #staged: CloudSpec[] | null = null // the observed clouds built at a look, to be joined by the radar's, which are built at the next frame
   #radarGen = 0 // the radar data held (its newest frame, its tiles): the radar's clouds are built again from it when it changes
   #builtRadar = -1
@@ -346,7 +380,9 @@ export class Weather3D {
     this.#units = opts.units ?? (() => DEFAULT_UNITS)
     this.#getJson = opts.getJson ?? getJson
     this.#at = opts.at ?? null
-    this.#sky = opts.sky ?? cesiumSky(viewer, () => this.#status())
+    this.#onCloudsFailed = opts.onCloudsFailed ?? (() => {})
+    this.#scale = opts.scale ?? null
+    this.#sky = opts.sky ?? cesiumSky(viewer, () => this.#seeFailed(), opts.broken === true)
     this.#tile = opts.tile ?? ((radar, z, x, y) => radar.get(z, x, y))
     this.#epochMs = opts.epochMs ?? Date.now
     this.#onShade = opts.onShade ?? (() => {})
@@ -375,6 +411,9 @@ export class Weather3D {
       this.#line = null
       this.#labels.setLayer(LABEL_KEY, LABEL_RANK, [])
       this.#sky.clouds.setAhead(null, this.#aheadShow) // the app gives the way ahead again at the first frame it shows
+      this.#pace.reset() // shown again, the march starts at half size
+      this.#frameMs = Number.NaN
+      if (this.#sky.clouds.scale !== undefined) this.#sky.clouds.scale = this.#scale ?? this.#pace.scale
       this.#sky.fog.set(null)
       this.#sky.precip.set(null)
       this.#falling = false
@@ -469,9 +508,28 @@ export class Weather3D {
     return this.#sky.clouds.field ?? null
   }
 
+  /**
+   * Whether the sky is known: a source of clouds has answered at least once (reports with a station in them, the radar's frame, the
+   * forecast's grid; the demo sky as soon as it is laid). Until then the field is empty for want of an answer, not for a clear sky,
+   * and the status line must not call it clear. (The hazard areas are a list of their own: they say nothing of cloud.)
+   */
+  get known(): boolean {
+    return this.#known
+  }
+
+  /** Whether the cloud pass has failed for good (a render error took it out: cloudVolume.ts), as told to onCloudsFailed. */
+  get cloudsFailed(): boolean {
+    return this.#cloudsFailed
+  }
+
   /** What draws the sky (for checks in the console). */
   get sky(): Sky {
     return this.#sky
+  }
+
+  /** How long the last draw took, ms: the field built from the cloud specs and its images made for the pass (the bench's line says it). */
+  get drawMs(): number {
+    return this.#drawMs
   }
 
   /**
@@ -515,8 +573,13 @@ export class Weather3D {
     if (!this.#show) return
     this.#fNow = tf.fNow
     this.#relHM = tf.relHM
+    const scale = this.#scale ?? this.#pace.frame(nowMs - this.#frameMs) // (the first frame's time is no number: not counted)
+    this.#frameMs = nowMs
+    if (this.#sky.clouds.scale !== undefined && this.#sky.clouds.scale !== scale) this.#sky.clouds.scale = scale
     if (this.#pending !== null) {
+      const t0 = performance.now()
       this.#sky.clouds.draw(this.#pending.clouds, this.#pending.at)
+      this.#drawMs = performance.now() - t0
       this.#pending = null
     } else if (this.#staged !== null) this.#buildRadar() // one heavy piece of work a frame: the look, this, the draw
     this.#sky.clouds.frame(tf, this.#night)
@@ -570,6 +633,7 @@ export class Weather3D {
     this.#demoSpecs = sky.specs
     this.#sigmets = sky.sigmets
     this.#gen++
+    this.#known = true // the demo sky is the whole sky
   }
 
   /** Asks for what is due: the SIGMETs and the radar frame by the clock, the METARs by the clock or when the aircraft is out of its box. With ?wxdemo, nothing. */
@@ -647,6 +711,7 @@ export class Weather3D {
       else {
         this.#metars = shiftMetars(list, this.#shift.dLat, this.#shift.dLon)
         this.#metarGen++
+        if (list.length > 0) this.#known = true // (an answer with no station in it, over the open sea, says nothing of the sky)
       }
       this.#refresh() // the clouds built from them, and the line
     })
@@ -661,6 +726,7 @@ export class Weather3D {
         this.#modelRetryMs = RETRY_MS
         this.#model = shiftModel(grid, this.#shift.dLat, this.#shift.dLon)
         this.#modelGen++
+        this.#known = true
       }
       this.#refresh() // the clouds built from it, and the line
     })
@@ -686,6 +752,7 @@ export class Weather3D {
           this.#radar = source // the frame held keeps its decoded tiles
           this.#radarGen++
         }
+        this.#known = true
       }
       this.#status()
     })
@@ -697,6 +764,7 @@ export class Weather3D {
    */
   #refresh(): void {
     if (!this.#show || !this.#seen) return
+    this.#seeFailed()
     const a = this.#here
     if (this.#pickedGen !== this.#gen || !(distanceNm(a.lat, a.lon, this.#pickedLat, this.#pickedLon) * KM_PER_NM < PICK_KM)) {
       this.#hazards = hazardsNear(this.#sigmets, a.lat, a.lon, HAZARD_KM)
@@ -934,8 +1002,23 @@ export class Weather3D {
   }
 
   /**
+   * The cloud pass has failed for good (seen at a look; Cesium's own sky tells at once): its clouds and the hazard areas' edges are
+   * gone from the view. The areas are then marked by their footprints in every style, the line says so, and the app is told, once
+   * (it takes the Weather menu away: its choices do nothing now, and says the note). The rest goes on: the field is still built, so
+   * the status line and the ahead strip still speak.
+   */
+  #seeFailed(): void {
+    if (this.#cloudsFailed || this.#sky.clouds.failed !== true) return
+    this.#cloudsFailed = true
+    this.#drawHazards()
+    this.#status()
+    this.#onCloudsFailed(NO_CLOUDS)
+  }
+
+  /**
    * The hazard areas picked, drawn: their edges by the cloud volume, in the style chosen; and under a curtain or a fence each ring's
-   * footprint on the ground, by Cesium (a box has none): the outline clamped to the ground, and a fill in stripes STRIPE_KM wide that
+   * footprint on the ground, by Cesium (a box has none, unless the cloud pass has failed: then nothing else marks an area): the
+   * outline clamped to the ground, and a fill in stripes STRIPE_KM wide that
    * follow each other north-eastward. The stripes are counted over the ring's extent that way: the texture Cesium gives a polygon on
    * the ground spans the ring as it is turned (Cesium's Geometry.js, _textureCoordinateRotationPoints: read, not seen drawn).
    */
@@ -944,7 +1027,7 @@ export class Weather3D {
     const ents = this.#footprints.entities
     ents.suspendEvents()
     ents.removeAll()
-    if (this.#hazardStyle !== 'box') {
+    if (this.#hazardStyle !== 'box' || this.#cloudsFailed) {
       for (const h of this.#hazards) {
         const color = Color.fromCssColorString(hazardColor(h))
         for (const ring of h.rings) {

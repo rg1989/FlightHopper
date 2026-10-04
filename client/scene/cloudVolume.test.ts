@@ -5,7 +5,7 @@ import { Cartesian3, Event, Matrix4, PostProcessStage, PostProcessStageComposite
 import { geoidN } from '../../shared/geoid.ts'
 import { PUFF_FILL, SEV, sunBrightness, type CloudSpec } from './cloudField.ts'
 import {
-  CloudVolume, EDGE_KM, EDGE_TEXELS, EDGE_TOP_KM, MARCH_SHADER, MAX_EDGES, MIX_SHADER, POST_KM, REACH_KM, eyeToLocal, hazardEdges, localFrame, localToMap, mapScale, noiseAtlas, packEdges,
+  CloudVolume, EDGE_KM, EDGE_TEXELS, EDGE_TOP_KM, MARCH_SHADER, MAX_EDGES, MIX_SHADER, NEAR_MAX_KM, NOISE_MEAN, POST_KM, REACH_KM, eyeToLocal, hazardEdges, localFrame, localToMap, mapScale, noiseAtlas, packEdges,
   resumeRendering, survey, tileUv, unpackEdge, type HazardEdge,
 } from './cloudVolume.ts'
 import { AHEAD_MIN, aheadPath } from './wxAhead.ts'
@@ -157,30 +157,70 @@ test('noiseAtlas: 64 slices of a smooth random volume that tiles (the mock\'s 32
   assert.deepEqual(noiseAtlas().data, a.data, 'the same every time')
 })
 
-test('survey: where each band has weather, coarsely (cells of 5 km, each also set when a neighbour has weather: R, G the two low layer bands, B the two high, A the towers), and which bands rain', () => {
+test('survey: the clear-air map: how far it is from each cell of 1.25 km to a band\'s weather (R, G the two low layer bands, B the two high, A the towers; a byte is 0.2 km, 51 km at most, the first row the south), never more than it truly is and not much less; and which bands rain', () => {
   const f = buildField([
     puff(1500, 2500, { eastKm: 22, northKm: -31 }), puff(7000, 8700, { eastKm: -80, northKm: 60, wide: 10_000, sev: SEV.light }),
     puff(1000, 9000, { eastKm: 100, northKm: 100, wide: 8000, tower: 1, sev: SEV.storm }), puff(3000, 4000, { eastKm: -120, northKm: -120 }), puff(9000, 10_000, { eastKm: -80, northKm: -20 }),
   ], LAT, LON)
   const s = survey(f)
-  assert.deepEqual([s.near.width, s.near.height, s.near.data.length], [64, 64, 64 * 64 * 4])
-  /** The cell of a place, R, G, B, A: the first row is the south. */
+  const N = 256
+  assert.equal(NEAR_MAX_KM, 51)
+  assert.deepEqual([s.near.width, s.near.height, s.near.data.length], [N, N, N * N * 4])
+  const CELL = FIELD_KM / N
+  /** The cell of a place, R, G, B, A, in km. */
   const cell = (eastKm: number, northKm: number): number[] => {
-    const o = (Math.floor((northKm + 160) / 5) * 64 + Math.floor((eastKm + 160) / 5)) * 4
-    return [...s.near.data.subarray(o, o + 4)]
+    const o = (Math.floor((northKm + 160) / CELL) * N + Math.floor((eastKm + 160) / CELL)) * 4
+    return [...s.near.data.subarray(o, o + 4)].map((b) => (b / 255) * NEAR_MAX_KM)
   }
-  assert.deepEqual(cell(22, -31), [255, 0, 0, 0], 'the cumulus: the lowest band')
-  assert.deepEqual(cell(27, -26), [255, 0, 0, 0], 'one cell round')
-  assert.deepEqual(cell(17, -36), [255, 0, 0, 0])
-  assert.deepEqual(cell(34, -31), [0, 0, 0, 0], 'two cells off')
-  assert.deepEqual(cell(22, 31), [0, 0, 0, 0], 'north is not south')
-  assert.deepEqual(cell(-80, 60), [0, 0, 255, 0], 'the rain deck, based at 7,000 m: a high band')
-  assert.deepEqual(cell(-80, -20), [0, 0, 255, 0], 'cirrus at 9,000 m: the other high band, the same channel')
-  assert.deepEqual(cell(-120, -120), [0, 255, 0, 0], 'based at 3,000 m: the second band')
-  assert.deepEqual(cell(100, 100), [0, 0, 0, 255], 'the tower')
-  assert.deepEqual(cell(0, 0), [0, 0, 0, 0])
+  assert.deepEqual(cell(22, -31), [0, 51, 51, 51], 'at the cumulus: the lowest band is here, the others more than 51 km off')
+  assert.deepEqual(cell(22, 31).map(Math.round), [51, 51, 51, 51], 'north is not south')
+  assert.equal(cell(-80, 60)[2], 0, 'the rain deck, based at 7,000 m: a high band')
+  assert.equal(cell(-80, -20)[2], 0, 'cirrus at 9,000 m: the other high band, the same channel')
+  assert.equal(cell(-120, -120)[1], 0, 'based at 3,000 m: the second band')
+  assert.equal(cell(100, 100)[3], 0, 'the tower')
+  assert.ok(near(cell(42, -31)[0], 17.5, 1.5), `20 km east of the cumulus (its rim is 1 km out): ${cell(42, -31)[0]} km, a little under the 19 there are`)
+  // Against the field itself: from a cell's middle to the middle of the nearest texel with cover, band by band.
+  const CHANNEL = [0, 1, 2, 2, 3]
+  const covered: [number, number][][] = [[], [], [], []]
+  for (let b = 0; b < BANDS; b++) f.cov[b].forEach((c, o) => { if (c > 0) covered[CHANNEL[b]].push(middleOf(o % FIELD_N, Math.floor(o / FIELD_N))) })
+  assert.ok(covered.every((list) => list.length > 0))
+  let [over, under] = [-Infinity, -Infinity]
+  for (let j = 3; j < N; j += 9) {
+    for (let i = 5; i < N; i += 9) {
+      const [x, y] = [(i + 0.5) * CELL - 160, (j + 0.5) * CELL - 160]
+      for (let c = 0; c < 4; c++) {
+        const truly = Math.min(...covered[c].map(([cx, cy]) => Math.hypot(cx - x, cy - y)))
+        const said = (s.near.data[(j * N + i) * 4 + c] / 255) * NEAR_MAX_KM
+        over = Math.max(over, said - truly)
+        under = Math.max(under, 0.92 * Math.min(truly, NEAR_MAX_KM) - said)
+      }
+    }
+  }
+  assert.ok(over <= 0, `never further than it is (a ray strides that far unseen): ${over} km over`)
+  assert.ok(under <= 1.6, `and not much nearer: ${under} km under 92 % of it`)
   assert.deepEqual(s.wet, [false, false, true, false, true], 'the deck of light rain and the storm')
-  assert.deepEqual(survey(buildField([], LAT, LON)).wet, [false, false, false, false, false])
+  const none = survey(buildField([], LAT, LON))
+  assert.deepEqual(none.wet, [false, false, false, false, false])
+  assert.ok(none.near.data.every((b) => b === 255), 'no weather: clear everywhere')
+})
+
+test('noiseAtlas: its mean is NOISE_MEAN (an octave of the detail that has faded is given as that), and the four octaves together are under a fifth almost nowhere (cloud thinner than that is never drawn)', () => {
+  const a = noiseAtlas()
+  const v = (x: number, y: number, z: number): number => a.data[((Math.floor(z / 8) * 66 + 1 + y) * a.width + (z % 8) * 66 + 1 + x) * 4] / 255
+  let sum = 0
+  for (let z = 0; z < 64; z++) for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) sum += v(x, y, z)
+  assert.ok(near(sum / 64 ** 3, NOISE_MEAN, 0.005), `mean ${sum / 64 ** 3}`)
+  assert.ok(MARCH_SHADER.includes(`const float NOISE_MEAN = ${NOISE_MEAN};`))
+  // The shader's fbm at many places (the nearest texel of each octave: the mix between texels lies between them).
+  const at = (q: number): number => ((Math.floor(q * 64) % 64) + 64) % 64
+  const octave = (x: number, y: number, z: number, k: number): number => v(at(x * k), at(y * k), at(z * k))
+  let thin = 0
+  const n = 200_000
+  for (let i = 0; i < n; i++) {
+    const [x, y, z] = [(i * 0.618034) % 1, (i * 0.754878) % 1, (i * 0.569840) % 1]
+    if (0.42 * octave(x, y, z, 1) + 0.27 * octave(x, y, z, 3) + 0.19 * octave(x, y, z, 8) + 0.12 * octave(x, y, z, 23) < 0.2) thin++
+  }
+  assert.ok(thin / n < 1e-3, `${thin} of ${n} places`)
 })
 
 // ---- CloudVolume -------------------------------------------------------------------------------------------------------------
@@ -192,7 +232,7 @@ const HERE = { lat: LAT, lon: LON }
 type Uniforms = Record<string, unknown>
 interface Image { data: Uint8ClampedArray; width: number; height: number }
 
-function rig(opts: { geoid?: (lat: number, lon: number) => number; onFailed?: () => void } = {}) {
+function rig(opts: { geoid?: (lat: number, lon: number) => number; onFailed?: () => void; broken?: boolean } = {}) {
   const added: PostProcessStageComposite[] = []
   const removed: PostProcessStageComposite[] = []
   const stages = { add: (s: PostProcessStageComposite) => (added.push(s), s), remove: (s: PostProcessStageComposite) => (removed.push(s), true) } as unknown as PostProcessStageCollection
@@ -261,6 +301,25 @@ test('CloudVolume: the pass is a composite of two stages on the scene\'s own col
   assert.equal(mix.fragmentShader, MIX_SHADER)
   assert.equal(r.mix().u_march, march.name)
   assert.notEqual(march.name, mix.name)
+})
+
+test('CloudVolume: the march is walked at half the view\'s size until told otherwise (scale): another size is a new pass at it, the same again is not, and a pass made later has it', () => {
+  const r = rig()
+  r.vol.show = true
+  r.vol.draw([CU], HERE)
+  assert.equal(r.vol.scale, 0.5)
+  r.vol.scale = 0.5
+  assert.equal(r.added.length, 1, 'the same: the pass stands')
+  r.vol.scale = 0.35
+  assert.deepEqual([r.added.length, r.live().length, r.stage(0).textureScale, r.stage(1).textureScale], [2, 1, 0.35, 1], 'the march coarser, the mix at full size still')
+  assert.equal((r.march().u_field as Image).width, 3 * FIELD_N, 'with the field it had')
+  r.vol.show = false
+  r.vol.scale = 0.25
+  assert.equal(r.live().length, 0, 'hidden: no pass for it')
+  r.vol.show = true
+  assert.equal(r.stage(0).textureScale, 0.25)
+  r.vol.draw([CU, RAIN], HERE)
+  assert.equal(r.stage(0).textureScale, 0.25, 'a draw keeps it')
 })
 
 test('CloudVolume: each draw is a new pass in place of the last (a field given to a pass that runs would be gone for a frame), its stages named anew', () => {
@@ -627,6 +686,9 @@ test('CloudVolume: each shader is given the reach the radar is read by (REACH_KM
   for (const text of ['const float EDGE_KM = 819.2;', 'const float EDGE_Q = 0.025;', `const float HEIGHT_Q = ${EDGE_TOP_KM / 65536};`, `const float ALONG_Q = ${POST_KM / 65536};`, 'const float POST_KM = 4.0;', 'k < 48;', 'int x = k * 5;']) {
     assert.ok(MARCH_SHADER.includes(text), text)
   }
+  assert.ok(MARCH_SHADER.includes('const float NEAR_MAX = 51.0;'), 'the clear-air map\'s range, as survey packs it')
+  const margin = Number(/const float MARGIN = ([\d.]+);/.exec(MARCH_SHADER)?.[1])
+  assert.ok(margin >= Math.SQRT1_2 * (FIELD_KM / 256) + 2.16 && margin < 3.5, `MARGIN ${margin}: the map's cell (its half diagonal, between four words) and the warp's reach (1.525 km each way)`)
   for (const text of ['uniform float u_path[21];', 'i < 6;']) assert.ok(MIX_SHADER.includes(text) && !MARCH_SHADER.includes(text), `${text}: the track line is the mix's`)
   for (const src of [MARCH_SHADER, MIX_SHADER]) {
     const code = src.replace(/\/\/.*$/gm, '')
@@ -673,6 +735,16 @@ test('CloudVolume: a render error while its pass is in the scene takes the pass 
   } finally {
     console.warn = warn
   }
+})
+
+test('CloudVolume: broken (?wxbreak=1, a check aid) gives the march a shader that cannot compile, so that the failure is seen handled on any machine; the mix and an unbroken volume have their own', () => {
+  const r = rig({ broken: true })
+  r.vol.show = true
+  r.vol.draw([CU], HERE)
+  const src = r.stage(0).fragmentShader
+  assert.ok(src.startsWith(MARCH_SHADER) && src.length > MARCH_SHADER.length)
+  assert.match(src.slice(MARCH_SHADER.length), /wxbreak/, 'what is added says why')
+  assert.equal(r.stage(1).fragmentShader, MIX_SHADER)
 })
 
 test('resumeRendering: after a render error Cesium has stopped its loop and put up its panel: the panel is closed by its own button, and the loop is started again two frames on (by then the loop that ran has seen that it is stopped: one loop, not two); not when the viewer is gone, nor when the loop already runs', () => {
