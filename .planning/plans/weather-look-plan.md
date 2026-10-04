@@ -43,7 +43,7 @@ make it look nicer"; "texts … appear above the cloud and not beneath it, becau
   `nice -n 15 npm run typecheck` and `nice -n 15 node --test --test-concurrency=1 <the test files you touched>`.
   Do not start dev servers or browsers (the controller does the visual QA). Do not run the whole suite more than once
   per task.
-- Commit on branch `feat/weather-look` in `/Users/rgv250cc/Documents/Projects/FlightHopper-liveries`. End commit
+- Commit on branch `feat/weather-look` in `../FlightHopper-liveries`. End commit
   messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ---
@@ -272,7 +272,7 @@ a `.fh-wx-sep` hairline (`border-top: 1px solid var(--fh-hairline)`, margin 8px 
 RainViewer's z ≤ 7 tiles, 256 px, Universal Blue colours: each colour is one integer dBZ, rain and snow separately.
 The table (dBZ −10 … 95, rain then snow, RRGGBBAA, from https://www.rainviewer.com/files/rainviewer_api_colors_table.csv,
 column "Universal Blue") is ready to paste in
-`/private/tmp/claude-501/-Users-rgv250cc-Documents-Projects-FlightHopper/e8b64e5e-e91e-4b6c-9a70-073e94db0ee2/scratchpad/wx/ub.ts`
+`<scratchpad>/wx/ub.ts`
 (`UB_RAIN[i]` and `UB_SNOW[i]` are dBZ `i − 10`). Build a `Map<number, number>` from the packed RGBA (`>>> 0`) to
 `dbz | (snow ? 0x100 : 0)` skipping alpha-0 entries and keeping the FIRST dBZ of a repeated colour (65+ white, 75+ green
 and blue). A pixel with alpha 0, or a colour not in the map, is no echo.

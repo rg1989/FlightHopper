@@ -8,10 +8,12 @@
 // .env.local key is never shown). A second tab, Controls, lists the keyboard shortcuts (info.ts; left out on touch
 // screens, opts.controls false). A third, Display, picks the map's theme, Light or Dark (the same pref as the Layers
 // panel's; the app owns it: onDark asks, setDark shows). A native modal <dialog>: the page behind is inert, so the focus stays in it; Esc, the
-// X and a click on the backdrop close it. It opens on the API keys tab unless asked otherwise.
+// X and a click on the backdrop close it. It opens on the API keys tab unless asked otherwise. The setup guide (setup.ts)
+// is mounted here too: it takes each key in a second form of the same kind, on the same state.
 import { KEYS_KEY, keySources, readSavedKeys, writeSavedKeys, type KeySource, type SavedKeys } from '../config.ts'
 import { icon } from './icons.ts'
 import { mountInfoPanel } from './info.ts'
+import { mountSetup, setupDue, type SetupHandle } from './setup.ts'
 import './settings.css'
 
 export type KeyId = 'arcgis' | 'ion'
@@ -116,6 +118,7 @@ export interface SettingsOpts {
   controls?: boolean // the Controls tab (the keyboard shortcuts); default true
   dark?: boolean // the map's theme at mount (Display tab)
   onDark?(dark: boolean): void
+  search?: string // the page's query (location.search): the setup guide opens by itself when due (setup.ts setupDue); unset = never
 }
 
 export type SettingsTab = 'keys' | 'display' | 'controls'
@@ -123,6 +126,8 @@ export type SettingsTab = 'keys' | 'display' | 'controls'
 export interface SettingsHandle {
   /** Opens on this tab (default: API keys). */
   open(tab?: SettingsTab): void
+  /** Opens the setup guide (setup.ts). */
+  setup(): void
   /** A key failed while the app used it: what fell back to its keyless source and why, on its status line. */
   setFallback(id: KeyId, what: KeyUse, why: string): void
   /** The map's theme changed (here or in the Layers panel). */
@@ -166,8 +171,12 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
 
   const body = h('div', 'fh-settings-body')
   const section = h('section', 'fh-settings-section')
+  const guide = h('button', 'fh-key-link fh-settings-guide', 'Setup guide')
+  guide.type = 'button'
+  guide.append(icon('chevronRight', 13))
   section.append(
     h('p', 'fh-settings-intro', 'FlightHopper runs without keys, on Re:Earth terrain and EOX 10 m imagery. A key saved here stays in this browser, goes only to its own provider, and takes over from .env.local when the page reloads.'),
+    guide,
   )
   const controls = h('section', 'fh-settings-section fh-settings-controls')
   mountInfoPanel(controls)
@@ -247,26 +256,33 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
   root.append(dialog)
 
   const keys: Array<{ sync(): void; reset(): void }> = []
+  let setup: SetupHandle | null = null
+  const changed = (): boolean => SPECS.some((s) => saved[s.field] !== atLoad[s.field])
   const syncFoot = (): void => {
-    foot.hidden = SPECS.every((s) => saved[s.field] === atLoad[s.field])
+    foot.hidden = !changed()
+    setup?.sync()
   }
 
-  for (const spec of SPECS) {
+  /** A key's card: its title, link and what it unlocks, then the field. In the setup guide (bare), the field alone. */
+  function keyForm(spec: KeySpec, bare = false): HTMLFormElement {
     const block = h('form', 'fh-key')
     block.noValidate = true
-    const top = h('div', 'fh-key-head')
-    const label = h('label', 'fh-key-title', spec.title)
-    label.htmlFor = `fh-key-${spec.id}`
-    const link = h('a', 'fh-key-link', spec.linkText)
-    link.href = spec.href
-    link.target = '_blank'
-    link.rel = 'noopener'
-    link.append(icon('external', 13))
-    top.append(label, link)
-
     const field = h('div', 'fh-key-field')
     const input = h('input', 'fh-key-input')
-    input.id = `fh-key-${spec.id}`
+    input.id = `fh-${bare ? 'setup-' : ''}key-${spec.id}`
+    if (bare) input.setAttribute('aria-label', spec.title)
+    else {
+      const top = h('div', 'fh-key-head')
+      const label = h('label', 'fh-key-title', spec.title)
+      label.htmlFor = input.id
+      const link = h('a', 'fh-key-link', spec.linkText)
+      link.href = spec.href
+      link.target = '_blank'
+      link.rel = 'noopener'
+      link.append(icon('external', 13))
+      top.append(label, link)
+      block.append(top, h('p', 'fh-key-about', spec.about))
+    }
     input.type = 'password'
     input.autocomplete = 'off'
     input.spellcheck = false
@@ -311,8 +327,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       msg.scrollIntoView?.({ block: 'nearest' }) // a phone's dialog scrolls: the answer below the fold comes into view
     }
 
-    block.append(top, h('p', 'fh-key-about', spec.about), field, row, msg)
-    section.append(block)
+    block.append(field, row, msg)
 
     let checking = false
     const sync = (): void => {
@@ -379,7 +394,21 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       sync()
     })
     reset()
+    return block
   }
+  for (const spec of SPECS) section.append(keyForm(spec))
+  const reloadPage = opts.reload ?? ((): void => location.reload())
+  setup = mountSetup(root, {
+    keyForm: (id) => keyForm(SPECS.find((s) => s.id === id)!, true),
+    sources: () => keySources(opts.env, saved),
+    changed,
+    store: opts.store,
+    reload: reloadPage,
+  })
+  guide.addEventListener('click', () => {
+    dialog.close()
+    setup?.open()
+  })
 
   // While it is open, no key reaches the app's own handlers (Esc leaves the chase, T L X toggle the scene), wherever the
   // focus is: stopped on its way down, at the window. What keys do by default still happens: typing, Enter saving, and
@@ -394,14 +423,17 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
     if (downOnBackdrop && e.target === dialog) dialog.close()
   })
   close.addEventListener('click', () => dialog.close())
-  reload.addEventListener('click', () => (opts.reload ?? ((): void => location.reload()))())
+  reload.addEventListener('click', () => reloadPage())
   let opener: HTMLElement | null = null
   dialog.addEventListener('close', () => {
     window.removeEventListener('keydown', keep, true)
     opener?.focus() // back where it was opened from
   })
 
+  if (opts.search !== undefined && setupDue(opts.store, keySources(opts.env, saved), opts.search)) setup.open()
+
   return {
+    setup: () => setup?.open(),
     open(tab = 'keys') {
       show(tabs.some((t) => t.id === tab) ? tab : 'keys')
       if (dialog.open) return
@@ -424,6 +456,7 @@ export function mountSettings(root: HTMLElement, opts: SettingsOpts): SettingsHa
       window.removeEventListener('keydown', keep, true)
       if (dialog.open) dialog.close()
       dialog.remove()
+      setup?.destroy()
     },
   }
 }

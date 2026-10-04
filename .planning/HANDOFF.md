@@ -9,6 +9,14 @@ options) is `git show 0737372:.planning/HANDOFF.md`; older ones are linked from 
 
 ## Where things stand
 
+- **Setup guide and public-repo pass (2026-10-04, local `main`, not pushed).** The first start in a browser opens a
+  setup guide (`client/ui/setup.ts`, mounted by `settings.ts`): Welcome, one step for each key with the provider's
+  sign-up steps and the Settings dialog's own key form, Ready. Shown once (`fh.setup.v1`), not on the TV; Settings →
+  API keys → Setup guide reopens it; `?setup=1` opens it, `?setup=0` keeps it shut (`qa-remote.sh` adds it to every
+  shot). The README is rewritten for a first-time reader, with screenshots in `docs/images/`; its old History, weather
+  and data-source notes are `docs/history.md`, `docs/weather.md`, `docs/data-sources.md`. `make` runs `npm ci` when
+  `node_modules` is missing. Home paths, the login name and LAN addresses are out of the tracked files. No licence
+  file yet: the user's choice.
 - **Buttons rearranged on local `main` (2026-09-30, not pushed).** rail.ts items take `spot: 'under' | 'corner' |
   'left' | 'bottom'` (was `corner`/`under` booleans). Scenarios is a square at the top left (its panel opens beside it,
   `.fh-panel-left`; the flight card moved right by `--fh-spot`), the instrument layout a square at the bottom centre
@@ -145,7 +153,7 @@ profile that once had `?topo=0` stays flat.
 - **Tests never touch the network.** `npm run check` — and read its exit code: `npm run check | grep …` hides a failure.
 - **Keep the machine's load low:** no uncapped GPU benchmarks, no parallel full suites, stop every server and Chrome
   you start. Timing tests can flake under load (table sort, `/api/view` at 5,000 aircraft); re-run them alone.
-- **Git:** identity `rg1989 <roman.grinevic@gmail.com>` (repo-local), `git add` explicit paths only, never commit other
+- **Git:** the repo-local identity, `git add` explicit paths only, never commit other
   sessions' files, messages end with the `Co-Authored-By` line.
 - **Downloads that a task the user asked for needs are approved** (the user, emphatically, 2026-09-28: "i did like 10
   times do it already"): fetch them, then say what (file, source, size). Ask first only for out-of-scope, very large,

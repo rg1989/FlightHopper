@@ -1,67 +1,144 @@
 # FlightHopper
 
-Live ADS-B chase-cam on a CesiumJS globe: pick an aircraft and follow it in third person over real terrain, down to a geographically correct landing.
+Live air traffic on a 3-D globe. Pick an aircraft and fly behind it over real terrain, down to the runway.
 
-Personal, non-commercial project. **Entertainment only — not for navigation, ATC or any operational decision.**
+![An A320 over the hills east of San Francisco Bay, with the flight instruments round it](docs/images/chase.jpg)
 
-**Status:** under construction. Plan: [`.planning/PLAN.md`](.planning/PLAN.md) · work packages: [`.planning/plans/`](.planning/plans/).
+A personal, non-commercial project. **Entertainment only: not for navigation, ATC or any operational decision.**
+
+## What it does
+
+- **Live map.** Every aircraft in view from open ADS-B data, coloured by altitude. Search airports, cities and
+  flights. A flight card shows the aircraft's photo, route and flown path.
+- **Chase view.** Follow one aircraft in 3-D: real terrain, sun and moon light for the time of day, city lights at
+  night, 3-D buildings, painted runways. Aircraft are type models in airline liveries, with landing gear, lights and
+  glass-cockpit instruments. Nearby traffic is drawn too.
+- **Weather.** Rain radar, airport reports and hazard areas on the map. In the chase, clouds, rain and storms are
+  volumes round the aircraft.
+- **History.** The map as it was at any time in the last 42 days, on a replay clock.
+- **Recordings.** Record a flight with one button and replay it later.
+- **Scenarios.** Reconstructed flights played back with a timeline and captions from the official record.
+- **Alerts.** Emergency squawks worldwide and steep descents, with optional push to a phone.
+- **Phone and TV.** A phone layout, and a kiosk mode driven by a TV remote ([tv/](tv/README.md)).
+
+| The live map | A night approach |
+|---|---|
+| ![Aircraft over the San Francisco Bay area on the map](docs/images/map.jpg) | ![An El Al 737 at night with its instruments](docs/images/night.jpg) |
 
 ## Quick start
 
+You need Node 24.2 or newer, npm and make.
+
 ```bash
-npm ci
-cp .env.example .env.local   # set CONTACT; optional VITE_ARCGIS_KEY (sharp imagery), VITE_CESIUM_ION_TOKEN
-npm run check                # type-check + tests
-make                         # live traffic (adsb.fi) + client; prints the link, Ctrl+C stops both
-make replay                  # the same, replaying the newest recording
+git clone https://github.com/rg1989/FlightHopper.git
+cd FlightHopper
+make
 ```
 
-## The past
+`make` installs the dependencies the first time, starts the server with live traffic from adsb.fi and prints the link
+(http://localhost:5173). Ctrl+C stops it. No account and no key is needed.
 
-- **Flown path:** select an aircraft and its whole leg so far shows behind it, coloured by altitude; dotted where no
-  receiver heard it, and from its origin airport when the route is known.
-- **History** (the rail's clock button, or `?hist=<unix s>`): the map as it was at any time of the last ~42 days (what
-  adsb.lol keeps), every aircraft in view on a replay clock with its type's silhouette, and a time bar (play, scrub over
-  the day, the day before and after, 1×/10×/60×, Go to, Live) that shows a loader while the time under it loads. A
-  selected aircraft brings its day: its flights in amber on the bar, and where it was at any time (flying, on the ground,
-  or faded where it was last heard). Chase in 3-D works in the past too. Aircraft types: the Mictronics database (ODC-By
-  1.0, credit below). Design: [`.planning/history-design.md`](.planning/history-design.md),
-  [`.planning/history-ux-design.md`](.planning/history-ux-design.md).
-- A live server keeps the newest hour of the past in memory (two half-hour files, ~25 MB per 30 min while it runs); older
-  half hours are fetched when the replay needs them and dropped again. Nothing is written to disk.
+## Keys (optional)
 
-## The weather in the chase
+Two free keys make the globe look better. On the first start a setup guide walks through both: where to sign up, what
+to click, and a field that checks the key. Open it again from Settings → API keys → Setup guide.
 
-- **Weather** (the Layers panel's switch, or `W`): in the chase the clouds, rain and storms are volumes round the aircraft, out to 150 km,
-  from airport reports, the rain radar and the weather model: it flies into them and fades out of sight in thick ones, and rain falls as
-  a veil under a raining cloud. A line at the top centre says what is on its heading ("In light rain", "Clear air · a thunderstorm in
-  3 min"; "No weather data" until a weather source has answered), a second line names a hazard area on the way, in the area's colour,
-  and a red frame round the view shows the aircraft is inside one. Live only: History and scenarios draw none.
-- **The Weather menu** (a square of its own under Layers, there while the chase's weather is drawn; it opens when you turn Weather on in
-  a live chase, not at load). **Clouds:** natural, severity colours (cloud white, light rain blue, heavy rain amber, thunderstorm red) or
-  blocks. **Hazard areas:** their edges as a curtain or a fence (each with the area's striped footprint on the ground) or a box.
-  **Looking ahead:** three switches, the track line (the next six minutes on this heading, a label at each minute, coloured where it
-  enters weather), the level slice (the weather at the aircraft's own altitude within 60 km, with rings at 10, 20 and 40 km) and the
-  ahead strip (a side view of the next 80 km: the weather's cells, the hazard areas, the aircraft's way; not in a window under 480 px
-  high). A choice applies at once and is kept in this browser; `?wxlook=natural|severity|blocks`, `?wxhaz=curtain|fence|box` and
-  `?wxtrack`, `?wxslice`, `?wxstrip` (`=0` or `=1`) set them for one load, and are not kept.
-- The clouds are drawn at half the view's size, and coarser (0.35, then 0.25) when the frames have been slow for a while and that helps.
-  Should the graphics card refuse the cloud pass, the view goes on without it: a toast says "3-D clouds stopped after a drawing error",
-  the Weather menu goes, and the hazard areas stay marked on the ground. Check aids: `?wxdemo=1` (a made-up sky, no weather asked for;
-  `?wxdemo=60` starts in its rain, `?wxdemo=98` at its storm), `?wxscale=0.5|0.35|0.25` (the clouds held at one size), `?wxbreak=1`
-  (the cloud pass fails on purpose).
+<img src="docs/images/setup.jpg" alt="The setup guide's ArcGIS step" width="460">
 
-## Data sources
+| Key | Gives | Without it | Get it |
+|---|---|---|---|
+| ArcGIS API key | Esri World Imagery, 0.3 m at big airports | EOX Sentinel-2, 10 m | [location.arcgis.com](https://location.arcgis.com/sign-up/), free up to 2 million tiles a month |
+| Cesium ion token | Cesium World Terrain | Re:Earth terrain | [ion.cesium.com](https://ion.cesium.com/signup/), free for personal use |
 
-- Live aircraft: [adsb.fi](https://adsb.fi) open data (personal, non-commercial use), the default; [adsb.lol](https://adsb.lol) — data © adsb.lol contributors, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) — for recordings and `LIVE_SOURCE=adsblol`. Later: the author's own receiver.
-- The past: adsb.lol's tar1090 heatmap files (every aircraft, 10 s) and per-aircraft traces, the same ODbL 1.0 data.
-- Aircraft types in the past: the [Mictronics aircraft database](https://github.com/Mictronics/aircraft-database). Contains information from the Mictronics aircraft database, made available under the [ODC Attribution License](https://opendatacommons.org/licenses/by/1-0/). The server downloads it and holds it in memory only.
-- Airports: [OurAirports](https://ourairports.com/data/) (public domain). `node tools/build-runways.ts` rebuilds `public/airports/runways.json`: every open runway with both ends placed (14,299 runways of 10,873 airports). The app fetches it the first time the selected aircraft's signal is lost. An aircraft that is no longer heard on its final approach to one of these runways is drawn landing on it, and its card says "Landed": an estimate, as receivers lose most aircraft below their horizon just before they touch down.
-- Airport weather reports (METARs) and hazard areas (SIGMETs): the [aviationweather.gov](https://aviationweather.gov/data/api/) Data API (no key). The server fetches them for the client, because aviationweather.gov sends no CORS headers.
-- Rain radar: [RainViewer](https://www.rainviewer.com/api.html)'s newest radar frame (keyless tiles), which the client fetches and draws itself.
-- Weather model, for the chase's clouds where no report or radar says and its winds aloft (the flight-data frame's wind when an aircraft sends none): [Open-Meteo](https://open-meteo.com/). Weather data by Open-Meteo.com, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), free for non-commercial use. Round the chase the server wants a grid of places 0.25° apart: it asks Open-Meteo once for the places it lacks, keeps each place fresh for 30 min, and holds it up to 2 h. It asks for at most 8,000 calls a day and 4,000 an hour, under Open-Meteo's free 10,000 and 5,000.
-- Search places: airports and countries from OurAirports, cities of 15 000+ people and their regions from [GeoNames](https://www.geonames.org/) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)); `node tools/build-places.ts` rebuilds `public/search/places.json`.
-- Chase map borders, country and sea names: [Natural Earth](https://www.naturalearthdata.com/) (public domain); `node tools/build-map-overlays.ts` rebuilds `public/map/`.
-- Terrain / imagery: Cesium ion (Community plan), Re:Earth terrain, Esri World Imagery (optional `VITE_ARCGIS_KEY`), EOX Sentinel-2 cloudless.
+A key saved in the guide or in Settings stays in that browser and goes only to its own provider. You can also set
+`VITE_ARCGIS_KEY` and `VITE_CESIUM_ION_TOKEN` in `.env.local`.
 
-Contact: roman.grinevic@gmail.com
+**Do not publish a build made with keys in `.env.local`.** Vite writes `VITE_*` values into the JavaScript bundle. For
+a public deployment build without them and let each visitor add their own in Settings.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `make` | Live traffic from adsb.fi, and the client |
+| `make replay` | The same, replaying the newest recording in `data/recordings/`, or the bundled fixtures |
+| `make live LIVE_SOURCE=adsblol` | Live from adsb.lol (needs `CONTACT`) |
+| `npm run check` | Type-check and all tests |
+| `npm run build` | The client, built into `dist/` |
+| `npm run server` | The API server alone. It also serves `dist/`, on port 8787 |
+
+## Configuration
+
+Server settings are environment variables. `npm run server` and `make` read them from `.env.local`.
+[`.env.example`](.env.example) lists them all. The ones you may want:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `ADSB_SOURCE` | `replay` (`make` sets `adsbfi`) | `adsbfi`, `adsblol`, `readsb` (your own receiver) or `replay` |
+| `CONTACT` | none | An email or URL for the User-Agent. adsb.lol requires it |
+| `PORT` | `8787` | The API server's port |
+| `READSB_URL`, `READSB_COVERAGE` | | Your receiver's address and its coverage as `lat,lon,nm` |
+| `EVENTS_DIR` | none (`make` sets `data/events`) | Where alerts keep their switch and log. Unset: no alerts |
+| `NTFY_URL` | none | An [ntfy](https://ntfy.sh) topic that each new alert is pushed to. Treat it as a secret |
+
+Useful links into the app: `?hex=<icao>&chase=1` chases an aircraft, `?scenario=<id>` plays a scenario,
+`?hist=<unix seconds>` opens the past, `?tv=1` is the TV kiosk, `?setup=1` opens the setup guide.
+Settings → Controls lists the keyboard shortcuts.
+
+## Layout
+
+| Path | What is in it |
+|---|---|
+| `client/` | The browser app: CesiumJS scene, UI, track smoothing, scenarios, history |
+| `server/` | The API server: polls the flight data source, weather, history, alerts, recordings |
+| `shared/` | Types and maths used by both |
+| `public/` | Aircraft models, liveries, airports, scenario packages, map overlays |
+| `tools/` | Scripts that build the data in `public/`, recorders and benchmarks |
+| `harness/` | Single-feature pages for development |
+| `tv/` | The TV setup |
+| `third_party/` | Source of the GPL aircraft models |
+| `.planning/` | Design notes and work plans, kept as the project's log |
+
+No framework: TypeScript run by Node directly, Vite for the client, `node --test` for tests.
+
+## More documentation
+
+- [History](docs/history.md): flown paths and the replay of the past
+- [Weather in the chase](docs/weather.md): the Weather menu, its looks and its check aids
+- [Scenarios](docs/scenarios.md): the package format, and how to prepare one
+- [Liveries and type models](docs/liveries.md): how to add an aircraft or an airline
+- [Alerts](docs/anomaly-alerts.md): sources, rules and limits
+- [Aircraft models](third_party/aircraft-models/README.md): licences and corresponding source
+- [Data sources](docs/data-sources.md): what is read from where, and how the bundled data is rebuilt
+- [Test fixtures](data/fixtures/README.md)
+
+## Data sources and credits
+
+- **Live aircraft:** [adsb.fi](https://adsb.fi) open data (personal, non-commercial use), the default.
+  [adsb.lol](https://adsb.lol) for recordings and `LIVE_SOURCE=adsblol`: data © adsb.lol contributors,
+  [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+- **The past:** adsb.lol's heatmap files and per-aircraft traces, the same ODbL 1.0 data.
+- **Aircraft types in the past:** contains information from the
+  [Mictronics aircraft database](https://github.com/Mictronics/aircraft-database), made available under the
+  [ODC Attribution License](https://opendatacommons.org/licenses/by/1-0/).
+- **Airports and runways:** [OurAirports](https://ourairports.com/data/) (public domain).
+- **Airport weather and hazard areas:** the [aviationweather.gov](https://aviationweather.gov/data/api/) Data API.
+- **Rain radar:** [RainViewer](https://www.rainviewer.com/api.html).
+- **Weather model:** weather data by [Open-Meteo.com](https://open-meteo.com/),
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), free for non-commercial use.
+- **Places:** OurAirports and [GeoNames](https://www.geonames.org/)
+  ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
+- **Borders and names in the chase:** [Natural Earth](https://www.naturalearthdata.com/) (public domain).
+- **Street map and buildings:** © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, with
+  vector tiles from [OpenFreeMap](https://openfreemap.org/).
+- **Aircraft photos:** [Planespotters.net](https://www.planespotters.net/). **Routes:** [adsbdb.com](https://www.adsbdb.com/).
+- **City lights at night:** NASA VIIRS Black Marble.
+- **Terrain and imagery:** Re:Earth terrain, EOX Sentinel-2 cloudless, Esri World Imagery, Cesium ion.
+- **Aircraft models:** from FlightGear aircraft, GPL. See [third_party/aircraft-models](third_party/aircraft-models/README.md).
+
+Each source has its own terms: see [docs/data-sources.md](docs/data-sources.md). Read them before you use
+FlightHopper for anything but personal use.
+
+## Questions and bugs
+
+Open an [issue](https://github.com/rg1989/FlightHopper/issues).

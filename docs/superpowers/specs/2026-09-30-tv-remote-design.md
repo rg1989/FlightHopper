@@ -1,7 +1,7 @@
 # FlightHopper on the TV: remote-control navigation (design)
 
 2026-09-30. The user watches FlightHopper on the living-room TV (Xiaomi Mi TV, Android 9, weak GPU). The TV cannot
-render Cesium, so `omarchy` (MacBookPro16,1, Radeon 5300M, Arch + Hyprland, LAN 10.0.0.12) renders the app in a Chromium
+render Cesium, so `omarchy` (MacBookPro16,1, Radeon 5300M, Arch + Hyprland) renders the app in a Chromium
 kiosk on a 1920×1080 headless Hyprland output. Sunshine streams that output to Moonlight on the TV. The Xiaomi remote
 (D-pad, OK, Back, Menu) must drive the whole app.
 

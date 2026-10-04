@@ -1,7 +1,6 @@
 # Fixtures
 
-`golden/` — tiny, committed, used by unit tests. Real adsb.lol responses captured on 2026-09-22 during the plan review
-(workflow `wf_a83bb071-6da`), trimmed:
+`golden/` — tiny, committed, used by unit tests. Real adsb.lol responses captured on 2026-09-22, trimmed:
 
 | File | What | Source |
 |---|---|---|

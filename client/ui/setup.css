@@ -1,0 +1,162 @@
+/* client/ui/setup.css */
+/* The setup guide (setup.ts): the Settings dialog's shell and key card (settings.css), with numbered steps and a footer
+   that steps through them. */
+.fh-setup {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.fh-setup-eyebrow {
+  margin-bottom: 4px;
+  color: var(--fh-accent);
+  font: 600 11px/1.3 var(--fh-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fh-setup-h {
+  margin: 0 0 6px;
+  font: 600 17px/1.25 var(--fh-font);
+}
+
+/* Welcome: one row for each key, its state at the right. */
+.fh-setup-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.fh-setup-row-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--fh-accent-soft);
+  color: var(--fh-accent);
+}
+
+.fh-setup-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.fh-setup-row .fh-key-about {
+  margin: 2px 0 0;
+}
+
+.fh-setup-row .fh-key-status {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A key's steps: numbers in the accent, a link at the end of the line it belongs to. */
+.fh-setup-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: fh-setup;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fh-setup-list li {
+  position: relative;
+  margin-top: 8px;
+  padding-left: 30px;
+  counter-increment: fh-setup;
+}
+
+.fh-setup-list li::before {
+  content: counter(fh-setup);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--fh-accent-soft);
+  color: var(--fh-accent);
+  font: 600 11px/1 var(--fh-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-setup-list .fh-key-link {
+  font-size: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Ready: what the globe is drawn with. */
+.fh-setup-sum {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--fh-hairline);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+}
+
+.fh-setup-sum dt {
+  color: var(--fh-muted);
+}
+
+.fh-setup-sum dd {
+  margin: 0;
+}
+
+/* The footer is always there: where the guide is (dots), Back, and the way on. */
+.fh-setup-foot {
+  gap: 8px;
+  background: none;
+}
+
+.fh-setup-dots {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+}
+
+.fh-setup-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  transition: background var(--fh-fast) var(--fh-ease);
+}
+
+.fh-setup-dots span.fh-on {
+  background: var(--fh-accent);
+}
+
+.fh-setup-foot .fh-pill {
+  padding: 0 14px;
+}
+
+@media (max-width: 640px) {
+  .fh-setup-h {
+    font-size: 19px;
+  }
+
+  .fh-setup-list {
+    font-size: 14.5px;
+  }
+
+  .fh-setup-sum {
+    font-size: 14px;
+  }
+
+  .fh-setup-foot .fh-pill {
+    height: 40px;
+  }
+}

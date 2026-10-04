@@ -23,6 +23,8 @@ for a in "$@"; do
   name=${a%%|*}
   rest=${a#*|}
   query=${rest%%|*}
+  # The setup guide would open on a fresh profile and cover the shot: shut unless the query asks for it.
+  case "$query" in *setup=*) ;; *) query="${query:+$query&}setup=0" ;; esac
   STEPS+=("go http://localhost:5198/?$query" "wait ${WAIT:-22}")
   if [ "$rest" != "$query" ]; then
     more=${rest#*|}

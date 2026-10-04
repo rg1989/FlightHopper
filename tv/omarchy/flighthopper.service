@@ -4,10 +4,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=rgv250cc
-WorkingDirectory=/home/rgv250cc/flighthopper
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/flighthopper
 # ponytail: pinned to the mise-installed node, like swarm.service; update the path if mise upgrades node
-ExecStart=/home/rgv250cc/.local/share/mise/installs/node/26.8.1/bin/node --env-file-if-exists=.env.local server/main.ts
+ExecStart=/home/YOUR_USER/.local/share/mise/installs/node/26.8.1/bin/node --env-file-if-exists=.env.local server/main.ts
 Restart=always
 # Polls only while a browser (the TV kiosk) looks: the interest in a view expires 15 s after the last ask.
 # Same public IP as the Mac: adsb.fi allows 1 req/s per IP, and a 429 halves the rate (server budget).
