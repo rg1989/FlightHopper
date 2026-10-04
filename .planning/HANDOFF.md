@@ -145,7 +145,7 @@ profile that once had `?topo=0` stays flat.
 - **Tests never touch the network.** `npm run check` — and read its exit code: `npm run check | grep …` hides a failure.
 - **Keep the machine's load low:** no uncapped GPU benchmarks, no parallel full suites, stop every server and Chrome
   you start. Timing tests can flake under load (table sort, `/api/view` at 5,000 aircraft); re-run them alone.
-- **Git:** identity `rg1989 <roman.grinevic@gmail.com>` (repo-local), `git add` explicit paths only, never commit other
+- **Git:** the repo-local identity, `git add` explicit paths only, never commit other
   sessions' files, messages end with the `Co-Authored-By` line.
 - **Downloads that a task the user asked for needs are approved** (the user, emphatically, 2026-09-28: "i did like 10
   times do it already"): fetch them, then say what (file, source, size). Ask first only for out-of-scope, very large,

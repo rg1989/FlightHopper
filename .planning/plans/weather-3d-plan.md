@@ -50,7 +50,7 @@ raster lie on the ground, blurry and turned with the map, not the camera.
   priority, one at a time — `taskpolicy -b nice -n 19 npm run typecheck`,
   `taskpolicy -b nice -n 19 node --test --test-concurrency=1 <the test files you touched>`. No dev servers, no browsers,
   no full test suite (the controller runs those).
-- Commit on branch `feat/weather-3d` in `/Users/rgv250cc/Documents/Projects/FlightHopper-liveries`; end commit messages
+- Commit on branch `feat/weather-3d` in `../FlightHopper-liveries`; end commit messages
   with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ---

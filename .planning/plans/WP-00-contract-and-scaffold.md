@@ -48,7 +48,7 @@ See `.planning/PLAN.md` § Global Constraints — they apply to every task here.
 
 - [ ] **Step 1: Initialise git and install exact dependencies**
 
-Run from the repository root (`/Users/rgv250cc/Documents/Projects/FlightHopper`):
+Run from the repository root:
 
 ```bash
 git init -b main

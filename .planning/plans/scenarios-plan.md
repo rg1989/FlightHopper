@@ -20,9 +20,9 @@ numpy + Pillow + poppler (`pdftoppm`) for the data tools.
 
 ## Global Constraints
 
-- Worktree `/Users/rgv250cc/Documents/Projects/FlightHopper-scenarios`, branch `feat/scenarios`. Never touch the main
-  checkout `/Users/rgv250cc/Documents/Projects/FlightHopper` (other sessions use it), except reading `.work/`.
-- Source PDFs are in `/Users/rgv250cc/Documents/Projects/FlightHopper/.work/jal123/sources/` (git-ignored). Do NOT
+- Worktree `../FlightHopper-scenarios`, branch `feat/scenarios`. Never touch the main
+  checkout `../FlightHopper` (other sessions use it), except reading `.work/`.
+- Source PDFs are in `../FlightHopper/.work/jal123/sources/` (git-ignored). Do NOT
   download the report appendix (付録, 62-2-JA8119-huroku.pdf): the user declined it. Other downloads need the user's OK.
 - Tests: `node --test <file>` for one file; `npm run check` = typecheck + all tests. Baseline 803/803.
 - Imports use explicit `.ts` extensions; Cesium named imports only (no `import * as Cesium`: it bloats the bundle).
@@ -326,7 +326,7 @@ export class AudioSync {
 ### Task D1: DFDR digitization (JAL 123)
 
 **Files:** Create `tools/scenarios/jal123/README.md`, `tools/scenarios/jal123/digitize.py`,
-`tools/scenarios/jal123/digitize_check.py`. Output (git-ignored): `/Users/rgv250cc/Documents/Projects/FlightHopper/.work/jal123/dfdr_1hz.csv`
+`tools/scenarios/jal123/digitize_check.py`. Output (git-ignored): `../FlightHopper/.work/jal123/dfdr_1hz.csv`
 and `.work/jal123/digitize-report.md` with overlay PNGs (trace drawn over the scan) per chart page.
 - Input: `62-2-JA8119-11.pdf` (77 pages: DFDR図-1…6 strip charts on the first ≈ 42 pages, then the CVR record).
   Render with `pdftoppm -r 300`. Identify per page: time axis (tick labels), each parameter's band and its scale

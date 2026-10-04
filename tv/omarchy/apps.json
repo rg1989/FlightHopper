@@ -5,11 +5,11 @@
   "apps": [
     {
       "name": "FlightHopper",
-      "image-path": "/home/rgv250cc/.local/share/flighthopper-tv/boxart.png",
+      "image-path": "/home/YOUR_USER/.local/share/flighthopper-tv/boxart.png",
       "prep-cmd": [
         {
-          "do": "/home/rgv250cc/.local/bin/fh-tv-start",
-          "undo": "/home/rgv250cc/.local/bin/fh-tv-stop"
+          "do": "/home/YOUR_USER/.local/bin/fh-tv-start",
+          "undo": "/home/YOUR_USER/.local/bin/fh-tv-stop"
         }
       ],
       "auto-detach": "true",

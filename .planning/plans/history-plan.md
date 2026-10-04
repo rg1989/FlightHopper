@@ -15,7 +15,7 @@ properties, `.ts` import suffixes), Cesium 1.145 on the client, no new dependenc
 
 ## Global constraints
 
-- Worktree `/Users/rgv250cc/Documents/Projects/FlightHopper-liveries`, branch `feat/history`. Several workers run at once
+- Worktree `../FlightHopper-liveries`, branch `feat/history`. Several workers run at once
   in it: touch ONLY the files your task lists. Do not run `git add`/`git commit` (the lead commits after review).
 - Test one file: `node --test path/to/x.test.ts`. Typecheck: `npx tsc --noEmit` (whole project: ignore errors in files
   another task owns, fix every error in yours). Do not run the whole suite.

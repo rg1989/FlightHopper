@@ -1,6 +1,6 @@
 # JAL123 flight-path and attitude check: primary-source corrections to the CSV
 
-I did not edit anything in the repo and did not use curl. WebFetch saved copies of the PDFs I opened (the JTSB commentary, report parts 05, 10 and 11, and the NASA TM) under `~/.claude/projects/-Users-rgv250cc-Documents-Projects-FlightHopper/404e153c-7b17-4c10-aaf4-5970f7c9a931/tool-results/`. I rendered page crops to measure the plots in the session scratchpad. The 57.7 MB report and the 18.1 MB supplement (付録) were not fetched.
+I did not edit anything in the repo and did not use curl. WebFetch saved copies of the PDFs I opened (the JTSB commentary, report parts 05, 10 and 11, and the NASA TM) outside the repo. I rendered page crops to measure the plots in the session scratchpad. The 57.7 MB report and the 18.1 MB supplement (付録) were not fetched.
 
 **The main finding:** the Japanese report is split into small PDFs, and they contain the official annotated flight-path map (付図-1) and the full DFDR strip charts. From those, the CSV is off by roughly 10–30 km on most legs. It also leaves out the final 360° right turn and puts the impact point about 350 m from the real ridge. On that spot the terrain is about 95 m higher than the ridge.
 
