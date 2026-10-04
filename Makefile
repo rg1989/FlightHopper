@@ -1,4 +1,5 @@
-# Quick start: API server in the background, Vite in the foreground; Ctrl+C stops both.
+# Quick start: API server in the background, Vite in the foreground; Ctrl+C stops both. The first run installs the
+# dependencies (npm ci).
 #   make / make live   live traffic from adsb.fi (paced below its 1 req/s public limit)
 #   make replay        replay the most recently modified recording (REC=data/recordings/<file>.jsonl to pick one)
 #   make live LIVE_SOURCE=adsblol   live from adsb.lol at 0.04 req/s (refuses while the recorder polls it)
@@ -34,6 +35,8 @@ replay:
 
 # vite.config.ts proxies /api to API_PORT.
 run:
+	@node -e 'const [a, b] = process.versions.node.split(".").map(Number); if (a < 24 || (a === 24 && b < 2)) { console.error("FlightHopper needs Node 24.2 or newer; this is " + process.version); process.exit(1) }'
+	@[ -e node_modules ] || npm ci
 	@if lsof -nP -iTCP:$(API_PORT) -sTCP:LISTEN >/dev/null 2>&1; then echo "Port $(API_PORT) is busy: stop the other API server first (two live servers would double the upstream rate from this IP)."; exit 1; fi
 	@env $(SRC) PORT=$(API_PORT) npm run --silent server & trap 'kill $$! 2>/dev/null' EXIT INT TERM; \
 	echo ""; echo "  FlightHopper → http://localhost:$(FE_PORT)/"; echo ""; \

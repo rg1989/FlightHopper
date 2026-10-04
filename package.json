@@ -1,5 +1,7 @@
 {
   "name": "flighthopper",
+  "description": "Live air traffic on a 3-D globe: pick an aircraft and fly behind it over real terrain.",
+  "repository": "github:rg1989/FlightHopper",
   "private": true,
   "type": "module",
   "engines": {

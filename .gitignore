@@ -4,6 +4,7 @@ data/recordings/
 data/flights/
 data/events/
 .env.local
+.env.*.local
 *.log
 .DS_Store
 
@@ -15,3 +16,6 @@ data/livery-refs/
 
 # Subagent-driven development scratch (briefs, reports, the progress ledger)
 .superpowers/
+
+# Source material for the scenarios (reports, raw tracks): kept outside the repository
+.work/
